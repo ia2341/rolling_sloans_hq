@@ -14,8 +14,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Lint
         run: |
-          echo "TODO: no linter wired up yet — tech stack not chosen (see issue #3 in this repo)."
-          echo "Once a stack is picked, replace this step with the real lint command and remove this notice."
+          echo "TODO: tech stack is Django (see issue #3) but no app code exists yet."
+          echo "Once the Django project exists, replace this step with e.g. 'ruff check .' (or flake8) and remove this notice."
 
   test:
     name: Unit tests
@@ -24,8 +24,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Run tests
         run: |
-          echo "TODO: no test runner wired up yet — tech stack not chosen (see issue #3 in this repo)."
-          echo "Once a stack is picked, replace this step with the real test command and remove this notice."
+          echo "TODO: tech stack is Django (see issue #3) but no app code exists yet."
+          echo "Once the Django project exists, replace this step with e.g. 'python manage.py test' (or pytest) and remove this notice."
 
   build:
     name: Build
@@ -34,8 +34,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build
         run: |
-          echo "TODO: no build step wired up yet — tech stack not chosen (see issue #3 in this repo)."
-          echo "Once a stack is picked, replace this step with the real build command and remove this notice."
+          echo "TODO: tech stack is Django (see issue #3) but no app code exists yet."
+          echo "Once the Django project exists, replace this step with e.g. 'pip install -r requirements.txt && python manage.py check --deploy' and remove this notice."
 
   no-secrets-committed:
     name: No committed secrets or real member data
