@@ -40,3 +40,7 @@ _Avoid_: Practice, Session
 
 **Dress Rehearsal**:
 The Rehearsal whose song coverage always tracks the Semester's current setlist, in concert order — not a fixed set of songs chosen in advance, since it should reflect whatever the setlist looks like at the time.
+
+**Recording**:
+An uploaded audio file of a member's take on one song's slot at one rehearsal (a RehearsalSong) — not the rehearsal or song in the abstract. Multiple Recordings can exist for the same RehearsalSong (e.g. several takes), each with its own uploader and optional note.
+_Avoid_: Upload, Track
