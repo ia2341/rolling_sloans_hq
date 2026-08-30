@@ -30,7 +30,9 @@ jobs:
           DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
         run: |
           set -euo pipefail
-          pg_dump "$DATABASE_URL" --format=custom --file="backup-$(date +%F).dump"
+          BACKUP_FILE="backup-$(date -u +%F)-${GITHUB_RUN_ID}.dump"
+          echo "BACKUP_FILE=$BACKUP_FILE" >> "$GITHUB_ENV"
+          pg_dump "$DATABASE_URL" --format=custom --file="$BACKUP_FILE"
 
       - name: Upload dump to Cloudflare R2
         env:
@@ -41,4 +43,4 @@ jobs:
           R2_BUCKET: ${{ secrets.R2_BACKUP_BUCKET }}
         run: |
           set -euo pipefail
-          aws s3 cp backup-*.dump "s3://${R2_BUCKET}/db-backups/" --endpoint-url "$R2_ENDPOINT_URL"
+          aws s3 cp "$BACKUP_FILE" "s3://${R2_BUCKET}/db-backups/${BACKUP_FILE}" --endpoint-url "$R2_ENDPOINT_URL"
