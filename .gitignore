@@ -1,0 +1,28 @@
+# Secrets / local config — never commit real credentials or env values.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+id_rsa
+id_ed25519
+
+# OS / editor cruft
+.DS_Store
+.idea/
+.vscode/
+
+# Common dependency / build output directories (kept broad until the tech
+# stack is chosen — issue #3 — then trim to what's actually relevant).
+node_modules/
+dist/
+build/
+.next/
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Logs
+*.log
+npm-debug.log*

@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint
+        run: |
+          echo "TODO: no linter wired up yet — tech stack not chosen (see issue #3 in this repo)."
+          echo "Once a stack is picked, replace this step with the real lint command and remove this notice."
+
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run tests
+        run: |
+          echo "TODO: no test runner wired up yet — tech stack not chosen (see issue #3 in this repo)."
+          echo "Once a stack is picked, replace this step with the real test command and remove this notice."
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          echo "TODO: no build step wired up yet — tech stack not chosen (see issue #3 in this repo)."
+          echo "Once a stack is picked, replace this step with the real build command and remove this notice."
+
+  no-secrets-committed:
+    name: No committed secrets or real member data
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Scan for likely secrets / env files
+        run: |
+          set -e
+          # Guard against the privacy-by-design constraint: no .env files, private keys,
+          # or common credential file patterns should ever be committed.
+          if git ls-files | grep -E '(^|/)\.env($|\.[^.]+$)|\.pem$|\.key$|id_rsa|id_ed25519' ; then
+            echo "Found a file that looks like a secret or credential. Remove it and use environment variables / a secrets manager instead."
+            exit 1
+          fi
+          echo "No obvious committed secrets found."
