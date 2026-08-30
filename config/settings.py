@@ -33,6 +33,8 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'storages',
+    'anymail',
     'identity',
 ]
 
@@ -122,6 +124,40 @@ USE_TZ = True
 STATIC_URL = 'static/'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+
+# Object storage (Cloudflare R2, S3-compatible), via django-storages.
+#
+# The bucket is private: no AWS_DEFAULT_ACL='public-read', and
+# AWS_QUERYSTRING_AUTH is left at its default (True), so django-storages
+# itself never hands out unsigned public URLs. Actual upload/playback access
+# uses short-lived presigned URLs issued explicitly per the storage-access
+# ADR (docs/adr/0004) — that presigning logic belongs to the Recordings
+# feature, not this base configuration.
+
+STORAGES = {
+    'default': {
+        'BACKEND': 'storages.backends.s3.S3Storage',
+    },
+    'staticfiles': {
+        'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage',
+    },
+}
+
+AWS_ACCESS_KEY_ID = env('AWS_ACCESS_KEY_ID')
+AWS_SECRET_ACCESS_KEY = env('AWS_SECRET_ACCESS_KEY')
+AWS_STORAGE_BUCKET_NAME = env('AWS_STORAGE_BUCKET_NAME')
+AWS_S3_ENDPOINT_URL = env('AWS_S3_ENDPOINT_URL')
+
+
+# Outbound email (Resend), via django-anymail. CLUB_EMAIL_FROM is the one
+# address the club sends from; it's an env var so it's never hardcoded.
+
+EMAIL_BACKEND = 'anymail.backends.resend.EmailBackend'
+ANYMAIL = {
+    'RESEND_API_KEY': env('RESEND_API_KEY'),
+}
+DEFAULT_FROM_EMAIL = env('CLUB_EMAIL_FROM')
 
 
 # Production security settings ("TLS everywhere").
