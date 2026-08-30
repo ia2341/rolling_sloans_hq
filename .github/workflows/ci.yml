@@ -23,7 +23,7 @@ jobs:
   test:
     name: Unit tests
     runs-on: ubuntu-latest
-    env:
+    env: &production_like_env
       DJANGO_SECRET_KEY: test-secret-key-not-used-anywhere-real
       DJANGO_DEBUG: "False"
       DJANGO_ALLOWED_HOSTS: example.com
@@ -47,17 +47,7 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
-    env:
-      DJANGO_SECRET_KEY: test-secret-key-not-used-anywhere-real
-      DJANGO_DEBUG: "False"
-      DJANGO_ALLOWED_HOSTS: example.com
-      DATABASE_URL: postgres://user:password@dbhost:5432/rolling_sloans?sslmode=require
-      AWS_ACCESS_KEY_ID: test-access-key
-      AWS_SECRET_ACCESS_KEY: test-secret-key
-      AWS_STORAGE_BUCKET_NAME: test-bucket
-      AWS_S3_ENDPOINT_URL: https://test.r2.cloudflarestorage.com
-      RESEND_API_KEY: test-resend-key
-      CLUB_EMAIL_FROM: test@example.com
+    env: *production_like_env
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
