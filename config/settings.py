@@ -129,8 +129,9 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # Object storage (Cloudflare R2, S3-compatible), via django-storages.
 #
 # The bucket is private: no AWS_DEFAULT_ACL='public-read', and
-# AWS_QUERYSTRING_AUTH is left at its default (True), so django-storages
-# itself never hands out unsigned public URLs. Actual upload/playback access
+# AWS_QUERYSTRING_AUTH is left unset here, so django-storages falls back to
+# its own default (True) rather than us ever setting it False and handing
+# out unsigned public URLs. Actual upload/playback access
 # uses short-lived presigned URLs issued explicitly per the storage-access
 # ADR (docs/adr/0004) — that presigning logic belongs to the Recordings
 # feature, not this base configuration.
