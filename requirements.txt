@@ -1,0 +1,8 @@
+Django==6.1
+django-environ==0.14.0
+psycopg[binary]==3.3.4
+django-storages==1.14.6
+django-anymail==15.1
+factory_boy==3.3.3
+Faker==40.37.0
+ruff==0.16.5
