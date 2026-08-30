@@ -5,6 +5,8 @@ on:
     - cron: "0 6 * * 0" # 06:00 UTC every Sunday
   workflow_dispatch: {}
 
+permissions: {}
+
 jobs:
   backup:
     name: Dump Neon Postgres to R2
