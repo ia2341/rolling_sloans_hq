@@ -12,30 +12,61 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
       - name: Lint
-        run: |
-          echo "TODO: tech stack is Django (see issue #3) but no app code exists yet."
-          echo "Once the Django project exists, replace this step with e.g. 'ruff check .' (or flake8) and remove this notice."
+        run: ruff check .
 
   test:
     name: Unit tests
     runs-on: ubuntu-latest
+    env:
+      DJANGO_SECRET_KEY: test-secret-key-not-used-anywhere-real
+      DJANGO_DEBUG: "False"
+      DJANGO_ALLOWED_HOSTS: example.com
+      DATABASE_URL: postgres://user:password@dbhost:5432/rolling_sloans?sslmode=require
+      AWS_ACCESS_KEY_ID: test-access-key
+      AWS_SECRET_ACCESS_KEY: test-secret-key
+      AWS_STORAGE_BUCKET_NAME: test-bucket
+      AWS_S3_ENDPOINT_URL: https://test.r2.cloudflarestorage.com
+      RESEND_API_KEY: test-resend-key
+      CLUB_EMAIL_FROM: test@example.com
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
       - name: Run tests
-        run: |
-          echo "TODO: tech stack is Django (see issue #3) but no app code exists yet."
-          echo "Once the Django project exists, replace this step with e.g. 'python manage.py test' (or pytest) and remove this notice."
+        run: python manage.py test
 
   build:
     name: Build
     runs-on: ubuntu-latest
+    env:
+      DJANGO_SECRET_KEY: test-secret-key-not-used-anywhere-real
+      DJANGO_DEBUG: "False"
+      DJANGO_ALLOWED_HOSTS: example.com
+      DATABASE_URL: postgres://user:password@dbhost:5432/rolling_sloans?sslmode=require
+      AWS_ACCESS_KEY_ID: test-access-key
+      AWS_SECRET_ACCESS_KEY: test-secret-key
+      AWS_STORAGE_BUCKET_NAME: test-bucket
+      AWS_S3_ENDPOINT_URL: https://test.r2.cloudflarestorage.com
+      RESEND_API_KEY: test-resend-key
+      CLUB_EMAIL_FROM: test@example.com
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
       - name: Build
-        run: |
-          echo "TODO: tech stack is Django (see issue #3) but no app code exists yet."
-          echo "Once the Django project exists, replace this step with e.g. 'pip install -r requirements.txt && python manage.py check --deploy' and remove this notice."
+        run: python manage.py check --deploy
 
   no-secrets-committed:
     name: No committed secrets or real member data

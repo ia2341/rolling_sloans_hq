@@ -36,6 +36,7 @@ class DeployCheckTests(unittest.TestCase):
             env=env,
             capture_output=True,
             text=True,
+            check=False,
         )
 
         self.assertEqual(
