@@ -13,6 +13,8 @@ This repo is public — it's the codebase for a private, auth-gated band website
 
 Use **`factory_boy`** + **`Faker`** to generate synthetic data at test-run time (fake names, `@example.com` emails, placeholder song titles like "Song A", synthetic dates). Do not check in static fixture files with hand-written data, even if it looks obviously fake — it's too easy for "realistic-looking" fixture data to drift into actually-real data over time.
 
+Each Django app defines its model factories in a `factories.py` module alongside its models (e.g. `identity/factories.py`), not in `tests/`, so other apps can import and reuse them. See `identity/factories.py` (`PersonFactory`) for the pattern: a `factory.django.DjangoModelFactory` with `factory.Faker(...)` fields for every attribute a test needs realistic-looking data for.
+
 ## Backstop
 
 The `no-secrets-committed` CI job scans every push/PR for common secret/credential filename patterns (`.env`, `*.pem`, `*.key`, etc.) as a mechanical safety net. It is not a substitute for judgment — it only catches filenames, not content. Before every commit, ask: *would this line identify a real Rolling Sloans member, or contain a real credential?* If yes, it doesn't go in.
