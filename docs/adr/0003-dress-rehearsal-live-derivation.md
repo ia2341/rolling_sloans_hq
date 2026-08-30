@@ -1,0 +1,3 @@
+# Dress Rehearsal derives its songs live from the setlist, not a stored snapshot
+
+A Dress Rehearsal's song coverage (`Rehearsal.is_full_setlist = true`) is computed at read-time from the Semester's current setlist, in concert order, rather than being materialized as explicit `RehearsalSong` rows at creation time. We considered snapshotting the setlist into `RehearsalSong` rows like any other rehearsal, but that risked the Dress Rehearsal silently going stale if the setlist changes (a song added, dropped, or reordered) after it was scheduled — live derivation guarantees it always reflects "the full setlist" as stated, which is the whole point of the Dress Rehearsal.
