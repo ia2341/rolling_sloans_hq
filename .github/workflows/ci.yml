@@ -70,7 +70,7 @@ jobs:
           set -e
           # Guard against the privacy-by-design constraint: no .env files, private keys,
           # or common credential file patterns should ever be committed.
-          if git ls-files | grep -E '(^|/)\.env($|\.[^.]+$)|\.pem$|\.key$|id_rsa|id_ed25519' ; then
+          if git ls-files | grep -vE '(^|/)\.env\.example$' | grep -E '(^|/)\.env($|\.[^.]+$)|\.pem$|\.key$|id_rsa|id_ed25519' ; then
             echo "Found a file that looks like a secret or credential. Remove it and use environment variables / a secrets manager instead."
             exit 1
           fi
