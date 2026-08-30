@@ -1,0 +1,5 @@
+# Semester is the scoping boundary for Song and Membership, not Person
+
+Each semester is a full "refresh" of roster, setlist, and schedule, so `Song` and `Membership` are re-created fresh per `Semester` rather than being a shared master list that's reused or versioned across terms — a song replayed years later gets a brand-new `Song` row, and a returning member's declared roles are re-entered on their new `Membership` rather than carried forward automatically. `Person` is the one exception: it persists across semesters as a stable identity, since band members legitimately span multiple terms across their MBA tenure and losing that continuity would orphan their history.
+
+We considered a shared `Song` catalog reused across semesters with per-semester requirement overlays, and a `Person`-level profile that persists roles across terms — both were rejected because the band's real turnover (roles and instrumentation genuinely change most semesters, especially fall) made "carry forward by default" the wrong default, and duplicate-by-semester is simpler to reason about than a reuse-with-override model.
