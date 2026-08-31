@@ -1,3 +1,6 @@
+from typing import ClassVar
+
+from django.conf import settings
 from django.db import models
 
 
@@ -26,3 +29,39 @@ class Role(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class Membership(models.Model):
+    """A Person's participation in one Semester, carrying that term's declared Roles.
+
+    Re-created fresh per Semester rather than carried forward, since declared
+    roles legitimately change term to term (per ADR-0001).
+    """
+
+    person = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    semester = models.ForeignKey(Semester, on_delete=models.CASCADE)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(fields=['person', 'semester'], name='unique_membership_per_person_per_semester'),
+        ]
+
+    def __str__(self):
+        """Return "<person> — <semester>" for admin/debug display."""
+        return f'{self.person} — {self.semester}'
+
+
+class MembershipRole(models.Model):
+    """A Role a Membership has declared for its Semester."""
+
+    membership = models.ForeignKey(Membership, on_delete=models.CASCADE)
+    role = models.ForeignKey(Role, on_delete=models.CASCADE)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(fields=['membership', 'role'], name='unique_role_per_membership'),
+        ]
+
+    def __str__(self):
+        """Return "<membership> — <role>" for admin/debug display."""
+        return f'{self.membership} — {self.role}'
