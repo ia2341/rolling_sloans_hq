@@ -38,13 +38,15 @@ print(json.dumps({
 
 
 def run_settings_subprocess(debug_value, env_overrides=None):
-    """Spawn a fresh Python process that imports config.settings under the given DJANGO_DEBUG value.
-
-    Settings are read once at process startup, so DEBUG-dependent behavior
-    (including startup failures) can only be observed in a subprocess, not
-    by mutating django.conf.settings in-process. Returns the raw
-    CompletedProcess so callers can assert on either a clean exit (via
-    load_settings_with_debug) or a startup failure.
+    """
+    Run the Django settings module in a fresh process with the specified debug setting and environment overrides.
+    
+    Parameters:
+        debug_value: Value assigned to `DJANGO_DEBUG`.
+        env_overrides: Optional environment values that override the shared test environment.
+    
+    Returns:
+        The completed subprocess result, including its exit status, standard output, and standard error.
     """
     env = os.environ.copy()
     env.update(BASE_ENV)
@@ -62,7 +64,16 @@ def run_settings_subprocess(debug_value, env_overrides=None):
 
 
 def load_settings_with_debug(debug_value):
-    """Run settings under the given DJANGO_DEBUG value and parse the printed settings, failing the test on a non-zero exit."""
+    """
+    Load Django settings for the specified debug mode.
+    
+    Parameters:
+        debug_value: The value assigned to DJANGO_DEBUG.
+    
+    Returns:
+        dict: The settings printed by the subprocess.
+    
+    """
     result = run_settings_subprocess(debug_value)
     result.check_returncode()
     return json.loads(result.stdout)

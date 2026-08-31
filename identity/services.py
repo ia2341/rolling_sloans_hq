@@ -51,11 +51,14 @@ def build_set_password_url(person):
 
 
 def send_invite_email(person):
-    """Email person their set-password link; raise EmailDeliveryError if nothing was sent.
-
-    `send_mail` returns the number of messages successfully delivered (per
-    Django's docs); a return of 0 means the call succeeded but nothing was
-    actually sent, which we treat as a failure just like a raised exception.
+    """
+    Send the person an invitation containing a link to set their password.
+    
+    Parameters:
+        person: The person who will receive the invitation.
+    
+    Raises:
+        EmailDeliveryError: If the invitation email is not delivered.
     """
     set_password_url = build_set_password_url(person)
     subject = 'You have been invited to Rolling Sloans'
