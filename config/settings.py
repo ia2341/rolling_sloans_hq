@@ -37,6 +37,7 @@ INSTALLED_APPS = [
     'storages',
     'anymail',
     'identity',
+    'scheduling',
 ]
 
 MIDDLEWARE = [
