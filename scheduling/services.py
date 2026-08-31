@@ -7,7 +7,7 @@ from botocore.exceptions import ClientError
 from django.core.files.storage import storages
 from django.db import IntegrityError, transaction
 
-from scheduling.models import Recording, RehearsalSong
+from scheduling.models import Recording, RehearsalSong, Semester
 
 MAX_RECORDING_FILE_SIZE = 50 * 1024 * 1024
 PRESIGNED_URL_EXPIRY_SECONDS = 900
@@ -148,3 +148,27 @@ def _validate_recording_metadata(content_type: str | None, file_size: int | None
         raise RecordingUploadError('Recording uploads must include a positive file size.')
     if file_size > MAX_RECORDING_FILE_SIZE:
         raise RecordingUploadError('Recording uploads may not exceed 50 MB.')
+
+
+def get_current_semester() -> Semester | None:
+    """Return the most-recently-created Semester, or None if none exist yet.
+
+    "Current semester" isn't specified anywhere else in the domain map
+    (issue #56); this is the single place that decides it, so every read
+    route that needs "the current semester" reuses this instead of
+    re-deriving its own notion of recency.
+    """
+    return Semester.objects.order_by('-id').first()
+
+
+def rehearsal_count_target(song) -> int:
+    """Return how many Rehearsals a Song is targeted to appear in.
+
+    Nothing in the domain model persists a per-Song rehearsal-count target
+    (issue #56); the closest available proxy is every non-Dress Rehearsal in
+    the Song's Semester, since the Dress Rehearsal never carries persisted
+    RehearsalSong rows (ADR-0003) and so can't be part of a song's actual
+    count either. Centralized here so /songs/<id>/ and /setlist/ don't
+    re-derive it.
+    """
+    return song.semester.rehearsal_set.filter(is_full_setlist=False).count()
