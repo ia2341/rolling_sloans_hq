@@ -478,15 +478,32 @@ class ConflictWindow(models.Model):
     unavailable_start = models.TimeField()
     unavailable_end = models.TimeField()
 
+    def _outside_rehearsal_span(self):
+        """True if unavailable_start or unavailable_end falls outside the parent Rehearsal's time span."""
+        rehearsal = self.conflict.rehearsal
+        return not (
+            rehearsal.start_time <= self.unavailable_start <= rehearsal.end_time
+            and rehearsal.start_time <= self.unavailable_end <= rehearsal.end_time
+        )
+
     def clean(self):
-        """Reject a window whose start/end falls outside the parent Rehearsal's time span."""
+        """Surface a window outside the parent Rehearsal's time span as a normal form error, not a 500."""
         if not (self.conflict_id and self.unavailable_start and self.unavailable_end):
             return
-        rehearsal = self.conflict.rehearsal
-        if not (rehearsal.start_time <= self.unavailable_start <= rehearsal.end_time):
-            raise ValidationError({'unavailable_start': "Must fall within the Rehearsal's time span."})
-        if not (rehearsal.start_time <= self.unavailable_end <= rehearsal.end_time):
-            raise ValidationError({'unavailable_end': "Must fall within the Rehearsal's time span."})
+        if self._outside_rehearsal_span():
+            message = "Must fall within the Rehearsal's time span."
+            raise ValidationError({'unavailable_start': message, 'unavailable_end': message})
+
+    def save(self, *args, **kwargs):
+        """Reject a window outside the parent Rehearsal's time span before saving.
+
+        Mirrors RehearsalSong.save()'s belt-and-suspenders check, so this is
+        enforced for every write path (e.g. .objects.create()), not only
+        callers that run full_clean() first (e.g. a ModelForm).
+        """
+        if self._outside_rehearsal_span():
+            raise ValueError("ConflictWindow's unavailable_start/unavailable_end must fall within the Rehearsal's time span.")
+        super().save(*args, **kwargs)
 
     def __str__(self):
         """Return "<conflict> <unavailable_start>-<unavailable_end>" for admin/debug display."""

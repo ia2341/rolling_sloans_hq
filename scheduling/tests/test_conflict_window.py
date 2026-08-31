@@ -78,6 +78,14 @@ class ConflictWindowValidationTests(TestCase):
 
         window.full_clean(exclude=['id'])
 
+    def test_save_rejects_a_window_outside_the_rehearsal_span_even_without_full_clean(self):
+        """save() enforces the span check directly, so a caller that skips full_clean() (e.g. .objects.create()) can't bypass it."""
+        rehearsal = RehearsalFactory(start_time=time(18, 0), end_time=time(19, 30))
+        conflict = ConflictFactory(rehearsal=rehearsal, type=Conflict.PARTIAL)
+
+        with self.assertRaises(ValueError):
+            ConflictWindow.objects.create(conflict=conflict, unavailable_start=time(17, 0), unavailable_end=time(18, 30))
+
 
 class ConflictAggregationTests(TestCase):
     def test_rehearsal_conflicts_with_windows_are_returned_via_select_and_prefetch(self):
