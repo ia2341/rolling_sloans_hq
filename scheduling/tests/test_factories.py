@@ -1,6 +1,11 @@
 import unittest
 
-from scheduling.factories import RoleFactory, SemesterFactory, SongFactory
+from scheduling.factories import (
+    RoleFactory,
+    SemesterFactory,
+    SongFactory,
+    SongRoleRequirementFactory,
+)
 
 
 class SemesterFactoryTests(unittest.TestCase):
@@ -42,3 +47,13 @@ class SongFactoryTests(unittest.TestCase):
 
         self.assertNotEqual(first.title, second.title)
         self.assertNotEqual(first.position, second.position)
+
+
+class SongRoleRequirementFactoryTests(unittest.TestCase):
+    def test_builds_requirement_with_synthetic_data(self):
+        """SongRoleRequirementFactory builds a requirement with a Song, Role, and positive count."""
+        requirement = SongRoleRequirementFactory.build()
+
+        self.assertIsNotNone(requirement.song)
+        self.assertIsNotNone(requirement.role)
+        self.assertGreater(requirement.count, 0)

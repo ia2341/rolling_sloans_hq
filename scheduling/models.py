@@ -98,3 +98,25 @@ class Song(models.Model):
     def __str__(self):
         """Return "<title> (<semester>)" for admin/debug display."""
         return f'{self.title} ({self.semester})'
+
+
+class SongRoleRequirement(models.Model):
+    """A target headcount for one Role on one Song (e.g. 3 singers).
+
+    The count is a target for admins to track fill-status against, not a
+    hard cap — nothing here prevents assigning more or fewer people than
+    requested (issue #33).
+    """
+
+    song = models.ForeignKey(Song, on_delete=models.CASCADE)
+    role = models.ForeignKey(Role, on_delete=models.CASCADE)
+    count = models.PositiveIntegerField()
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(fields=['song', 'role'], name='unique_role_requirement_per_song'),
+        ]
+
+    def __str__(self):
+        """Return "<song> — <count> x <role>" for admin/debug display."""
+        return f'{self.song} — {self.count} x {self.role}'
