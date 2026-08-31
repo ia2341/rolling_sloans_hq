@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from uuid import uuid4
 
+from botocore.exceptions import ClientError
 from django.core.files.storage import storages
 
 from scheduling.models import Recording, RehearsalSong
@@ -41,26 +42,15 @@ class RecordingUploadReservation:
     upload_url: str
 
 
-def reserve_recording_upload(
-    rehearsal_song: RehearsalSong,
-    uploaded_by,
-    filename: str,
-    content_type: str,
-    file_size: int,
-) -> RecordingUploadReservation:
+def reserve_recording_upload(content_type: str, file_size: int) -> RecordingUploadReservation:
     """Validate client metadata and return a short-lived direct R2 PUT reservation."""
     _validate_recording_metadata(content_type, file_size)
     object_key = _new_recording_object_key(content_type)
-    storage = _recording_storage()
-    upload_url = storage.connection.meta.client.generate_presigned_url(
+    upload_url = _presign(
         'put_object',
-        Params={
-            'Bucket': storage.bucket_name,
-            'Key': object_key,
-            'ContentType': content_type,
-        },
-        ExpiresIn=PRESIGNED_URL_EXPIRY_SECONDS,
-        HttpMethod='PUT',
+        object_key,
+        extra_params={'ContentType': content_type},
+        http_method='PUT',
     )
     return RecordingUploadReservation(object_key=object_key, upload_url=upload_url)
 
@@ -73,11 +63,16 @@ def confirm_recording_upload(
 ) -> Recording:
     """Verify R2's actual object metadata, then persist the corresponding Recording."""
     _validate_recording_object_key(object_key)
+    if Recording.objects.filter(file=object_key).exists():
+        raise RecordingUploadError('This recording object has already been confirmed.')
     storage = _recording_storage()
-    uploaded_object = storage.connection.meta.client.head_object(
-        Bucket=storage.bucket_name,
-        Key=object_key,
-    )
+    try:
+        uploaded_object = storage.connection.meta.client.head_object(
+            Bucket=storage.bucket_name,
+            Key=object_key,
+        )
+    except ClientError as error:
+        raise RecordingUploadError('The uploaded recording object could not be found.') from error
     content_type = uploaded_object.get('ContentType')
     file_size = uploaded_object.get('ContentLength')
     _validate_recording_metadata(content_type, file_size)
@@ -93,12 +88,18 @@ def confirm_recording_upload(
 
 def create_recording_playback_url(recording: Recording) -> str:
     """Return a freshly signed, short-lived R2 GET URL for a private Recording."""
+    return _presign('get_object', recording.file.name, http_method='GET')
+
+
+def _presign(client_method: str, object_key: str, http_method: str, extra_params=None) -> str:
+    """Return a short-lived signed R2 URL for the given S3 client method and object key."""
     storage = _recording_storage()
+    params = {'Bucket': storage.bucket_name, 'Key': object_key, **(extra_params or {})}
     return storage.connection.meta.client.generate_presigned_url(
-        'get_object',
-        Params={'Bucket': storage.bucket_name, 'Key': recording.file.name},
+        client_method,
+        Params=params,
         ExpiresIn=PRESIGNED_URL_EXPIRY_SECONDS,
-        HttpMethod='GET',
+        HttpMethod=http_method,
     )
 
 

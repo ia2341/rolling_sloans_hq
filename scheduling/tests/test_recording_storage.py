@@ -2,10 +2,11 @@
 
 from unittest.mock import patch
 
+from botocore.exceptions import ClientError
 from django.test import TestCase
 
 from identity.factories import PersonFactory
-from scheduling.factories import RehearsalSongFactory
+from scheduling.factories import RecordingFactory, RehearsalSongFactory
 from scheduling.models import Recording
 from scheduling.services import (
     MAX_RECORDING_FILE_SIZE,
@@ -23,19 +24,11 @@ class RecordingUploadReservationTests(TestCase):
     def test_rejects_unsupported_content_types_and_oversized_files(self, recording_storage):
         """Reservation rejects invalid client metadata before it contacts R2."""
         storage = recording_storage.return_value
-        rehearsal_song = RehearsalSongFactory()
-        uploader = PersonFactory()
 
         with self.assertRaises(RecordingUploadError):
-            reserve_recording_upload(rehearsal_song, uploader, 'take.mov', 'video/quicktime', 1)
+            reserve_recording_upload('video/quicktime', 1)
         with self.assertRaises(RecordingUploadError):
-            reserve_recording_upload(
-                rehearsal_song,
-                uploader,
-                'take.m4a',
-                'audio/mp4',
-                MAX_RECORDING_FILE_SIZE + 1,
-            )
+            reserve_recording_upload('audio/mp4', MAX_RECORDING_FILE_SIZE + 1)
 
         storage.connection.meta.client.generate_presigned_url.assert_not_called()
 
@@ -43,18 +36,10 @@ class RecordingUploadReservationTests(TestCase):
     def test_reserves_a_private_audio_upload_with_a_presigned_put_url(self, recording_storage):
         """Reservation returns an opaque object key and the R2 client's signed PUT URL."""
         storage = recording_storage.return_value
-        rehearsal_song = RehearsalSongFactory()
-        uploader = PersonFactory()
         client = storage.connection.meta.client
         client.generate_presigned_url.return_value = 'https://r2.example/upload-signature'
 
-        reservation = reserve_recording_upload(
-            rehearsal_song,
-            uploader,
-            'take.m4a',
-            'audio/mp4',
-            1_024,
-        )
+        reservation = reserve_recording_upload('audio/mp4', 1_024)
 
         self.assertTrue(reservation.object_key.startswith('recordings/'))
         self.assertEqual(reservation.upload_url, 'https://r2.example/upload-signature')
@@ -116,6 +101,41 @@ class RecordingUploadConfirmationTests(TestCase):
 
         self.assertFalse(Recording.objects.exists())
 
+    @patch('scheduling.services._recording_storage')
+    def test_rejects_an_object_key_that_was_never_uploaded(self, recording_storage):
+        """Confirmation surfaces a missing R2 object as a RecordingUploadError, not a raw ClientError."""
+        storage = recording_storage.return_value
+        rehearsal_song = RehearsalSongFactory()
+        uploader = PersonFactory()
+        storage.connection.meta.client.head_object.side_effect = ClientError(
+            {'Error': {'Code': '404', 'Message': 'Not Found'}}, 'HeadObject'
+        )
+
+        with self.assertRaises(RecordingUploadError):
+            confirm_recording_upload(rehearsal_song, uploader, 'recordings/never-uploaded.mp3')
+
+        self.assertFalse(Recording.objects.exists())
+
+    @patch('scheduling.services._recording_storage')
+    def test_rejects_confirming_the_same_object_key_twice(self, recording_storage):
+        """Confirmation refuses to create a second Recording for an already-confirmed object key."""
+        storage = recording_storage.return_value
+        RecordingFactory(file='recordings/already-confirmed.mp3')
+        storage.connection.meta.client.head_object.return_value = {
+            'ContentType': 'audio/mpeg',
+            'ContentLength': 2_048,
+        }
+
+        with self.assertRaises(RecordingUploadError):
+            confirm_recording_upload(
+                RehearsalSongFactory(),
+                PersonFactory(),
+                'recordings/already-confirmed.mp3',
+            )
+
+        self.assertEqual(Recording.objects.count(), 1)
+        storage.connection.meta.client.head_object.assert_not_called()
+
 
 class RecordingPlaybackTests(TestCase):
     """Tests for issuing ephemeral private playback URLs."""
@@ -124,13 +144,7 @@ class RecordingPlaybackTests(TestCase):
     def test_generates_a_new_signed_get_url_for_every_playback_request(self, recording_storage):
         """Playback delegates every request to R2 instead of returning a permanent cached URL."""
         storage = recording_storage.return_value
-        recording = Recording.objects.create(
-            rehearsal_song=RehearsalSongFactory(),
-            uploaded_by=PersonFactory(),
-            file='recordings/take.m4a',
-            content_type='audio/mp4',
-            file_size=1_024,
-        )
+        recording = RecordingFactory(file='recordings/take.m4a')
         client = storage.connection.meta.client
         client.generate_presigned_url.side_effect = [
             'https://r2.example/playback-one',
