@@ -2,6 +2,7 @@ from django.contrib import admin
 
 from .models import (
     Conflict,
+    ConflictWindow,
     Membership,
     MembershipRole,
     Rehearsal,
@@ -127,6 +128,13 @@ class RehearsalSongAdmin(admin.ModelAdmin):
     readonly_fields = ('start_time', 'end_time')
 
 
+class ConflictWindowInline(admin.TabularInline):
+    """Edit a partial Conflict's unavailable time ranges inline on the Conflict admin page (issue #49)."""
+
+    model = ConflictWindow
+    extra = 1
+
+
 @admin.register(Conflict)
 class ConflictAdmin(admin.ModelAdmin):
     """Admin for a Person's declared unavailability on a Rehearsal, editable in place (issue #48)."""
@@ -135,3 +143,12 @@ class ConflictAdmin(admin.ModelAdmin):
     list_filter = ('type', 'rehearsal__semester')
     search_fields = ('person__name', 'person__email')
     readonly_fields = ('created_at', 'updated_at')
+    inlines = (ConflictWindowInline,)
+
+
+@admin.register(ConflictWindow)
+class ConflictWindowAdmin(admin.ModelAdmin):
+    """Admin for a single unavailable time range within a partial Conflict, for direct lookup/filtering (issue #49)."""
+
+    list_display = ('conflict', 'unavailable_start', 'unavailable_end')
+    list_filter = ('conflict__rehearsal__semester',)

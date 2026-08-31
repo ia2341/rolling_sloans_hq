@@ -7,6 +7,7 @@ from faker import Faker
 from identity.factories import PersonFactory
 from scheduling.models import (
     Conflict,
+    ConflictWindow,
     Membership,
     Recording,
     Rehearsal,
@@ -147,6 +148,21 @@ class ConflictFactory(factory.django.DjangoModelFactory):
     person = factory.SubFactory(PersonFactory)
     rehearsal = factory.SubFactory(RehearsalFactory)
     type = Conflict.FULL_CONFLICT
+
+
+class ConflictWindowFactory(factory.django.DjangoModelFactory):
+    """Builds a disjoint unavailable time range for a partial Conflict, with a fresh partial Conflict by default.
+
+    Defaults 18:15-18:45, which falls within RehearsalFactory's default
+    18:00-19:30 span, so the default build is valid without overrides.
+    """
+
+    class Meta:
+        model = ConflictWindow
+
+    conflict = factory.SubFactory(ConflictFactory, type=Conflict.PARTIAL)
+    unavailable_start = time(18, 15)
+    unavailable_end = time(18, 45)
 
 
 class RecordingFactory(factory.django.DjangoModelFactory):

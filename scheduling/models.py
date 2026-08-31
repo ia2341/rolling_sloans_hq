@@ -446,9 +446,68 @@ class Conflict(models.Model):
             models.UniqueConstraint(fields=['person', 'rehearsal'], name='unique_conflict_per_person_per_rehearsal'),
         ]
 
+    def _was_partial_in_db(self):
+        """True if this row exists in the DB and was last saved with type=PARTIAL."""
+        if self._state.adding:
+            return False
+        return Conflict.objects.filter(pk=self.pk, type=self.PARTIAL).exists()
+
+    def save(self, *args, **kwargs):
+        """Save, then clear stale ConflictWindow rows if type just flipped from PARTIAL to FULL_CONFLICT."""
+        flipped_to_full = self.type == self.FULL_CONFLICT and self._was_partial_in_db()
+        super().save(*args, **kwargs)
+        if flipped_to_full:
+            self.conflictwindow_set.all().delete()
+
     def __str__(self):
         """Return "<person> — <rehearsal> (<type>)" for admin/debug display."""
         return f'{self.person} — {self.rehearsal} ({self.type})'
+
+
+class ConflictWindow(models.Model):
+    """One disjoint unavailable time range within a partial Conflict's Rehearsal span (issue #49).
+
+    Represents non-contiguous partial conflicts (e.g. unavailable 6-7pm and
+    again 8:30-9pm) as separate rows. A full_conflict Conflict is expected to
+    have no windows in normal application use — that's not enforced as a DB
+    constraint, but Conflict.save() deletes any stale windows when an
+    existing row's type flips from partial to full_conflict.
+    """
+
+    conflict = models.ForeignKey(Conflict, on_delete=models.CASCADE)
+    unavailable_start = models.TimeField()
+    unavailable_end = models.TimeField()
+
+    def _outside_rehearsal_span(self):
+        """True if unavailable_start or unavailable_end falls outside the parent Rehearsal's time span."""
+        rehearsal = self.conflict.rehearsal
+        return not (
+            rehearsal.start_time <= self.unavailable_start <= rehearsal.end_time
+            and rehearsal.start_time <= self.unavailable_end <= rehearsal.end_time
+        )
+
+    def clean(self):
+        """Surface a window outside the parent Rehearsal's time span as a normal form error, not a 500."""
+        if not (self.conflict_id and self.unavailable_start and self.unavailable_end):
+            return
+        if self._outside_rehearsal_span():
+            message = "Must fall within the Rehearsal's time span."
+            raise ValidationError({'unavailable_start': message, 'unavailable_end': message})
+
+    def save(self, *args, **kwargs):
+        """Reject a window outside the parent Rehearsal's time span before saving.
+
+        Mirrors RehearsalSong.save()'s belt-and-suspenders check, so this is
+        enforced for every write path (e.g. .objects.create()), not only
+        callers that run full_clean() first (e.g. a ModelForm).
+        """
+        if self._outside_rehearsal_span():
+            raise ValueError("ConflictWindow's unavailable_start/unavailable_end must fall within the Rehearsal's time span.")
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        """Return "<conflict> <unavailable_start>-<unavailable_end>" for admin/debug display."""
+        return f'{self.conflict} {self.unavailable_start}-{self.unavailable_end}'
 
 
 class Recording(models.Model):
