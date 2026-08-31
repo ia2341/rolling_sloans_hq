@@ -1,6 +1,7 @@
 import unittest
 
 from scheduling.factories import (
+    ConflictFactory,
     RecordingFactory,
     RehearsalFactory,
     RehearsalSongFactory,
@@ -10,6 +11,7 @@ from scheduling.factories import (
     SongRoleAssignmentFactory,
     SongRoleRequirementFactory,
 )
+from scheduling.models import Conflict
 
 
 class SemesterFactoryTests(unittest.TestCase):
@@ -100,6 +102,16 @@ class RehearsalSongFactoryTests(unittest.TestCase):
         self.assertIsNotNone(rehearsal_song.song)
         self.assertGreater(rehearsal_song.order, 0)
         self.assertEqual(rehearsal_song.slot_count, 1)
+
+
+class ConflictFactoryTests(unittest.TestCase):
+    def test_builds_conflict_with_synthetic_data(self):
+        """ConflictFactory builds a Conflict with a Person, Rehearsal, and a full_conflict type by default."""
+        conflict = ConflictFactory.build()
+
+        self.assertIsNotNone(conflict.person)
+        self.assertIsNotNone(conflict.rehearsal)
+        self.assertEqual(conflict.type, Conflict.FULL_CONFLICT)
 
 
 class RecordingFactoryTests(unittest.TestCase):

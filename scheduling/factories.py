@@ -6,6 +6,7 @@ from faker import Faker
 
 from identity.factories import PersonFactory
 from scheduling.models import (
+    Conflict,
     Membership,
     Recording,
     Rehearsal,
@@ -135,6 +136,17 @@ class RehearsalSongFactory(factory.django.DjangoModelFactory):
     song = factory.SubFactory(SongFactory)
     order = factory.Sequence(lambda n: n + 1)
     slot_count = 1
+
+
+class ConflictFactory(factory.django.DjangoModelFactory):
+    """Builds a Person's declared unavailability for a Rehearsal, with a fresh Person/Rehearsal by default."""
+
+    class Meta:
+        model = Conflict
+
+    person = factory.SubFactory(PersonFactory)
+    rehearsal = factory.SubFactory(RehearsalFactory)
+    type = Conflict.FULL_CONFLICT
 
 
 class RecordingFactory(factory.django.DjangoModelFactory):
