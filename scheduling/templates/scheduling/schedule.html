@@ -1,0 +1,10 @@
+<!doctype html>
+<title>Schedule</title>
+<h1>{% if semester %}{{ semester }} Schedule{% else %}Schedule{% endif %}</h1>
+<ul>
+  {% for rehearsal in rehearsals %}
+    <li>{{ rehearsal.date }} {{ rehearsal.start_time }}&ndash;{{ rehearsal.end_time }}</li>
+  {% empty %}
+    <li>No rehearsals scheduled.</li>
+  {% endfor %}
+</ul>
