@@ -8,12 +8,23 @@ from identity.factories import PersonFactory
 from scheduling.factories import RoleFactory, SemesterFactory
 from scheduling.models import (
     Rehearsal,
+    RehearsalSong,
     Role,
     Semester,
     Song,
     SongRoleAssignment,
     SongRoleRequirement,
 )
+
+# Empty RehearsalSongInline management-form data, required by Django's admin
+# formset validation whenever posting to the Rehearsal add/change form
+# (issue #37 added the inline).
+REHEARSAL_SONG_INLINE_MANAGEMENT_FORM_DATA = {
+    'rehearsalsong_set-TOTAL_FORMS': '0',
+    'rehearsalsong_set-INITIAL_FORMS': '0',
+    'rehearsalsong_set-MIN_NUM_FORMS': '0',
+    'rehearsalsong_set-MAX_NUM_FORMS': '1000',
+}
 
 
 class AdminRegistrationTests(TestCase):
@@ -40,6 +51,13 @@ class AdminRegistrationTests(TestCase):
     def test_rehearsal_is_registered(self):
         """Rehearsal is registered in Django admin for create/list/edit (issue #36)."""
         self.assertIn(Rehearsal, admin.site._registry)
+
+    def test_rehearsal_song_is_registered_and_inlined_on_rehearsal(self):
+        """RehearsalSong is registered directly and inlined on the Rehearsal admin page (issue #37)."""
+        self.assertIn(RehearsalSong, admin.site._registry)
+        rehearsal_admin = admin.site._registry[Rehearsal]
+        inline_models = [inline.model for inline in rehearsal_admin.inlines]
+        self.assertIn(RehearsalSong, inline_models)
 
 
 class RoleAdminDeletionTests(TestCase):
@@ -71,6 +89,7 @@ class RehearsalAdminCreateTests(TestCase):
             'end_time': '',
             'setup_grace_minutes': '',
             'teardown_grace_minutes': '',
+            **REHEARSAL_SONG_INLINE_MANAGEMENT_FORM_DATA,
         })
 
         self.assertEqual(response.status_code, 302, response.context['adminform'].form.errors if response.status_code == 200 else None)
@@ -92,6 +111,7 @@ class RehearsalAdminCreateTests(TestCase):
             'end_time': '',
             'setup_grace_minutes': '',
             'teardown_grace_minutes': '',
+            **REHEARSAL_SONG_INLINE_MANAGEMENT_FORM_DATA,
         })
 
         self.assertEqual(response.status_code, 200)

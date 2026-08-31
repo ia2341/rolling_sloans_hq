@@ -272,3 +272,81 @@ class Rehearsal(models.Model):
     def __str__(self):
         """Return "<semester> — <date>" for admin/debug display."""
         return f'{self.semester} — {self.date}'
+
+    @property
+    def dress_rehearsal_songs(self):
+        """The parent Semester's current setlist in concert-position order, computed live (ADR-0003).
+
+        Meaningful for the Dress Rehearsal (is_full_setlist=True); no
+        RehearsalSong rows are read or persisted here, so this can never go
+        stale relative to the setlist.
+        """
+        return Song.objects.filter(semester=self.semester).order_by('position')
+
+
+class RehearsalSong(models.Model):
+    """A Song scheduled into a timed slot within a non-Dress Rehearsal (issue #37).
+
+    start_time/end_time are computed from the Rehearsal's fixed window and
+    the Semester's default_song_slot_count, then persisted at save time
+    rather than derived live at read time. A slot_count greater than 1 eats
+    into the Rehearsal's fixed total time (i.e. takes multiple per-slot
+    shares) rather than extending Rehearsal.end_time. Only valid for a
+    Rehearsal with is_full_setlist=False — the Dress Rehearsal derives its
+    songs live from the setlist instead (see Rehearsal.dress_rehearsal_songs
+    and ADR-0003).
+    """
+
+    rehearsal = models.ForeignKey(Rehearsal, on_delete=models.CASCADE)
+    song = models.ForeignKey(Song, on_delete=models.CASCADE)
+    order = models.PositiveIntegerField()
+    slot_count = models.PositiveIntegerField(default=1)
+    start_time = models.TimeField(editable=False)
+    end_time = models.TimeField(editable=False)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(fields=['rehearsal', 'order'], name='unique_order_per_rehearsal'),
+        ]
+        ordering: ClassVar[list[str]] = ['rehearsal', 'order']
+
+    def _slot_duration(self):
+        """One song-slot's length: the Rehearsal's fixed window divided by its Semester's slot count."""
+        start = datetime.combine(self.rehearsal.date, self.rehearsal.start_time)
+        end = datetime.combine(self.rehearsal.date, self.rehearsal.end_time)
+        return (end - start) / self.rehearsal.semester.default_song_slot_count
+
+    def _compute_times(self):
+        """Derive start_time/end_time from the slot_counts of lower-order rows plus this row's own."""
+        prior_slots = RehearsalSong.objects.filter(
+            rehearsal=self.rehearsal, order__lt=self.order,
+        ).exclude(pk=self.pk).aggregate(total=models.Sum('slot_count'))['total'] or 0
+        slot_duration = self._slot_duration()
+        rehearsal_start = datetime.combine(self.rehearsal.date, self.rehearsal.start_time)
+        start = rehearsal_start + prior_slots * slot_duration
+        end = start + self.slot_count * slot_duration
+        self.start_time = start.time()
+        self.end_time = end.time()
+
+    def clean(self):
+        """Surface an attempted Dress Rehearsal attachment as a normal form error, not a 500."""
+        if self.rehearsal_id and self.rehearsal.is_full_setlist:
+            raise ValidationError({
+                'rehearsal': (
+                    'RehearsalSong rows cannot be added to the Dress Rehearsal '
+                    '(is_full_setlist=True); its songs are derived live from the setlist instead.'
+                ),
+            })
+
+    def save(self, *args, **kwargs):
+        """Reject the Dress Rehearsal, then compute start_time/end_time before saving."""
+        if self.rehearsal.is_full_setlist:
+            raise ValueError(
+                'RehearsalSong rows cannot be added to the Dress Rehearsal (is_full_setlist=True).'
+            )
+        self._compute_times()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        """Return "<song> @ <rehearsal> (order <order>)" for admin/debug display."""
+        return f'{self.song} @ {self.rehearsal} (order {self.order})'
