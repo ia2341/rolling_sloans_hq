@@ -3,6 +3,7 @@
 from typing import ClassVar
 
 from django import forms
+from django.db import transaction
 
 from scheduling.models import Membership, MembershipRole, Role
 
@@ -33,11 +34,13 @@ class MembershipRolesForm(forms.ModelForm):
             self.fields['roles'].initial = Role.objects.filter(membershiprole__membership=self.instance)
 
     def save(self, commit=True):
-        """Persist the Membership (creating it on first save), then sync its MembershipRole rows."""
-        membership = super().save(commit=commit)
+        """Persist the Membership (creating it on first save) and sync its MembershipRole rows atomically."""
         if commit:
-            self._sync_roles(membership)
+            with transaction.atomic():
+                membership = super().save(commit=True)
+                self._sync_roles(membership)
         else:
+            membership = super().save(commit=False)
             self.save_m2m = lambda: self._sync_roles(membership)
         return membership
 

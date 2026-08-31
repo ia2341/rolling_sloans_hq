@@ -73,13 +73,14 @@ class ProfileView(BaseView, View):
 
     def get(self, request):
         """Render the member's current declared Roles for the current Semester."""
-        return render(request, self.template_name, self._get_context())
+        semester = get_current_semester()
+        return render(request, self.template_name, self._build_context(semester))
 
     def post(self, request):
         """Validate and persist the member's declared Roles, or re-render the form with errors."""
         semester = get_current_semester()
         if semester is None:
-            return render(request, self.template_name, self._get_context())
+            return render(request, self.template_name, self._build_context(semester))
         form = MembershipRolesForm(request.POST, instance=self._get_or_build_membership(semester))
         if form.is_valid():
             form.save()
@@ -87,9 +88,8 @@ class ProfileView(BaseView, View):
             return redirect('scheduling:profile')
         return render(request, self.template_name, {'form': form, 'semester': semester})
 
-    def _get_context(self):
-        """Build the GET-time context: the bound form plus the current Semester, or neither if there's none."""
-        semester = get_current_semester()
+    def _build_context(self, semester):
+        """Build the GET-time context for `semester`: the bound form, or neither if there's no Semester yet."""
         if semester is None:
             return {'semester': None}
         form = MembershipRolesForm(instance=self._get_or_build_membership(semester))
