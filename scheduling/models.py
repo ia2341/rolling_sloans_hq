@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from typing import ClassVar
+from typing import ClassVar, NamedTuple
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -195,6 +195,13 @@ def _membership_role_deleted(sender, instance, **kwargs):
     _reevaluate_song_role_assignments_for(membership, instance.role)
 
 
+class RehearsalAttendance(NamedTuple):
+    """Whether a Person is needed at a Rehearsal's start and/or end (issue #38)."""
+
+    needed_from_start: bool
+    needed_until_end: bool
+
+
 class Rehearsal(models.Model):
     """A dated, timed event within a Semester (issue #36).
 
@@ -283,6 +290,39 @@ class Rehearsal(models.Model):
         stale relative to the setlist.
         """
         return Song.objects.filter(semester=self.semester).order_by('position')
+
+    def attendance_for(self, person):
+        """Derive whether `person` is needed at this Rehearsal's start and/or end (issue #38).
+
+        Computed live from the Person's SongRoleAssignments compared against
+        which Song covers this Rehearsal's first/last slot — never a stored
+        field, so it can't drift out of sync if assignments or the schedule
+        change later. For the Dress Rehearsal (is_full_setlist=True), which
+        has no RehearsalSong rows by design (ADR-0003), the first/last slot
+        comes from the live setlist (dress_rehearsal_songs) instead.
+        """
+        if self.is_full_setlist:
+            songs = list(self.dress_rehearsal_songs)
+            if not songs:
+                return RehearsalAttendance(needed_from_start=False, needed_until_end=False)
+            first_song, last_song = songs[0], songs[-1]
+        else:
+            bounds = RehearsalSong.objects.filter(rehearsal=self).aggregate(
+                first=models.Min('order'), last=models.Max('order'),
+            )
+            if bounds['first'] is None:
+                return RehearsalAttendance(needed_from_start=False, needed_until_end=False)
+            first_song = RehearsalSong.objects.get(rehearsal=self, order=bounds['first']).song
+            last_song = RehearsalSong.objects.get(rehearsal=self, order=bounds['last']).song
+        assigned_song_ids = set(
+            SongRoleAssignment.objects.filter(
+                person=person, song__in=(first_song, last_song),
+            ).values_list('song_id', flat=True)
+        )
+        return RehearsalAttendance(
+            needed_from_start=first_song.id in assigned_song_ids,
+            needed_until_end=last_song.id in assigned_song_ids,
+        )
 
 
 class RehearsalSong(models.Model):
