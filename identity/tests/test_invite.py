@@ -5,9 +5,16 @@ import re
 from django.core import mail
 from django.test import TestCase
 from django.urls import NoReverseMatch, reverse
+from faker import Faker
 
 from identity.models import Person
 from identity.services import invite_person
+
+fake = Faker()
+
+
+def invite_args():
+    return {'name': fake.name(), 'email': fake.email(domain='example.com')}
 
 
 def extract_set_password_path(email_body):
@@ -18,23 +25,25 @@ def extract_set_password_path(email_body):
 
 class InvitePersonTests(TestCase):
     def test_creates_person_with_unusable_password(self):
-        person = invite_person(name='Jamie Example', email='jamie@example.com')
+        args = invite_args()
+        person = invite_person(**args)
 
         self.assertFalse(person.has_usable_password())
-        self.assertEqual(Person.objects.get(pk=person.pk).email, 'jamie@example.com')
+        self.assertEqual(Person.objects.get(pk=person.pk).email, args['email'])
 
     def test_sends_invite_email_with_working_link(self):
-        invite_person(name='Jamie Example', email='jamie@example.com')
+        args = invite_args()
+        invite_person(**args)
 
         self.assertEqual(len(mail.outbox), 1)
         sent = mail.outbox[0]
-        self.assertIn('jamie@example.com', sent.to)
+        self.assertIn(args['email'], sent.to)
         self.assertIn('set-password', sent.body)
 
 
 class SetPasswordFlowTests(TestCase):
     def setUp(self):
-        self.person = invite_person(name='Jamie Example', email='jamie@example.com')
+        self.person = invite_person(**invite_args())
         self.set_password_path = extract_set_password_path(mail.outbox[0].body)
 
     def test_link_leads_to_working_set_password_form(self):
@@ -59,7 +68,7 @@ class SetPasswordFlowTests(TestCase):
         self.assertTrue(reloaded.has_usable_password())
         self.assertTrue(reloaded.check_password('a-strong-new-password-1'))
 
-    def test_link_is_single_use(self):
+    def test_link_is_single_use_on_replayed_get(self):
         get_response = self.client.get(self.set_password_path, follow=True)
         form_url = get_response.request['PATH_INFO']
         self.client.post(
@@ -73,6 +82,26 @@ class SetPasswordFlowTests(TestCase):
         second_response = self.client.get(self.set_password_path, follow=True)
 
         self.assertFalse(second_response.context['validlink'])
+
+    def test_link_is_single_use_on_replayed_post(self):
+        get_response = self.client.get(self.set_password_path, follow=True)
+        form_url = get_response.request['PATH_INFO']
+        self.client.post(
+            form_url,
+            {'new_password1': 'a-strong-new-password-1', 'new_password2': 'a-strong-new-password-1'},
+        )
+
+        # Replaying the POST against the same (now-stale) form URL, in the
+        # same session, must not be accepted as a second password change.
+        replay_response = self.client.post(
+            form_url,
+            {'new_password1': 'a-different-password-2', 'new_password2': 'a-different-password-2'},
+        )
+
+        self.assertFalse(replay_response.context['validlink'])
+        reloaded = Person.objects.get(pk=self.person.pk)
+        self.assertTrue(reloaded.check_password('a-strong-new-password-1'))
+        self.assertFalse(reloaded.check_password('a-different-password-2'))
 
     def test_unauthenticated_post_to_set_password_form_without_prior_valid_link_fails(self):
         bogus_url = reverse(
@@ -97,13 +126,14 @@ class NoSelfRegistrationTests(TestCase):
 
     def test_admin_add_person_requires_authentication(self):
         add_url = reverse('admin:identity_person_add')
+        args = invite_args()
 
         response = self.client.post(add_url, {
-            'email': 'anonymous@example.com',
-            'name': 'Anonymous',
+            'email': args['email'],
+            'name': args['name'],
             'password1': 'a-strong-password-1',
             'password2': 'a-strong-password-1',
         })
 
         self.assertNotEqual(response.status_code, 200)
-        self.assertFalse(Person.objects.filter(email='anonymous@example.com').exists())
+        self.assertFalse(Person.objects.filter(email=args['email']).exists())
