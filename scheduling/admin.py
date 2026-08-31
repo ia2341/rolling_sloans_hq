@@ -68,14 +68,6 @@ class SongRoleRequirementInline(admin.TabularInline):
     extra = 1
 
 
-class SongRoleAssignmentInline(admin.TabularInline):
-    """Edit a Song's Role assignments inline on the Song admin page (issue #35)."""
-
-    model = SongRoleAssignment
-    extra = 1
-    readonly_fields = ('is_role_mismatch',)
-
-
 @admin.register(Song)
 class SongAdmin(admin.ModelAdmin):
     """Admin edits change `position` directly to reorder a semester's setlist (issue #32)."""
@@ -84,7 +76,7 @@ class SongAdmin(admin.ModelAdmin):
     list_filter = ('semester',)
     search_fields = ('title', 'artist')
     ordering = ('semester', 'position')
-    inlines = (SongRoleRequirementInline, SongRoleAssignmentInline)
+    inlines = (SongRoleRequirementInline,)
 
 
 @admin.register(SongRoleRequirement)
