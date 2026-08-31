@@ -50,3 +50,14 @@ class PersonIsAdminSyncTests(TestCase):
         reloaded = Person.objects.get(pk=person.pk)
         self.assertFalse(reloaded.is_staff)
         self.assertFalse(reloaded.is_superuser)
+
+    def test_update_fields_save_still_persists_mirrored_flags(self):
+        person = PersonFactory.create(is_admin=False)
+
+        person.is_admin = True
+        person.save(update_fields=['is_admin'])
+
+        reloaded = Person.objects.get(pk=person.pk)
+        self.assertTrue(reloaded.is_admin)
+        self.assertTrue(reloaded.is_staff)
+        self.assertTrue(reloaded.is_superuser)

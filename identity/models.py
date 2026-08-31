@@ -49,6 +49,11 @@ class Person(AbstractBaseUser, PermissionsMixin):
     def save(self, *args, **kwargs):
         self.is_staff = self.is_admin
         self.is_superuser = self.is_admin
+
+        update_fields = kwargs.get('update_fields')
+        if update_fields is not None and 'is_admin' in update_fields:
+            kwargs['update_fields'] = {*update_fields, 'is_staff', 'is_superuser'}
+
         super().save(*args, **kwargs)
 
     def __str__(self):
