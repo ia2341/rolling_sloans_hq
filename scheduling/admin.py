@@ -17,6 +17,12 @@ class SemesterAdmin(admin.ModelAdmin):
 
 @admin.register(Role)
 class RoleAdmin(admin.ModelAdmin):
+    """No delete action: a Role is retired via is_active, never removed (issue #30)."""
+
     list_display = ('name', 'is_active')
     list_filter = ('is_active',)
     search_fields = ('name',)
+    actions = None
+
+    def has_delete_permission(self, request, obj=None):
+        return False
