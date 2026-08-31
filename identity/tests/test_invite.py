@@ -1,6 +1,8 @@
 """The invite flow: service function + set-password confirm view (issue #24)."""
 
 import re
+from unittest.mock import patch
+from urllib.parse import urlsplit
 
 from django.core import mail
 from django.test import TestCase, override_settings
@@ -8,23 +10,26 @@ from django.urls import NoReverseMatch, reverse
 from faker import Faker
 
 from identity.models import Person
-from identity.services import invite_person
+from identity.services import EmailDeliveryError, invite_person
 
 fake = Faker()
 
 
 def invite_args():
+    """Build a fresh, fake (name, email) kwargs dict for calling invite_person in tests."""
     return {'name': fake.name(), 'email': fake.email(domain='example.com')}
 
 
 def extract_set_password_path(email_body):
-    match = re.search(r'http://\S+(/accounts/set-password/\S+/\S+/)', email_body)
+    """Pull the path component of the set-password link out of an invite email body."""
+    match = re.search(r'https?://\S+', email_body)
     assert match, f'no set-password link found in email body: {email_body!r}'
-    return match.group(1)
+    return urlsplit(match.group()).path
 
 
 class InvitePersonTests(TestCase):
     def test_creates_person_with_unusable_password(self):
+        """A successful invite creates exactly one Person with no usable password."""
         args = invite_args()
         person = invite_person(**args)
 
@@ -32,6 +37,7 @@ class InvitePersonTests(TestCase):
         self.assertEqual(Person.objects.get(pk=person.pk).email, args['email'])
 
     def test_sends_invite_email_with_working_link(self):
+        """A successful invite sends exactly one email containing a set-password link."""
         args = invite_args()
         invite_person(**args)
 
@@ -39,6 +45,26 @@ class InvitePersonTests(TestCase):
         sent = mail.outbox[0]
         self.assertIn(args['email'], sent.to)
         self.assertIn('set-password', sent.body)
+
+    def test_rolls_back_person_when_send_mail_raises(self):
+        """If send_mail raises, the exception propagates and no Person row is left committed."""
+        args = invite_args()
+
+        with patch('identity.services.send_mail', side_effect=RuntimeError('boom')), \
+                self.assertRaises(RuntimeError):
+            invite_person(**args)
+
+        self.assertFalse(Person.objects.filter(email=args['email']).exists())
+
+    def test_rolls_back_person_when_send_mail_delivers_nothing(self):
+        """If send_mail reports zero messages delivered, invite_person raises and rolls back."""
+        args = invite_args()
+
+        with patch('identity.services.send_mail', return_value=0), \
+                self.assertRaises(EmailDeliveryError):
+            invite_person(**args)
+
+        self.assertFalse(Person.objects.filter(email=args['email']).exists())
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)
