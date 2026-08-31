@@ -60,3 +60,22 @@ class RehearsalAdminCreateTests(TestCase):
         self.assertEqual(rehearsal.setup_grace_minutes, 20)
         self.assertEqual(rehearsal.teardown_grace_minutes, 10)
         self.assertEqual(rehearsal.end_time, time(19, 30))
+
+    def test_default_duration_crossing_midnight_is_a_form_error_not_a_500(self):
+        """A late start_time whose default duration would cross midnight fails as a form error, not a crash."""
+        admin_person = PersonFactory(is_admin=True)
+        self.client.force_login(admin_person)
+        semester = SemesterFactory(default_rehearsal_duration_minutes=90)
+
+        response = self.client.post(reverse('admin:scheduling_rehearsal_add'), {
+            'semester': semester.pk,
+            'date': '2026-09-15',
+            'start_time': '23:30:00',
+            'end_time': '',
+            'setup_grace_minutes': '',
+            'teardown_grace_minutes': '',
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('end_time', response.context['adminform'].form.errors)
+        self.assertFalse(Rehearsal.objects.filter(semester=semester).exists())
