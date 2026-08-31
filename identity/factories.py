@@ -7,7 +7,15 @@ class PersonFactory(factory.django.DjangoModelFactory):
     class Meta:
         model = Person
 
-    username = factory.Faker('user_name')
+    name = factory.Faker('name')
     email = factory.Faker('safe_email')
-    first_name = factory.Faker('first_name')
-    last_name = factory.Faker('last_name')
+    is_admin = False
+
+    @factory.post_generation
+    def password(self, create, extracted, **kwargs):
+        if extracted:
+            self.set_password(extracted)
+        else:
+            self.set_unusable_password()
+        if create:
+            self.save()

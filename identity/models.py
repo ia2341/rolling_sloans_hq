@@ -1,12 +1,55 @@
-from django.contrib.auth.models import AbstractUser
+from typing import ClassVar
+
+from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
+from django.contrib.auth.models import PermissionsMixin
+from django.db import models
 
 
-class Person(AbstractUser):
-    """Placeholder for AUTH_USER_MODEL.
+class PersonManager(BaseUserManager):
+    use_in_migrations = True
 
-    AUTH_USER_MODEL must point at a real model before the first migration
-    ever runs (changing it later requires a migration reset), so this stub
-    exists to make that setting valid now. The real fields and behavior are
-    designed and implemented in the Identity & Auth spec (issue #5); no
-    migrations have been generated for this app yet.
+    def _create_person(self, email, password, **extra_fields):
+        if not email:
+            raise ValueError('Person must have an email address')
+        person = self.model(email=self.normalize_email(email), **extra_fields)
+        if password:
+            person.set_password(password)
+        else:
+            person.set_unusable_password()
+        person.save(using=self._db)
+        return person
+
+    def create_user(self, email, password=None, **extra_fields):
+        extra_fields.setdefault('is_admin', False)
+        return self._create_person(email, password, **extra_fields)
+
+    def create_superuser(self, email, password=None, **extra_fields):
+        extra_fields['is_admin'] = True
+        return self._create_person(email, password, **extra_fields)
+
+
+class Person(AbstractBaseUser, PermissionsMixin):
+    """The persistent identity/auth record every part of the app authenticates against.
+
+    No separate Group/Permission objects back `is_admin` — save() mirrors it
+    onto `is_staff`/`is_superuser` directly, per the Identity & Auth spec (#13).
     """
+
+    name = models.CharField(max_length=255)
+    email = models.EmailField(unique=True)
+    is_admin = models.BooleanField(default=False)
+    is_staff = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)
+
+    objects = PersonManager()
+
+    USERNAME_FIELD = 'email'
+    REQUIRED_FIELDS: ClassVar[list[str]] = ['name']
+
+    def save(self, *args, **kwargs):
+        self.is_staff = self.is_admin
+        self.is_superuser = self.is_admin
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.email
