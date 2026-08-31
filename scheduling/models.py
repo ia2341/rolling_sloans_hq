@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db import models
 
 
@@ -26,3 +27,27 @@ class Role(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class Membership(models.Model):
+    """A Person's participation in one Semester, carrying that term's declared Roles.
+
+    Re-created fresh per Semester rather than carried forward, since declared
+    roles legitimately change term to term (per ADR-0001).
+    """
+
+    person = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    semester = models.ForeignKey(Semester, on_delete=models.CASCADE)
+
+    def __str__(self):
+        return f'{self.person} — {self.semester}'
+
+
+class MembershipRole(models.Model):
+    """A Role a Membership has declared for its Semester."""
+
+    membership = models.ForeignKey(Membership, on_delete=models.CASCADE)
+    role = models.ForeignKey(Role, on_delete=models.CASCADE)
+
+    def __str__(self):
+        return f'{self.membership} — {self.role}'

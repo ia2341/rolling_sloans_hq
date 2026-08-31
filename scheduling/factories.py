@@ -1,7 +1,8 @@
 import factory
 from faker import Faker
 
-from scheduling.models import Role, Semester
+from identity.factories import PersonFactory
+from scheduling.models import Membership, Role, Semester
 
 fake = Faker()
 
@@ -30,3 +31,11 @@ class RoleFactory(factory.django.DjangoModelFactory):
 
     name = factory.Sequence(lambda n: f'Role {n}')
     is_active = True
+
+
+class MembershipFactory(factory.django.DjangoModelFactory):
+    class Meta:
+        model = Membership
+
+    person = factory.SubFactory(PersonFactory)
+    semester = factory.SubFactory(SemesterFactory)
