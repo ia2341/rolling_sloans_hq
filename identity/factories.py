@@ -8,7 +8,7 @@ class PersonFactory(factory.django.DjangoModelFactory):
         model = Person
 
     name = factory.Faker('name')
-    email = factory.Faker('safe_email')
+    email = factory.Sequence(lambda n: f'person{n}@example.com')
     is_admin = False
 
     @factory.post_generation

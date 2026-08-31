@@ -11,9 +11,17 @@ class PersonFactoryTests(unittest.TestCase):
 
         self.assertTrue(person.name)
         self.assertTrue(
-            person.email.endswith(('@example.com', '@example.org', '@example.net')),
-            f"expected a synthetic @example.* email, got {person.email!r}",
+            person.email.endswith('@example.com'),
+            f"expected an @example.com email, got {person.email!r}",
         )
+
+    def test_email_domain_is_always_example_com(self):
+        for _ in range(50):
+            person = PersonFactory.build()
+            self.assertTrue(
+                person.email.endswith('@example.com'),
+                f"expected an @example.com email, got {person.email!r}",
+            )
 
     def test_generates_distinct_data_per_instance(self):
         first = PersonFactory.build()
