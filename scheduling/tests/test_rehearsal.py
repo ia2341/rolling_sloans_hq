@@ -28,6 +28,13 @@ class RehearsalDefaultsFromSemesterTests(TestCase):
         reloaded = Rehearsal.objects.get(pk=rehearsal.pk)
         self.assertEqual(reloaded.end_time, time(19, 30))
 
+    def test_end_time_crossing_midnight_raises_instead_of_wrapping_silently(self):
+        """If the Semester's default duration would carry end_time past midnight, creation fails loud."""
+        semester = SemesterFactory(default_rehearsal_duration_minutes=90)
+
+        with self.assertRaises(ValueError):
+            RehearsalFactory(semester=semester, start_time=time(23, 30))
+
     def test_explicit_values_at_creation_are_not_overridden_by_semester_defaults(self):
         """Values passed explicitly at creation win over the Semester's defaults."""
         semester = SemesterFactory(default_setup_grace_minutes=20, default_teardown_grace_minutes=10)

@@ -65,8 +65,7 @@ class SongAdmin(admin.ModelAdmin):
 
 @admin.register(Rehearsal)
 class RehearsalAdmin(admin.ModelAdmin):
-    """Grace periods and end_time are pre-filled from the Semester's defaults on create (issue #36)."""
+    """Grace periods and end_time can be left blank on create to inherit the Semester's defaults (issue #36)."""
 
     list_display = ('semester', 'date', 'start_time', 'end_time', 'is_full_setlist')
     list_filter = ('semester', 'is_full_setlist')
-    ordering = ('semester', 'date', 'start_time')
