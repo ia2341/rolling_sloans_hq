@@ -418,6 +418,39 @@ class RehearsalSong(models.Model):
         return f'{self.song} @ {self.rehearsal} (order {self.order})'
 
 
+class Conflict(models.Model):
+    """A Person's declared full or partial unavailability for one Rehearsal (issue #48).
+
+    Editable in place at any time — there is no submission deadline or edit
+    lock. A (person, rehearsal) pair with no Conflict row means implicit
+    full availability; that's the absence of a row, not an explicit status
+    value, so it stays distinguishable from a future "confirmed available"
+    status without conflating the two.
+    """
+
+    FULL_CONFLICT = 'full_conflict'
+    PARTIAL = 'partial'
+    TYPE_CHOICES = (
+        (FULL_CONFLICT, 'Full conflict'),
+        (PARTIAL, 'Partial'),
+    )
+
+    person = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    rehearsal = models.ForeignKey(Rehearsal, on_delete=models.CASCADE)
+    type = models.CharField(max_length=20, choices=TYPE_CHOICES)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(fields=['person', 'rehearsal'], name='unique_conflict_per_person_per_rehearsal'),
+        ]
+
+    def __str__(self):
+        """Return "<person> — <rehearsal> (<type>)" for admin/debug display."""
+        return f'{self.person} — {self.rehearsal} ({self.type})'
+
+
 class Recording(models.Model):
     """An uploaded audio take for one Song's slot at one Rehearsal (issue #50).
 
