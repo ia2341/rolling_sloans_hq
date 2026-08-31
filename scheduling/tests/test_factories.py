@@ -2,6 +2,7 @@ import unittest
 
 from scheduling.factories import (
     ConflictFactory,
+    ConflictWindowFactory,
     RecordingFactory,
     RehearsalFactory,
     RehearsalSongFactory,
@@ -112,6 +113,16 @@ class ConflictFactoryTests(unittest.TestCase):
         self.assertIsNotNone(conflict.person)
         self.assertIsNotNone(conflict.rehearsal)
         self.assertEqual(conflict.type, Conflict.FULL_CONFLICT)
+
+
+class ConflictWindowFactoryTests(unittest.TestCase):
+    def test_builds_conflict_window_with_synthetic_data(self):
+        """ConflictWindowFactory builds a ConflictWindow with a partial Conflict and a start/end within its span."""
+        window = ConflictWindowFactory.build()
+
+        self.assertIsNotNone(window.conflict)
+        self.assertEqual(window.conflict.type, Conflict.PARTIAL)
+        self.assertLess(window.unavailable_start, window.unavailable_end)
 
 
 class RecordingFactoryTests(unittest.TestCase):

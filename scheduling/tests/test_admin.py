@@ -8,6 +8,7 @@ from identity.factories import PersonFactory
 from scheduling.factories import RoleFactory, SemesterFactory
 from scheduling.models import (
     Conflict,
+    ConflictWindow,
     Rehearsal,
     RehearsalSong,
     Role,
@@ -63,6 +64,13 @@ class AdminRegistrationTests(TestCase):
     def test_conflict_is_registered(self):
         """Conflict is registered in Django admin for create/list/edit (issue #48)."""
         self.assertIn(Conflict, admin.site._registry)
+
+    def test_conflict_window_is_registered_and_inlined_on_conflict(self):
+        """ConflictWindow is registered directly and inlined on the Conflict admin page (issue #49)."""
+        self.assertIn(ConflictWindow, admin.site._registry)
+        conflict_admin = admin.site._registry[Conflict]
+        inline_models = [inline.model for inline in conflict_admin.inlines]
+        self.assertIn(ConflictWindow, inline_models)
 
 
 class RoleAdminDeletionTests(TestCase):
