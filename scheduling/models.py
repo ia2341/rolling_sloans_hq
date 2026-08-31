@@ -127,6 +127,7 @@ class Rehearsal(models.Model):
         ordering: ClassVar[list[str]] = ['semester', 'date', 'start_time']
 
     def _default_from_semester(self, value, semester_field_name):
+        """Return `value` if set, else fall back to the Semester's `semester_field_name` default."""
         return value if value is not None else getattr(self.semester, semester_field_name)
 
     def save(self, *args, **kwargs):
