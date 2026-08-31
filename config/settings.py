@@ -107,6 +107,13 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 
+# Sessions: a 30-day sliding expiry, so members aren't forced to re-login
+# mid-semester as long as they keep using the site. No JWT, no third-party
+# session library — Django's built-in session framework covers this.
+SESSION_COOKIE_AGE = 60 * 60 * 24 * 30  # 30 days
+SESSION_SAVE_EVERY_REQUEST = True
+
+
 # Internationalization
 # https://docs.djangoproject.com/en/6.1/topics/i18n/
 
