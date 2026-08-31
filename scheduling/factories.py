@@ -34,6 +34,8 @@ class RoleFactory(factory.django.DjangoModelFactory):
 
 
 class MembershipFactory(factory.django.DjangoModelFactory):
+    """A Person's roster entry for a Semester, with synthetic person/semester by default."""
+
     class Meta:
         model = Membership
 
