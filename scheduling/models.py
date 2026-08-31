@@ -1,3 +1,4 @@
+from datetime import time, timedelta
 from typing import ClassVar
 
 from django.conf import settings
@@ -98,3 +99,44 @@ class Song(models.Model):
     def __str__(self):
         """Return "<title> (<semester>)" for admin/debug display."""
         return f'{self.title} ({self.semester})'
+
+
+class Rehearsal(models.Model):
+    """A dated, timed event within a Semester (issue #36).
+
+    `setup_grace_minutes`, `teardown_grace_minutes`, and `end_time` (derived
+    from `start_time` plus the Semester's default duration) are copied from
+    the parent Semester's defaults only at creation time, when left unset —
+    once saved, editing them here never reaches back to update the
+    Semester's defaults or any other Rehearsal.
+    """
+
+    semester = models.ForeignKey(Semester, on_delete=models.CASCADE)
+    date = models.DateField()
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    setup_grace_minutes = models.PositiveIntegerField()
+    teardown_grace_minutes = models.PositiveIntegerField()
+    is_full_setlist = models.BooleanField(default=False)
+
+    def save(self, *args, **kwargs):
+        """Fill grace periods and end_time from the Semester's defaults on first save only."""
+        if self._state.adding:
+            if self.setup_grace_minutes is None:
+                self.setup_grace_minutes = self.semester.default_setup_grace_minutes
+            if self.teardown_grace_minutes is None:
+                self.teardown_grace_minutes = self.semester.default_teardown_grace_minutes
+            if self.end_time is None and self.start_time is not None:
+                start_seconds = (
+                    self.start_time.hour * 3600 + self.start_time.minute * 60 + self.start_time.second
+                )
+                duration = timedelta(minutes=self.semester.default_rehearsal_duration_minutes)
+                end_seconds = (start_seconds + duration.total_seconds()) % (24 * 3600)
+                hours, remainder = divmod(int(end_seconds), 3600)
+                minutes, seconds = divmod(remainder, 60)
+                self.end_time = time(hours, minutes, seconds)
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        """Return "<semester> — <date>" for admin/debug display."""
+        return f'{self.semester} — {self.date}'

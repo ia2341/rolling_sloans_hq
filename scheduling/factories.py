@@ -1,11 +1,11 @@
 import string
-from datetime import timedelta
+from datetime import time, timedelta
 
 import factory
 from faker import Faker
 
 from identity.factories import PersonFactory
-from scheduling.models import Membership, Role, Semester, Song
+from scheduling.models import Membership, Rehearsal, Role, Semester, Song
 
 fake = Faker()
 
@@ -63,3 +63,23 @@ class SongFactory(factory.django.DjangoModelFactory):
     length = timedelta(minutes=3, seconds=30)
     notes = ''
     position = factory.Sequence(lambda n: n + 1)
+
+
+class RehearsalFactory(factory.django.DjangoModelFactory):
+    """Builds a Rehearsal with a fresh Semester by default.
+
+    Leaves setup_grace_minutes, teardown_grace_minutes, and end_time unset
+    (None) so Rehearsal.save() copies them from the Semester's defaults, the
+    same as a real creation through the admin would.
+    """
+
+    class Meta:
+        model = Rehearsal
+
+    semester = factory.SubFactory(SemesterFactory)
+    date = factory.LazyFunction(lambda: fake.date_between(start_date='+1d', end_date='+120d'))
+    start_time = time(18, 0)
+    end_time = None
+    setup_grace_minutes = None
+    teardown_grace_minutes = None
+    is_full_setlist = False

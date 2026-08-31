@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Membership, MembershipRole, Role, Semester, Song
+from .models import Membership, MembershipRole, Rehearsal, Role, Semester, Song
 
 
 @admin.register(Semester)
@@ -61,3 +61,12 @@ class SongAdmin(admin.ModelAdmin):
     list_filter = ('semester',)
     search_fields = ('title', 'artist')
     ordering = ('semester', 'position')
+
+
+@admin.register(Rehearsal)
+class RehearsalAdmin(admin.ModelAdmin):
+    """Grace periods and end_time are pre-filled from the Semester's defaults on create (issue #36)."""
+
+    list_display = ('semester', 'date', 'start_time', 'end_time', 'is_full_setlist')
+    list_filter = ('semester', 'is_full_setlist')
+    ordering = ('semester', 'date', 'start_time')
