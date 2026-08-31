@@ -416,3 +416,25 @@ class RehearsalSong(models.Model):
     def __str__(self):
         """Return "<song> @ <rehearsal> (order <order>)" for admin/debug display."""
         return f'{self.song} @ {self.rehearsal} (order {self.order})'
+
+
+class Recording(models.Model):
+    """An uploaded audio take for one Song's slot at one Rehearsal (issue #50).
+
+    The Song and Rehearsal are intentionally reached only through
+    `rehearsal_song`, so those relationships cannot drift from the slot the
+    Recording represents. `file` stores the private-object key; storage and
+    signed-URL handling are addressed separately by ADR-0004.
+    """
+
+    rehearsal_song = models.ForeignKey(RehearsalSong, on_delete=models.CASCADE)
+    uploaded_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+    file = models.FileField(upload_to='recordings/')
+    content_type = models.CharField(max_length=255)
+    file_size = models.PositiveIntegerField()
+    note = models.TextField(blank=True)
+
+    def __str__(self):
+        """Return the Recording's object key for admin/debug display."""
+        return self.file.name
