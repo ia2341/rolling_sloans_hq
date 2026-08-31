@@ -3,6 +3,7 @@ from django.contrib import admin
 from .models import (
     Membership,
     MembershipRole,
+    Rehearsal,
     Role,
     Semester,
     Song,
@@ -95,3 +96,11 @@ class SongRoleAssignmentAdmin(admin.ModelAdmin):
     list_filter = ('is_role_mismatch', 'role')
     search_fields = ('person__name', 'person__email', 'song__title')
     readonly_fields = ('is_role_mismatch',)
+
+
+@admin.register(Rehearsal)
+class RehearsalAdmin(admin.ModelAdmin):
+    """Grace periods and end_time can be left blank on create to inherit the Semester's defaults (issue #36)."""
+
+    list_display = ('semester', 'date', 'start_time', 'end_time', 'is_full_setlist')
+    list_filter = ('semester', 'is_full_setlist')

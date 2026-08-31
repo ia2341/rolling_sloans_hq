@@ -1,6 +1,7 @@
 import unittest
 
 from scheduling.factories import (
+    RehearsalFactory,
     RoleFactory,
     SemesterFactory,
     SongFactory,
@@ -68,3 +69,21 @@ class SongRoleAssignmentFactoryTests(unittest.TestCase):
         self.assertIsNotNone(assignment.song)
         self.assertIsNotNone(assignment.role)
         self.assertIsNotNone(assignment.person)
+
+
+class RehearsalFactoryTests(unittest.TestCase):
+    def test_builds_rehearsal_with_synthetic_data(self):
+        """RehearsalFactory builds a Rehearsal with a semester, date, and start time."""
+        rehearsal = RehearsalFactory.build()
+
+        self.assertIsNotNone(rehearsal.semester)
+        self.assertIsNotNone(rehearsal.date)
+        self.assertIsNotNone(rehearsal.start_time)
+
+    def test_leaves_grace_periods_and_end_time_unset_for_save_time_defaulting(self):
+        """The factory leaves grace periods/end_time as None so Rehearsal.save() defaults them."""
+        rehearsal = RehearsalFactory.build()
+
+        self.assertIsNone(rehearsal.setup_grace_minutes)
+        self.assertIsNone(rehearsal.teardown_grace_minutes)
+        self.assertIsNone(rehearsal.end_time)
