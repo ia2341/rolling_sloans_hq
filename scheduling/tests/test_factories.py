@@ -1,6 +1,7 @@
 import unittest
 
 from scheduling.factories import (
+    RecordingFactory,
     RehearsalFactory,
     RehearsalSongFactory,
     RoleFactory,
@@ -99,3 +100,15 @@ class RehearsalSongFactoryTests(unittest.TestCase):
         self.assertIsNotNone(rehearsal_song.song)
         self.assertGreater(rehearsal_song.order, 0)
         self.assertEqual(rehearsal_song.slot_count, 1)
+
+
+class RecordingFactoryTests(unittest.TestCase):
+    def test_builds_recording_with_synthetic_upload_metadata(self):
+        """RecordingFactory builds a Recording with synthetic relationships and upload metadata."""
+        recording = RecordingFactory.build()
+
+        self.assertIsNotNone(recording.rehearsal_song)
+        self.assertIsNotNone(recording.uploaded_by)
+        self.assertTrue(recording.file.name)
+        self.assertTrue(recording.content_type)
+        self.assertGreater(recording.file_size, 0)

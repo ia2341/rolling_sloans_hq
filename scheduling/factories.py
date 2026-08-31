@@ -7,6 +7,7 @@ from faker import Faker
 from identity.factories import PersonFactory
 from scheduling.models import (
     Membership,
+    Recording,
     Rehearsal,
     RehearsalSong,
     Role,
@@ -134,3 +135,17 @@ class RehearsalSongFactory(factory.django.DjangoModelFactory):
     song = factory.SubFactory(SongFactory)
     order = factory.Sequence(lambda n: n + 1)
     slot_count = 1
+
+
+class RecordingFactory(factory.django.DjangoModelFactory):
+    """Builds a Recording with synthetic upload metadata and relationships by default."""
+
+    class Meta:
+        model = Recording
+
+    rehearsal_song = factory.SubFactory(RehearsalSongFactory)
+    uploaded_by = factory.SubFactory(PersonFactory)
+    file = factory.Sequence(lambda n: f'recordings/recording-{n}.m4a')
+    content_type = 'audio/mp4'
+    file_size = 1_024
+    note = factory.Faker('sentence')
