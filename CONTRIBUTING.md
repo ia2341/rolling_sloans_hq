@@ -15,6 +15,16 @@ Use **`factory_boy`** + **`Faker`** to generate synthetic data at test-run time 
 
 Each Django app defines its model factories in a `factories.py` module alongside its models (e.g. `identity/factories.py`), not in `tests/`, so other apps can import and reuse them. See `identity/factories.py` (`PersonFactory`) for the pattern: a `factory.django.DjangoModelFactory` with `factory.Faker(...)` fields for every attribute a test needs realistic-looking data for.
 
+## Docstrings
+
+CodeRabbit enforces a minimum docstring coverage threshold (currently 80%) on every PR, scoped to functions touched by the diff. To keep PRs passing that check:
+
+1. **Every function or method you add or modify needs a docstring** — this includes views, model methods, factories, signal handlers, and test functions, not just public API surface.
+2. Keep it short: one line stating what the function does is enough for simple cases. Add a couple more lines only when a parameter, return value, or side effect isn't obvious from the signature.
+3. Docstrings describe *what* the function does and *why*, not implementation mechanics — don't restate the code line-by-line.
+4. When editing an existing function that lacks a docstring, add one as part of your change rather than leaving it missing — this is what actually moves the coverage percentage.
+5. This applies even to small or "obvious" functions; CodeRabbit's coverage metric counts every touched function, so a handful of undocumented one-liners is enough to fail the threshold.
+
 ## Backstop
 
 The `no-secrets-committed` CI job scans every push/PR for common secret/credential filename patterns (`.env`, `*.pem`, `*.key`, etc.) as a mechanical safety net. It is not a substitute for judgment — it only catches filenames, not content. Before every commit, ask: *would this line identify a real Rolling Sloans member, or contain a real credential?* If yes, it doesn't go in.
