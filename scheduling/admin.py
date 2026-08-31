@@ -6,6 +6,7 @@ from .models import (
     Role,
     Semester,
     Song,
+    SongRoleAssignment,
     SongRoleRequirement,
 )
 
@@ -67,6 +68,14 @@ class SongRoleRequirementInline(admin.TabularInline):
     extra = 1
 
 
+class SongRoleAssignmentInline(admin.TabularInline):
+    """Edit a Song's Role assignments inline on the Song admin page (issue #35)."""
+
+    model = SongRoleAssignment
+    extra = 1
+    readonly_fields = ('is_role_mismatch',)
+
+
 @admin.register(Song)
 class SongAdmin(admin.ModelAdmin):
     """Admin edits change `position` directly to reorder a semester's setlist (issue #32)."""
@@ -75,7 +84,7 @@ class SongAdmin(admin.ModelAdmin):
     list_filter = ('semester',)
     search_fields = ('title', 'artist')
     ordering = ('semester', 'position')
-    inlines = (SongRoleRequirementInline,)
+    inlines = (SongRoleRequirementInline, SongRoleAssignmentInline)
 
 
 @admin.register(SongRoleRequirement)
@@ -84,3 +93,13 @@ class SongRoleRequirementAdmin(admin.ModelAdmin):
 
     list_display = ('song', 'role', 'count')
     list_filter = ('role',)
+
+
+@admin.register(SongRoleAssignment)
+class SongRoleAssignmentAdmin(admin.ModelAdmin):
+    """Admin for a single Person-on-Role-on-Song assignment, surfacing role mismatches (issue #35)."""
+
+    list_display = ('song', 'role', 'person', 'is_role_mismatch')
+    list_filter = ('is_role_mismatch', 'role')
+    search_fields = ('person__name', 'person__email', 'song__title')
+    readonly_fields = ('is_role_mismatch',)
