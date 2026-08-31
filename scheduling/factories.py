@@ -5,7 +5,7 @@ import factory
 from faker import Faker
 
 from identity.factories import PersonFactory
-from scheduling.models import Membership, Role, Semester, Song
+from scheduling.models import Membership, Role, Semester, Song, SongRoleRequirement
 
 fake = Faker()
 
@@ -63,3 +63,14 @@ class SongFactory(factory.django.DjangoModelFactory):
     length = timedelta(minutes=3, seconds=30)
     notes = ''
     position = factory.Sequence(lambda n: n + 1)
+
+
+class SongRoleRequirementFactory(factory.django.DjangoModelFactory):
+    """Builds a target Role headcount for a Song, with a fresh Song/Role by default."""
+
+    class Meta:
+        model = SongRoleRequirement
+
+    song = factory.SubFactory(SongFactory)
+    role = factory.SubFactory(RoleFactory)
+    count = 1
