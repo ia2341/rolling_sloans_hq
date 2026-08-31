@@ -430,7 +430,7 @@ class Recording(models.Model):
     rehearsal_song = models.ForeignKey(RehearsalSong, on_delete=models.CASCADE)
     uploaded_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     uploaded_at = models.DateTimeField(auto_now_add=True)
-    file = models.FileField(upload_to='recordings/')
+    file = models.FileField(upload_to='recordings/', unique=True)
     content_type = models.CharField(max_length=255)
     file_size = models.PositiveIntegerField()
     note = models.TextField(blank=True)

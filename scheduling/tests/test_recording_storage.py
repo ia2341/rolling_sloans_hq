@@ -136,6 +136,29 @@ class RecordingUploadConfirmationTests(TestCase):
         self.assertEqual(Recording.objects.count(), 1)
         storage.connection.meta.client.head_object.assert_not_called()
 
+    @patch('scheduling.services.Recording.objects.filter')
+    @patch('scheduling.services._recording_storage')
+    def test_rejects_a_concurrent_confirmation_that_slips_past_the_exists_check(
+        self, recording_storage, filter_mock
+    ):
+        """The database's unique constraint on file, not just the exists() pre-check, guards against races."""
+        storage = recording_storage.return_value
+        storage.connection.meta.client.head_object.return_value = {
+            'ContentType': 'audio/mpeg',
+            'ContentLength': 2_048,
+        }
+        filter_mock.return_value.exists.return_value = False
+        RecordingFactory(file='recordings/racing-confirm.mp3')
+
+        with self.assertRaises(RecordingUploadError):
+            confirm_recording_upload(
+                RehearsalSongFactory(),
+                PersonFactory(),
+                'recordings/racing-confirm.mp3',
+            )
+
+        self.assertEqual(Recording.objects.count(), 1)
+
 
 class RecordingPlaybackTests(TestCase):
     """Tests for issuing ephemeral private playback URLs."""

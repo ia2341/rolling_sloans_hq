@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from botocore.exceptions import ClientError
 from django.core.files.storage import storages
+from django.db import IntegrityError, transaction
 
 from scheduling.models import Recording, RehearsalSong
 
@@ -76,14 +77,18 @@ def confirm_recording_upload(
     content_type = uploaded_object.get('ContentType')
     file_size = uploaded_object.get('ContentLength')
     _validate_recording_metadata(content_type, file_size)
-    return Recording.objects.create(
-        rehearsal_song=rehearsal_song,
-        uploaded_by=uploaded_by,
-        file=object_key,
-        content_type=content_type,
-        file_size=file_size,
-        note=note,
-    )
+    try:
+        with transaction.atomic():
+            return Recording.objects.create(
+                rehearsal_song=rehearsal_song,
+                uploaded_by=uploaded_by,
+                file=object_key,
+                content_type=content_type,
+                file_size=file_size,
+                note=note,
+            )
+    except IntegrityError as error:
+        raise RecordingUploadError('This recording object has already been confirmed.') from error
 
 
 def create_recording_playback_url(recording: Recording) -> str:
