@@ -34,6 +34,7 @@ class PersonIsAdminSyncTests(TestCase):
         self.assertTrue(reloaded.is_superuser)
 
     def test_demoting_is_admin_reverses_staff_and_superuser(self):
+        """Verify that demoting an administrator clears staff and superuser privileges."""
         person = PersonFactory.create(is_admin=True)
 
         person.is_admin = False

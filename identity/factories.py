@@ -13,6 +13,13 @@ class PersonFactory(factory.django.DjangoModelFactory):
 
     @factory.post_generation
     def password(self, create, extracted, **kwargs):
+        """
+        Set the instance password or mark it as unusable.
+        
+        Parameters:
+            create (bool): Whether to save the instance after setting its password.
+            extracted (str | None): Password to assign to the instance.
+        """
         if extracted:
             self.set_password(extracted)
         else:

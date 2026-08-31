@@ -9,6 +9,17 @@ class PersonManager(BaseUserManager):
     use_in_migrations = True
 
     def _create_person(self, email, password, **extra_fields):
+        """
+        Create and save a person with a normalized email address and configured password.
+        
+        Parameters:
+            email (str): The person's email address.
+            password (str): The password to set, or a falsey value to set an unusable password.
+            **extra_fields: Additional fields for the person.
+        
+        Returns:
+            Person: The newly created person.
+        """
         if not email:
             raise ValueError('Person must have an email address')
         person = self.model(email=self.normalize_email(email), **extra_fields)
@@ -20,10 +31,31 @@ class PersonManager(BaseUserManager):
         return person
 
     def create_user(self, email, password=None, **extra_fields):
+        """
+        Create a regular person account.
+        
+        Parameters:
+        	email (str): The person's email address.
+        	password (str, optional): The password for the account.
+        	extra_fields (dict): Additional person fields.
+        
+        Returns:
+        	Person: The newly created person.
+        """
         extra_fields.setdefault('is_admin', False)
         return self._create_person(email, password, **extra_fields)
 
     def create_superuser(self, email, password=None, **extra_fields):
+        """Create an administrative person account.
+        
+        Parameters:
+            email: The person's email address.
+            password: The person's password.
+            **extra_fields: Additional fields for the person.
+        
+        Returns:
+            Person: The created administrative person.
+        """
         extra_fields['is_admin'] = True
         return self._create_person(email, password, **extra_fields)
 
@@ -47,6 +79,12 @@ class Person(AbstractBaseUser, PermissionsMixin):
     REQUIRED_FIELDS: ClassVar[list[str]] = ['name']
 
     def save(self, *args, **kwargs):
+        """
+        Save the person while synchronizing administrative, staff, and superuser status.
+        
+        When ``is_admin`` is included in ``update_fields``, the corresponding staff and
+        superuser fields are saved as well.
+        """
         self.is_staff = self.is_admin
         self.is_superuser = self.is_admin
 
@@ -57,4 +95,5 @@ class Person(AbstractBaseUser, PermissionsMixin):
         super().save(*args, **kwargs)
 
     def __str__(self):
+        """Return the person's email address as a string."""
         return self.email

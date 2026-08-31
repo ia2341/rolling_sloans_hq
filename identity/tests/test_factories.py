@@ -24,6 +24,9 @@ class PersonFactoryTests(unittest.TestCase):
             )
 
     def test_generates_distinct_data_per_instance(self):
+        """
+        Verify that separate factory builds produce distinct email addresses.
+        """
         first = PersonFactory.build()
         second = PersonFactory.build()
 
