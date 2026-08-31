@@ -5,7 +5,15 @@ import factory
 from faker import Faker
 
 from identity.factories import PersonFactory
-from scheduling.models import Membership, Rehearsal, Role, Semester, Song
+from scheduling.models import (
+    Membership,
+    Rehearsal,
+    Role,
+    Semester,
+    Song,
+    SongRoleAssignment,
+    SongRoleRequirement,
+)
 
 fake = Faker()
 
@@ -63,6 +71,32 @@ class SongFactory(factory.django.DjangoModelFactory):
     length = timedelta(minutes=3, seconds=30)
     notes = ''
     position = factory.Sequence(lambda n: n + 1)
+
+
+class SongRoleRequirementFactory(factory.django.DjangoModelFactory):
+    """Builds a target Role headcount for a Song, with a fresh Song/Role by default."""
+
+    class Meta:
+        model = SongRoleRequirement
+
+    song = factory.SubFactory(SongFactory)
+    role = factory.SubFactory(RoleFactory)
+    count = 1
+
+
+class SongRoleAssignmentFactory(factory.django.DjangoModelFactory):
+    """Builds a Person's Role assignment on a Song, with a fresh Song/Role/Person by default.
+
+    Leaves is_role_mismatch unset since SongRoleAssignment.save() always
+    recomputes it from the Person's current Membership.
+    """
+
+    class Meta:
+        model = SongRoleAssignment
+
+    song = factory.SubFactory(SongFactory)
+    role = factory.SubFactory(RoleFactory)
+    person = factory.SubFactory(PersonFactory)
 
 
 class RehearsalFactory(factory.django.DjangoModelFactory):

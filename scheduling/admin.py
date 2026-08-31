@@ -1,6 +1,15 @@
 from django.contrib import admin
 
-from .models import Membership, MembershipRole, Rehearsal, Role, Semester, Song
+from .models import (
+    Membership,
+    MembershipRole,
+    Rehearsal,
+    Role,
+    Semester,
+    Song,
+    SongRoleAssignment,
+    SongRoleRequirement,
+)
 
 
 @admin.register(Semester)
@@ -53,6 +62,13 @@ class MembershipRoleAdmin(admin.ModelAdmin):
     list_filter = ('role',)
 
 
+class SongRoleRequirementInline(admin.TabularInline):
+    """Edit a Song's target Role headcounts inline on the Song admin page (issue #33)."""
+
+    model = SongRoleRequirement
+    extra = 1
+
+
 @admin.register(Song)
 class SongAdmin(admin.ModelAdmin):
     """Admin edits change `position` directly to reorder a semester's setlist (issue #32)."""
@@ -61,6 +77,25 @@ class SongAdmin(admin.ModelAdmin):
     list_filter = ('semester',)
     search_fields = ('title', 'artist')
     ordering = ('semester', 'position')
+    inlines = (SongRoleRequirementInline,)
+
+
+@admin.register(SongRoleRequirement)
+class SongRoleRequirementAdmin(admin.ModelAdmin):
+    """Admin for a single Role headcount target on a Song, for direct lookup/filtering."""
+
+    list_display = ('song', 'role', 'count')
+    list_filter = ('role',)
+
+
+@admin.register(SongRoleAssignment)
+class SongRoleAssignmentAdmin(admin.ModelAdmin):
+    """Admin for a single Person-on-Role-on-Song assignment, surfacing role mismatches (issue #35)."""
+
+    list_display = ('song', 'role', 'person', 'is_role_mismatch')
+    list_filter = ('is_role_mismatch', 'role')
+    search_fields = ('person__name', 'person__email', 'song__title')
+    readonly_fields = ('is_role_mismatch',)
 
 
 @admin.register(Rehearsal)

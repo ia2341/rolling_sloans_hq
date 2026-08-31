@@ -6,7 +6,14 @@ from django.urls import reverse
 
 from identity.factories import PersonFactory
 from scheduling.factories import RoleFactory, SemesterFactory
-from scheduling.models import Rehearsal, Role, Semester, Song
+from scheduling.models import (
+    Rehearsal,
+    Role,
+    Semester,
+    Song,
+    SongRoleAssignment,
+    SongRoleRequirement,
+)
 
 
 class AdminRegistrationTests(TestCase):
@@ -18,6 +25,17 @@ class AdminRegistrationTests(TestCase):
     def test_song_is_registered(self):
         """Song is registered in Django admin for create/list/edit (issue #32)."""
         self.assertIn(Song, admin.site._registry)
+
+    def test_song_role_requirement_is_registered(self):
+        """SongRoleRequirement is registered in Django admin for create/list/edit (issue #33)."""
+        self.assertIn(SongRoleRequirement, admin.site._registry)
+
+    def test_song_role_assignment_is_registered_with_mismatch_visible_and_filterable(self):
+        """SongRoleAssignment is registered with is_role_mismatch shown and filterable (issue #35)."""
+        self.assertIn(SongRoleAssignment, admin.site._registry)
+        assignment_admin = admin.site._registry[SongRoleAssignment]
+        self.assertIn('is_role_mismatch', assignment_admin.list_display)
+        self.assertIn('is_role_mismatch', assignment_admin.list_filter)
 
     def test_rehearsal_is_registered(self):
         """Rehearsal is registered in Django admin for create/list/edit (issue #36)."""

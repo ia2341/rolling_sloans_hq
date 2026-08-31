@@ -4,6 +4,8 @@ from typing import ClassVar
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.db.models.signals import post_delete, post_save
+from django.dispatch import receiver
 
 
 class Semester(models.Model):
@@ -100,6 +102,96 @@ class Song(models.Model):
     def __str__(self):
         """Return "<title> (<semester>)" for admin/debug display."""
         return f'{self.title} ({self.semester})'
+
+
+class SongRoleRequirement(models.Model):
+    """A target headcount for one Role on one Song (e.g. 3 singers).
+
+    The count is a target for admins to track fill-status against, not a
+    hard cap — nothing here prevents assigning more or fewer people than
+    requested (issue #33).
+    """
+
+    song = models.ForeignKey(Song, on_delete=models.CASCADE)
+    role = models.ForeignKey(Role, on_delete=models.CASCADE)
+    count = models.PositiveIntegerField()
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(fields=['song', 'role'], name='unique_role_requirement_per_song'),
+        ]
+
+    def __str__(self):
+        """Return "<song> — <count> x <role>" for admin/debug display."""
+        return f'{self.song} — {self.count} x {self.role}'
+
+
+class SongRoleAssignment(models.Model):
+    """A Person filling a Role on a Song (issue #35).
+
+    is_role_mismatch is never a hard block on save (per ADR-0002): it just
+    flags that the assigned Role isn't among the Roles the Person declared
+    on their Membership for the Song's Semester, so an admin can notice and
+    resolve it either way.
+    """
+
+    song = models.ForeignKey(Song, on_delete=models.CASCADE)
+    role = models.ForeignKey(Role, on_delete=models.CASCADE)
+    person = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    is_role_mismatch = models.BooleanField(default=False)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(fields=['song', 'role', 'person'], name='unique_song_role_person'),
+        ]
+
+    def _compute_is_role_mismatch(self):
+        """True when the Person has no matching MembershipRole for the Song's Semester."""
+        return not MembershipRole.objects.filter(
+            membership__person=self.person,
+            membership__semester=self.song.semester,
+            role=self.role,
+        ).exists()
+
+    def save(self, *args, **kwargs):
+        """Recompute is_role_mismatch from the Person's current Membership before saving."""
+        self.is_role_mismatch = self._compute_is_role_mismatch()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        """Return "<person> as <role> on <song>" for admin/debug display."""
+        return f'{self.person} as {self.role} on {self.song}'
+
+
+def _reevaluate_song_role_assignments_for(membership, role):
+    """Recompute is_role_mismatch on every SongRoleAssignment this MembershipRole change could affect."""
+    affected = SongRoleAssignment.objects.filter(
+        person=membership.person,
+        role=role,
+        song__semester=membership.semester,
+    )
+    for assignment in affected:
+        assignment.save()
+
+
+@receiver(post_save, sender=MembershipRole)
+def _membership_role_saved(sender, instance, **kwargs):
+    """Re-evaluate is_role_mismatch on affected SongRoleAssignments when a Role is declared."""
+    _reevaluate_song_role_assignments_for(instance.membership, instance.role)
+
+
+@receiver(post_delete, sender=MembershipRole)
+def _membership_role_deleted(sender, instance, **kwargs):
+    """Re-evaluate is_role_mismatch on affected SongRoleAssignments when a declared Role is removed.
+
+    Skips re-evaluation if the parent Membership was itself cascade-deleted
+    alongside this row (it's no longer fetchable) rather than raising.
+    """
+    try:
+        membership = instance.membership
+    except Membership.DoesNotExist:
+        return
+    _reevaluate_song_role_assignments_for(membership, instance.role)
 
 
 class Rehearsal(models.Model):

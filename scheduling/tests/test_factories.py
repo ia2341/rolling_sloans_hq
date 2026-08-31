@@ -5,6 +5,8 @@ from scheduling.factories import (
     RoleFactory,
     SemesterFactory,
     SongFactory,
+    SongRoleAssignmentFactory,
+    SongRoleRequirementFactory,
 )
 
 
@@ -47,6 +49,26 @@ class SongFactoryTests(unittest.TestCase):
 
         self.assertNotEqual(first.title, second.title)
         self.assertNotEqual(first.position, second.position)
+
+
+class SongRoleRequirementFactoryTests(unittest.TestCase):
+    def test_builds_requirement_with_synthetic_data(self):
+        """SongRoleRequirementFactory builds a requirement with a Song, Role, and positive count."""
+        requirement = SongRoleRequirementFactory.build()
+
+        self.assertIsNotNone(requirement.song)
+        self.assertIsNotNone(requirement.role)
+        self.assertGreater(requirement.count, 0)
+
+
+class SongRoleAssignmentFactoryTests(unittest.TestCase):
+    def test_builds_assignment_with_synthetic_data(self):
+        """SongRoleAssignmentFactory builds an assignment with a Song, Role, and Person."""
+        assignment = SongRoleAssignmentFactory.build()
+
+        self.assertIsNotNone(assignment.song)
+        self.assertIsNotNone(assignment.role)
+        self.assertIsNotNone(assignment.person)
 
 
 class RehearsalFactoryTests(unittest.TestCase):
