@@ -4,6 +4,7 @@ from .models import (
     Membership,
     MembershipRole,
     Rehearsal,
+    RehearsalSong,
     Role,
     Semester,
     Song,
@@ -98,9 +99,28 @@ class SongRoleAssignmentAdmin(admin.ModelAdmin):
     readonly_fields = ('is_role_mismatch',)
 
 
+class RehearsalSongInline(admin.TabularInline):
+    """Edit a Rehearsal's scheduled Songs inline; start_time/end_time are computed on save (issue #37)."""
+
+    model = RehearsalSong
+    extra = 1
+    readonly_fields = ('start_time', 'end_time')
+
+
 @admin.register(Rehearsal)
 class RehearsalAdmin(admin.ModelAdmin):
     """Grace periods and end_time can be left blank on create to inherit the Semester's defaults (issue #36)."""
 
     list_display = ('semester', 'date', 'start_time', 'end_time', 'is_full_setlist')
     list_filter = ('semester', 'is_full_setlist')
+    inlines = (RehearsalSongInline,)
+
+
+@admin.register(RehearsalSong)
+class RehearsalSongAdmin(admin.ModelAdmin):
+    """Admin for a single Song's timed slot within a Rehearsal, for direct lookup/filtering (issue #37)."""
+
+    list_display = ('rehearsal', 'order', 'song', 'slot_count', 'start_time', 'end_time')
+    list_filter = ('rehearsal__semester',)
+    search_fields = ('song__title',)
+    readonly_fields = ('start_time', 'end_time')

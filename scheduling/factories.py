@@ -8,6 +8,7 @@ from identity.factories import PersonFactory
 from scheduling.models import (
     Membership,
     Rehearsal,
+    RehearsalSong,
     Role,
     Semester,
     Song,
@@ -117,3 +118,19 @@ class RehearsalFactory(factory.django.DjangoModelFactory):
     setup_grace_minutes = None
     teardown_grace_minutes = None
     is_full_setlist = False
+
+
+class RehearsalSongFactory(factory.django.DjangoModelFactory):
+    """Builds a Song's timed slot in a Rehearsal, with a fresh Rehearsal/Song by default.
+
+    Leaves start_time/end_time unset since RehearsalSong.save() always
+    recomputes them from the Rehearsal's fixed window and slot_count.
+    """
+
+    class Meta:
+        model = RehearsalSong
+
+    rehearsal = factory.SubFactory(RehearsalFactory)
+    song = factory.SubFactory(SongFactory)
+    order = factory.Sequence(lambda n: n + 1)
+    slot_count = 1

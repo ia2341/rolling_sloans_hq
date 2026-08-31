@@ -2,6 +2,7 @@ import unittest
 
 from scheduling.factories import (
     RehearsalFactory,
+    RehearsalSongFactory,
     RoleFactory,
     SemesterFactory,
     SongFactory,
@@ -87,3 +88,14 @@ class RehearsalFactoryTests(unittest.TestCase):
         self.assertIsNone(rehearsal.setup_grace_minutes)
         self.assertIsNone(rehearsal.teardown_grace_minutes)
         self.assertIsNone(rehearsal.end_time)
+
+
+class RehearsalSongFactoryTests(unittest.TestCase):
+    def test_builds_rehearsal_song_with_synthetic_data(self):
+        """RehearsalSongFactory builds a RehearsalSong with a rehearsal, song, order, and slot_count."""
+        rehearsal_song = RehearsalSongFactory.build()
+
+        self.assertIsNotNone(rehearsal_song.rehearsal)
+        self.assertIsNotNone(rehearsal_song.song)
+        self.assertGreater(rehearsal_song.order, 0)
+        self.assertEqual(rehearsal_song.slot_count, 1)
