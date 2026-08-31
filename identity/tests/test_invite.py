@@ -3,7 +3,7 @@
 import re
 
 from django.core import mail
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import NoReverseMatch, reverse
 from faker import Faker
 
@@ -41,6 +41,7 @@ class InvitePersonTests(TestCase):
         self.assertIn('set-password', sent.body)
 
 
+@override_settings(SECURE_SSL_REDIRECT=False)
 class SetPasswordFlowTests(TestCase):
     def setUp(self):
         self.person = invite_person(**invite_args())
@@ -116,6 +117,7 @@ class SetPasswordFlowTests(TestCase):
         self.assertFalse(reloaded.has_usable_password())
 
 
+@override_settings(SECURE_SSL_REDIRECT=False)
 class NoSelfRegistrationTests(TestCase):
     """There is no unauthenticated way to create a Person (issue #24 AC)."""
 
@@ -135,5 +137,6 @@ class NoSelfRegistrationTests(TestCase):
             'password2': 'a-strong-password-1',
         })
 
-        self.assertNotEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('/admin/login', response.url)
         self.assertFalse(Person.objects.filter(email=args['email']).exists())
