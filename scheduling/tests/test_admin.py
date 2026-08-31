@@ -7,6 +7,7 @@ from django.urls import reverse
 from identity.factories import PersonFactory
 from scheduling.factories import RoleFactory, SemesterFactory
 from scheduling.models import (
+    Conflict,
     Rehearsal,
     RehearsalSong,
     Role,
@@ -58,6 +59,10 @@ class AdminRegistrationTests(TestCase):
         rehearsal_admin = admin.site._registry[Rehearsal]
         inline_models = [inline.model for inline in rehearsal_admin.inlines]
         self.assertIn(RehearsalSong, inline_models)
+
+    def test_conflict_is_registered(self):
+        """Conflict is registered in Django admin for create/list/edit (issue #48)."""
+        self.assertIn(Conflict, admin.site._registry)
 
 
 class RoleAdminDeletionTests(TestCase):
