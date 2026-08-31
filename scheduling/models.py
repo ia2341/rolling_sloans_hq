@@ -65,3 +65,36 @@ class MembershipRole(models.Model):
     def __str__(self):
         """Return "<membership> — <role>" for admin/debug display."""
         return f'{self.membership} — {self.role}'
+
+
+class Song(models.Model):
+    """A song on one Semester's setlist, placed at a concert-order position.
+
+    Carries no relationship back to any other Semester's Song — a title
+    replayed in a later semester is represented by a brand-new row, never a
+    reused one (per ADR-0001).
+    """
+
+    semester = models.ForeignKey(Semester, on_delete=models.CASCADE)
+    title = models.CharField(max_length=255)
+    artist = models.CharField(max_length=255)
+    length = models.DurationField()
+    notes = models.TextField(blank=True)
+    position = models.PositiveIntegerField()
+
+    class Meta:
+        # Deferred so a reorder can update several Songs' positions inside
+        # one atomic transaction without a transient collision on this
+        # constraint (e.g. swapping two songs' positions directly).
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=['semester', 'position'],
+                name='unique_song_position_per_semester',
+                deferrable=models.Deferrable.DEFERRED,
+            ),
+        ]
+        ordering: ClassVar[list[str]] = ['semester', 'position']
+
+    def __str__(self):
+        """Return "<title> (<semester>)" for admin/debug display."""
+        return f'{self.title} ({self.semester})'

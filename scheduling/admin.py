@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Membership, MembershipRole, Role, Semester
+from .models import Membership, MembershipRole, Role, Semester, Song
 
 
 @admin.register(Semester)
@@ -51,3 +51,13 @@ class MembershipRoleAdmin(admin.ModelAdmin):
 
     list_display = ('membership', 'role')
     list_filter = ('role',)
+
+
+@admin.register(Song)
+class SongAdmin(admin.ModelAdmin):
+    """Admin edits change `position` directly to reorder a semester's setlist (issue #32)."""
+
+    list_display = ('title', 'artist', 'semester', 'position', 'length')
+    list_filter = ('semester',)
+    search_fields = ('title', 'artist')
+    ordering = ('semester', 'position')

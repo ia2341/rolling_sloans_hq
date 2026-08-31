@@ -1,8 +1,11 @@
+import string
+from datetime import timedelta
+
 import factory
 from faker import Faker
 
 from identity.factories import PersonFactory
-from scheduling.models import Membership, Role, Semester
+from scheduling.models import Membership, Role, Semester, Song
 
 fake = Faker()
 
@@ -12,6 +15,11 @@ def fake_semester_name():
     season = fake.random_element(('Spring', 'Fall'))
     year = fake.random_int(min=2020, max=2035)
     return f'{season} {year}'
+
+
+def fake_song_title(n):
+    """A synthetic, obviously-fake song title, e.g. "Song A", per CONTRIBUTING.md."""
+    return f'Song {string.ascii_uppercase[n % len(string.ascii_uppercase)]}'
 
 
 class SemesterFactory(factory.django.DjangoModelFactory):
@@ -41,3 +49,17 @@ class MembershipFactory(factory.django.DjangoModelFactory):
 
     person = factory.SubFactory(PersonFactory)
     semester = factory.SubFactory(SemesterFactory)
+
+
+class SongFactory(factory.django.DjangoModelFactory):
+    """Builds a Song with a synthetic title/artist and a fresh Semester by default."""
+
+    class Meta:
+        model = Song
+
+    semester = factory.SubFactory(SemesterFactory)
+    title = factory.Sequence(fake_song_title)
+    artist = factory.Faker('name')
+    length = timedelta(minutes=3, seconds=30)
+    notes = ''
+    position = factory.Sequence(lambda n: n + 1)
