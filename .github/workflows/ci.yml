@@ -23,6 +23,20 @@ jobs:
   test:
     name: Unit tests
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: user
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: rolling_sloans
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U user -d rolling_sloans"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
     env: &production_like_env
       DJANGO_SECRET_KEY: test-secret-key-not-used-anywhere-real
       DJANGO_DEBUG: "False"
@@ -42,6 +56,8 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: Run tests
+        env:
+          DATABASE_URL: postgres://user:password@localhost:5432/rolling_sloans?sslmode=disable
         run: python manage.py test
 
   build:
