@@ -1,5 +1,6 @@
 """SongRoleRequirement: target Role headcounts per Song (issue #33)."""
 
+from django.db import IntegrityError, transaction
 from django.test import TestCase
 
 from scheduling.factories import RoleFactory, SongFactory, SongRoleRequirementFactory
@@ -17,6 +18,20 @@ class SongRoleRequirementMultipleRolesTests(TestCase):
         SongRoleRequirementFactory(song=song, role=guitarist, count=2)
 
         self.assertEqual(SongRoleRequirement.objects.filter(song=song).count(), 2)
+
+    def test_duplicate_role_on_same_song_is_rejected(self):
+        """A second requirement for the same (song, role) pair raises IntegrityError.
+
+        One target count per Role per Song keeps the target unambiguous —
+        two rows for the same Role on the same Song would leave it unclear
+        which count is the real target.
+        """
+        song = SongFactory()
+        role = RoleFactory()
+        SongRoleRequirementFactory(song=song, role=role, count=2)
+
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            SongRoleRequirementFactory(song=song, role=role, count=3)
 
 
 class SongRoleRequirementCountIsATargetTests(TestCase):
