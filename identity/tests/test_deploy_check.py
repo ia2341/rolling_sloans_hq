@@ -21,6 +21,7 @@ PRODUCTION_ENV = {
     'AWS_S3_ENDPOINT_URL': 'https://test.r2.cloudflarestorage.com',
     'RESEND_API_KEY': 'test-resend-key',
     'CLUB_EMAIL_FROM': 'test@example.com',
+    'SITE_URL': 'https://example.com',
 }
 
 
