@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from typing import ClassVar
+from typing import ClassVar, NamedTuple
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -195,6 +195,13 @@ def _membership_role_deleted(sender, instance, **kwargs):
     _reevaluate_song_role_assignments_for(membership, instance.role)
 
 
+class RehearsalAttendance(NamedTuple):
+    """Whether a Person is needed at a Rehearsal's start and/or end (issue #38)."""
+
+    needed_from_start: bool
+    needed_until_end: bool
+
+
 class Rehearsal(models.Model):
     """A dated, timed event within a Semester (issue #36).
 
@@ -283,6 +290,30 @@ class Rehearsal(models.Model):
         stale relative to the setlist.
         """
         return Song.objects.filter(semester=self.semester).order_by('position')
+
+    def attendance_for(self, person):
+        """Derive whether `person` is needed at this Rehearsal's start and/or end (issue #38).
+
+        Computed live from the Person's SongRoleAssignments on Songs covered
+        by this Rehearsal's RehearsalSong rows, compared against the
+        min/max RehearsalSong.order — never a stored field, so it can't
+        drift out of sync if assignments or the schedule change later.
+        """
+        bounds = RehearsalSong.objects.filter(rehearsal=self).aggregate(
+            first=models.Min('order'), last=models.Max('order'),
+        )
+        if bounds['first'] is None:
+            return RehearsalAttendance(needed_from_start=False, needed_until_end=False)
+        assigned_orders = set(
+            RehearsalSong.objects.filter(
+                rehearsal=self,
+                song__songroleassignment__person=person,
+            ).values_list('order', flat=True)
+        )
+        return RehearsalAttendance(
+            needed_from_start=bounds['first'] in assigned_orders,
+            needed_until_end=bounds['last'] in assigned_orders,
+        )
 
 
 class RehearsalSong(models.Model):
