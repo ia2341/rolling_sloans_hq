@@ -2,7 +2,7 @@ from django.contrib import admin
 from django.test import TestCase
 
 from scheduling.factories import RoleFactory
-from scheduling.models import Role, Semester
+from scheduling.models import Role, Semester, Song
 
 
 class AdminRegistrationTests(TestCase):
@@ -10,6 +10,10 @@ class AdminRegistrationTests(TestCase):
         """Semester and Role are registered in Django admin for create/list/edit."""
         self.assertIn(Semester, admin.site._registry)
         self.assertIn(Role, admin.site._registry)
+
+    def test_song_is_registered(self):
+        """Song is registered in Django admin for create/list/edit (issue #32)."""
+        self.assertIn(Song, admin.site._registry)
 
 
 class RoleAdminDeletionTests(TestCase):
