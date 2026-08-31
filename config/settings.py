@@ -9,6 +9,7 @@ production). No setting here is ever a literal secret.
 from pathlib import Path
 
 import environ
+from django.core.exceptions import ImproperlyConfigured
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -159,6 +160,18 @@ ANYMAIL = {
     'RESEND_API_KEY': env('RESEND_API_KEY'),
 }
 DEFAULT_FROM_EMAIL = env('CLUB_EMAIL_FROM')
+
+# Base URL used to build absolute links (e.g. invite set-password links) in
+# contexts with no request object, like a signal or admin action. The
+# localhost fallback is a dev-only convenience; in production (DEBUG=False)
+# it must be set explicitly, since silently falling back there would build
+# invite/reset links members can't actually use.
+SITE_URL = env('SITE_URL', default=None)
+if not DEBUG and not SITE_URL:
+    raise ImproperlyConfigured(
+        'SITE_URL must be set via the environment when DJANGO_DEBUG is False.'
+    )
+SITE_URL = SITE_URL or 'http://localhost:8000'
 
 
 # Production security settings ("TLS everywhere").

@@ -18,6 +18,7 @@ BASE_ENV = {
     'DJANGO_SECRET_KEY': 'test-secret-key-not-used-anywhere-real',
     'DJANGO_ALLOWED_HOSTS': 'example.com',
     'DATABASE_URL': 'postgres://user:password@dbhost:5432/rolling_sloans?sslmode=require',
+    'SITE_URL': 'https://example.com',
 }
 
 PRINT_SETTINGS_SCRIPT = """
@@ -36,25 +37,51 @@ print(json.dumps({
 """
 
 
-def run_with_debug(debug_value):
+def run_settings_subprocess(debug_value, env_overrides=None):
+    """
+    Run the Django settings module in a fresh process with the specified debug setting and environment overrides.
+    
+    Parameters:
+        debug_value: Value assigned to `DJANGO_DEBUG`.
+        env_overrides: Optional environment values that override the shared test environment.
+    
+    Returns:
+        The completed subprocess result, including its exit status, standard output, and standard error.
+    """
     env = os.environ.copy()
     env.update(BASE_ENV)
+    env.update(env_overrides or {})
     env['DJANGO_DEBUG'] = debug_value
     env['DJANGO_SETTINGS_MODULE'] = 'config.settings'
-    result = subprocess.run(
+    return subprocess.run(
         [sys.executable, '-c', PRINT_SETTINGS_SCRIPT],
         cwd=BASE_DIR,
         env=env,
         capture_output=True,
         text=True,
-        check=True,
+        check=False,
     )
+
+
+def load_settings_with_debug(debug_value):
+    """
+    Load Django settings for the specified debug mode.
+    
+    Parameters:
+        debug_value: The value assigned to DJANGO_DEBUG.
+    
+    Returns:
+        dict: The settings printed by the subprocess.
+    
+    """
+    result = run_settings_subprocess(debug_value)
+    result.check_returncode()
     return json.loads(result.stdout)
 
 
 class ProductionSecuritySettingsTests(unittest.TestCase):
     def test_tls_settings_enabled_when_debug_false(self):
-        values = run_with_debug('False')
+        values = load_settings_with_debug('False')
 
         self.assertIs(values['DEBUG'], False)
         self.assertIs(values['SECURE_SSL_REDIRECT'], True)
@@ -63,20 +90,33 @@ class ProductionSecuritySettingsTests(unittest.TestCase):
         self.assertGreater(values['SECURE_HSTS_SECONDS'], 0)
 
     def test_database_connection_requires_ssl(self):
-        values = run_with_debug('False')
+        values = load_settings_with_debug('False')
 
         self.assertEqual(values['DATABASE_OPTIONS'].get('sslmode'), 'require')
+
+    def test_startup_fails_without_site_url(self):
+        """In production, settings must fail to load rather than silently fall back to the localhost SITE_URL default."""
+        result = run_settings_subprocess('False', env_overrides={'SITE_URL': ''})
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('SITE_URL', result.stderr)
 
 
 class DevSettingsTests(unittest.TestCase):
     def test_tls_settings_not_forced_when_debug_true(self):
-        values = run_with_debug('True')
+        values = load_settings_with_debug('True')
 
         self.assertIs(values['DEBUG'], True)
         self.assertIs(values['SECURE_SSL_REDIRECT'], False)
         self.assertIs(values['SESSION_COOKIE_SECURE'], False)
         self.assertIs(values['CSRF_COOKIE_SECURE'], False)
         self.assertEqual(values['SECURE_HSTS_SECONDS'], 0)
+
+    def test_localhost_fallback_used_without_site_url(self):
+        """In dev, settings must still load successfully without SITE_URL, falling back to the localhost default."""
+        result = run_settings_subprocess('True', env_overrides={'SITE_URL': ''})
+
+        result.check_returncode()
 
 
 class EnvExampleTests(unittest.TestCase):
