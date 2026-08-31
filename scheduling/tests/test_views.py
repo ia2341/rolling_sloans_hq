@@ -1,6 +1,6 @@
 """Member read routes (issue #56): /schedule/, /setlist/, /songs/<id>/."""
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from identity.factories import PersonFactory
@@ -16,6 +16,7 @@ from scheduling.factories import (
 PASSWORD = 'a-strong-test-password-123'
 
 
+@override_settings(SECURE_SSL_REDIRECT=False)
 class AnonymousAccessTests(TestCase):
     def test_schedule_redirects_anonymous_users_to_login(self):
         """An anonymous request to /schedule/ redirects to the login page."""
@@ -43,6 +44,7 @@ class AnonymousAccessTests(TestCase):
         self.assertRedirects(response, f"{reverse('identity:login')}?next={url}")
 
 
+@override_settings(SECURE_SSL_REDIRECT=False)
 class ScheduleViewTests(TestCase):
     def setUp(self):
         """Log in a synthetic Person before each test."""
@@ -63,6 +65,7 @@ class ScheduleViewTests(TestCase):
         self.assertEqual(rehearsals, [current_rehearsal])
 
 
+@override_settings(SECURE_SSL_REDIRECT=False)
 class SetlistViewTests(TestCase):
     def setUp(self):
         """Log in a synthetic Person before each test."""
@@ -98,6 +101,7 @@ class SetlistViewTests(TestCase):
         self.assertEqual(rendered_song.rehearsal_count_target, 1)
 
 
+@override_settings(SECURE_SSL_REDIRECT=False)
 class SongDetailViewTests(TestCase):
     def setUp(self):
         """Log in a synthetic Person before each test."""
