@@ -37,23 +37,39 @@ class RecordingUploadError(ValueError):
 
 @dataclass(frozen=True)
 class RecordingUploadReservation:
-    """The opaque private-object key and temporary PUT URL for one audio take."""
+    """The opaque private-object key and short-lived POST policy for one audio take.
+
+    upload_url and fields are submitted together as a multipart/form-data POST
+    (per boto3's generate_presigned_post contract) — R2 itself rejects the
+    upload if the posted bytes don't match the content-length-range/
+    Content-Type conditions baked into fields.
+    """
 
     object_key: str
     upload_url: str
+    fields: dict[str, str]
 
 
 def reserve_recording_upload(content_type: str, file_size: int) -> RecordingUploadReservation:
-    """Validate client metadata and return a short-lived direct R2 PUT reservation."""
+    """Validate client metadata and return a short-lived direct R2 POST-policy reservation."""
     _validate_recording_metadata(content_type, file_size)
     object_key = _new_recording_object_key(content_type)
-    upload_url = _presign(
-        'put_object',
-        object_key,
-        extra_params={'ContentType': content_type},
-        http_method='PUT',
+    storage = _recording_storage()
+    presigned_post = storage.connection.meta.client.generate_presigned_post(
+        Bucket=storage.bucket_name,
+        Key=object_key,
+        Fields={'Content-Type': content_type},
+        Conditions=[
+            {'Content-Type': content_type},
+            ['content-length-range', 1, MAX_RECORDING_FILE_SIZE],
+        ],
+        ExpiresIn=PRESIGNED_URL_EXPIRY_SECONDS,
     )
-    return RecordingUploadReservation(object_key=object_key, upload_url=upload_url)
+    return RecordingUploadReservation(
+        object_key=object_key,
+        upload_url=presigned_post['url'],
+        fields=presigned_post['fields'],
+    )
 
 
 def confirm_recording_upload(

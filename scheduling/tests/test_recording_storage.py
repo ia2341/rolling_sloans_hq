@@ -30,28 +30,35 @@ class RecordingUploadReservationTests(TestCase):
         with self.assertRaises(RecordingUploadError):
             reserve_recording_upload('audio/mp4', MAX_RECORDING_FILE_SIZE + 1)
 
-        storage.connection.meta.client.generate_presigned_url.assert_not_called()
+        storage.connection.meta.client.generate_presigned_post.assert_not_called()
 
     @patch('scheduling.services._recording_storage')
-    def test_reserves_a_private_audio_upload_with_a_presigned_put_url(self, recording_storage):
-        """Reservation returns an opaque object key and the R2 client's signed PUT URL."""
+    def test_reserves_a_private_audio_upload_with_a_size_and_type_enforced_post_policy(
+        self, recording_storage
+    ):
+        """Reservation returns an opaque object key and R2's signed POST policy, which itself
+        caps the upload to the claimed content type and MAX_RECORDING_FILE_SIZE."""
         storage = recording_storage.return_value
         client = storage.connection.meta.client
-        client.generate_presigned_url.return_value = 'https://r2.example/upload-signature'
+        client.generate_presigned_post.return_value = {
+            'url': 'https://r2.example/upload-bucket',
+            'fields': {'key': 'recordings/whatever.m4a', 'Content-Type': 'audio/mp4'},
+        }
 
         reservation = reserve_recording_upload('audio/mp4', 1_024)
 
         self.assertTrue(reservation.object_key.startswith('recordings/'))
-        self.assertEqual(reservation.upload_url, 'https://r2.example/upload-signature')
-        client.generate_presigned_url.assert_called_once_with(
-            'put_object',
-            Params={
-                'Bucket': storage.bucket_name,
-                'Key': reservation.object_key,
-                'ContentType': 'audio/mp4',
-            },
+        self.assertEqual(reservation.upload_url, 'https://r2.example/upload-bucket')
+        self.assertEqual(reservation.fields, {'key': 'recordings/whatever.m4a', 'Content-Type': 'audio/mp4'})
+        client.generate_presigned_post.assert_called_once_with(
+            Bucket=storage.bucket_name,
+            Key=reservation.object_key,
+            Fields={'Content-Type': 'audio/mp4'},
+            Conditions=[
+                {'Content-Type': 'audio/mp4'},
+                ['content-length-range', 1, MAX_RECORDING_FILE_SIZE],
+            ],
             ExpiresIn=900,
-            HttpMethod='PUT',
         )
 
 
