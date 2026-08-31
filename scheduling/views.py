@@ -1,9 +1,13 @@
-"""Member read routes (issue #56): /schedule/, /setlist/, /songs/<id>/."""
+"""Member read routes (issue #56) and self-service routes (issue #57)."""
 
+from django.contrib import messages
+from django.shortcuts import redirect, render
+from django.views import View
 from django.views.generic import DetailView, TemplateView
 
 from config.views import BaseView
-from scheduling.models import Recording, Rehearsal, Song, SongRoleAssignment
+from scheduling.forms import MembershipRolesForm
+from scheduling.models import Membership, Recording, Rehearsal, Song, SongRoleAssignment
 from scheduling.services import get_current_semester, rehearsal_count_target
 
 
@@ -64,3 +68,38 @@ class SongDetailView(BaseView, DetailView):
         context['rehearsal_count_target'] = rehearsal_count_target(song)
         context['rehearsal_count_actual'] = song.rehearsalsong_set.count()
         return context
+
+
+class ProfileView(BaseView, View):
+    """`/me/profile/`: a member views/edits their own declared Roles for the current Semester."""
+
+    template_name = 'scheduling/profile.html'
+
+    def get(self, request):
+        """Render the member's current declared Roles for the current Semester."""
+        return render(request, self.template_name, self._get_context())
+
+    def post(self, request):
+        """Validate and persist the member's declared Roles, or re-render the form with errors."""
+        semester = get_current_semester()
+        if semester is None:
+            return render(request, self.template_name, self._get_context())
+        form = MembershipRolesForm(request.POST, instance=self._get_or_build_membership(semester))
+        if form.is_valid():
+            form.save()
+            messages.success(request, 'Profile updated.')
+            return redirect('scheduling:profile')
+        return render(request, self.template_name, {'form': form, 'semester': semester})
+
+    def _get_context(self):
+        """Build the GET-time context: the bound form plus the current Semester, or neither if there's none."""
+        semester = get_current_semester()
+        if semester is None:
+            return {'semester': None}
+        form = MembershipRolesForm(instance=self._get_or_build_membership(semester))
+        return {'form': form, 'semester': semester}
+
+    def _get_or_build_membership(self, semester):
+        """Return the member's Membership for `semester`, or an unsaved one if none exists yet."""
+        membership = Membership.objects.filter(person=self.request.user, semester=semester).first()
+        return membership or Membership(person=self.request.user, semester=semester)
