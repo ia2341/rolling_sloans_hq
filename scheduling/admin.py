@@ -6,6 +6,7 @@ from .models import (
     Role,
     Semester,
     Song,
+    SongRoleAssignment,
     SongRoleRequirement,
 )
 
@@ -84,3 +85,13 @@ class SongRoleRequirementAdmin(admin.ModelAdmin):
 
     list_display = ('song', 'role', 'count')
     list_filter = ('role',)
+
+
+@admin.register(SongRoleAssignment)
+class SongRoleAssignmentAdmin(admin.ModelAdmin):
+    """Admin for a single Person-on-Role-on-Song assignment, surfacing role mismatches (issue #35)."""
+
+    list_display = ('song', 'role', 'person', 'is_role_mismatch')
+    list_filter = ('is_role_mismatch', 'role')
+    search_fields = ('person__name', 'person__email', 'song__title')
+    readonly_fields = ('is_role_mismatch',)
