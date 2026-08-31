@@ -1,7 +1,7 @@
 """Login + sessions (issue #25): login/logout views and sliding session expiry."""
 
 from django.conf import settings
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from identity.factories import PersonFactory
@@ -9,6 +9,7 @@ from identity.factories import PersonFactory
 PASSWORD = 'a-strong-test-password-123'
 
 
+@override_settings(SECURE_SSL_REDIRECT=False)
 class LoginViewTests(TestCase):
     def test_valid_credentials_log_the_user_in(self):
         """POSTing valid credentials for a Person with a set password logs the user in."""
@@ -35,6 +36,7 @@ class LoginViewTests(TestCase):
         self.assertNotIn('_auth_user_id', self.client.session)
 
 
+@override_settings(SECURE_SSL_REDIRECT=False)
 class LogoutViewTests(TestCase):
     def test_logout_clears_the_session(self):
         """Logging out clears the session."""
