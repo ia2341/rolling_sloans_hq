@@ -3,6 +3,7 @@ from typing import ClassVar
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.core.validators import MinValueValidator
 from django.db import models
 from django.db.models.signals import post_delete, post_save
 from django.dispatch import receiver
@@ -300,7 +301,7 @@ class RehearsalSong(models.Model):
     rehearsal = models.ForeignKey(Rehearsal, on_delete=models.CASCADE)
     song = models.ForeignKey(Song, on_delete=models.CASCADE)
     order = models.PositiveIntegerField()
-    slot_count = models.PositiveIntegerField(default=1)
+    slot_count = models.PositiveIntegerField(default=1, validators=[MinValueValidator(1)])
     start_time = models.TimeField(editable=False)
     end_time = models.TimeField(editable=False)
 
@@ -316,20 +317,33 @@ class RehearsalSong(models.Model):
         end = datetime.combine(self.rehearsal.date, self.rehearsal.end_time)
         return (end - start) / self.rehearsal.semester.default_song_slot_count
 
-    def _compute_times(self):
-        """Derive start_time/end_time from the slot_counts of lower-order rows plus this row's own."""
-        prior_slots = RehearsalSong.objects.filter(
+    def _prior_slots(self):
+        """Sum of slot_count for this Rehearsal's lower-order rows (excluding this one)."""
+        return RehearsalSong.objects.filter(
             rehearsal=self.rehearsal, order__lt=self.order,
         ).exclude(pk=self.pk).aggregate(total=models.Sum('slot_count'))['total'] or 0
+
+    def _compute_times(self):
+        """Derive start_time/end_time from the slot_counts of lower-order rows plus this row's own."""
         slot_duration = self._slot_duration()
         rehearsal_start = datetime.combine(self.rehearsal.date, self.rehearsal.start_time)
-        start = rehearsal_start + prior_slots * slot_duration
+        start = rehearsal_start + self._prior_slots() * slot_duration
         end = start + self.slot_count * slot_duration
         self.start_time = start.time()
         self.end_time = end.time()
 
+    def _overruns_rehearsal_window(self):
+        """True when this row's own + prior rows' slot_counts exceed the Semester's slot count.
+
+        Guards against a slot allocation that would silently push end_time
+        past the Rehearsal's fixed end_time (or even past midnight), mirroring
+        Rehearsal's own "raise instead of wrap" handling for its default
+        duration.
+        """
+        return self._prior_slots() + self.slot_count > self.rehearsal.semester.default_song_slot_count
+
     def clean(self):
-        """Surface an attempted Dress Rehearsal attachment as a normal form error, not a 500."""
+        """Surface an attempted Dress Rehearsal attachment or a slot overrun as a normal form error, not a 500."""
         if self.rehearsal_id and self.rehearsal.is_full_setlist:
             raise ValidationError({
                 'rehearsal': (
@@ -337,12 +351,24 @@ class RehearsalSong(models.Model):
                     '(is_full_setlist=True); its songs are derived live from the setlist instead.'
                 ),
             })
+        if self.rehearsal_id and self._overruns_rehearsal_window():
+            raise ValidationError({
+                'slot_count': (
+                    "This row's slot_count, added to this Rehearsal's other rows, "
+                    "exceeds the Semester's default_song_slot_count."
+                ),
+            })
 
     def save(self, *args, **kwargs):
-        """Reject the Dress Rehearsal, then compute start_time/end_time before saving."""
+        """Reject the Dress Rehearsal or a slot overrun, then compute start_time/end_time before saving."""
         if self.rehearsal.is_full_setlist:
             raise ValueError(
                 'RehearsalSong rows cannot be added to the Dress Rehearsal (is_full_setlist=True).'
+            )
+        if self._overruns_rehearsal_window():
+            raise ValueError(
+                "This row's slot_count, added to this Rehearsal's other rows, "
+                "exceeds the Semester's default_song_slot_count."
             )
         self._compute_times()
         super().save(*args, **kwargs)

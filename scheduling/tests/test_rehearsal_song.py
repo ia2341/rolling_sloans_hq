@@ -81,6 +81,37 @@ class RehearsalSongComputedTimesTests(TestCase):
         self.assertEqual(reloaded.end_time, time(18, 36))
 
 
+class RehearsalSongOverrunRejectionTests(TestCase):
+    def test_slot_counts_exceeding_semester_slot_count_raise_instead_of_overrunning(self):
+        """A row whose slot_count, added to prior rows', exceeds the Semester's slot count raises."""
+        semester = SemesterFactory(default_rehearsal_duration_minutes=90, default_song_slot_count=5)
+        rehearsal = RehearsalFactory(semester=semester, start_time=time(18, 0))
+        RehearsalSongFactory(rehearsal=rehearsal, order=1, slot_count=4)
+
+        with self.assertRaises(ValueError):
+            RehearsalSongFactory(rehearsal=rehearsal, order=2, slot_count=2)
+
+    def test_overrun_clean_reports_it_as_a_validation_error(self):
+        """clean() surfaces the same overrun rejection as a ValidationError, for admin-form use."""
+        semester = SemesterFactory(default_rehearsal_duration_minutes=90, default_song_slot_count=5)
+        rehearsal = RehearsalFactory(semester=semester, start_time=time(18, 0))
+        RehearsalSongFactory(rehearsal=rehearsal, order=1, slot_count=4)
+        song = SongFactory(semester=semester)
+        overrunning = RehearsalSong(rehearsal=rehearsal, song=song, order=2, slot_count=2)
+
+        with self.assertRaises(ValidationError):
+            overrunning.clean()
+
+
+class RehearsalSongSlotCountValidationTests(TestCase):
+    def test_zero_slot_count_fails_validation(self):
+        """slot_count=0 fails full_clean(), since the spec requires slot_count >= 1."""
+        rehearsal_song = RehearsalSongFactory.build(slot_count=0)
+
+        with self.assertRaises(ValidationError):
+            rehearsal_song.full_clean()
+
+
 class RehearsalSongDressRehearsalRejectionTests(TestCase):
     def test_cannot_be_saved_against_a_dress_rehearsal(self):
         """Attempting to save a RehearsalSong against a Dress Rehearsal raises instead of persisting."""
