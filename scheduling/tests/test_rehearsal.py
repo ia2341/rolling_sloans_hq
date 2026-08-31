@@ -1,7 +1,8 @@
 """Rehearsal: dated/timed events defaulted from their Semester's timing fields (issue #36)."""
 
-from datetime import time
+from datetime import date, time
 
+from django.core.exceptions import ValidationError
 from django.test import TestCase
 
 from scheduling.factories import RehearsalFactory, SemesterFactory
@@ -50,6 +51,36 @@ class RehearsalDefaultsFromSemesterTests(TestCase):
         self.assertEqual(reloaded.setup_grace_minutes, 5)
         self.assertEqual(reloaded.teardown_grace_minutes, 5)
         self.assertEqual(reloaded.end_time, time(20, 0))
+
+
+class RehearsalValidationTests(TestCase):
+    def test_full_clean_rejects_blank_semester_without_applying_defaults(self):
+        """A missing Semester remains a validation error instead of crashing defaulting."""
+        rehearsal = Rehearsal(date=date(2026, 9, 15), start_time=time(18, 0))
+
+        with self.assertRaises(ValidationError) as error:
+            rehearsal.full_clean()
+
+        self.assertIn('semester', error.exception.message_dict)
+        self.assertIsNone(rehearsal.setup_grace_minutes)
+        self.assertIsNone(rehearsal.teardown_grace_minutes)
+        self.assertIsNone(rehearsal.end_time)
+
+    def test_full_clean_rejects_invalid_date_without_applying_defaults(self):
+        """An invalid date remains a validation error instead of reaching datetime.combine."""
+        rehearsal = Rehearsal(
+            semester=SemesterFactory(),
+            date='not-a-date',
+            start_time=time(18, 0),
+        )
+
+        with self.assertRaises(ValidationError) as error:
+            rehearsal.full_clean()
+
+        self.assertIn('date', error.exception.message_dict)
+        self.assertIsNone(rehearsal.setup_grace_minutes)
+        self.assertIsNone(rehearsal.teardown_grace_minutes)
+        self.assertIsNone(rehearsal.end_time)
 
 
 class RehearsalEditingIndependenceTests(TestCase):

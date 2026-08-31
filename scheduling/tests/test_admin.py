@@ -97,3 +97,40 @@ class RehearsalAdminCreateTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn('end_time', response.context['adminform'].form.errors)
         self.assertFalse(Rehearsal.objects.filter(semester=semester).exists())
+
+    def test_blank_semester_is_a_form_error_not_a_defaulting_crash(self):
+        """A Rehearsal admin submission without a Semester remains a normal form error."""
+        admin_person = PersonFactory(is_admin=True)
+        self.client.force_login(admin_person)
+
+        response = self.client.post(reverse('admin:scheduling_rehearsal_add'), {
+            'semester': '',
+            'date': '2026-09-15',
+            'start_time': '18:00:00',
+            'end_time': '',
+            'setup_grace_minutes': '',
+            'teardown_grace_minutes': '',
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('semester', response.context['adminform'].form.errors)
+        self.assertFalse(Rehearsal.objects.exists())
+
+    def test_invalid_date_is_a_form_error_not_a_defaulting_crash(self):
+        """An invalid Rehearsal date remains a normal admin form error."""
+        admin_person = PersonFactory(is_admin=True)
+        self.client.force_login(admin_person)
+        semester = SemesterFactory()
+
+        response = self.client.post(reverse('admin:scheduling_rehearsal_add'), {
+            'semester': semester.pk,
+            'date': 'not-a-date',
+            'start_time': '18:00:00',
+            'end_time': '',
+            'setup_grace_minutes': '',
+            'teardown_grace_minutes': '',
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('date', response.context['adminform'].form.errors)
+        self.assertFalse(Rehearsal.objects.exists())

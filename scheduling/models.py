@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import ClassVar
 
 from django.conf import settings
@@ -219,9 +219,9 @@ class Rehearsal(models.Model):
     class Meta:
         ordering: ClassVar[list[str]] = ['semester', 'date', 'start_time']
 
-    def _default_from_semester(self, value, semester_field_name):
+    def _default_from_semester(self, value, semester, semester_field_name):
         """Return `value` if set, else fall back to the Semester's `semester_field_name` default."""
-        return value if value is not None else getattr(self.semester, semester_field_name)
+        return value if value is not None else getattr(semester, semester_field_name)
 
     def _apply_semester_defaults(self):
         """Fill grace periods and end_time from the Semester's defaults, if not already set.
@@ -231,15 +231,24 @@ class Rehearsal(models.Model):
         past midnight. Called from both clean() (so the admin form surfaces
         this as a normal validation error) and save() (so callers that skip
         full_clean(), e.g. factories/scripts, still get the same defaulting).
+        Skips defaulting until the Semester and date are usable.
         """
+        if self.semester_id is None or not isinstance(self.date, date):
+            return
+
+        try:
+            semester = self.semester
+        except (Semester.DoesNotExist, TypeError, ValueError):
+            return
+
         self.setup_grace_minutes = self._default_from_semester(
-            self.setup_grace_minutes, 'default_setup_grace_minutes',
+            self.setup_grace_minutes, semester, 'default_setup_grace_minutes',
         )
         self.teardown_grace_minutes = self._default_from_semester(
-            self.teardown_grace_minutes, 'default_teardown_grace_minutes',
+            self.teardown_grace_minutes, semester, 'default_teardown_grace_minutes',
         )
-        if self.end_time is None and self.start_time is not None:
-            duration = timedelta(minutes=self.semester.default_rehearsal_duration_minutes)
+        if self.end_time is None and isinstance(self.start_time, time):
+            duration = timedelta(minutes=semester.default_rehearsal_duration_minutes)
             start = datetime.combine(self.date, self.start_time)
             end = start + duration
             if end.date() != start.date():
