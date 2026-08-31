@@ -1,0 +1,9 @@
+Hi {{ person.name }},
+
+You've been added to the Rolling Sloans site. Set your password to finish
+setting up your account:
+
+{{ set_password_url }}
+
+This link is single-use and expires in a few days. If it's expired, ask an
+admin to send you a new invite.

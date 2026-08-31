@@ -160,6 +160,10 @@ ANYMAIL = {
 }
 DEFAULT_FROM_EMAIL = env('CLUB_EMAIL_FROM')
 
+# Base URL used to build absolute links (e.g. invite set-password links) in
+# contexts with no request object, like a signal or admin action.
+SITE_URL = env('SITE_URL', default='http://localhost:8000')
+
 
 # Production security settings ("TLS everywhere").
 #
