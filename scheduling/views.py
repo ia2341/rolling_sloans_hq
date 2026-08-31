@@ -51,6 +51,10 @@ class SongDetailView(BaseView, DetailView):
     template_name = 'scheduling/song_detail.html'
     context_object_name = 'song'
 
+    def get_queryset(self):
+        """Restrict lookups to the current Semester's Songs, so an older Song 404s."""
+        return _scoped_to_current_semester(Song, get_current_semester())
+
     def get_context_data(self, **kwargs):
         """Add the Song's SongRoleAssignments, Recordings, and rehearsal-count target vs. actual."""
         context = super().get_context_data(**kwargs)

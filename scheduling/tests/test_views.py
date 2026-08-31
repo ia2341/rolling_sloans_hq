@@ -110,9 +110,11 @@ class SongDetailViewTests(TestCase):
 
     def test_renders_assignments_and_recordings(self):
         """Lists the Song's SongRoleAssignments and Recordings."""
-        song = SongFactory()
+        semester = SemesterFactory()
+        song = SongFactory(semester=semester)
         assignment = SongRoleAssignmentFactory(song=song)
-        rehearsal_song = RehearsalSongFactory(song=song)
+        rehearsal = RehearsalFactory(semester=semester)
+        rehearsal_song = RehearsalSongFactory(song=song, rehearsal=rehearsal)
         recording = RecordingFactory(rehearsal_song=rehearsal_song)
 
         response = self.client.get(reverse('scheduling:song-detail', args=[song.pk]))
@@ -125,11 +127,11 @@ class SongDetailViewTests(TestCase):
         """actual counts this Song's RehearsalSong rows; target counts the Semester's non-Dress Rehearsals."""
         semester = SemesterFactory()
         song = SongFactory(semester=semester)
-        RehearsalSongFactory(song=song, order=1)
-        RehearsalSongFactory(song=song, order=2)
-        RehearsalFactory(semester=semester, is_full_setlist=False)
-        RehearsalFactory(semester=semester, is_full_setlist=False)
+        rehearsal_one = RehearsalFactory(semester=semester, is_full_setlist=False)
+        rehearsal_two = RehearsalFactory(semester=semester, is_full_setlist=False)
         RehearsalFactory(semester=semester, is_full_setlist=True)
+        RehearsalSongFactory(song=song, rehearsal=rehearsal_one, order=1)
+        RehearsalSongFactory(song=song, rehearsal=rehearsal_two, order=1)
 
         response = self.client.get(reverse('scheduling:song-detail', args=[song.pk]))
 
@@ -140,5 +142,15 @@ class SongDetailViewTests(TestCase):
     def test_404_for_unknown_song(self):
         """A request for a nonexistent Song id returns 404."""
         response = self.client.get(reverse('scheduling:song-detail', args=[999999]))
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_404_for_song_from_an_older_semester(self):
+        """A Song belonging to a non-current Semester is not reachable by id."""
+        old_semester = SemesterFactory()
+        old_song = SongFactory(semester=old_semester)
+        SemesterFactory()  # becomes the current Semester
+
+        response = self.client.get(reverse('scheduling:song-detail', args=[old_song.pk]))
 
         self.assertEqual(response.status_code, 404)
