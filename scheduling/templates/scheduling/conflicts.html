@@ -1,0 +1,26 @@
+<!doctype html>
+<title>My conflicts</title>
+<h1>My conflicts</h1>
+{% for message in messages %}
+  <p>{{ message }}</p>
+{% endfor %}
+{% if semester %}
+  <h2>{{ semester }}</h2>
+  <form method="post">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button type="submit">Save</button>
+  </form>
+  <ul>
+    {% for rehearsal in rehearsals %}
+      <li>
+        {{ rehearsal.date }} {{ rehearsal.start_time }}&ndash;{{ rehearsal.end_time }}
+        &mdash; <a href="{% url 'scheduling:conflict-detail' rehearsal.pk %}">enter partial conflict</a>
+      </li>
+    {% empty %}
+      <li>No rehearsals scheduled.</li>
+    {% endfor %}
+  </ul>
+{% else %}
+  <p>There is no active semester yet.</p>
+{% endif %}
