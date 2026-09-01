@@ -1,6 +1,7 @@
 """Application services for the scheduling domain."""
 
 from dataclasses import dataclass
+from datetime import time
 from uuid import uuid4
 
 from botocore.exceptions import ClientError
@@ -9,7 +10,15 @@ from django.db import IntegrityError, transaction
 from django.db.models import Count, Q
 from django.utils import timezone
 
-from scheduling.models import Recording, RehearsalSong, Semester
+from scheduling.models import (
+    Recording,
+    Rehearsal,
+    RehearsalSong,
+    Role,
+    Semester,
+    Song,
+    SongRoleAssignment,
+)
 
 MAX_RECORDING_FILE_SIZE = 50 * 1024 * 1024
 PRESIGNED_URL_EXPIRY_SECONDS = 900
@@ -205,3 +214,107 @@ def rehearsal_count_target(song) -> int:
     re-derive it.
     """
     return song.semester.rehearsal_set.filter(is_full_setlist=False).count()
+
+
+def next_rehearsal_for(person, semester) -> Rehearsal | None:
+    """Return `person`'s next upcoming Rehearsal in `semester` they're on the roster for, else None (issue #95).
+
+    "Next" is not necessarily the band's literal next Rehearsal: this walks
+    the Semester's Rehearsals from today onward in date order and returns
+    the first one where `person` has a SongRoleAssignment on any of its
+    Songs (via `_matrix_songs`, the same Rehearsal-scoped Song set the
+    assignment matrix itself renders — the Dress Rehearsal's live setlist
+    for `is_full_setlist=True`, RehearsalSong-linked Songs otherwise),
+    skipping any Rehearsal they have no assignment at. Deliberately not
+    `Rehearsal.attendance_for` (issue #38), which only reports need at the
+    Rehearsal's first/last slot and would wrongly skip a Rehearsal where
+    the Person is assigned only to a middle Song. This is the default
+    landing Rehearsal for the shared rehearsal-detail view (ScheduleView).
+    """
+    upcoming = Rehearsal.objects.filter(semester=semester, date__gte=timezone.localdate()).order_by(
+        'date', 'start_time',
+    )
+    for rehearsal in upcoming:
+        songs, _ = _matrix_songs(rehearsal)
+        if SongRoleAssignment.objects.filter(person=person, song__in=songs).exists():
+            return rehearsal
+    return None
+
+
+@dataclass(frozen=True)
+class AssignmentMatrixCell:
+    """One (Song, Role) cell in an assignment matrix: every SongRoleAssignment for that pair (issue #95)."""
+
+    role: Role
+    assignments: list[SongRoleAssignment]
+
+
+@dataclass(frozen=True)
+class AssignmentMatrixRow:
+    """One Song's row in an assignment matrix: its slot start_time (if any) plus its per-Role cells (issue #95)."""
+
+    song: Song
+    start_time: time | None
+    cells: list[AssignmentMatrixCell]
+
+
+@dataclass(frozen=True)
+class AssignmentMatrix:
+    """A Rehearsal's Song x Role x Person assignment grid (issue #95)."""
+
+    roles: list[Role]
+    rows: list[AssignmentMatrixRow]
+
+
+def assignment_matrix_for(rehearsal) -> AssignmentMatrix:
+    """Build `rehearsal`'s Song x Role x Person assignment matrix (issue #95).
+
+    Rows are the Rehearsal's Songs in Song.position order: the Songs linked
+    via RehearsalSong for a regular Rehearsal, or the live setlist
+    (Rehearsal.dress_rehearsal_songs, ADR-0003) for the Dress Rehearsal,
+    which carries no RehearsalSong rows and so no per-row start_time.
+    Columns are every Role carrying a SongRoleRequirement on any of those
+    Songs, ordered by name. Each cell lists every SongRoleAssignment for
+    that (Song, Role) pair, each already carrying is_role_mismatch.
+    """
+    songs, start_times = _matrix_songs(rehearsal)
+    roles = list(Role.objects.filter(songrolerequirement__song__in=songs).distinct().order_by('name'))
+    assignments_by_song_role = _assignments_by_song_role(songs, roles)
+    rows = [
+        AssignmentMatrixRow(
+            song=song,
+            start_time=start_times.get(song.id),
+            cells=[
+                AssignmentMatrixCell(role=role, assignments=assignments_by_song_role.get((song.id, role.id), []))
+                for role in roles
+            ],
+        )
+        for song in songs
+    ]
+    return AssignmentMatrix(roles=roles, rows=rows)
+
+
+def _matrix_songs(rehearsal):
+    """Return (Songs in Song.position order, {song_id: RehearsalSong.start_time}) for `rehearsal`.
+
+    The Dress Rehearsal (is_full_setlist=True) has no RehearsalSong rows by
+    design (ADR-0003), so its Songs come from the live setlist instead and
+    the start_time map is empty.
+    """
+    if rehearsal.is_full_setlist:
+        return list(rehearsal.dress_rehearsal_songs), {}
+    rehearsal_songs = RehearsalSong.objects.filter(rehearsal=rehearsal)
+    start_times = {rehearsal_song.song_id: rehearsal_song.start_time for rehearsal_song in rehearsal_songs}
+    songs = list(Song.objects.filter(pk__in=start_times.keys()).order_by('position'))
+    return songs, start_times
+
+
+def _assignments_by_song_role(songs, roles):
+    """Return {(song_id, role_id): [SongRoleAssignment, ...]} for every assignment among `songs`/`roles`."""
+    assignments = SongRoleAssignment.objects.filter(
+        song__in=songs, role__in=roles,
+    ).select_related('person', 'role').order_by('person__name')
+    result = {}
+    for assignment in assignments:
+        result.setdefault((assignment.song_id, assignment.role_id), []).append(assignment)
+    return result

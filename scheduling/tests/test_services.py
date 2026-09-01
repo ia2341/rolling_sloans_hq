@@ -1,12 +1,27 @@
-"""Shared scheduling service functions (issue #92)."""
+"""Shared scheduling service functions (issue #92, issue #95)."""
 
 from datetime import timedelta
 
 from django.test import TestCase
 from django.utils import timezone
 
-from scheduling.factories import RehearsalFactory, RehearsalSongFactory, SongFactory
-from scheduling.services import song_rehearsal_progress
+from identity.factories import PersonFactory
+from scheduling.factories import (
+    MembershipFactory,
+    MembershipRoleFactory,
+    RehearsalFactory,
+    RehearsalSongFactory,
+    RoleFactory,
+    SemesterFactory,
+    SongFactory,
+    SongRoleAssignmentFactory,
+    SongRoleRequirementFactory,
+)
+from scheduling.services import (
+    assignment_matrix_for,
+    next_rehearsal_for,
+    song_rehearsal_progress,
+)
 
 
 class SongRehearsalProgressTests(TestCase):
@@ -74,3 +89,135 @@ class SongRehearsalProgressTests(TestCase):
         progress = song_rehearsal_progress(self.song)
 
         self.assertEqual(progress.total, 1)
+
+
+class NextRehearsalForTests(TestCase):
+    def setUp(self):
+        """Build a Semester and a Person, plus a past/future date."""
+        self.semester = SemesterFactory()
+        self.person = PersonFactory()
+        today = timezone.localdate()
+        self.past_date = today - timedelta(days=1)
+        self.future_date = today + timedelta(days=1)
+
+    def test_skips_past_rehearsals(self):
+        """A Rehearsal dated before today is never returned, even if the Person is needed at it."""
+        rehearsal = RehearsalFactory(semester=self.semester, date=self.past_date)
+        song = SongFactory(semester=self.semester)
+        RehearsalSongFactory(song=song, rehearsal=rehearsal, order=1)
+        SongRoleAssignmentFactory(song=song, person=self.person)
+
+        self.assertIsNone(next_rehearsal_for(self.person, self.semester))
+
+    def test_skips_rehearsals_the_person_is_not_needed_at(self):
+        """A future Rehearsal the Person has no assignment at is skipped."""
+        RehearsalFactory(semester=self.semester, date=self.future_date)
+
+        self.assertIsNone(next_rehearsal_for(self.person, self.semester))
+
+    def test_returns_earliest_future_rehearsal_the_person_is_needed_at(self):
+        """Returns the earliest-dated future Rehearsal with a Song the Person is assigned to."""
+        RehearsalFactory(semester=self.semester, date=self.future_date)
+        needed_rehearsal = RehearsalFactory(semester=self.semester, date=self.future_date + timedelta(days=1))
+        song = SongFactory(semester=self.semester)
+        RehearsalSongFactory(song=song, rehearsal=needed_rehearsal, order=1)
+        SongRoleAssignmentFactory(song=song, person=self.person)
+
+        self.assertEqual(next_rehearsal_for(self.person, self.semester), needed_rehearsal)
+
+    def test_returns_rehearsal_where_person_is_assigned_only_to_a_middle_song(self):
+        """A Rehearsal is returned even when the Person's only assignment is to a non-first/non-last Song.
+
+        Regression check: attendance_for (issue #38) only reports need at a
+        Rehearsal's first/last slot, which would wrongly skip this
+        Rehearsal — next_rehearsal_for must check every Song, not just the
+        boundary ones.
+        """
+        rehearsal = RehearsalFactory(semester=self.semester, date=self.future_date)
+        first_song = SongFactory(semester=self.semester)
+        middle_song = SongFactory(semester=self.semester)
+        last_song = SongFactory(semester=self.semester)
+        RehearsalSongFactory(song=first_song, rehearsal=rehearsal, order=1)
+        RehearsalSongFactory(song=middle_song, rehearsal=rehearsal, order=2)
+        RehearsalSongFactory(song=last_song, rehearsal=rehearsal, order=3)
+        SongRoleAssignmentFactory(song=middle_song, person=self.person)
+
+        self.assertEqual(next_rehearsal_for(self.person, self.semester), rehearsal)
+
+
+class AssignmentMatrixForTests(TestCase):
+    def test_rows_ordered_by_song_position_with_start_times(self):
+        """Rows are the Rehearsal's Songs in Song.position order, each carrying its RehearsalSong start_time."""
+        rehearsal = RehearsalFactory(is_full_setlist=False)
+        semester = rehearsal.semester
+        second_song = SongFactory(semester=semester, position=2)
+        first_song = SongFactory(semester=semester, position=1)
+        second_rs = RehearsalSongFactory(song=second_song, rehearsal=rehearsal, order=1)
+        first_rs = RehearsalSongFactory(song=first_song, rehearsal=rehearsal, order=2)
+
+        matrix = assignment_matrix_for(rehearsal)
+
+        self.assertEqual([row.song for row in matrix.rows], [first_song, second_song])
+        self.assertEqual(matrix.rows[0].start_time, first_rs.start_time)
+        self.assertEqual(matrix.rows[1].start_time, second_rs.start_time)
+
+    def test_dress_rehearsal_rows_come_from_live_setlist_with_no_start_time(self):
+        """The Dress Rehearsal's rows are the live setlist (no RehearsalSong rows), so start_time is None."""
+        rehearsal = RehearsalFactory(is_full_setlist=True)
+        song = SongFactory(semester=rehearsal.semester, position=1)
+
+        matrix = assignment_matrix_for(rehearsal)
+
+        self.assertEqual([row.song for row in matrix.rows], [song])
+        self.assertIsNone(matrix.rows[0].start_time)
+
+    def test_columns_are_roles_with_a_requirement_on_any_matrix_song(self):
+        """Columns are every Role with a SongRoleRequirement on one of the Rehearsal's Songs, ordered by name."""
+        rehearsal = RehearsalFactory(is_full_setlist=False)
+        song = SongFactory(semester=rehearsal.semester, position=1)
+        RehearsalSongFactory(song=song, rehearsal=rehearsal, order=1)
+        singer = RoleFactory(name='Singer')
+        guitarist = RoleFactory(name='Guitarist')
+        SongRoleRequirementFactory(song=song, role=singer, count=2)
+        SongRoleRequirementFactory(song=song, role=guitarist, count=1)
+        RoleFactory(name='Drummer')  # no requirement on this Song — not a column
+
+        matrix = assignment_matrix_for(rehearsal)
+
+        self.assertEqual(matrix.roles, [guitarist, singer])
+
+    def test_cell_lists_assignments_with_role_mismatch_flag(self):
+        """A cell lists every SongRoleAssignment for its (Song, Role) pair, carrying is_role_mismatch."""
+        rehearsal = RehearsalFactory(is_full_setlist=False)
+        song = SongFactory(semester=rehearsal.semester, position=1)
+        RehearsalSongFactory(song=song, rehearsal=rehearsal, order=1)
+        role = RoleFactory()
+        SongRoleRequirementFactory(song=song, role=role, count=1)
+        person = PersonFactory()
+        membership = MembershipFactory(person=person, semester=rehearsal.semester)
+        MembershipRoleFactory(membership=membership, role=role)
+        matched = SongRoleAssignmentFactory(song=song, role=role, person=person)
+        mismatched_person = PersonFactory()
+        MembershipFactory(person=mismatched_person, semester=rehearsal.semester)
+        mismatched = SongRoleAssignmentFactory(song=song, role=role, person=mismatched_person)
+
+        matrix = assignment_matrix_for(rehearsal)
+
+        [cell] = matrix.rows[0].cells
+        self.assertCountEqual(cell.assignments, [matched, mismatched])
+        by_person = {assignment.person: assignment.is_role_mismatch for assignment in cell.assignments}
+        self.assertFalse(by_person[person])
+        self.assertTrue(by_person[mismatched_person])
+
+    def test_empty_cell_for_song_role_pair_with_no_assignment(self):
+        """A (Song, Role) column pair with no SongRoleAssignment yields an empty cell, not a missing one."""
+        rehearsal = RehearsalFactory(is_full_setlist=False)
+        song = SongFactory(semester=rehearsal.semester, position=1)
+        RehearsalSongFactory(song=song, rehearsal=rehearsal, order=1)
+        role = RoleFactory()
+        SongRoleRequirementFactory(song=song, role=role, count=1)
+
+        matrix = assignment_matrix_for(rehearsal)
+
+        [cell] = matrix.rows[0].cells
+        self.assertEqual(cell.assignments, [])

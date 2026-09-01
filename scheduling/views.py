@@ -4,7 +4,7 @@ import json
 
 from django.contrib import messages
 from django.db import models, transaction
-from django.http import JsonResponse
+from django.http import Http404, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views import View
 from django.views.generic import DetailView, TemplateView
@@ -32,8 +32,10 @@ from scheduling.models import (
 )
 from scheduling.services import (
     RecordingUploadError,
+    assignment_matrix_for,
     confirm_recording_upload,
     get_current_semester,
+    next_rehearsal_for,
     rehearsal_count_target,
     reserve_recording_upload,
 )
@@ -62,17 +64,51 @@ class OverviewView(BaseView, TemplateView):
 
 
 class ScheduleView(BaseView, TemplateView):
-    """Lists the current Semester's Rehearsals."""
+    """`/schedule/`: the shared rehearsal-detail view — a Rehearsal's Song x Role x Person assignment matrix (issue #95).
+
+    Defaults (no `?rehearsal=` param) to the logged-in member's own next
+    Rehearsal; `?rehearsal=<id>` drills into any Rehearsal in the current
+    Semester. Read-only and identical for admins and members — admin write
+    affordances are a future hook point (issue #69).
+    """
 
     template_name = 'scheduling/schedule.html'
 
     def get_context_data(self, **kwargs):
-        """Add the current Semester's Rehearsals, ordered per Rehearsal.Meta.ordering."""
+        """Add the resolved Rehearsal (if any), its assignment matrix, and which of its Songs the member plays."""
         context = super().get_context_data(**kwargs)
         semester = get_current_semester()
         context['semester'] = semester
-        context['rehearsals'] = _scoped_to_current_semester(Rehearsal, semester)
+        context['rehearsal'] = None
+        context['matrix'] = None
+        context['my_song_ids'] = set()
+        if semester is not None:
+            rehearsal = self._resolve_rehearsal(semester)
+            context['rehearsal'] = rehearsal
+            if rehearsal is not None:
+                matrix = assignment_matrix_for(rehearsal)
+                context['matrix'] = matrix
+                context['my_song_ids'] = set(
+                    SongRoleAssignment.objects.filter(
+                        person=self.request.user, song__in=[row.song for row in matrix.rows],
+                    ).values_list('song_id', flat=True)
+                )
         return context
+
+    def _resolve_rehearsal(self, semester):
+        """Return the `?rehearsal=<id>` Rehearsal (404 outside the current Semester), or the member's next Rehearsal."""
+        raw_id = self.request.GET.get('rehearsal')
+        if raw_id is None:
+            return next_rehearsal_for(self.request.user, semester)
+        rehearsal_id = self._parse_rehearsal_id(raw_id)
+        return get_object_or_404(_scoped_to_current_semester(Rehearsal, semester), pk=rehearsal_id)
+
+    def _parse_rehearsal_id(self, raw_id):
+        """Return `raw_id` as an int, or raise Http404 for a non-numeric value."""
+        try:
+            return int(raw_id)
+        except ValueError:
+            raise Http404 from None
 
 
 class SetlistView(BaseView, TemplateView):
