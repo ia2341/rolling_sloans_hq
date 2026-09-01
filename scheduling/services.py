@@ -223,16 +223,18 @@ class AttendanceSuggestion:
 
 
 def next_attended_rehearsal_for(person, semester):
-    """Return `person`'s next upcoming Rehearsal in `semester` where attendance_for reports any need, else None.
+    """Return `person`'s next upcoming Rehearsal in `semester` they have any assignment for, else None.
 
     "Next" is not necessarily the band's literal next Rehearsal: this walks
     the Semester's upcoming Rehearsals in date order and returns the first
-    one where Rehearsal.attendance_for(person) reports at least one True
-    (issue #94), skipping any Rehearsal the Person isn't needed at.
+    one with a non-None attendance_suggestion_for (issue #94), skipping any
+    Rehearsal the Person isn't needed at. Deliberately not
+    Rehearsal.attendance_for alone: that only reports endpoint (start/end)
+    attendance, so a Person assigned only to a middle RehearsalSong (or a
+    middle Dress Rehearsal setlist song) would be wrongly skipped.
     """
     for rehearsal in _upcoming_rehearsals(semester):
-        attendance = rehearsal.attendance_for(person)
-        if attendance.needed_from_start or attendance.needed_until_end:
+        if attendance_suggestion_for(rehearsal, person) is not None:
             return rehearsal
     return None
 
@@ -243,8 +245,17 @@ def upcoming_rehearsals_for(semester, count=3):
 
 
 def _upcoming_rehearsals(semester):
-    """Return `semester`'s Rehearsals from today onward, in date order — the shared basis for both #94 lookups."""
-    return Rehearsal.objects.filter(semester=semester, date__gte=timezone.localdate()).order_by('date', 'start_time')
+    """Return `semester`'s not-yet-ended Rehearsals, in date order — the shared basis for both #94 lookups.
+
+    A future-dated Rehearsal always qualifies; a same-day one only qualifies
+    if its end_time hasn't passed yet, so a Rehearsal earlier today that's
+    already over doesn't linger as someone's "next" one.
+    """
+    today = timezone.localdate()
+    now = timezone.localtime().time()
+    return Rehearsal.objects.filter(semester=semester).filter(
+        Q(date__gt=today) | Q(date=today, end_time__gte=now),
+    ).order_by('date', 'start_time')
 
 
 def attendance_suggestion_for(rehearsal, person):
