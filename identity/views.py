@@ -65,6 +65,24 @@ class PasswordResetCompleteView(auth_views.PasswordResetCompleteView):
     template_name = 'identity/password_reset_complete.html'
 
 
+class PasswordChangeView(auth_views.PasswordChangeView):
+    """Self-serve password change from the profile page (issue #90), gated by the member's current password.
+
+    Distinct from the token-based forgot-password flow above: this requires
+    knowing the current password, so a hijacked session alone can't lock the
+    real member out by changing it.
+    """
+
+    template_name = 'identity/password_change_form.html'
+    success_url = reverse_lazy('identity:password-change-done')
+
+
+class PasswordChangeDoneView(auth_views.PasswordChangeDoneView):
+    """Shown after a successful password change."""
+
+    template_name = 'identity/password_change_done.html'
+
+
 class PeopleView(AdminRequiredMixin, View):
     """`/manage/people/`: an admin lists Persons and invites new ones (issue #59, issue #17 user story 13)."""
 
