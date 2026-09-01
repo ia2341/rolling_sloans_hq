@@ -91,6 +91,8 @@ class RehearsalFactoryTests(unittest.TestCase):
 
         self.assertIsNone(rehearsal.setup_grace_minutes)
         self.assertIsNone(rehearsal.teardown_grace_minutes)
+        self.assertIsNone(rehearsal.arrival_buffer_minutes)
+        self.assertIsNone(rehearsal.departure_buffer_minutes)
         self.assertIsNone(rehearsal.end_time)
 
 

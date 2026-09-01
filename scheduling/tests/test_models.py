@@ -15,6 +15,8 @@ class SemesterTests(TestCase):
             default_setup_grace_minutes=15,
             default_teardown_grace_minutes=10,
             default_song_slot_count=5,
+            default_arrival_buffer_minutes=10,
+            default_departure_buffer_minutes=5,
         )
 
         reloaded = Semester.objects.get(pk=semester.pk)
@@ -23,6 +25,8 @@ class SemesterTests(TestCase):
         self.assertEqual(reloaded.default_setup_grace_minutes, 15)
         self.assertEqual(reloaded.default_teardown_grace_minutes, 10)
         self.assertEqual(reloaded.default_song_slot_count, 5)
+        self.assertEqual(reloaded.default_arrival_buffer_minutes, 10)
+        self.assertEqual(reloaded.default_departure_buffer_minutes, 5)
 
 
 class RoleTests(TestCase):
