@@ -1,0 +1,14 @@
+<!doctype html>
+<title>Partial conflict</title>
+<h1>{{ rehearsal.date }} {{ rehearsal.start_time }}&ndash;{{ rehearsal.end_time }}</h1>
+{% for message in messages %}
+  <p>{{ message }}</p>
+{% endfor %}
+<form method="post">
+  {% csrf_token %}
+  {{ formset.management_form }}
+  {% for form in formset %}
+    {{ form.as_p }}
+  {% endfor %}
+  <button type="submit">Save</button>
+</form>
