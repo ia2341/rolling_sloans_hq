@@ -9,6 +9,8 @@ from scheduling.factories import (
     MembershipRoleFactory,
     RoleFactory,
     SemesterFactory,
+    SongFactory,
+    SongRoleAssignmentFactory,
 )
 from scheduling.models import Membership, MembershipRole
 
@@ -61,6 +63,39 @@ class ProfileViewGetTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(role, response.context['form'].fields['roles'].initial)
+
+    def test_shows_name_and_email(self):
+        """The logged-in member's name and email are shown, read-only, on the page."""
+        response = self.client.get(reverse('scheduling:profile'))
+
+        self.assertContains(response, self.person.name)
+        self.assertContains(response, self.person.email)
+
+    def test_roles_count_reflects_declared_roles(self):
+        """roles_count in the context matches the member's declared-Role count for the current Semester."""
+        membership = MembershipFactory(person=self.person, semester=self.semester)
+        MembershipRoleFactory(membership=membership, role=RoleFactory())
+        MembershipRoleFactory(membership=membership, role=RoleFactory())
+
+        response = self.client.get(reverse('scheduling:profile'))
+
+        self.assertEqual(response.context['roles_count'], 2)
+
+    def test_songs_played_count_reflects_distinct_songs_in_current_semester(self):
+        """songs_played_count counts distinct Songs the member has a SongRoleAssignment on, in the current Semester only."""
+        other_semester_song = SongFactory(semester=self.semester)  # self.semester is the "other" (non-current) one here
+        current_semester = SemesterFactory()  # created after self.semester, so this is now the current Semester
+        song_a = SongFactory(semester=current_semester)
+        song_b = SongFactory(semester=current_semester)
+        SongRoleAssignmentFactory(song=song_a, person=self.person)
+        SongRoleAssignmentFactory(song=song_a, person=self.person, role=RoleFactory())
+        SongRoleAssignmentFactory(song=song_b, person=self.person)
+        SongRoleAssignmentFactory(song=other_semester_song, person=self.person)
+
+        response = self.client.get(reverse('scheduling:profile'))
+
+        self.assertEqual(response.context['semester'], current_semester)
+        self.assertEqual(response.context['songs_played_count'], 2)
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)

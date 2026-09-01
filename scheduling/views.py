@@ -23,6 +23,7 @@ from scheduling.models import (
     Conflict,
     ConflictWindow,
     Membership,
+    MembershipRole,
     Recording,
     Rehearsal,
     RehearsalSong,
@@ -138,11 +139,18 @@ class ProfileView(BaseView, View):
         return render(request, self.template_name, {'form': form, 'semester': semester})
 
     def _build_context(self, semester):
-        """Build the GET-time context for `semester`: the bound form, or neither if there's no Semester yet."""
+        """Build the GET-time context for `semester`: the bound form plus Roles/Songs stats, or neither if there's no Semester yet."""
         if semester is None:
             return {'semester': None}
         form = MembershipRolesForm(instance=self._get_or_build_membership(semester))
-        return {'form': form, 'semester': semester}
+        return {
+            'form': form,
+            'semester': semester,
+            'roles_count': MembershipRole.objects.filter(membership__person=self.request.user, membership__semester=semester).count(),
+            'songs_played_count': SongRoleAssignment.objects.filter(
+                person=self.request.user, song__semester=semester,
+            ).values('song').distinct().count(),
+        }
 
     def _get_or_build_membership(self, semester):
         """Return the member's Membership for `semester`, or an unsaved one if none exists yet."""
