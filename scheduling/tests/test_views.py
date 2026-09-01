@@ -384,3 +384,61 @@ class OverviewViewTests(TestCase):
         suggestion = response.context['next_rehearsal_suggestion']
         self.assertEqual(suggestion.arrival_time, dress_rehearsal.start_time)
         self.assertEqual(suggestion.departure_time, dress_rehearsal.end_time)
+
+    def test_song_progress_table_lists_current_semesters_songs_in_position_order(self):
+        """The song-progress table lists only the current Semester's Songs, in position order (issue #93)."""
+        old_semester = SemesterFactory()
+        current_semester = SemesterFactory()
+        SongFactory(semester=old_semester)
+        second_song = SongFactory(semester=current_semester, position=2)
+        first_song = SongFactory(semester=current_semester, position=1)
+
+        response = self.client.get(reverse('scheduling:overview'))
+
+        self.assertEqual(response.status_code, 200)
+        songs = list(response.context['songs'])
+        self.assertEqual(songs, [first_song, second_song])
+
+    def test_song_progress_table_reports_completed_of_total_from_the_shared_service(self):
+        """Each Song's progress in context matches song_rehearsal_progress's completed/total counts."""
+        semester = SemesterFactory()
+        song = SongFactory(semester=semester)
+        past_rehearsal = RehearsalFactory(semester=semester, date=timezone.localdate() - timedelta(days=1))
+        future_rehearsal = RehearsalFactory(semester=semester, date=timezone.localdate() + timedelta(days=1))
+        RehearsalSongFactory(rehearsal=past_rehearsal, song=song, order=1)
+        RehearsalSongFactory(rehearsal=future_rehearsal, song=song, order=1)
+
+        response = self.client.get(reverse('scheduling:overview'))
+
+        self.assertEqual(response.status_code, 200)
+        [rendered_song] = response.context['songs']
+        self.assertEqual(rendered_song.progress.completed, 1)
+        self.assertEqual(rendered_song.progress.total, 2)
+        self.assertContains(response, '1 of 2')
+
+    def test_song_progress_table_marks_has_assignment_for_the_persons_own_songs(self):
+        """A Song carries has_assignment=True only when the logged-in Person has any SongRoleAssignment on it."""
+        semester = SemesterFactory()
+        role = RoleFactory()
+        my_song = SongFactory(semester=semester, position=1)
+        other_song = SongFactory(semester=semester, position=2)
+        SongRoleAssignmentFactory(song=my_song, role=role, person=self.person)
+        SongRoleAssignmentFactory(song=other_song, role=role, person=PersonFactory())
+
+        response = self.client.get(reverse('scheduling:overview'))
+
+        self.assertEqual(response.status_code, 200)
+        songs_by_pk = {song.pk: song for song in response.context['songs']}
+        self.assertTrue(songs_by_pk[my_song.pk].has_assignment)
+        self.assertFalse(songs_by_pk[other_song.pk].has_assignment)
+        self.assertContains(response, 'data-has-assignment="true"')
+        self.assertContains(response, 'data-has-assignment="false"')
+
+    def test_song_progress_table_shows_fallback_when_no_songs_exist(self):
+        """With no Songs in the current Semester, the table is replaced by an explicit empty-state message."""
+        SemesterFactory()
+
+        response = self.client.get(reverse('scheduling:overview'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'No songs on the setlist yet.')
