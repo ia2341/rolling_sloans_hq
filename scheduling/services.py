@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
+from itertools import pairwise
 from uuid import uuid4
 
 from botocore.exceptions import ClientError
@@ -446,3 +447,37 @@ def rehearsal_schedule_for(semester, person) -> RehearsalSchedule:
         )
         (past if rehearsal.date < today else future).append(row)
     return RehearsalSchedule(past=past, future=future)
+
+
+@dataclass(frozen=True)
+class Break:
+    """One gap of idle time between two of a Person's assigned RehearsalSong slots (issue #96)."""
+
+    start_time: time
+    end_time: time
+
+
+def breaks_for(rehearsal, person) -> list[Break]:
+    """Return `person`'s idle-time gaps between their own assigned RehearsalSong slots at `rehearsal` (issue #96).
+
+    Walks the Rehearsal's RehearsalSong rows that `person` is assigned to
+    (via any SongRoleAssignment on the row's Song), in `order`. Each
+    consecutive pair whose end_time/start_time don't line up back-to-back
+    means an intervening, unassigned slot sits between them — that gap is a
+    break. A Person with zero assigned slots gets an empty list here (the
+    view treats that as "not needed at this rehearsal", not a break). The
+    Dress Rehearsal always returns an empty list: it has no persisted
+    RehearsalSong rows to compute a gap from (ADR-0003).
+    """
+    if rehearsal.is_full_setlist:
+        return []
+    assigned_slots = list(
+        RehearsalSong.objects.filter(
+            rehearsal=rehearsal, song__songroleassignment__person=person,
+        ).distinct().order_by('order'),
+    )
+    breaks = []
+    for earlier, later in pairwise(assigned_slots):
+        if earlier.end_time < later.start_time:
+            breaks.append(Break(start_time=earlier.end_time, end_time=later.start_time))
+    return breaks

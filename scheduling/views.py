@@ -34,6 +34,7 @@ from scheduling.services import (
     RecordingUploadError,
     assignment_matrix_for,
     attendance_suggestion_for,
+    breaks_for,
     confirm_recording_upload,
     get_current_semester,
     next_attended_rehearsal_for,
@@ -106,7 +107,7 @@ class ScheduleView(BaseView, TemplateView):
     VIEW_NEXT = 'next'
 
     def get_context_data(self, **kwargs):
-        """Add either the All-Rehearsals schedule or the resolved Rehearsal's assignment matrix, per `?view=`."""
+        """Add either the All-Rehearsals schedule, or the resolved Rehearsal's matrix plus the member's own attendance/breaks (issues #95, #96, #97)."""
         context = super().get_context_data(**kwargs)
         semester = get_current_semester()
         context['semester'] = semester
@@ -114,6 +115,8 @@ class ScheduleView(BaseView, TemplateView):
         context['rehearsal'] = None
         context['matrix'] = None
         context['my_song_ids'] = set()
+        context['my_attendance_suggestion'] = None
+        context['my_breaks'] = []
         context['schedule'] = None
         if semester is not None:
             if context['view'] == self.VIEW_ALL:
@@ -129,6 +132,8 @@ class ScheduleView(BaseView, TemplateView):
                             person=self.request.user, song__in=[row.song for row in matrix.rows],
                         ).values_list('song_id', flat=True)
                     )
+                    context['my_attendance_suggestion'] = attendance_suggestion_for(rehearsal, self.request.user)
+                    context['my_breaks'] = breaks_for(rehearsal, self.request.user)
         return context
 
     def _resolve_view(self):

@@ -38,6 +38,25 @@
 
   <p><a href="{% url 'scheduling:conflicts' %}?rehearsal={{ rehearsal.pk }}">Add a conflict</a></p>
 
+  <div id="my-rehearsal-info">
+    {% if my_attendance_suggestion %}
+      <p>
+        Arrive around {{ my_attendance_suggestion.arrival_time }},
+        free to leave around {{ my_attendance_suggestion.departure_time }}.
+      </p>
+      {% if my_breaks %}
+        <p>
+          Breaks:
+          {% for break in my_breaks %}
+            {{ break.start_time }}&ndash;{{ break.end_time }}{% if not forloop.last %}, {% endif %}
+          {% endfor %}
+        </p>
+      {% endif %}
+    {% else %}
+      <p>You're not needed at this rehearsal.</p>
+    {% endif %}
+  </div>
+
   <p>
     <label>
       <input type="checkbox" id="my-songs-only-filter">
