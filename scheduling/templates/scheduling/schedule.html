@@ -1,5 +1,6 @@
-<!doctype html>
-<title>Schedule</title>
+{% extends "base.html" %}
+{% block title %}Schedule{% endblock %}
+{% block content %}
 <h1>{% if semester %}{{ semester }} Schedule{% else %}Schedule{% endif %}</h1>
 <ul>
   {% for rehearsal in rehearsals %}
@@ -8,3 +9,4 @@
     <li>No rehearsals scheduled.</li>
   {% endfor %}
 </ul>
+{% endblock %}

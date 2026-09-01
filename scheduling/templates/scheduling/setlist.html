@@ -1,5 +1,6 @@
-<!doctype html>
-<title>Setlist</title>
+{% extends "base.html" %}
+{% block title %}Setlist{% endblock %}
+{% block content %}
 <h1>{% if semester %}{{ semester }} Setlist{% else %}Setlist{% endif %}</h1>
 <ol>
   {% for song in songs %}
@@ -11,3 +12,4 @@
     <li>No songs on the setlist yet.</li>
   {% endfor %}
 </ol>
+{% endblock %}

@@ -55,6 +55,12 @@ def _lock_semester(semester):
     return Semester.objects.select_for_update().get(pk=semester.pk)
 
 
+class OverviewView(BaseView, TemplateView):
+    """`/`: placeholder landing page for a logged-in member (issue #85). Content is a separate ticket."""
+
+    template_name = 'scheduling/overview.html'
+
+
 class ScheduleView(BaseView, TemplateView):
     """Lists the current Semester's Rehearsals."""
 

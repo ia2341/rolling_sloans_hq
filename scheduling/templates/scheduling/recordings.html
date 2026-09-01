@@ -1,5 +1,6 @@
-<!doctype html>
-<title>Upload a recording</title>
+{% extends "base.html" %}
+{% block title %}Upload a recording{% endblock %}
+{% block content %}
 <h1>Upload a recording</h1>
 {% for message in messages %}
   <p>{{ message }}</p>
@@ -62,3 +63,4 @@
     form.submit();
   });
 </script>
+{% endblock %}

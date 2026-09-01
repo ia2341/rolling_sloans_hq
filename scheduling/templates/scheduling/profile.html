@@ -1,5 +1,6 @@
-<!doctype html>
-<title>My profile</title>
+{% extends "base.html" %}
+{% block title %}My profile{% endblock %}
+{% block content %}
 <h1>My profile</h1>
 {% for message in messages %}
   <p>{{ message }}</p>
@@ -14,3 +15,4 @@
 {% else %}
   <p>There is no active semester yet.</p>
 {% endif %}
+{% endblock %}
