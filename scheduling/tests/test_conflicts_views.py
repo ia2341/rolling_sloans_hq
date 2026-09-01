@@ -138,6 +138,18 @@ class ConflictsViewPostTests(TestCase):
         self.assertContains(response, 'is not one of the available choices')
         self.assertFalse(Conflict.objects.filter(person=self.person).exists())
 
+    def test_selecting_a_rehearsal_with_an_existing_partial_conflict_leaves_it_untouched(self):
+        """Selecting a Rehearsal that already has a PARTIAL Conflict never promotes it, preserving its windows."""
+        rehearsal = RehearsalFactory(semester=self.semester)
+        conflict = ConflictFactory(person=self.person, rehearsal=rehearsal, type=Conflict.PARTIAL)
+        window = ConflictWindowFactory(conflict=conflict)
+
+        self.client.post(reverse('scheduling:conflicts'), {'full_conflict_rehearsals': [rehearsal.pk]})
+
+        conflict.refresh_from_db()
+        self.assertEqual(conflict.type, Conflict.PARTIAL)
+        self.assertTrue(ConflictWindow.objects.filter(pk=window.pk).exists())
+
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class ConflictDetailViewGetTests(TestCase):
@@ -245,6 +257,34 @@ class ConflictDetailViewPostTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Must fall within the Rehearsal&#x27;s time span.")
+        self.assertFalse(Conflict.objects.filter(person=self.person, rehearsal=self.rehearsal).exists())
+
+    def test_reversed_window_rerenders_formset_with_errors(self):
+        """A window with unavailable_end before unavailable_start re-renders the formset with a field error."""
+        data = {
+            **self._management_form_data(),
+            'form-0-unavailable_start': '18:45',
+            'form-0-unavailable_end': '18:15',
+        }
+
+        response = self.client.post(reverse('scheduling:conflict-detail', args=[self.rehearsal.pk]), data)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'End time must be after start time.')
+        self.assertFalse(Conflict.objects.filter(person=self.person, rehearsal=self.rehearsal).exists())
+
+    def test_zero_length_window_rerenders_formset_with_errors(self):
+        """A window with unavailable_end equal to unavailable_start re-renders the formset with a field error."""
+        data = {
+            **self._management_form_data(),
+            'form-0-unavailable_start': '18:15',
+            'form-0-unavailable_end': '18:15',
+        }
+
+        response = self.client.post(reverse('scheduling:conflict-detail', args=[self.rehearsal.pk]), data)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'End time must be after start time.')
         self.assertFalse(Conflict.objects.filter(person=self.person, rehearsal=self.rehearsal).exists())
 
     def test_post_does_not_affect_another_members_conflict_for_same_rehearsal(self):

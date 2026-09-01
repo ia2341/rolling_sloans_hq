@@ -106,6 +106,11 @@ class ConflictWindowForm(forms.ModelForm):
         start = cleaned_data.get('unavailable_start')
         end = cleaned_data.get('unavailable_end')
         if self.rehearsal and start and end:
+            if start >= end:
+                message = 'End time must be after start time.'
+                self.add_error('unavailable_start', message)
+                self.add_error('unavailable_end', message)
+                return cleaned_data
             in_span = self.rehearsal.start_time <= start <= self.rehearsal.end_time
             in_span = in_span and self.rehearsal.start_time <= end <= self.rehearsal.end_time
             if not in_span:

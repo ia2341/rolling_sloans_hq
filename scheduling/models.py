@@ -486,21 +486,30 @@ class ConflictWindow(models.Model):
             and rehearsal.start_time <= self.unavailable_end <= rehearsal.end_time
         )
 
+    def _reversed_or_zero_length(self):
+        """True if unavailable_start doesn't fall strictly before unavailable_end."""
+        return self.unavailable_start >= self.unavailable_end
+
     def clean(self):
-        """Surface a window outside the parent Rehearsal's time span as a normal form error, not a 500."""
+        """Surface a reversed/zero-length window, or one outside the Rehearsal's span, as a form error, not a 500."""
         if not (self.conflict_id and self.unavailable_start and self.unavailable_end):
             return
+        if self._reversed_or_zero_length():
+            message = 'End time must be after start time.'
+            raise ValidationError({'unavailable_start': message, 'unavailable_end': message})
         if self._outside_rehearsal_span():
             message = "Must fall within the Rehearsal's time span."
             raise ValidationError({'unavailable_start': message, 'unavailable_end': message})
 
     def save(self, *args, **kwargs):
-        """Reject a window outside the parent Rehearsal's time span before saving.
+        """Reject a reversed/zero-length window, or one outside the Rehearsal's span, before saving.
 
         Mirrors RehearsalSong.save()'s belt-and-suspenders check, so this is
         enforced for every write path (e.g. .objects.create()), not only
         callers that run full_clean() first (e.g. a ModelForm).
         """
+        if self._reversed_or_zero_length():
+            raise ValueError("ConflictWindow's unavailable_start must be strictly before unavailable_end.")
         if self._outside_rehearsal_span():
             raise ValueError("ConflictWindow's unavailable_start/unavailable_end must fall within the Rehearsal's time span.")
         super().save(*args, **kwargs)

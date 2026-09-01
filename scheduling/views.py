@@ -156,16 +156,19 @@ class ConflictsView(BaseView, View):
         return {'form': form, 'semester': semester, 'rehearsals': rehearsals}
 
     def _apply_bulk_toggle(self, rehearsals, full_conflict_rehearsals):
-        """Create/promote a FULL_CONFLICT Conflict for each selected Rehearsal; drop full-conflict rows for the rest."""
+        """Create a FULL_CONFLICT Conflict for each selected Rehearsal with none yet; drop full-conflict rows for the rest.
+
+        An existing PARTIAL Conflict is left untouched even when its
+        Rehearsal is selected: promoting it here would delete its
+        ConflictWindow rows (per Conflict.save()'s partial-to-full cascade),
+        silently losing the member's saved partial-conflict times.
+        """
         selected_ids = {rehearsal.pk for rehearsal in full_conflict_rehearsals}
         for rehearsal in rehearsals:
             existing = Conflict.objects.filter(person=self.request.user, rehearsal=rehearsal).first()
             if rehearsal.pk in selected_ids:
                 if existing is None:
                     Conflict.objects.create(person=self.request.user, rehearsal=rehearsal, type=Conflict.FULL_CONFLICT)
-                elif existing.type != Conflict.FULL_CONFLICT:
-                    existing.type = Conflict.FULL_CONFLICT
-                    existing.save()
             elif existing is not None and existing.type == Conflict.FULL_CONFLICT:
                 existing.delete()
 
