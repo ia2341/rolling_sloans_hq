@@ -409,3 +409,40 @@ def _regular_rehearsal_attendance_suggestion(rehearsal, person):
 def _shift_time(date, time_value, minutes):
     """Return `time_value` on `date` shifted by `minutes` (may be negative), as a plain time."""
     return (datetime.combine(date, time_value) + timedelta(minutes=minutes)).time()
+
+
+@dataclass(frozen=True)
+class RehearsalListRow:
+    """One row of the All-Rehearsals view: a Rehearsal plus `person`'s one-line attendance summary (issue #97)."""
+
+    rehearsal: Rehearsal
+    attendance_suggestion: AttendanceSuggestion | None
+
+
+@dataclass(frozen=True)
+class RehearsalSchedule:
+    """`semester`'s Rehearsals, split into past/future rows for the All-Rehearsals view (issue #97)."""
+
+    past: list[RehearsalListRow]
+    future: list[RehearsalListRow]
+
+
+def rehearsal_schedule_for(semester, person) -> RehearsalSchedule:
+    """Return `semester`'s Rehearsals split into past/future, each row carrying `person`'s attendance summary.
+
+    Split is by date only (today counts as future) per issue #97's spec —
+    unlike _upcoming_rehearsals, this is a display grouping for the
+    All-Rehearsals list, not a "what's next" lookup, so a same-day
+    already-ended Rehearsal still renders in the future/expanded section
+    rather than being hidden away with the past ones.
+    """
+    today = timezone.localdate()
+    rehearsals = Rehearsal.objects.filter(semester=semester).order_by('date', 'start_time')
+    past, future = [], []
+    for rehearsal in rehearsals:
+        row = RehearsalListRow(
+            rehearsal=rehearsal,
+            attendance_suggestion=attendance_suggestion_for(rehearsal, person),
+        )
+        (past if rehearsal.date < today else future).append(row)
+    return RehearsalSchedule(past=past, future=future)

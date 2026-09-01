@@ -6,10 +6,35 @@
 
 {% if not semester %}
   <p>There is no active semester yet.</p>
+{% elif view == 'all' %}
+  <p><a href="{% url 'scheduling:schedule' %}">Back to next rehearsal</a></p>
+  <h2>All Rehearsals</h2>
+
+  {% if schedule.past %}
+    <details>
+      <summary>Show past rehearsals</summary>
+      <ul>
+        {% for row in schedule.past %}
+          {% include "scheduling/_rehearsal_list_row.html" %}
+        {% endfor %}
+      </ul>
+    </details>
+  {% endif %}
+
+  <ul>
+    {% for row in schedule.future %}
+      {% include "scheduling/_rehearsal_list_row.html" %}
+    {% empty %}
+      <li>No upcoming rehearsals scheduled.</li>
+    {% endfor %}
+  </ul>
 {% elif not rehearsal %}
   <p>No upcoming rehearsal to show.</p>
+  <p><a href="{% url 'scheduling:schedule' %}?view=all">View all rehearsals</a></p>
 {% else %}
   <h2>{{ rehearsal.date }} {{ rehearsal.start_time }}&ndash;{{ rehearsal.end_time }}</h2>
+
+  <p><a href="{% url 'scheduling:schedule' %}?view=all">View all rehearsals</a></p>
 
   <p><a href="{% url 'scheduling:conflicts' %}?rehearsal={{ rehearsal.pk }}">Add a conflict</a></p>
 

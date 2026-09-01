@@ -1,6 +1,6 @@
 """Shared scheduling service functions (issue #92, issue #95)."""
 
-from datetime import timedelta
+from datetime import time, timedelta
 
 from django.test import TestCase
 from django.utils import timezone
@@ -19,6 +19,7 @@ from scheduling.factories import (
 )
 from scheduling.services import (
     assignment_matrix_for,
+    rehearsal_schedule_for,
     song_rehearsal_progress,
     songs_with_progress_for,
 )
@@ -209,3 +210,57 @@ class AssignmentMatrixForTests(TestCase):
 
         [cell] = matrix.rows[0].cells
         self.assertEqual(cell.assignments, [])
+
+
+class RehearsalScheduleForTests(TestCase):
+    def setUp(self):
+        """Build a Semester and a Person to view its schedule."""
+        self.semester = SemesterFactory()
+        self.person = PersonFactory()
+
+    def test_splits_past_and_future_rehearsals_by_date(self):
+        """A Rehearsal dated before today is past; one dated today or later is future."""
+        today = timezone.localdate()
+        past = RehearsalFactory(semester=self.semester, date=today - timedelta(days=1))
+        today_rehearsal = RehearsalFactory(semester=self.semester, date=today)
+        future = RehearsalFactory(semester=self.semester, date=today + timedelta(days=1))
+
+        schedule = rehearsal_schedule_for(self.semester, self.person)
+
+        self.assertEqual([row.rehearsal for row in schedule.past], [past])
+        self.assertEqual(
+            [row.rehearsal for row in schedule.future], [today_rehearsal, future],
+        )
+
+    def test_rows_ordered_by_date_then_start_time(self):
+        """Rows within each split are ordered by date, then start_time."""
+        today = timezone.localdate()
+        later = RehearsalFactory(semester=self.semester, date=today + timedelta(days=1), start_time=time(19, 0))
+        earlier = RehearsalFactory(semester=self.semester, date=today + timedelta(days=1), start_time=time(17, 0))
+
+        schedule = rehearsal_schedule_for(self.semester, self.person)
+
+        self.assertEqual([row.rehearsal for row in schedule.future], [earlier, later])
+
+    def test_row_carries_persons_attendance_suggestion(self):
+        """Each row carries the viewing Person's attendance_suggestion_for that Rehearsal, or None if not needed."""
+        rehearsal = RehearsalFactory(semester=self.semester, date=timezone.localdate() + timedelta(days=1))
+        song = SongFactory(semester=self.semester, position=1)
+        RehearsalSongFactory(song=song, rehearsal=rehearsal, order=1)
+        SongRoleAssignmentFactory(song=song, person=self.person)
+        not_needed = RehearsalFactory(semester=self.semester, date=timezone.localdate() + timedelta(days=2))
+
+        schedule = rehearsal_schedule_for(self.semester, self.person)
+
+        by_rehearsal = {row.rehearsal: row.attendance_suggestion for row in schedule.future}
+        self.assertIsNotNone(by_rehearsal[rehearsal])
+        self.assertIsNone(by_rehearsal[not_needed])
+
+    def test_scoped_to_the_given_semester_only(self):
+        """A Rehearsal in a different Semester is not included."""
+        RehearsalFactory()  # different semester
+
+        schedule = rehearsal_schedule_for(self.semester, self.person)
+
+        self.assertEqual(schedule.past, [])
+        self.assertEqual(schedule.future, [])
