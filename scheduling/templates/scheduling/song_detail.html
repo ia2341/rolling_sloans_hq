@@ -1,5 +1,6 @@
-<!doctype html>
-<title>{{ song.title }}</title>
+{% extends "base.html" %}
+{% block title %}{{ song.title }}{% endblock %}
+{% block content %}
 <h1>{{ song.title }} — {{ song.artist }}</h1>
 <p>Rehearsed {{ rehearsal_count_actual }} of {{ rehearsal_count_target }} rehearsals.</p>
 
@@ -20,3 +21,4 @@
     <li>No recordings yet.</li>
   {% endfor %}
 </ul>
+{% endblock %}

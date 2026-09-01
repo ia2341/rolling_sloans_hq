@@ -1,5 +1,6 @@
-<!doctype html>
-<title>Partial conflict</title>
+{% extends "base.html" %}
+{% block title %}Partial conflict{% endblock %}
+{% block content %}
 <h1>{{ rehearsal.date }} {{ rehearsal.start_time }}&ndash;{{ rehearsal.end_time }}</h1>
 {% for message in messages %}
   <p>{{ message }}</p>
@@ -12,3 +13,4 @@
   {% endfor %}
   <button type="submit">Save</button>
 </form>
+{% endblock %}
