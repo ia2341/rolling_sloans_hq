@@ -1,4 +1,4 @@
-"""Member-facing forms (issues #57, #58, #61)."""
+"""Member-facing (issues #57, #58, #61) and admin-facing (issue #60) forms."""
 
 from typing import ClassVar
 
@@ -12,6 +12,8 @@ from scheduling.models import (
     Rehearsal,
     RehearsalSong,
     Role,
+    Song,
+    SongRoleAssignment,
 )
 
 
@@ -124,6 +126,54 @@ class ConflictWindowForm(forms.ModelForm):
 ConflictWindowFormSet = forms.modelformset_factory(
     ConflictWindow, form=ConflictWindowForm, extra=1, can_delete=True,
 )
+
+
+class RehearsalForm(forms.ModelForm):
+    """Creates/edits a Rehearsal within its (already-set) Semester (issue #60).
+
+    `semester` is deliberately excluded: the view sets it on the instance
+    before binding (a fresh Rehearsal for create, the existing one for
+    edit), so it's never attacker-controlled via POST data.
+    """
+
+    class Meta:
+        model = Rehearsal
+        fields: ClassVar[list[str]] = [
+            'date', 'start_time', 'end_time', 'setup_grace_minutes', 'teardown_grace_minutes', 'is_full_setlist',
+        ]
+
+
+class SongForm(forms.ModelForm):
+    """Creates/edits a Song's title/artist/length/notes within its (already-set) Semester (issue #60).
+
+    `semester` and `position` are deliberately excluded: the view sets
+    `semester` on the instance before binding, and `position` is only ever
+    changed through the dedicated reorder endpoints, never through this
+    form.
+    """
+
+    class Meta:
+        model = Song
+        fields: ClassVar[list[str]] = ['title', 'artist', 'length', 'notes']
+
+
+class SongRoleAssignmentForm(forms.ModelForm):
+    """Assigns a Person to a Role on a Song, restricted to the current Semester's Songs (issue #60).
+
+    `is_role_mismatch` is excluded: SongRoleAssignment.save() always
+    recomputes it from the Person's current Membership, so it's never a
+    form input.
+    """
+
+    class Meta:
+        model = SongRoleAssignment
+        fields: ClassVar[list[str]] = ['song', 'role', 'person']
+
+    def __init__(self, *args, songs=None, **kwargs):
+        """Restrict the `song` choices to `songs` (the current Semester's) and `role` to active Roles."""
+        super().__init__(*args, **kwargs)
+        self.fields['song'].queryset = songs if songs is not None else Song.objects.none()
+        self.fields['role'].queryset = Role.objects.filter(is_active=True)
 
 
 class RecordingUploadForm(forms.Form):
