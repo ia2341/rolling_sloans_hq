@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load static %}
 {% block title %}Overview{% endblock %}
 {% block content %}
 <h1>Overview</h1>
@@ -39,4 +40,38 @@
     <li>No upcoming rehearsals.</li>
   {% endfor %}
 </ul>
+
+<h2>Song progress</h2>
+{% if songs %}
+  <div>
+    <button type="button" id="sort-by-position" data-sort="position">Sort by setlist order</button>
+    <button type="button" id="sort-by-title" data-sort="title">Sort alphabetically</button>
+    <label>
+      <input type="checkbox" id="my-songs-only">
+      My songs only
+    </label>
+  </div>
+  <table id="song-progress-table">
+    <thead>
+      <tr>
+        <th>Song</th>
+        <th>Position</th>
+        <th>Progress</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for song in songs %}
+        <tr data-position="{{ song.position }}" data-title="{{ song.title }}" data-has-assignment="{{ song.has_assignment|yesno:"true,false" }}">
+          <td>{{ song.title }}</td>
+          <td>{{ song.position }}</td>
+          <td>{{ song.progress.completed }} of {{ song.progress.total }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% else %}
+  <p>No songs on the setlist yet.</p>
+{% endif %}
+
+<script src="{% static 'scheduling/js/overview.js' %}" defer></script>
 {% endblock %}

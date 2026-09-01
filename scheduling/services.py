@@ -15,6 +15,7 @@ from scheduling.models import (
     Rehearsal,
     RehearsalSong,
     Semester,
+    Song,
     SongRoleAssignment,
 )
 
@@ -199,6 +200,27 @@ def song_rehearsal_progress(song) -> SongRehearsalProgress:
         remaining=counts['remaining'],
         total=counts['completed'] + counts['remaining'],
     )
+
+
+def songs_with_progress_for(semester, person) -> list[Song]:
+    """Return `semester`'s Songs in position order, each annotated with `.progress` and `.has_assignment` for `person` (issue #93).
+
+    `.progress` is that Song's `song_rehearsal_progress` (X of Y);
+    `.has_assignment` is True whenever `person` has any SongRoleAssignment
+    on the Song, regardless of is_role_mismatch — the Overview page's "my
+    songs only" filter is intentionally coarser than My Schedule's
+    per-role assignment matrix.
+    """
+    assigned_song_ids = set(
+        SongRoleAssignment.objects.filter(
+            person=person, song__semester=semester,
+        ).values_list('song_id', flat=True),
+    )
+    songs = list(Song.objects.filter(semester=semester).order_by('position'))
+    for song in songs:
+        song.progress = song_rehearsal_progress(song)
+        song.has_assignment = song.pk in assigned_song_ids
+    return songs
 
 
 def rehearsal_count_target(song) -> int:

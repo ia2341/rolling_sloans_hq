@@ -38,6 +38,7 @@ from scheduling.services import (
     next_attended_rehearsal_for,
     rehearsal_count_target,
     reserve_recording_upload,
+    songs_with_progress_for,
     upcoming_rehearsals_for,
 )
 
@@ -59,18 +60,19 @@ def _lock_semester(semester):
 
 
 class OverviewView(BaseView, TemplateView):
-    """`/`: a logged-in member's personalized Next Rehearsal card and 3-rehearsal preview (issue #94)."""
+    """`/`: a logged-in member's personalized Next Rehearsal card, 3-rehearsal preview, and song-progress table."""
 
     template_name = 'scheduling/overview.html'
 
     def get_context_data(self, **kwargs):
-        """Add the member's Next Rehearsal card and the band's 3-rehearsal preview, each with a suggested time-window."""
+        """Add the Next Rehearsal card (issue #94) and semester-wide song-progress table (issue #93)."""
         context = super().get_context_data(**kwargs)
         semester = get_current_semester()
         context['semester'] = semester
         context['next_rehearsal'] = None
         context['next_rehearsal_suggestion'] = None
         context['upcoming_rehearsals'] = []
+        context['songs'] = []
         if semester is not None:
             next_rehearsal = next_attended_rehearsal_for(self.request.user, semester=semester)
             context['next_rehearsal'] = next_rehearsal
@@ -80,6 +82,7 @@ class OverviewView(BaseView, TemplateView):
                 (rehearsal, attendance_suggestion_for(rehearsal, self.request.user))
                 for rehearsal in upcoming_rehearsals_for(semester)
             ]
+            context['songs'] = songs_with_progress_for(semester, self.request.user)
         return context
 
 
