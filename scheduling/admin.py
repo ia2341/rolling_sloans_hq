@@ -23,6 +23,8 @@ class SemesterAdmin(admin.ModelAdmin):
         'default_setup_grace_minutes',
         'default_teardown_grace_minutes',
         'default_song_slot_count',
+        'default_arrival_buffer_minutes',
+        'default_departure_buffer_minutes',
     )
     search_fields = ('name',)
 

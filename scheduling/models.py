@@ -17,6 +17,8 @@ class Semester(models.Model):
     default_setup_grace_minutes = models.PositiveIntegerField()
     default_teardown_grace_minutes = models.PositiveIntegerField()
     default_song_slot_count = models.PositiveIntegerField()
+    default_arrival_buffer_minutes = models.PositiveIntegerField()
+    default_departure_buffer_minutes = models.PositiveIntegerField()
 
     def __str__(self):
         return self.name
@@ -205,15 +207,16 @@ class RehearsalAttendance(NamedTuple):
 class Rehearsal(models.Model):
     """A dated, timed event within a Semester (issue #36).
 
-    `setup_grace_minutes`, `teardown_grace_minutes`, and `end_time` (derived
-    from `start_time` plus the Semester's default duration) are copied from
-    the parent Semester's defaults only at creation time, when left blank —
-    once saved, editing them here never reaches back to update the
-    Semester's defaults or any other Rehearsal. They're nullable/optional at
-    the field level (rather than required) specifically so the Django admin
-    add form can be submitted with them left blank and still get sensible
-    values, rather than forcing whoever's creating the Rehearsal to already
-    know and retype the Semester's numbers.
+    `setup_grace_minutes`, `teardown_grace_minutes`, `arrival_buffer_minutes`,
+    `departure_buffer_minutes`, and `end_time` (derived from `start_time`
+    plus the Semester's default duration) are copied from the parent
+    Semester's defaults only at creation time, when left blank — once
+    saved, editing them here never reaches back to update the Semester's
+    defaults or any other Rehearsal. They're nullable/optional at the field
+    level (rather than required) specifically so the Django admin add form
+    can be submitted with them left blank and still get sensible values,
+    rather than forcing whoever's creating the Rehearsal to already know
+    and retype the Semester's numbers.
     """
 
     semester = models.ForeignKey(Semester, on_delete=models.CASCADE)
@@ -222,6 +225,8 @@ class Rehearsal(models.Model):
     end_time = models.TimeField(null=True, blank=True)
     setup_grace_minutes = models.PositiveIntegerField(null=True, blank=True)
     teardown_grace_minutes = models.PositiveIntegerField(null=True, blank=True)
+    arrival_buffer_minutes = models.PositiveIntegerField(null=True, blank=True)
+    departure_buffer_minutes = models.PositiveIntegerField(null=True, blank=True)
     is_full_setlist = models.BooleanField(default=False)
 
     class Meta:
@@ -245,6 +250,12 @@ class Rehearsal(models.Model):
         )
         self.teardown_grace_minutes = self._default_from_semester(
             self.teardown_grace_minutes, 'default_teardown_grace_minutes',
+        )
+        self.arrival_buffer_minutes = self._default_from_semester(
+            self.arrival_buffer_minutes, 'default_arrival_buffer_minutes',
+        )
+        self.departure_buffer_minutes = self._default_from_semester(
+            self.departure_buffer_minutes, 'default_departure_buffer_minutes',
         )
         if self.end_time is None and self.start_time is not None:
             duration = timedelta(minutes=self.semester.default_rehearsal_duration_minutes)
