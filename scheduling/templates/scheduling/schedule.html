@@ -1,12 +1,56 @@
 {% extends "base.html" %}
-{% block title %}Schedule{% endblock %}
+{% load static %}
+{% block title %}My Schedule{% endblock %}
 {% block content %}
-<h1>{% if semester %}{{ semester }} Schedule{% else %}Schedule{% endif %}</h1>
-<ul>
-  {% for rehearsal in rehearsals %}
-    <li>{{ rehearsal.date }} {{ rehearsal.start_time }}&ndash;{{ rehearsal.end_time }}</li>
-  {% empty %}
-    <li>No rehearsals scheduled.</li>
-  {% endfor %}
-</ul>
+<h1>My Schedule</h1>
+
+{% if not semester %}
+  <p>There is no active semester yet.</p>
+{% elif not rehearsal %}
+  <p>No upcoming rehearsal to show.</p>
+{% else %}
+  <h2>{{ rehearsal.date }} {{ rehearsal.start_time }}&ndash;{{ rehearsal.end_time }}</h2>
+
+  <p><a href="{% url 'scheduling:conflicts' %}?rehearsal={{ rehearsal.pk }}">Add a conflict</a></p>
+
+  <p>
+    <label>
+      <input type="checkbox" id="my-songs-only-filter">
+      My Songs Only
+    </label>
+  </p>
+
+  <table id="assignment-matrix">
+    <thead>
+      <tr>
+        <th>Song</th>
+        <th>Start Time</th>
+        {% for role in matrix.roles %}
+          <th>{{ role.name }}</th>
+        {% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in matrix.rows %}
+        <tr data-song-id="{{ row.song.pk }}" data-mine="{% if row.song.pk in my_song_ids %}true{% else %}false{% endif %}">
+          <td>{{ row.song.title }}</td>
+          <td>{% if row.start_time %}{{ row.start_time }}{% else %}&mdash;{% endif %}</td>
+          {% for cell in row.cells %}
+            <td>
+              {% for assignment in cell.assignments %}
+                <span{% if assignment.is_role_mismatch %} class="role-mismatch"{% endif %}>{{ assignment.person }}</span>{% if not forloop.last %}, {% endif %}
+              {% empty %}
+                &mdash;
+              {% endfor %}
+            </td>
+          {% endfor %}
+        </tr>
+      {% empty %}
+        <tr><td colspan="{{ matrix.roles|length|add:2 }}">No songs scheduled for this rehearsal.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% endif %}
+
+<script src="{% static 'scheduling/js/schedule.js' %}"></script>
 {% endblock %}
