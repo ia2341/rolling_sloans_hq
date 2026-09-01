@@ -1,6 +1,9 @@
-"""Member read routes (issue #56) and self-service routes (issues #57, #58)."""
+"""Member read routes (issue #56) and self-service routes (issues #57, #58, #61)."""
+
+import json
 
 from django.contrib import messages
+from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views import View
 from django.views.generic import DetailView, TemplateView
@@ -10,6 +13,7 @@ from scheduling.forms import (
     BulkConflictForm,
     ConflictWindowFormSet,
     MembershipRolesForm,
+    RecordingUploadForm,
 )
 from scheduling.models import (
     Conflict,
@@ -17,10 +21,17 @@ from scheduling.models import (
     Membership,
     Recording,
     Rehearsal,
+    RehearsalSong,
     Song,
     SongRoleAssignment,
 )
-from scheduling.services import get_current_semester, rehearsal_count_target
+from scheduling.services import (
+    RecordingUploadError,
+    confirm_recording_upload,
+    get_current_semester,
+    rehearsal_count_target,
+    reserve_recording_upload,
+)
 
 
 def _scoped_to_current_semester(model, semester):
@@ -233,3 +244,72 @@ class ConflictDetailView(BaseView, View):
                 window.delete()
         elif conflict is not None:
             conflict.delete()
+
+
+class RecordingUploadView(BaseView, View):
+    """`/me/recordings/`: picks a RehearsalSong and confirms an already-uploaded Recording (issue #61).
+
+    Two-step flow per ADR-0004 / issue #11: the client gets a presigned
+    R2 POST policy from RecordingPresignView, uploads the file straight to
+    R2, then submits here (a normal form POST, not JSON) with the resulting
+    object_key to create the Recording row.
+    """
+
+    template_name = 'scheduling/recordings.html'
+
+    def get(self, request):
+        """Render the RehearsalSong picker for the current Semester's recordings."""
+        return self._render(RecordingUploadForm(rehearsal_songs=self._rehearsal_songs()))
+
+    def post(self, request):
+        """Validate the confirm submission and persist the Recording, or re-render with errors."""
+        form = RecordingUploadForm(request.POST, rehearsal_songs=self._rehearsal_songs())
+        if not form.is_valid():
+            return self._render(form)
+        try:
+            confirm_recording_upload(
+                form.cleaned_data['rehearsal_song'],
+                request.user,
+                form.cleaned_data['object_key'],
+                note=form.cleaned_data['note'],
+            )
+        except RecordingUploadError as error:
+            form.add_error(None, str(error))
+            return self._render(form)
+        messages.success(request, 'Recording uploaded.')
+        return redirect('scheduling:recordings')
+
+    def _render(self, form):
+        """Render the picker/confirm template with `form` (bound or unbound)."""
+        return render(self.request, self.template_name, {'form': form})
+
+    def _rehearsal_songs(self):
+        """Return the current Semester's RehearsalSongs, or an empty queryset if there's no current Semester."""
+        semester = get_current_semester()
+        return RehearsalSong.objects.filter(rehearsal__semester=semester) if semester else RehearsalSong.objects.none()
+
+
+class RecordingPresignView(BaseView, View):
+    """`/me/recordings/presign/`: a hand-rolled JSON endpoint reserving a direct-to-R2 upload slot (issue #61).
+
+    No DRF, per the issue: this is the app's one JSON endpoint, so it's a
+    plain JsonResponse view rather than reaching for a serializer framework.
+    """
+
+    def post(self, request):
+        """Validate the requested content_type/file_size and return a presigned upload reservation, or a 4xx."""
+        try:
+            payload = json.loads(request.body)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return JsonResponse({'error': 'Malformed JSON body.'}, status=400)
+        content_type = payload.get('content_type')
+        file_size = payload.get('file_size')
+        try:
+            reservation = reserve_recording_upload(content_type, file_size)
+        except RecordingUploadError as error:
+            return JsonResponse({'error': str(error)}, status=400)
+        return JsonResponse({
+            'upload_url': reservation.upload_url,
+            'fields': reservation.fields,
+            'object_key': reservation.object_key,
+        })

@@ -1,4 +1,4 @@
-"""Member-facing forms (issues #57, #58)."""
+"""Member-facing forms (issues #57, #58, #61)."""
 
 from typing import ClassVar
 
@@ -10,6 +10,7 @@ from scheduling.models import (
     Membership,
     MembershipRole,
     Rehearsal,
+    RehearsalSong,
     Role,
 )
 
@@ -123,3 +124,24 @@ class ConflictWindowForm(forms.ModelForm):
 ConflictWindowFormSet = forms.modelformset_factory(
     ConflictWindow, form=ConflictWindowForm, extra=1, can_delete=True,
 )
+
+
+class RecordingUploadForm(forms.Form):
+    """Picks the RehearsalSong to upload against and confirms an already-uploaded R2 object (issue #61).
+
+    Used for both halves of the two-step upload: on GET only
+    `rehearsal_song` is rendered (to build the picker), and on the confirm
+    POST all three fields are submitted together once the client has
+    already put the file in R2 under `object_key`.
+    """
+
+    rehearsal_song = forms.ModelChoiceField(queryset=RehearsalSong.objects.none())
+    object_key = forms.CharField(widget=forms.HiddenInput)
+    note = forms.CharField(required=False, widget=forms.Textarea)
+
+    def __init__(self, *args, rehearsal_songs=None, **kwargs):
+        """Restrict the `rehearsal_song` choices to `rehearsal_songs` (the current Semester's)."""
+        super().__init__(*args, **kwargs)
+        self.fields['rehearsal_song'].queryset = (
+            rehearsal_songs if rehearsal_songs is not None else RehearsalSong.objects.none()
+        )

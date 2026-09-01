@@ -1,0 +1,64 @@
+<!doctype html>
+<title>Upload a recording</title>
+<h1>Upload a recording</h1>
+{% for message in messages %}
+  <p>{{ message }}</p>
+{% endfor %}
+{% if form.non_field_errors %}
+  <ul>
+    {% for error in form.non_field_errors %}
+      <li>{{ error }}</li>
+    {% endfor %}
+  </ul>
+{% endif %}
+<form id="recording-upload-form" method="post">
+  {% csrf_token %}
+  {{ form.rehearsal_song.errors }}
+  {{ form.rehearsal_song.label_tag }} {{ form.rehearsal_song }}
+  <p>
+    <label for="recording-file">Recording file</label>
+    <input type="file" id="recording-file" accept="audio/*" required>
+  </p>
+  {{ form.note.errors }}
+  {{ form.note.label_tag }} {{ form.note }}
+  {{ form.object_key }}
+  <p id="recording-upload-status"></p>
+  <button type="submit">Upload</button>
+</form>
+<script>
+  document.getElementById('recording-upload-form').addEventListener('submit', async function (event) {
+    event.preventDefault();
+    const form = event.target;
+    const fileInput = document.getElementById('recording-file');
+    const statusEl = document.getElementById('recording-upload-status');
+    const file = fileInput.files[0];
+    if (!file) {
+      statusEl.textContent = 'Choose a file first.';
+      return;
+    }
+    statusEl.textContent = 'Requesting upload slot...';
+    const csrfToken = form.querySelector('[name=csrfmiddlewaretoken]').value;
+    const presignResponse = await fetch('{% url "scheduling:recordings-presign" %}', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken },
+      body: JSON.stringify({ content_type: file.type, file_size: file.size }),
+    });
+    const presignData = await presignResponse.json();
+    if (!presignResponse.ok) {
+      statusEl.textContent = presignData.error || 'Could not reserve an upload slot.';
+      return;
+    }
+    statusEl.textContent = 'Uploading...';
+    const uploadBody = new FormData();
+    Object.entries(presignData.fields).forEach(([key, value]) => uploadBody.append(key, value));
+    uploadBody.append('file', file);
+    const uploadResponse = await fetch(presignData.upload_url, { method: 'POST', body: uploadBody });
+    if (!uploadResponse.ok) {
+      statusEl.textContent = 'Upload to storage failed.';
+      return;
+    }
+    form.querySelector('[name=object_key]').value = presignData.object_key;
+    statusEl.textContent = 'Confirming...';
+    form.submit();
+  });
+</script>
