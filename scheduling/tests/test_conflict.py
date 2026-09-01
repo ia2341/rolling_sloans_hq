@@ -113,3 +113,16 @@ class ConflictFieldTests(TestCase):
         self.assertEqual(reloaded.type, Conflict.PARTIAL)
         self.assertIsNotNone(reloaded.created_at)
         self.assertIsNotNone(reloaded.updated_at)
+
+    def test_reason_is_optional(self):
+        """A Conflict can be created without a reason, defaulting to an empty string."""
+        conflict = ConflictFactory()
+
+        self.assertEqual(conflict.reason, '')
+
+    def test_reason_is_saved(self):
+        """A Conflict's reason text is persisted and reloadable."""
+        conflict = ConflictFactory(reason='Out of town for a wedding.')
+
+        reloaded = Conflict.objects.get(pk=conflict.pk)
+        self.assertEqual(reloaded.reason, 'Out of town for a wedding.')
