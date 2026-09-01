@@ -4,8 +4,11 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from identity.factories import PersonFactory
+from scheduling.factories import RehearsalFactory, SongFactory
 
 PASSWORD = 'a-strong-test-password-123'
+
+NAV_MARKER = '<nav>'
 
 NAV_ROUTES = {
     'scheduling:overview': 'Overview',
@@ -47,6 +50,41 @@ class NavRenderingTests(TestCase):
                 current_count = content.count('aria-current="page"')
                 self.assertEqual(current_count, 1)
                 self.assertIn(f'aria-current="page">{label}</a>', content)
+
+    def test_conflict_detail_renders_the_nav(self):
+        """conflict_detail.html, retrofitted onto the shell, renders the shared nav."""
+        rehearsal = RehearsalFactory()
+
+        response = self.client.get(reverse('scheduling:conflict-detail', args=[rehearsal.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, NAV_MARKER)
+
+    def test_recordings_renders_the_nav(self):
+        """recordings.html, retrofitted onto the shell, renders the shared nav."""
+        response = self.client.get(reverse('scheduling:recordings'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, NAV_MARKER)
+
+    def test_song_detail_renders_the_nav(self):
+        """song_detail.html, retrofitted onto the shell, renders the shared nav."""
+        song = SongFactory()
+
+        response = self.client.get(reverse('scheduling:song-detail', args=[song.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, NAV_MARKER)
+
+    def test_logout_form_posts_to_logout_and_ends_the_session(self):
+        """The shell's logout form action, POSTed from a rendered page, ends the session."""
+        response = self.client.get(reverse('scheduling:overview'))
+        self.assertContains(response, f'action="{reverse("identity:logout")}"')
+        self.assertIn('_auth_user_id', self.client.session)
+
+        self.client.post(reverse('identity:logout'))
+
+        self.assertNotIn('_auth_user_id', self.client.session)
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)
