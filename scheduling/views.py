@@ -26,6 +26,7 @@ from scheduling.models import (
     Recording,
     Rehearsal,
     RehearsalSong,
+    Semester,
     Song,
     SongRoleAssignment,
 )
@@ -41,6 +42,17 @@ from scheduling.services import (
 def _scoped_to_current_semester(model, semester):
     """Return `model`'s current-Semester queryset, or an empty one if there's no current Semester yet."""
     return model.objects.filter(semester=semester) if semester else model.objects.none()
+
+
+def _lock_semester(semester):
+    """Row-lock `semester` for the duration of the enclosing transaction.
+
+    Must be called inside `transaction.atomic()`. Serializes concurrent
+    Song-position mutations (create, move) against the same Semester so two
+    overlapping requests can't compute/apply stale positions and collide on
+    `unique_song_position_per_semester`.
+    """
+    return Semester.objects.select_for_update().get(pk=semester.pk)
 
 
 class ScheduleView(BaseView, TemplateView):
@@ -322,12 +334,14 @@ class SongManageView(AdminRequiredMixin, View):
         if semester is None:
             messages.error(request, 'Create a Semester before adding Songs.')
             return redirect('scheduling:manage-setlist')
-        instance = Song(semester=semester, position=self._next_position(semester))
-        form = SongForm(request.POST, instance=instance)
-        if form.is_valid():
-            form.save()
-            messages.success(request, 'Song added.')
-            return redirect('scheduling:manage-setlist')
+        with transaction.atomic():
+            semester = _lock_semester(semester)
+            instance = Song(semester=semester, position=self._next_position(semester))
+            form = SongForm(request.POST, instance=instance)
+            if form.is_valid():
+                form.save()
+                messages.success(request, 'Song added.')
+                return redirect('scheduling:manage-setlist')
         return render(request, self.template_name, self._build_context(form))
 
     def _next_position(self, semester):
@@ -396,10 +410,13 @@ class SongMoveView(AdminRequiredMixin, View):
     def post(self, request, pk, direction):
         """Swap the current Semester's target Song's position with its previous/next neighbor, if one exists."""
         song = get_object_or_404(_scoped_to_current_semester(Song, get_current_semester()), pk=pk)
-        neighbor = self._neighbor(song, direction)
-        if neighbor is not None:
-            self._swap_positions(song, neighbor)
-            messages.success(request, 'Setlist reordered.')
+        with transaction.atomic():
+            _lock_semester(song.semester)
+            song.refresh_from_db()
+            neighbor = self._neighbor(song, direction)
+            if neighbor is not None:
+                self._swap_positions(song, neighbor)
+                messages.success(request, 'Setlist reordered.')
         return redirect('scheduling:manage-setlist')
 
     def _neighbor(self, song, direction):
@@ -413,11 +430,10 @@ class SongMoveView(AdminRequiredMixin, View):
         return None
 
     def _swap_positions(self, song_a, song_b):
-        """Swap two Songs' positions inside one atomic transaction."""
-        with transaction.atomic():
-            song_a.position, song_b.position = song_b.position, song_a.position
-            song_a.save(update_fields=['position'])
-            song_b.save(update_fields=['position'])
+        """Swap two Songs' positions. Must be called within a transaction holding the Semester's row lock."""
+        song_a.position, song_b.position = song_b.position, song_a.position
+        song_a.save(update_fields=['position'])
+        song_b.save(update_fields=['position'])
 
 
 class SongRoleAssignmentManageView(AdminRequiredMixin, View):
