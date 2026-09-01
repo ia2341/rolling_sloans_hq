@@ -1,4 +1,4 @@
-"""Member-facing (issues #57, #58) and admin-facing (issue #60) forms."""
+"""Member-facing (issues #57, #58, #61) and admin-facing (issue #60) forms."""
 
 from typing import ClassVar
 
@@ -10,6 +10,7 @@ from scheduling.models import (
     Membership,
     MembershipRole,
     Rehearsal,
+    RehearsalSong,
     Role,
     Song,
     SongRoleAssignment,
@@ -173,3 +174,24 @@ class SongRoleAssignmentForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         self.fields['song'].queryset = songs if songs is not None else Song.objects.none()
         self.fields['role'].queryset = Role.objects.filter(is_active=True)
+
+
+class RecordingUploadForm(forms.Form):
+    """Picks the RehearsalSong to upload against and confirms an already-uploaded R2 object (issue #61).
+
+    Used for both halves of the two-step upload: on GET only
+    `rehearsal_song` is rendered (to build the picker), and on the confirm
+    POST all three fields are submitted together once the client has
+    already put the file in R2 under `object_key`.
+    """
+
+    rehearsal_song = forms.ModelChoiceField(queryset=RehearsalSong.objects.none())
+    object_key = forms.CharField(widget=forms.HiddenInput)
+    note = forms.CharField(required=False, widget=forms.Textarea)
+
+    def __init__(self, *args, rehearsal_songs=None, **kwargs):
+        """Restrict the `rehearsal_song` choices to `rehearsal_songs` (the current Semester's)."""
+        super().__init__(*args, **kwargs)
+        self.fields['rehearsal_song'].queryset = (
+            rehearsal_songs if rehearsal_songs is not None else RehearsalSong.objects.none()
+        )
