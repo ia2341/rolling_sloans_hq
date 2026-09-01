@@ -1,15 +1,19 @@
-"""Member read routes (issue #56) and self-service routes (issues #57, #58)."""
+"""Member read routes (issue #56), self-service routes (issues #57, #58), and admin management routes (issue #60)."""
 
 from django.contrib import messages
+from django.db import models, transaction
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views import View
 from django.views.generic import DetailView, TemplateView
 
-from config.views import BaseView
+from config.views import AdminRequiredMixin, BaseView
 from scheduling.forms import (
     BulkConflictForm,
     ConflictWindowFormSet,
     MembershipRolesForm,
+    RehearsalForm,
+    SongForm,
+    SongRoleAssignmentForm,
 )
 from scheduling.models import (
     Conflict,
@@ -233,3 +237,220 @@ class ConflictDetailView(BaseView, View):
                 window.delete()
         elif conflict is not None:
             conflict.delete()
+
+
+class RehearsalManageView(AdminRequiredMixin, View):
+    """`/manage/schedule/`: an admin lists and creates the current Semester's Rehearsals (issue #60, #17 story 10)."""
+
+    template_name = 'scheduling/manage_schedule.html'
+
+    def get(self, request):
+        """Render the current Semester's Rehearsals alongside an empty create form."""
+        return render(request, self.template_name, self._build_context())
+
+    def post(self, request):
+        """Validate the create form and save a new Rehearsal in the current Semester, or re-render with errors."""
+        semester = get_current_semester()
+        if semester is None:
+            messages.error(request, 'Create a Semester before scheduling Rehearsals.')
+            return redirect('scheduling:manage-schedule')
+        form = RehearsalForm(request.POST, instance=Rehearsal(semester=semester))
+        if form.is_valid():
+            form.save()
+            messages.success(request, 'Rehearsal created.')
+            return redirect('scheduling:manage-schedule')
+        return render(request, self.template_name, self._build_context(form))
+
+    def _build_context(self, form=None):
+        """Build context: the current Semester's Rehearsals plus the create form (fresh if none is given)."""
+        semester = get_current_semester()
+        return {
+            'semester': semester,
+            'rehearsals': _scoped_to_current_semester(Rehearsal, semester),
+            'form': form or RehearsalForm(),
+        }
+
+
+class RehearsalEditView(AdminRequiredMixin, View):
+    """`/manage/schedule/<pk>/edit/`: an admin edits an existing Rehearsal (issue #60, #17 story 10)."""
+
+    template_name = 'scheduling/manage_schedule_edit.html'
+
+    def get(self, request, pk):
+        """Render the edit form pre-filled with the target Rehearsal's current values."""
+        rehearsal = self._get_rehearsal(pk)
+        return render(request, self.template_name, {'rehearsal': rehearsal, 'form': RehearsalForm(instance=rehearsal)})
+
+    def post(self, request, pk):
+        """Validate and save the edit, or re-render with errors."""
+        rehearsal = self._get_rehearsal(pk)
+        form = RehearsalForm(request.POST, instance=rehearsal)
+        if form.is_valid():
+            form.save()
+            messages.success(request, 'Rehearsal updated.')
+            return redirect('scheduling:manage-schedule')
+        return render(request, self.template_name, {'rehearsal': rehearsal, 'form': form})
+
+    def _get_rehearsal(self, pk):
+        """Return the current Semester's Rehearsal with this id, or 404 (mirrors ConflictDetailView's scoping)."""
+        return get_object_or_404(_scoped_to_current_semester(Rehearsal, get_current_semester()), pk=pk)
+
+
+class SongManageView(AdminRequiredMixin, View):
+    """`/manage/setlist/`: an admin lists and adds the current Semester's Songs (issue #60, #17 story 11)."""
+
+    template_name = 'scheduling/manage_setlist.html'
+
+    def get(self, request):
+        """Render the current Semester's Songs in position order alongside an empty create form."""
+        return render(request, self.template_name, self._build_context())
+
+    def post(self, request):
+        """Validate the create form and append a new Song at the end of the current Semester's setlist."""
+        semester = get_current_semester()
+        if semester is None:
+            messages.error(request, 'Create a Semester before adding Songs.')
+            return redirect('scheduling:manage-setlist')
+        instance = Song(semester=semester, position=self._next_position(semester))
+        form = SongForm(request.POST, instance=instance)
+        if form.is_valid():
+            form.save()
+            messages.success(request, 'Song added.')
+            return redirect('scheduling:manage-setlist')
+        return render(request, self.template_name, self._build_context(form))
+
+    def _next_position(self, semester):
+        """Return one past the current Semester's highest Song position (1 if it has no Songs yet)."""
+        highest = Song.objects.filter(semester=semester).aggregate(highest=models.Max('position'))['highest']
+        return (highest or 0) + 1
+
+    def _build_context(self, form=None):
+        """Build context: the current Semester's Songs plus the create form (fresh if none is given)."""
+        semester = get_current_semester()
+        return {
+            'semester': semester,
+            'songs': _scoped_to_current_semester(Song, semester),
+            'form': form or SongForm(),
+        }
+
+
+class SongEditView(AdminRequiredMixin, View):
+    """`/manage/setlist/<pk>/edit/`: an admin edits an existing Song's title/artist/length/notes (issue #60, #17 story 11)."""
+
+    template_name = 'scheduling/manage_setlist_edit.html'
+
+    def get(self, request, pk):
+        """Render the edit form pre-filled with the target Song's current values."""
+        song = self._get_song(pk)
+        return render(request, self.template_name, {'song': song, 'form': SongForm(instance=song)})
+
+    def post(self, request, pk):
+        """Validate and save the edit, or re-render with errors."""
+        song = self._get_song(pk)
+        form = SongForm(request.POST, instance=song)
+        if form.is_valid():
+            form.save()
+            messages.success(request, 'Song updated.')
+            return redirect('scheduling:manage-setlist')
+        return render(request, self.template_name, {'song': song, 'form': form})
+
+    def _get_song(self, pk):
+        """Return the current Semester's Song with this id, or 404 (mirrors ConflictDetailView's scoping)."""
+        return get_object_or_404(_scoped_to_current_semester(Song, get_current_semester()), pk=pk)
+
+
+class SongDeleteView(AdminRequiredMixin, View):
+    """`/manage/setlist/<pk>/delete/`: an admin removes a Song from the setlist (issue #60, #17 story 11)."""
+
+    def post(self, request, pk):
+        """Delete the current Semester's target Song and redirect back to the setlist with a success message."""
+        song = get_object_or_404(_scoped_to_current_semester(Song, get_current_semester()), pk=pk)
+        song.delete()
+        messages.success(request, 'Song removed.')
+        return redirect('scheduling:manage-setlist')
+
+
+class SongMoveView(AdminRequiredMixin, View):
+    """`/manage/setlist/<pk>/move-up|down/`: an admin swaps a Song's position with its neighbor (issue #60, #17 story 11).
+
+    Reuses the deferred `unique_song_position_per_semester` constraint the
+    same way `Song.Meta` already relies on: both rows' positions are
+    swapped inside one atomic transaction, so the transient collision
+    between them is never checked mid-transaction.
+    """
+
+    UP = 'up'
+    DOWN = 'down'
+
+    def post(self, request, pk, direction):
+        """Swap the current Semester's target Song's position with its previous/next neighbor, if one exists."""
+        song = get_object_or_404(_scoped_to_current_semester(Song, get_current_semester()), pk=pk)
+        neighbor = self._neighbor(song, direction)
+        if neighbor is not None:
+            self._swap_positions(song, neighbor)
+            messages.success(request, 'Setlist reordered.')
+        return redirect('scheduling:manage-setlist')
+
+    def _neighbor(self, song, direction):
+        """Return the Song immediately before/after `song` in its Semester's position order, or None at either end."""
+        songs = list(Song.objects.filter(semester=song.semester).order_by('position'))
+        index = songs.index(song)
+        if direction == self.UP and index > 0:
+            return songs[index - 1]
+        if direction == self.DOWN and index < len(songs) - 1:
+            return songs[index + 1]
+        return None
+
+    def _swap_positions(self, song_a, song_b):
+        """Swap two Songs' positions inside one atomic transaction."""
+        with transaction.atomic():
+            song_a.position, song_b.position = song_b.position, song_a.position
+            song_a.save(update_fields=['position'])
+            song_b.save(update_fields=['position'])
+
+
+class SongRoleAssignmentManageView(AdminRequiredMixin, View):
+    """`/manage/assignments/`: an admin lists and creates SongRoleAssignments, surfacing mismatches (issue #60, #17 story 12)."""
+
+    template_name = 'scheduling/manage_assignments.html'
+
+    def get(self, request):
+        """Render the current Semester's SongRoleAssignments alongside an empty create form."""
+        return render(request, self.template_name, self._build_context())
+
+    def post(self, request):
+        """Validate the create form and save a new SongRoleAssignment, or re-render with errors."""
+        semester = get_current_semester()
+        if semester is None:
+            messages.error(request, 'Create a Semester with Songs before assigning Roles.')
+            return redirect('scheduling:manage-assignments')
+        songs = _scoped_to_current_semester(Song, semester)
+        form = SongRoleAssignmentForm(request.POST, songs=songs)
+        if form.is_valid():
+            form.save()
+            messages.success(request, 'Assignment created.')
+            return redirect('scheduling:manage-assignments')
+        return render(request, self.template_name, self._build_context(form))
+
+    def _build_context(self, form=None):
+        """Build context: the current Semester's SongRoleAssignments plus the create form (fresh if none is given)."""
+        semester = get_current_semester()
+        songs = _scoped_to_current_semester(Song, semester)
+        assignments = SongRoleAssignment.objects.filter(song__in=songs).select_related('song', 'role', 'person')
+        return {
+            'semester': semester,
+            'assignments': assignments,
+            'form': form or SongRoleAssignmentForm(songs=songs),
+        }
+
+
+class SongRoleAssignmentDeleteView(AdminRequiredMixin, View):
+    """`/manage/assignments/<pk>/delete/`: an admin removes a SongRoleAssignment (issue #60, #17 story 12)."""
+
+    def post(self, request, pk):
+        """Delete the current Semester's target SongRoleAssignment and redirect with a success message."""
+        songs = _scoped_to_current_semester(Song, get_current_semester())
+        assignment = get_object_or_404(SongRoleAssignment, pk=pk, song__in=songs)
+        assignment.delete()
+        messages.success(request, 'Assignment removed.')
+        return redirect('scheduling:manage-assignments')
