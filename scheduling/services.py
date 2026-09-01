@@ -7,6 +7,7 @@ from uuid import uuid4
 from botocore.exceptions import ClientError
 from django.core.files.storage import storages
 from django.db import IntegrityError, models, transaction
+from django.db.models import Count, Q
 from django.utils import timezone
 
 from scheduling.models import (
@@ -167,6 +168,37 @@ def get_current_semester() -> Semester | None:
     re-deriving its own notion of recency.
     """
     return Semester.objects.order_by('-id').first()
+
+
+@dataclass(frozen=True)
+class SongRehearsalProgress:
+    """A Song's RehearsalSong counts split by whether the rehearsal has already happened."""
+
+    completed: int
+    remaining: int
+    total: int
+
+
+def song_rehearsal_progress(song) -> SongRehearsalProgress:
+    """Return `song`'s RehearsalSong counts split into completed/remaining/total (issue #92).
+
+    completed/remaining are date-split (rehearsal.date < today vs >= today)
+    counts of the Song's own RehearsalSong rows, computed in one aggregate
+    query; total is their sum. Shared by the Overview song-progress table
+    (X of Y = completed of total) and the Songs page's "rehearsals
+    remaining" column (X/Y = remaining/total) so both read off one query
+    instead of duplicating it.
+    """
+    today = timezone.localdate()
+    counts = RehearsalSong.objects.filter(song=song).aggregate(
+        completed=Count('pk', filter=Q(rehearsal__date__lt=today)),
+        remaining=Count('pk', filter=Q(rehearsal__date__gte=today)),
+    )
+    return SongRehearsalProgress(
+        completed=counts['completed'],
+        remaining=counts['remaining'],
+        total=counts['completed'] + counts['remaining'],
+    )
 
 
 def rehearsal_count_target(song) -> int:
