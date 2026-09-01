@@ -32,10 +32,13 @@ from scheduling.models import (
 )
 from scheduling.services import (
     RecordingUploadError,
+    attendance_suggestion_for,
     confirm_recording_upload,
     get_current_semester,
+    next_attended_rehearsal_for,
     rehearsal_count_target,
     reserve_recording_upload,
+    upcoming_rehearsals_for,
 )
 
 
@@ -56,9 +59,28 @@ def _lock_semester(semester):
 
 
 class OverviewView(BaseView, TemplateView):
-    """`/`: placeholder landing page for a logged-in member (issue #85). Content is a separate ticket."""
+    """`/`: a logged-in member's personalized Next Rehearsal card and 3-rehearsal preview (issue #94)."""
 
     template_name = 'scheduling/overview.html'
+
+    def get_context_data(self, **kwargs):
+        """Add the member's Next Rehearsal card and the band's 3-rehearsal preview, each with a suggested time-window."""
+        context = super().get_context_data(**kwargs)
+        semester = get_current_semester()
+        context['semester'] = semester
+        context['next_rehearsal'] = None
+        context['next_rehearsal_suggestion'] = None
+        context['upcoming_rehearsals'] = []
+        if semester is not None:
+            next_rehearsal = next_attended_rehearsal_for(self.request.user, semester=semester)
+            context['next_rehearsal'] = next_rehearsal
+            if next_rehearsal is not None:
+                context['next_rehearsal_suggestion'] = attendance_suggestion_for(next_rehearsal, self.request.user)
+            context['upcoming_rehearsals'] = [
+                (rehearsal, attendance_suggestion_for(rehearsal, self.request.user))
+                for rehearsal in upcoming_rehearsals_for(semester)
+            ]
+        return context
 
 
 class ScheduleView(BaseView, TemplateView):

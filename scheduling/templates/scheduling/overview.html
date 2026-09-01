@@ -2,4 +2,41 @@
 {% block title %}Overview{% endblock %}
 {% block content %}
 <h1>Overview</h1>
+
+{% if not semester %}
+<p>There is no active semester yet.</p>
+{% endif %}
+
+<h2>Next rehearsal</h2>
+{% if next_rehearsal %}
+  <p>
+    <a href="{% url 'scheduling:schedule' %}?rehearsal={{ next_rehearsal.pk }}">
+      {{ next_rehearsal.date }} {{ next_rehearsal.start_time }}&ndash;{{ next_rehearsal.end_time }}
+    </a>
+  </p>
+  {% if next_rehearsal_suggestion %}
+    <p>
+      Arrive around {{ next_rehearsal_suggestion.arrival_time }},
+      free to leave around {{ next_rehearsal_suggestion.departure_time }}.
+    </p>
+  {% endif %}
+{% else %}
+  <p>You're not needed at any upcoming rehearsal.</p>
+{% endif %}
+
+<h2>Upcoming rehearsals</h2>
+<ul>
+  {% for rehearsal, suggestion in upcoming_rehearsals %}
+    <li>
+      {{ rehearsal.date }} {{ rehearsal.start_time }}&ndash;{{ rehearsal.end_time }}:
+      {% if suggestion %}
+        arrive around {{ suggestion.arrival_time }}, free to leave around {{ suggestion.departure_time }}
+      {% else %}
+        not needed at this rehearsal
+      {% endif %}
+    </li>
+  {% empty %}
+    <li>No upcoming rehearsals.</li>
+  {% endfor %}
+</ul>
 {% endblock %}
