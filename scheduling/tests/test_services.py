@@ -12,16 +12,11 @@ from scheduling.factories import (
     RehearsalFactory,
     RehearsalSongFactory,
     RoleFactory,
-    SemesterFactory,
     SongFactory,
     SongRoleAssignmentFactory,
     SongRoleRequirementFactory,
 )
-from scheduling.services import (
-    assignment_matrix_for,
-    next_rehearsal_for,
-    song_rehearsal_progress,
-)
+from scheduling.services import assignment_matrix_for, song_rehearsal_progress
 
 
 class SongRehearsalProgressTests(TestCase):
@@ -89,60 +84,6 @@ class SongRehearsalProgressTests(TestCase):
         progress = song_rehearsal_progress(self.song)
 
         self.assertEqual(progress.total, 1)
-
-
-class NextRehearsalForTests(TestCase):
-    def setUp(self):
-        """Build a Semester and a Person, plus a past/future date."""
-        self.semester = SemesterFactory()
-        self.person = PersonFactory()
-        today = timezone.localdate()
-        self.past_date = today - timedelta(days=1)
-        self.future_date = today + timedelta(days=1)
-
-    def test_skips_past_rehearsals(self):
-        """A Rehearsal dated before today is never returned, even if the Person is needed at it."""
-        rehearsal = RehearsalFactory(semester=self.semester, date=self.past_date)
-        song = SongFactory(semester=self.semester)
-        RehearsalSongFactory(song=song, rehearsal=rehearsal, order=1)
-        SongRoleAssignmentFactory(song=song, person=self.person)
-
-        self.assertIsNone(next_rehearsal_for(self.person, self.semester))
-
-    def test_skips_rehearsals_the_person_is_not_needed_at(self):
-        """A future Rehearsal the Person has no assignment at is skipped."""
-        RehearsalFactory(semester=self.semester, date=self.future_date)
-
-        self.assertIsNone(next_rehearsal_for(self.person, self.semester))
-
-    def test_returns_earliest_future_rehearsal_the_person_is_needed_at(self):
-        """Returns the earliest-dated future Rehearsal with a Song the Person is assigned to."""
-        RehearsalFactory(semester=self.semester, date=self.future_date)
-        needed_rehearsal = RehearsalFactory(semester=self.semester, date=self.future_date + timedelta(days=1))
-        song = SongFactory(semester=self.semester)
-        RehearsalSongFactory(song=song, rehearsal=needed_rehearsal, order=1)
-        SongRoleAssignmentFactory(song=song, person=self.person)
-
-        self.assertEqual(next_rehearsal_for(self.person, self.semester), needed_rehearsal)
-
-    def test_returns_rehearsal_where_person_is_assigned_only_to_a_middle_song(self):
-        """A Rehearsal is returned even when the Person's only assignment is to a non-first/non-last Song.
-
-        Regression check: attendance_for (issue #38) only reports need at a
-        Rehearsal's first/last slot, which would wrongly skip this
-        Rehearsal — next_rehearsal_for must check every Song, not just the
-        boundary ones.
-        """
-        rehearsal = RehearsalFactory(semester=self.semester, date=self.future_date)
-        first_song = SongFactory(semester=self.semester)
-        middle_song = SongFactory(semester=self.semester)
-        last_song = SongFactory(semester=self.semester)
-        RehearsalSongFactory(song=first_song, rehearsal=rehearsal, order=1)
-        RehearsalSongFactory(song=middle_song, rehearsal=rehearsal, order=2)
-        RehearsalSongFactory(song=last_song, rehearsal=rehearsal, order=3)
-        SongRoleAssignmentFactory(song=middle_song, person=self.person)
-
-        self.assertEqual(next_rehearsal_for(self.person, self.semester), rehearsal)
 
 
 class AssignmentMatrixForTests(TestCase):

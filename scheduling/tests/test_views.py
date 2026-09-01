@@ -1,6 +1,7 @@
-"""Member read routes (issue #56): /schedule/, /setlist/, /songs/<id>/."""
+"""Member read routes (issue #56): /schedule/, /setlist/, /songs/<id>/, and the Overview (issue #94)."""
 
-from datetime import timedelta
+from datetime import date, datetime, time, timedelta
+from unittest.mock import patch
 
 from django.test import TestCase, override_settings
 from django.urls import reverse
@@ -246,3 +247,140 @@ class SongDetailViewTests(TestCase):
         response = self.client.get(reverse('scheduling:song-detail', args=[old_song.pk]))
 
         self.assertEqual(response.status_code, 404)
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class OverviewViewTests(TestCase):
+    def setUp(self):
+        """Log in a synthetic Person before each test."""
+        self.person = PersonFactory(password=PASSWORD)
+        self.client.login(username=self.person.email, password=PASSWORD)
+
+    def test_next_rehearsal_card_skips_a_rehearsal_the_person_is_not_needed_at(self):
+        """The Next Rehearsal card picks the earliest Rehearsal the Person is actually needed at, not the band's literal next one."""
+        semester = SemesterFactory()
+        role = RoleFactory()
+        today = timezone.localdate()
+        soon_rehearsal = RehearsalFactory(semester=semester, date=today + timedelta(days=1))
+        RehearsalSongFactory(rehearsal=soon_rehearsal, song=SongFactory(semester=semester), order=1)
+        later_rehearsal = RehearsalFactory(semester=semester, date=today + timedelta(days=5))
+        later_song = SongFactory(semester=semester)
+        RehearsalSongFactory(rehearsal=later_rehearsal, song=later_song, order=1)
+        SongRoleAssignmentFactory(song=later_song, role=role, person=self.person)
+
+        response = self.client.get(reverse('scheduling:overview'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['next_rehearsal'], later_rehearsal)
+        self.assertContains(response, f'?rehearsal={later_rehearsal.pk}')
+
+    def test_next_rehearsal_card_includes_a_rehearsal_needed_only_for_a_middle_song(self):
+        """A Person assigned only to a middle RehearsalSong (needed at neither end) still counts as needing that Rehearsal."""
+        semester = SemesterFactory()
+        role = RoleFactory()
+        today = timezone.localdate()
+        rehearsal = RehearsalFactory(semester=semester, date=today + timedelta(days=1))
+        first_song = SongFactory(semester=semester)
+        middle_song = SongFactory(semester=semester)
+        last_song = SongFactory(semester=semester)
+        RehearsalSongFactory(rehearsal=rehearsal, song=first_song, order=1)
+        RehearsalSongFactory(rehearsal=rehearsal, song=middle_song, order=2)
+        RehearsalSongFactory(rehearsal=rehearsal, song=last_song, order=3)
+        SongRoleAssignmentFactory(song=middle_song, role=role, person=self.person)
+
+        response = self.client.get(reverse('scheduling:overview'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['next_rehearsal'], rehearsal)
+        self.assertIsNotNone(response.context['next_rehearsal_suggestion'])
+
+    @patch('scheduling.services.timezone.localtime')
+    @patch('scheduling.services.timezone.localdate')
+    def test_next_rehearsal_excludes_a_same_day_rehearsal_that_already_ended(self, mock_localdate, mock_localtime):
+        """A Rehearsal earlier today whose end_time has already passed isn't offered as the Person's next Rehearsal."""
+        fixed_date = date(2026, 3, 10)
+        mock_localdate.return_value = fixed_date
+        mock_localtime.return_value = datetime.combine(fixed_date, time(12, 0))
+        semester = SemesterFactory()
+        role = RoleFactory()
+        ended_rehearsal = RehearsalFactory(semester=semester, date=fixed_date, start_time=time(9, 0), end_time=time(10, 0))
+        ended_song = SongFactory(semester=semester)
+        RehearsalSongFactory(rehearsal=ended_rehearsal, song=ended_song, order=1)
+        SongRoleAssignmentFactory(song=ended_song, role=role, person=self.person)
+        future_rehearsal = RehearsalFactory(semester=semester, date=fixed_date + timedelta(days=1))
+        future_song = SongFactory(semester=semester)
+        RehearsalSongFactory(rehearsal=future_rehearsal, song=future_song, order=1)
+        SongRoleAssignmentFactory(song=future_song, role=role, person=self.person)
+
+        response = self.client.get(reverse('scheduling:overview'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['next_rehearsal'], future_rehearsal)
+
+    def test_partial_attendance_suggestion_buffers_the_persons_own_assigned_slots(self):
+        """Needed only from the start: arrival/departure buffer applies around the Person's own assigned slot, not the whole Rehearsal."""
+        semester = SemesterFactory()
+        role = RoleFactory()
+        today = timezone.localdate()
+        rehearsal = RehearsalFactory(semester=semester, date=today + timedelta(days=1))
+        first_song = SongFactory(semester=semester)
+        middle_song = SongFactory(semester=semester)
+        last_song = SongFactory(semester=semester)
+        first_slot = RehearsalSongFactory(rehearsal=rehearsal, song=first_song, order=1)
+        RehearsalSongFactory(rehearsal=rehearsal, song=middle_song, order=2)
+        RehearsalSongFactory(rehearsal=rehearsal, song=last_song, order=3)
+        SongRoleAssignmentFactory(song=first_song, role=role, person=self.person)
+
+        response = self.client.get(reverse('scheduling:overview'))
+
+        self.assertEqual(response.status_code, 200)
+        suggestion = response.context['next_rehearsal_suggestion']
+        expected_arrival = (
+            datetime.combine(rehearsal.date, first_slot.start_time) - timedelta(minutes=rehearsal.arrival_buffer_minutes)
+        ).time()
+        expected_departure = (
+            datetime.combine(rehearsal.date, first_slot.end_time) + timedelta(minutes=rehearsal.departure_buffer_minutes)
+        ).time()
+        self.assertEqual(suggestion.arrival_time, expected_arrival)
+        self.assertEqual(suggestion.departure_time, expected_departure)
+
+    def test_preview_shows_not_needed_note_for_a_rehearsal_with_zero_assignments(self):
+        """The 3-rehearsal preview lists a Rehearsal with zero SongRoleAssignments as an explicit "not needed" row, never omitted."""
+        semester = SemesterFactory()
+        role = RoleFactory()
+        today = timezone.localdate()
+        needed_rehearsal = RehearsalFactory(semester=semester, date=today + timedelta(days=1))
+        needed_song = SongFactory(semester=semester)
+        RehearsalSongFactory(rehearsal=needed_rehearsal, song=needed_song, order=1)
+        SongRoleAssignmentFactory(song=needed_song, role=role, person=self.person)
+        not_needed_rehearsal = RehearsalFactory(semester=semester, date=today + timedelta(days=2))
+        RehearsalSongFactory(rehearsal=not_needed_rehearsal, song=SongFactory(semester=semester), order=1)
+        RehearsalFactory(semester=semester, date=today + timedelta(days=3))
+
+        response = self.client.get(reverse('scheduling:overview'))
+
+        self.assertEqual(response.status_code, 200)
+        preview = response.context['upcoming_rehearsals']
+        self.assertEqual(len(preview), 3)
+        suggestions_by_rehearsal = dict(preview)
+        self.assertIsNotNone(suggestions_by_rehearsal[needed_rehearsal])
+        self.assertIsNone(suggestions_by_rehearsal[not_needed_rehearsal])
+        self.assertContains(response, 'not needed at this rehearsal')
+
+    def test_dress_rehearsal_suggestion_uses_rehearsal_window_not_per_song_times(self):
+        """A Dress Rehearsal suggestion falls back to the Rehearsal's own start/end, since no RehearsalSong rows exist (ADR-0003)."""
+        semester = SemesterFactory()
+        role = RoleFactory()
+        today = timezone.localdate()
+        dress_rehearsal = RehearsalFactory(semester=semester, date=today + timedelta(days=1), is_full_setlist=True)
+        first_song = SongFactory(semester=semester, position=1)
+        SongFactory(semester=semester, position=2)
+        SongRoleAssignmentFactory(song=first_song, role=role, person=self.person)
+
+        response = self.client.get(reverse('scheduling:overview'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['next_rehearsal'], dress_rehearsal)
+        suggestion = response.context['next_rehearsal_suggestion']
+        self.assertEqual(suggestion.arrival_time, dress_rehearsal.start_time)
+        self.assertEqual(suggestion.departure_time, dress_rehearsal.end_time)

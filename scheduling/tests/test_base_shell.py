@@ -89,8 +89,8 @@ class NavRenderingTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class OverviewViewTests(TestCase):
-    def test_authenticated_request_renders_placeholder_overview(self):
-        """An authenticated request to '' returns 200 and renders the placeholder Overview view."""
+    def test_authenticated_request_renders_overview(self):
+        """An authenticated request to '' returns 200 and renders the Overview view."""
         person = PersonFactory(password=PASSWORD)
         self.client.login(username=person.email, password=PASSWORD)
 

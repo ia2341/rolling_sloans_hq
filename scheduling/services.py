@@ -1,12 +1,12 @@
 """Application services for the scheduling domain."""
 
 from dataclasses import dataclass
-from datetime import time
+from datetime import datetime, time, timedelta
 from uuid import uuid4
 
 from botocore.exceptions import ClientError
 from django.core.files.storage import storages
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, models, transaction
 from django.db.models import Count, Q
 from django.utils import timezone
 
@@ -216,27 +216,29 @@ def rehearsal_count_target(song) -> int:
     return song.semester.rehearsal_set.filter(is_full_setlist=False).count()
 
 
-def next_rehearsal_for(person, semester) -> Rehearsal | None:
-    """Return `person`'s next upcoming Rehearsal in `semester` they're on the roster for, else None (issue #95).
+@dataclass(frozen=True)
+class AttendanceSuggestion:
+    """A Person's suggested arrival/departure time-window for one Rehearsal (issue #94)."""
+
+    arrival_time: time
+    departure_time: time
+
+
+def next_attended_rehearsal_for(person, semester):
+    """Return `person`'s next upcoming Rehearsal in `semester` they have any assignment for, else None.
 
     "Next" is not necessarily the band's literal next Rehearsal: this walks
-    the Semester's Rehearsals from today onward in date order and returns
-    the first one where `person` has a SongRoleAssignment on any of its
-    Songs (via `_matrix_songs`, the same Rehearsal-scoped Song set the
-    assignment matrix itself renders — the Dress Rehearsal's live setlist
-    for `is_full_setlist=True`, RehearsalSong-linked Songs otherwise),
-    skipping any Rehearsal they have no assignment at. Deliberately not
-    `Rehearsal.attendance_for` (issue #38), which only reports need at the
-    Rehearsal's first/last slot and would wrongly skip a Rehearsal where
-    the Person is assigned only to a middle Song. This is the default
-    landing Rehearsal for the shared rehearsal-detail view (ScheduleView).
+    the Semester's upcoming Rehearsals in date order and returns the first
+    one with a non-None attendance_suggestion_for (issue #94), skipping any
+    Rehearsal the Person isn't needed at. Deliberately not
+    Rehearsal.attendance_for alone: that only reports endpoint (start/end)
+    attendance, so a Person assigned only to a middle RehearsalSong (or a
+    middle Dress Rehearsal setlist song) would be wrongly skipped. Also the
+    default landing Rehearsal for the shared rehearsal-detail view
+    (ScheduleView, issue #95).
     """
-    upcoming = Rehearsal.objects.filter(semester=semester, date__gte=timezone.localdate()).order_by(
-        'date', 'start_time',
-    )
-    for rehearsal in upcoming:
-        songs, _ = _matrix_songs(rehearsal)
-        if SongRoleAssignment.objects.filter(person=person, song__in=songs).exists():
+    for rehearsal in _upcoming_rehearsals(semester):
+        if attendance_suggestion_for(rehearsal, person) is not None:
             return rehearsal
     return None
 
@@ -318,3 +320,71 @@ def _assignments_by_song_role(songs, roles):
     for assignment in assignments:
         result.setdefault((assignment.song_id, assignment.role_id), []).append(assignment)
     return result
+
+
+def upcoming_rehearsals_for(semester, count=3):
+    """Return `semester`'s next `count` upcoming Rehearsals, band-wide, in date order."""
+    return list(_upcoming_rehearsals(semester)[:count])
+
+
+def _upcoming_rehearsals(semester):
+    """Return `semester`'s not-yet-ended Rehearsals, in date order — the shared basis for both #94 lookups.
+
+    A future-dated Rehearsal always qualifies; a same-day one only qualifies
+    if its end_time hasn't passed yet, so a Rehearsal earlier today that's
+    already over doesn't linger as someone's "next" one.
+    """
+    today = timezone.localdate()
+    now = timezone.localtime().time()
+    return Rehearsal.objects.filter(semester=semester).filter(
+        Q(date__gt=today) | Q(date=today, end_time__gte=now),
+    ).order_by('date', 'start_time')
+
+
+def attendance_suggestion_for(rehearsal, person):
+    """Return `person`'s suggested arrival/departure time-window for `rehearsal`, or None if not needed at all.
+
+    Derived from the Person's earliest/latest assigned RehearsalSong
+    start_time/end_time within `rehearsal`, minus/plus the Rehearsal's
+    arrival_buffer_minutes/departure_buffer_minutes (already defaulted from
+    the Semester at Rehearsal creation time). Falls back to the Rehearsal's
+    own start_time/end_time, with no buffer applied, whenever
+    attendance_for reports full-window attendance (needed at both ends) —
+    and, for the Dress Rehearsal (ADR-0003, no persisted RehearsalSong
+    rows), whenever the Person has any assignment among the live setlist at
+    all, since there's no per-song clock time to derive a narrower window
+    from.
+    """
+    if rehearsal.is_full_setlist:
+        return _dress_rehearsal_attendance_suggestion(rehearsal, person)
+    return _regular_rehearsal_attendance_suggestion(rehearsal, person)
+
+
+def _dress_rehearsal_attendance_suggestion(rehearsal, person):
+    """Return the Dress Rehearsal's own start/end as `person`'s suggestion, or None if they have no assignment."""
+    has_assignment = SongRoleAssignment.objects.filter(
+        person=person, song__in=rehearsal.dress_rehearsal_songs,
+    ).exists()
+    if not has_assignment:
+        return None
+    return AttendanceSuggestion(arrival_time=rehearsal.start_time, departure_time=rehearsal.end_time)
+
+
+def _regular_rehearsal_attendance_suggestion(rehearsal, person):
+    """Return `person`'s suggestion for a non-Dress Rehearsal, derived from their assigned RehearsalSong slots."""
+    bounds = RehearsalSong.objects.filter(
+        rehearsal=rehearsal, song__songroleassignment__person=person,
+    ).aggregate(earliest_start=models.Min('start_time'), latest_end=models.Max('end_time'))
+    if bounds['earliest_start'] is None:
+        return None
+    attendance = rehearsal.attendance_for(person)
+    if attendance.needed_from_start and attendance.needed_until_end:
+        return AttendanceSuggestion(arrival_time=rehearsal.start_time, departure_time=rehearsal.end_time)
+    arrival_time = _shift_time(rehearsal.date, bounds['earliest_start'], -rehearsal.arrival_buffer_minutes)
+    departure_time = _shift_time(rehearsal.date, bounds['latest_end'], rehearsal.departure_buffer_minutes)
+    return AttendanceSuggestion(arrival_time=arrival_time, departure_time=departure_time)
+
+
+def _shift_time(date, time_value, minutes):
+    """Return `time_value` on `date` shifted by `minutes` (may be negative), as a plain time."""
+    return (datetime.combine(date, time_value) + timedelta(minutes=minutes)).time()
