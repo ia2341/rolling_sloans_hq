@@ -14,7 +14,9 @@ from scheduling.models import (
     Recording,
     Rehearsal,
     RehearsalSong,
+    Role,
     Semester,
+    Song,
     SongRoleAssignment,
 )
 
@@ -231,12 +233,93 @@ def next_attended_rehearsal_for(person, semester):
     Rehearsal the Person isn't needed at. Deliberately not
     Rehearsal.attendance_for alone: that only reports endpoint (start/end)
     attendance, so a Person assigned only to a middle RehearsalSong (or a
-    middle Dress Rehearsal setlist song) would be wrongly skipped.
+    middle Dress Rehearsal setlist song) would be wrongly skipped. Also the
+    default landing Rehearsal for the shared rehearsal-detail view
+    (ScheduleView, issue #95).
     """
     for rehearsal in _upcoming_rehearsals(semester):
         if attendance_suggestion_for(rehearsal, person) is not None:
             return rehearsal
     return None
+
+
+@dataclass(frozen=True)
+class AssignmentMatrixCell:
+    """One (Song, Role) cell in an assignment matrix: every SongRoleAssignment for that pair (issue #95)."""
+
+    role: Role
+    assignments: list[SongRoleAssignment]
+
+
+@dataclass(frozen=True)
+class AssignmentMatrixRow:
+    """One Song's row in an assignment matrix: its slot start_time (if any) plus its per-Role cells (issue #95)."""
+
+    song: Song
+    start_time: time | None
+    cells: list[AssignmentMatrixCell]
+
+
+@dataclass(frozen=True)
+class AssignmentMatrix:
+    """A Rehearsal's Song x Role x Person assignment grid (issue #95)."""
+
+    roles: list[Role]
+    rows: list[AssignmentMatrixRow]
+
+
+def assignment_matrix_for(rehearsal) -> AssignmentMatrix:
+    """Build `rehearsal`'s Song x Role x Person assignment matrix (issue #95).
+
+    Rows are the Rehearsal's Songs in Song.position order: the Songs linked
+    via RehearsalSong for a regular Rehearsal, or the live setlist
+    (Rehearsal.dress_rehearsal_songs, ADR-0003) for the Dress Rehearsal,
+    which carries no RehearsalSong rows and so no per-row start_time.
+    Columns are every Role carrying a SongRoleRequirement on any of those
+    Songs, ordered by name. Each cell lists every SongRoleAssignment for
+    that (Song, Role) pair, each already carrying is_role_mismatch.
+    """
+    songs, start_times = _matrix_songs(rehearsal)
+    roles = list(Role.objects.filter(songrolerequirement__song__in=songs).distinct().order_by('name'))
+    assignments_by_song_role = _assignments_by_song_role(songs, roles)
+    rows = [
+        AssignmentMatrixRow(
+            song=song,
+            start_time=start_times.get(song.id),
+            cells=[
+                AssignmentMatrixCell(role=role, assignments=assignments_by_song_role.get((song.id, role.id), []))
+                for role in roles
+            ],
+        )
+        for song in songs
+    ]
+    return AssignmentMatrix(roles=roles, rows=rows)
+
+
+def _matrix_songs(rehearsal):
+    """Return (Songs in Song.position order, {song_id: RehearsalSong.start_time}) for `rehearsal`.
+
+    The Dress Rehearsal (is_full_setlist=True) has no RehearsalSong rows by
+    design (ADR-0003), so its Songs come from the live setlist instead and
+    the start_time map is empty.
+    """
+    if rehearsal.is_full_setlist:
+        return list(rehearsal.dress_rehearsal_songs), {}
+    rehearsal_songs = RehearsalSong.objects.filter(rehearsal=rehearsal)
+    start_times = {rehearsal_song.song_id: rehearsal_song.start_time for rehearsal_song in rehearsal_songs}
+    songs = list(Song.objects.filter(pk__in=start_times.keys()).order_by('position'))
+    return songs, start_times
+
+
+def _assignments_by_song_role(songs, roles):
+    """Return {(song_id, role_id): [SongRoleAssignment, ...]} for every assignment among `songs`/`roles`."""
+    assignments = SongRoleAssignment.objects.filter(
+        song__in=songs, role__in=roles,
+    ).select_related('person', 'role').order_by('person__name')
+    result = {}
+    for assignment in assignments:
+        result.setdefault((assignment.song_id, assignment.role_id), []).append(assignment)
+    return result
 
 
 def upcoming_rehearsals_for(semester, count=3):
