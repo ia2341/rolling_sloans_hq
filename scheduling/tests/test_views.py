@@ -157,6 +157,56 @@ class ScheduleViewTests(TestCase):
         expected_href = f"{reverse('scheduling:conflicts')}?rehearsal={rehearsal.pk}"
         self.assertContains(response, f'href="{expected_href}"')
 
+    def test_arrival_and_departure_render_for_a_needed_rehearsal(self):
+        """A Person needed at the Rehearsal sees their arrival/departure suggestion, unconditionally (issue #96)."""
+        semester = SemesterFactory()
+        rehearsal = self._needed_rehearsal(semester, timezone.localdate() + timedelta(days=1))
+
+        response = self.client.get(reverse('scheduling:schedule'), {'rehearsal': rehearsal.pk})
+
+        self.assertIsNotNone(response.context['my_attendance_suggestion'])
+        self.assertContains(response, 'Arrive around')
+
+    def test_not_needed_treatment_when_person_has_no_assignment_at_the_rehearsal(self):
+        """A Person with no assignment at the Rehearsal sees "not needed", not a break framing (issue #96)."""
+        semester = SemesterFactory()
+        rehearsal = RehearsalFactory(semester=semester)
+
+        response = self.client.get(reverse('scheduling:schedule'), {'rehearsal': rehearsal.pk})
+
+        self.assertIsNone(response.context['my_attendance_suggestion'])
+        self.assertContains(response, "You're not needed at this rehearsal.")
+
+    def test_breaks_render_when_person_has_a_gap_between_assigned_slots(self):
+        """A gap between two of the Person's assigned slots renders a Breaks line (issue #96)."""
+        semester = SemesterFactory()
+        rehearsal = RehearsalFactory(semester=semester)
+        first_song = SongFactory(semester=semester)
+        middle_song = SongFactory(semester=semester)
+        last_song = SongFactory(semester=semester)
+        RehearsalSongFactory(rehearsal=rehearsal, song=first_song, order=1)
+        RehearsalSongFactory(rehearsal=rehearsal, song=middle_song, order=2)
+        RehearsalSongFactory(rehearsal=rehearsal, song=last_song, order=3)
+        SongRoleAssignmentFactory(song=first_song, person=self.person)
+        SongRoleAssignmentFactory(song=last_song, person=self.person)
+
+        response = self.client.get(reverse('scheduling:schedule'), {'rehearsal': rehearsal.pk})
+
+        self.assertEqual(len(response.context['my_breaks']), 1)
+        self.assertContains(response, 'Breaks:')
+
+    def test_no_breaks_line_for_the_dress_rehearsal(self):
+        """The Dress Rehearsal renders with no Breaks line (ADR-0003, issue #96)."""
+        semester = SemesterFactory()
+        dress_rehearsal = RehearsalFactory(semester=semester, is_full_setlist=True)
+        song = SongFactory(semester=semester, position=1)
+        SongRoleAssignmentFactory(song=song, person=self.person)
+
+        response = self.client.get(reverse('scheduling:schedule'), {'rehearsal': dress_rehearsal.pk})
+
+        self.assertEqual(response.context['my_breaks'], [])
+        self.assertNotContains(response, 'Breaks:')
+
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class SetlistViewTests(TestCase):

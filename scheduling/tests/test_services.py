@@ -19,6 +19,7 @@ from scheduling.factories import (
 )
 from scheduling.services import (
     assignment_matrix_for,
+    breaks_for,
     song_rehearsal_progress,
     songs_with_progress_for,
 )
@@ -131,6 +132,66 @@ class SongsWithProgressForTests(TestCase):
         songs_by_pk = {song.pk: song for song in songs}
         self.assertTrue(songs_by_pk[my_song.pk].has_assignment)
         self.assertFalse(songs_by_pk[other_song.pk].has_assignment)
+
+
+class BreaksForTests(TestCase):
+    def setUp(self):
+        """Build a Person and a 5-slot Rehearsal (18:00 start, 18-minute slots) to attach RehearsalSong rows to."""
+        self.person = PersonFactory()
+        self.role = RoleFactory()
+        self.rehearsal = RehearsalFactory(is_full_setlist=False)
+
+    def _assigned_slot(self, order):
+        """Build a RehearsalSong at `order` in self.rehearsal, with self.person assigned to its Song."""
+        song = SongFactory(semester=self.rehearsal.semester)
+        SongRoleAssignmentFactory(song=song, role=self.role, person=self.person)
+        return RehearsalSongFactory(rehearsal=self.rehearsal, song=song, order=order)
+
+    def _unassigned_slot(self, order):
+        """Build a RehearsalSong at `order` in self.rehearsal, with no assignment for self.person."""
+        song = SongFactory(semester=self.rehearsal.semester)
+        return RehearsalSongFactory(rehearsal=self.rehearsal, song=song, order=order)
+
+    def test_zero_assignments_yields_no_breaks(self):
+        """A Person with no assigned slots at the Rehearsal gets an empty list, not a break."""
+        self._unassigned_slot(1)
+
+        self.assertEqual(breaks_for(self.rehearsal, self.person), [])
+
+    def test_back_to_back_assigned_slots_yield_no_breaks(self):
+        """Consecutive assigned slots with no intervening unassigned slot yield no breaks."""
+        self._assigned_slot(1)
+        self._assigned_slot(2)
+
+        self.assertEqual(breaks_for(self.rehearsal, self.person), [])
+
+    def test_full_window_attendance_yields_no_breaks(self):
+        """A Person assigned to every slot in the Rehearsal has no gaps at all."""
+        for order in range(1, 6):
+            self._assigned_slot(order)
+
+        self.assertEqual(breaks_for(self.rehearsal, self.person), [])
+
+    def test_unassigned_slot_between_two_assigned_slots_is_a_break(self):
+        """A gap opens between one assigned slot's end_time and the next assigned slot's start_time."""
+        first = self._assigned_slot(1)
+        middle = self._unassigned_slot(2)
+        last = self._assigned_slot(3)
+
+        [gap] = breaks_for(self.rehearsal, self.person)
+
+        self.assertEqual(gap.start_time, first.end_time)
+        self.assertEqual(gap.end_time, last.start_time)
+        self.assertEqual(first.end_time, middle.start_time)
+        self.assertEqual(middle.end_time, last.start_time)
+
+    def test_dress_rehearsal_yields_no_breaks(self):
+        """The Dress Rehearsal has no persisted RehearsalSong rows, so it always yields an empty list (ADR-0003)."""
+        dress_rehearsal = RehearsalFactory(is_full_setlist=True)
+        song = SongFactory(semester=dress_rehearsal.semester)
+        SongRoleAssignmentFactory(song=song, role=self.role, person=self.person)
+
+        self.assertEqual(breaks_for(dress_rehearsal, self.person), [])
 
 
 class AssignmentMatrixForTests(TestCase):
