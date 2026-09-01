@@ -259,13 +259,13 @@ class RecordingUploadView(BaseView, View):
 
     def get(self, request):
         """Render the RehearsalSong picker for the current Semester's recordings."""
-        return render(request, self.template_name, {'form': RecordingUploadForm(rehearsal_songs=self._rehearsal_songs())})
+        return self._render(RecordingUploadForm(rehearsal_songs=self._rehearsal_songs()))
 
     def post(self, request):
         """Validate the confirm submission and persist the Recording, or re-render with errors."""
         form = RecordingUploadForm(request.POST, rehearsal_songs=self._rehearsal_songs())
         if not form.is_valid():
-            return render(request, self.template_name, {'form': form})
+            return self._render(form)
         try:
             confirm_recording_upload(
                 form.cleaned_data['rehearsal_song'],
@@ -275,9 +275,13 @@ class RecordingUploadView(BaseView, View):
             )
         except RecordingUploadError as error:
             form.add_error(None, str(error))
-            return render(request, self.template_name, {'form': form})
+            return self._render(form)
         messages.success(request, 'Recording uploaded.')
         return redirect('scheduling:recordings')
+
+    def _render(self, form):
+        """Render the picker/confirm template with `form` (bound or unbound)."""
+        return render(self.request, self.template_name, {'form': form})
 
     def _rehearsal_songs(self):
         """Return the current Semester's RehearsalSongs, or an empty queryset if there's no current Semester."""
