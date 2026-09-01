@@ -86,6 +86,32 @@ class ConflictWindowValidationTests(TestCase):
         with self.assertRaises(ValueError):
             ConflictWindow.objects.create(conflict=conflict, unavailable_start=time(17, 0), unavailable_end=time(18, 30))
 
+    def test_reversed_window_is_rejected(self):
+        """A window whose end falls before its start fails validation."""
+        rehearsal = RehearsalFactory(start_time=time(18, 0), end_time=time(19, 30))
+        conflict = ConflictFactory(rehearsal=rehearsal, type=Conflict.PARTIAL)
+        window = ConflictWindow(conflict=conflict, unavailable_start=time(18, 45), unavailable_end=time(18, 15))
+
+        with self.assertRaises(ValidationError):
+            window.full_clean()
+
+    def test_zero_length_window_is_rejected(self):
+        """A window whose start and end are equal fails validation."""
+        rehearsal = RehearsalFactory(start_time=time(18, 0), end_time=time(19, 30))
+        conflict = ConflictFactory(rehearsal=rehearsal, type=Conflict.PARTIAL)
+        window = ConflictWindow(conflict=conflict, unavailable_start=time(18, 15), unavailable_end=time(18, 15))
+
+        with self.assertRaises(ValidationError):
+            window.full_clean()
+
+    def test_save_rejects_a_reversed_window_even_without_full_clean(self):
+        """save() enforces the ordering check directly, so a caller that skips full_clean() can't bypass it."""
+        rehearsal = RehearsalFactory(start_time=time(18, 0), end_time=time(19, 30))
+        conflict = ConflictFactory(rehearsal=rehearsal, type=Conflict.PARTIAL)
+
+        with self.assertRaises(ValueError):
+            ConflictWindow.objects.create(conflict=conflict, unavailable_start=time(18, 45), unavailable_end=time(18, 15))
+
 
 class ConflictAggregationTests(TestCase):
     def test_rehearsal_conflicts_with_windows_are_returned_via_select_and_prefetch(self):
