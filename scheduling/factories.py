@@ -9,6 +9,7 @@ from scheduling.models import (
     Conflict,
     ConflictWindow,
     Membership,
+    MembershipRole,
     Recording,
     Rehearsal,
     RehearsalSong,
@@ -61,6 +62,16 @@ class MembershipFactory(factory.django.DjangoModelFactory):
 
     person = factory.SubFactory(PersonFactory)
     semester = factory.SubFactory(SemesterFactory)
+
+
+class MembershipRoleFactory(factory.django.DjangoModelFactory):
+    """Builds a Role a Membership has declared for its Semester, with a fresh Membership/Role by default."""
+
+    class Meta:
+        model = MembershipRole
+
+    membership = factory.SubFactory(MembershipFactory)
+    role = factory.SubFactory(RoleFactory)
 
 
 class SongFactory(factory.django.DjangoModelFactory):

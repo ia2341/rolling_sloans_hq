@@ -1,0 +1,16 @@
+<!doctype html>
+<title>My profile</title>
+<h1>My profile</h1>
+{% for message in messages %}
+  <p>{{ message }}</p>
+{% endfor %}
+{% if semester %}
+  <h2>{{ semester }} roles</h2>
+  <form method="post">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button type="submit">Save</button>
+  </form>
+{% else %}
+  <p>There is no active semester yet.</p>
+{% endif %}
