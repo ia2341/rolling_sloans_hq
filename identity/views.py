@@ -1,5 +1,14 @@
+from django.contrib import messages
 from django.contrib.auth import views as auth_views
+from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse_lazy
+from django.views import View
+
+from config.views import AdminRequiredMixin
+
+from .forms import PersonInviteForm
+from .models import Person
+from .services import invite_person
 
 
 class LoginView(auth_views.LoginView):
@@ -54,3 +63,41 @@ class PasswordResetConfirmView(auth_views.PasswordResetConfirmView):
 
 class PasswordResetCompleteView(auth_views.PasswordResetCompleteView):
     template_name = 'identity/password_reset_complete.html'
+
+
+class PeopleView(AdminRequiredMixin, View):
+    """`/manage/people/`: an admin lists Persons and invites new ones (issue #59, issue #17 user story 13)."""
+
+    template_name = 'identity/people.html'
+
+    def get(self, request):
+        """Render the roster of existing Persons alongside an empty invite form."""
+        return render(request, self.template_name, self._build_context())
+
+    def post(self, request):
+        """Validate the invite form and create a Person via `invite_person()`, or re-render with errors."""
+        form = PersonInviteForm(request.POST)
+        if form.is_valid():
+            invite_person(name=form.cleaned_data['name'], email=form.cleaned_data['email'])
+            messages.success(request, f"Invited {form.cleaned_data['email']}.")
+            return redirect('identity:people')
+        return render(request, self.template_name, self._build_context(form))
+
+    def _build_context(self, form=None):
+        """Build context: the Person roster ordered by name, plus the invite form (fresh if none is given)."""
+        return {
+            'people': Person.objects.order_by('name'),
+            'form': form or PersonInviteForm(),
+        }
+
+
+class PersonToggleAdminView(AdminRequiredMixin, View):
+    """`/manage/people/<id>/toggle-admin/`: an admin flips a Person's `is_admin` flag (issue #59, issue #17 user story 13)."""
+
+    def post(self, request, pk):
+        """Flip the target Person's is_admin flag and redirect back to the roster with a success message."""
+        person = get_object_or_404(Person, pk=pk)
+        person.is_admin = not person.is_admin
+        person.save(update_fields=['is_admin'])
+        messages.success(request, f'Updated admin access for {person.email}.')
+        return redirect('identity:people')

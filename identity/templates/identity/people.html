@@ -1,0 +1,24 @@
+<!doctype html>
+<title>Manage people</title>
+<h1>Manage people</h1>
+{% for message in messages %}
+  <p>{{ message }}</p>
+{% endfor %}
+<h2>Invite a new person</h2>
+<form method="post">
+  {% csrf_token %}
+  {{ form.as_p }}
+  <button type="submit">Invite</button>
+</form>
+<h2>People</h2>
+<ul>
+  {% for person in people %}
+    <li>
+      {{ person.name }} ({{ person.email }}) &mdash; {% if person.is_admin %}Admin{% else %}Member{% endif %}
+      <form method="post" action="{% url 'identity:people-toggle-admin' person.pk %}">
+        {% csrf_token %}
+        <button type="submit">{% if person.is_admin %}Revoke admin{% else %}Make admin{% endif %}</button>
+      </form>
+    </li>
+  {% endfor %}
+</ul>

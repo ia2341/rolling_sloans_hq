@@ -37,4 +37,10 @@ urlpatterns = [
         views.PasswordResetCompleteView.as_view(),
         name='password-reset-complete',
     ),
+    path('manage/people/', views.PeopleView.as_view(), name='people'),
+    path(
+        'manage/people/<int:pk>/toggle-admin/',
+        views.PersonToggleAdminView.as_view(),
+        name='people-toggle-admin',
+    ),
 ]
