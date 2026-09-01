@@ -23,7 +23,6 @@ from scheduling.models import (
     Conflict,
     ConflictWindow,
     Membership,
-    MembershipRole,
     Recording,
     Rehearsal,
     RehearsalSong,
@@ -142,11 +141,11 @@ class ProfileView(BaseView, View):
         """Build the GET-time context for `semester`: the bound form plus Roles/Songs stats, or neither if there's no Semester yet."""
         if semester is None:
             return {'semester': None}
-        form = MembershipRolesForm(instance=self._get_or_build_membership(semester))
+        membership = self._get_or_build_membership(semester)
         return {
-            'form': form,
+            'form': MembershipRolesForm(instance=membership),
             'semester': semester,
-            'roles_count': MembershipRole.objects.filter(membership__person=self.request.user, membership__semester=semester).count(),
+            'roles_count': membership.membershiprole_set.count() if membership.pk else 0,
             'songs_played_count': SongRoleAssignment.objects.filter(
                 person=self.request.user, song__semester=semester,
             ).values('song').distinct().count(),

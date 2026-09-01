@@ -78,6 +78,8 @@ class PasswordChangeView(auth_views.PasswordChangeView):
 
 
 class PasswordChangeDoneView(auth_views.PasswordChangeDoneView):
+    """Shown after a successful password change."""
+
     template_name = 'identity/password_change_done.html'
 
 
