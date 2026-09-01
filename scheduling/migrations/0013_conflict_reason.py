@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('scheduling', '0011_alter_recording_file'),
+        ('scheduling', '0012_rehearsal_arrival_buffer_minutes_and_more'),
     ]
 
     operations = [
