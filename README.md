@@ -19,6 +19,7 @@ Several design decisions that reject the "obvious" alternative are recorded as A
 - [`0004`](docs/adr/0004-recording-storage-access-pattern.md) — `Recording` files live in a private R2 bucket via presigned uploads and short-lived signed playback URLs, never public objects or a proxy through the app server.
 - [`0005`](docs/adr/0005-conflict-privacy-boundary.md) — `Conflict` data is never rendered on a member-facing surface, admin viewers included.
 - [`0006`](docs/adr/0006-mandatory-dress-rehearsal-attendance.md) — Dress Rehearsal attendance is mandatory, so no `Conflict` may point at it; enforced in the model and services, never by a DB constraint.
+- [`0007`](docs/adr/0007-rehearsal-scoped-backup.md) — a `Backup` (a one-Rehearsal stand-in) is its own model anchored on `RehearsalSong`, never a rehearsal-scoped `SongRoleAssignment`; who is being covered for is advisory and admin-only.
 
 Configuration (`config/settings.py`) is entirely environment-driven via `django-environ` — no setting is ever a literal secret.
 

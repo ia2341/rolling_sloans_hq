@@ -39,7 +39,7 @@ _Avoid_: Casting
 The condition where a Role Assignment's Role isn't among the Roles the assigned Person declared on their Membership for that semester. Surfaced as a flag for an admin to resolve — either by changing the assignment or updating the person's declared roles — never a hard block.
 
 **Backup**:
-A Person covering a Role on a Song at one specific Rehearsal, standing in because the Role's usual holder has a Conflict. Scoped to that Rehearsal alone — it never changes the Song's Role Assignment or the Person's declared roles on their Membership. A valid, expected state, not an error.
+A Person covering a Role on a Song at one specific Rehearsal — usually because the Role's usual holder has a Conflict, sometimes because nobody holds it at all. Scoped to that Rehearsal alone — it never changes the Song's Role Assignment or the Person's declared roles on their Membership. Who is being covered for is recorded where there is someone, but it is context rather than part of the fact: the Backup stands even after that person's Conflict is withdrawn. A valid, expected state, not an error.
 _Avoid_: Substitute, Fill-in, Understudy
 
 **Rehearsal**:
