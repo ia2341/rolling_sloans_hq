@@ -6,6 +6,7 @@ from django.contrib import messages
 from django.db import models, transaction
 from django.http import Http404, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.utils import timezone
 from django.views import View
 from django.views.generic import DetailView, TemplateView
 
@@ -260,7 +261,8 @@ class ConflictsView(BaseView, View):
         """Declare a Conflict for the Rehearsal named in the POST body, or re-render that row with its errors."""
         semester = get_current_semester()
         rehearsal = get_object_or_404(
-            _scoped_to_current_semester(Rehearsal, semester), pk=request.POST.get('rehearsal_id'),
+            _scoped_to_current_semester(Rehearsal, semester).filter(date__gte=timezone.localdate()),
+            pk=request.POST.get('rehearsal_id'),
         )
         if Conflict.objects.filter(person=request.user, rehearsal=rehearsal).exists():
             raise Http404('A Conflict already exists for this Rehearsal.')
