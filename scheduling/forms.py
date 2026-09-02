@@ -95,18 +95,26 @@ class DeclareConflictForm(forms.Form):
         cleaned_data = super().clean()
         declaration_type = cleaned_data.get('declaration_type')
         if declaration_type == CONFLICT_LATE_ARRIVAL:
-            self._require_time_in_span('arrival_time', cleaned_data, 'Enter the time you will arrive.')
+            self._require_arrival_time(cleaned_data)
         if declaration_type == CONFLICT_EARLY_DEPARTURE:
-            self._require_time_in_span('departure_time', cleaned_data, 'Enter the time you will leave.')
+            self._require_departure_time(cleaned_data)
         return cleaned_data
 
-    def _require_time_in_span(self, field_name, cleaned_data, required_message):
-        """Add a field error if `field_name` is blank, or if set, falls outside self.rehearsal's time span."""
-        time_value = cleaned_data.get(field_name)
+    def _require_arrival_time(self, cleaned_data):
+        """Add a field error if arrival_time is blank, or set but not strictly after the Rehearsal's start (matching the model's strict-inequality rule)."""
+        time_value = cleaned_data.get('arrival_time')
         if not time_value:
-            self.add_error(field_name, required_message)
-        elif self.rehearsal and not (self.rehearsal.start_time <= time_value <= self.rehearsal.end_time):
-            self.add_error(field_name, "Must fall within the Rehearsal's time span.")
+            self.add_error('arrival_time', 'Enter the time you will arrive.')
+        elif self.rehearsal and not (self.rehearsal.start_time < time_value <= self.rehearsal.end_time):
+            self.add_error('arrival_time', "Must fall within the Rehearsal's time span, after it starts.")
+
+    def _require_departure_time(self, cleaned_data):
+        """Add a field error if departure_time is blank, or set but not strictly before the Rehearsal's end (matching the model's strict-inequality rule)."""
+        time_value = cleaned_data.get('departure_time')
+        if not time_value:
+            self.add_error('departure_time', 'Enter the time you will leave.')
+        elif self.rehearsal and not (self.rehearsal.start_time <= time_value < self.rehearsal.end_time):
+            self.add_error('departure_time', "Must fall within the Rehearsal's time span, before it ends.")
 
     @property
     def declared_time(self):

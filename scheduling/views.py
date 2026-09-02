@@ -3,7 +3,7 @@
 import json
 
 from django.contrib import messages
-from django.db import models, transaction
+from django.db import IntegrityError, models, transaction
 from django.http import Http404, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
@@ -360,19 +360,24 @@ class ConflictsView(BaseView, View):
         """Declare a Conflict for the Rehearsal named in the POST body, or re-render that row with its errors."""
         semester = get_current_semester()
         rehearsal = get_object_or_404(
-            _scoped_to_current_semester(Rehearsal, semester), pk=request.POST.get('rehearsal_id'),
+            _scoped_to_current_semester(Rehearsal, semester).filter(date__gte=timezone.localdate()),
+            pk=request.POST.get('rehearsal_id'),
         )
         if Conflict.objects.filter(person=request.user, rehearsal=rehearsal).exists():
             raise Http404('A Conflict already exists for this Rehearsal.')
         form = DeclareConflictForm(request.POST, rehearsal=rehearsal, prefix=_declare_prefix(rehearsal))
         if form.is_valid():
-            declare_conflict(
-                person=request.user,
-                rehearsal=rehearsal,
-                declaration_type=form.cleaned_data['declaration_type'],
-                declared_time=form.declared_time,
-                reason=form.cleaned_data['reason'],
-            )
+            try:
+                declare_conflict(
+                    person=request.user,
+                    rehearsal=rehearsal,
+                    declaration_type=form.cleaned_data['declaration_type'],
+                    declared_time=form.declared_time,
+                    reason=form.cleaned_data['reason'],
+                )
+            except IntegrityError:
+                # A concurrent request won the race past the exists() check above.
+                raise Http404('A Conflict already exists for this Rehearsal.') from None
             messages.success(request, 'Conflict declared.')
             return redirect('scheduling:conflicts')
         context = _build_conflicts_context(request.user, error_rehearsal=rehearsal, error_form=form)
@@ -658,17 +663,23 @@ class RecordingUploadView(BaseView, View):
     R2 POST policy from RecordingPresignView, uploads the file straight to
     R2, then submits here (a normal form POST, not JSON) with the resulting
     object_key to create the Recording row.
+
+    An optional `?song=<id>` param (issue #102) restricts the RehearsalSong
+    dropdown to that Song's own slots within the current Semester; omitting
+    it keeps the original flat, semester-wide dropdown. The picker form has
+    no `action` attribute, so the confirm POST resubmits to the same URL and
+    the param survives into `post()` without needing a hidden field.
     """
 
     template_name = 'scheduling/recordings.html'
 
     def get(self, request):
-        """Render the RehearsalSong picker for the current Semester's recordings."""
-        return self._render(RecordingUploadForm(rehearsal_songs=self._rehearsal_songs()))
+        """Render the RehearsalSong picker, optionally pre-filtered to `?song=<id>`."""
+        return self._render(RecordingUploadForm(rehearsal_songs=self._rehearsal_songs(request)))
 
     def post(self, request):
         """Validate the confirm submission and persist the Recording, or re-render with errors."""
-        form = RecordingUploadForm(request.POST, rehearsal_songs=self._rehearsal_songs())
+        form = RecordingUploadForm(request.POST, rehearsal_songs=self._rehearsal_songs(request))
         if not form.is_valid():
             return self._render(form)
         try:
@@ -688,10 +699,28 @@ class RecordingUploadView(BaseView, View):
         """Render the picker/confirm template with `form` (bound or unbound)."""
         return render(self.request, self.template_name, {'form': form})
 
-    def _rehearsal_songs(self):
-        """Return the current Semester's RehearsalSongs, or an empty queryset if there's no current Semester."""
+    def _rehearsal_songs(self, request):
+        """Return the current Semester's RehearsalSongs, filtered to `?song=<id>` when given.
+
+        Empty queryset if there's no current Semester, or if `?song=<id>` matches no
+        RehearsalSong (e.g. a Song with no scheduled slots yet) — never an error.
+        """
         semester = get_current_semester()
-        return RehearsalSong.objects.filter(rehearsal__semester=semester) if semester else RehearsalSong.objects.none()
+        if semester is None:
+            return RehearsalSong.objects.none()
+        rehearsal_songs = RehearsalSong.objects.filter(rehearsal__semester=semester)
+        raw_song_id = request.GET.get('song')
+        if raw_song_id is not None:
+            song_id = self._parse_song_id(raw_song_id)
+            rehearsal_songs = rehearsal_songs.filter(song_id=song_id)
+        return rehearsal_songs
+
+    def _parse_song_id(self, raw_song_id):
+        """Return `raw_song_id` as an int, or raise Http404 for a non-numeric value."""
+        try:
+            return int(raw_song_id)
+        except ValueError:
+            raise Http404 from None
 
 
 class RecordingPresignView(BaseView, View):

@@ -1,6 +1,7 @@
 """Member conflicts self-service: /me/conflicts/ (issues #58, #98, #99)."""
 
 from datetime import time, timedelta
+from unittest.mock import patch
 
 from django.test import TestCase, override_settings
 from django.urls import reverse
@@ -191,7 +192,32 @@ class ConflictsViewPostTests(TestCase):
         response = self.client.post(reverse('scheduling:conflicts'), data)
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Must fall within the Rehearsal&#x27;s time span.")
+        self.assertContains(response, "Must fall within the Rehearsal&#x27;s time span, after it starts.")
+        self.assertFalse(Conflict.objects.filter(person=self.person, rehearsal=self.rehearsal).exists())
+
+    def test_arrival_time_exactly_at_rehearsal_start_rerenders_form_with_errors(self):
+        """An arrival_time equal to the Rehearsal's start (a zero-length window) re-renders with a field error, not a 500."""
+        data = self._post_data(
+            self.rehearsal, declaration_type='late_arrival', arrival_time=self.rehearsal.start_time.strftime('%H:%M'),
+        )
+
+        response = self.client.post(reverse('scheduling:conflicts'), data)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Must fall within the Rehearsal&#x27;s time span, after it starts.")
+        self.assertFalse(Conflict.objects.filter(person=self.person, rehearsal=self.rehearsal).exists())
+
+    def test_departure_time_exactly_at_rehearsal_end_rerenders_form_with_errors(self):
+        """A departure_time equal to the Rehearsal's end (a zero-length window) re-renders with a field error, not a 500."""
+        data = self._post_data(
+            self.rehearsal, declaration_type='early_departure',
+            departure_time=self.rehearsal.end_time.strftime('%H:%M'),
+        )
+
+        response = self.client.post(reverse('scheduling:conflicts'), data)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Must fall within the Rehearsal&#x27;s time span, before it ends.")
         self.assertFalse(Conflict.objects.filter(person=self.person, rehearsal=self.rehearsal).exists())
 
     def test_missing_required_time_rerenders_that_rows_form_with_errors(self):
@@ -214,11 +240,33 @@ class ConflictsViewPostTests(TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertEqual(Conflict.objects.filter(person=self.person, rehearsal=self.rehearsal).count(), 1)
 
+    def test_concurrent_duplicate_declaration_404s_instead_of_500(self):
+        """A request that loses a race against a concurrent duplicate declaration 404s, not a 500 IntegrityError."""
+        ConflictFactory(person=self.person, rehearsal=self.rehearsal, type=Conflict.FULL_CONFLICT)
+        data = self._post_data(self.rehearsal, declaration_type='full_absence')
+
+        with patch('scheduling.views.Conflict.objects.filter') as mock_filter:
+            mock_filter.return_value.exists.return_value = False
+            response = self.client.post(reverse('scheduling:conflicts'), data)
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(Conflict.objects.filter(person=self.person, rehearsal=self.rehearsal).count(), 1)
+
     def test_post_referencing_a_nonexistent_rehearsal_404s(self):
         """A POST naming a nonexistent rehearsal_id 404s instead of erroring."""
         response = self.client.post(reverse('scheduling:conflicts'), {'rehearsal_id': '999999'})
 
         self.assertEqual(response.status_code, 404)
+
+    def test_post_referencing_a_past_rehearsal_in_the_current_semester_404s(self):
+        """A POST naming a past Rehearsal in the current Semester (never a declarable row) 404s instead of succeeding."""
+        past_rehearsal = RehearsalFactory(semester=self.semester, date=timezone.localdate() - timedelta(days=1))
+        data = self._post_data(past_rehearsal, declaration_type='full_absence')
+
+        response = self.client.post(reverse('scheduling:conflicts'), data)
+
+        self.assertEqual(response.status_code, 404)
+        self.assertFalse(Conflict.objects.filter(person=self.person, rehearsal=past_rehearsal).exists())
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)

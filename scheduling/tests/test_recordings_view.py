@@ -8,7 +8,7 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from identity.factories import PersonFactory
-from scheduling.factories import RehearsalSongFactory, SemesterFactory
+from scheduling.factories import RehearsalSongFactory, SemesterFactory, SongFactory
 from scheduling.models import Recording
 
 PASSWORD = 'a-strong-test-password-123'
@@ -62,6 +62,50 @@ class RecordingUploadViewGetTests(TestCase):
         self.assertIn(current_rehearsal_song, choices)
         self.assertNotIn(older_rehearsal_song, choices)
 
+    def test_song_param_restricts_dropdown_to_that_songs_slots(self):
+        """`?song=<id>` (issue #102) limits the picker to that Song's own RehearsalSong rows, not the whole Semester."""
+        semester = SemesterFactory()
+        target_song = SongFactory(semester=semester)
+        other_song = SongFactory(semester=semester)
+        target_rehearsal_song = RehearsalSongFactory(rehearsal__semester=semester, song=target_song)
+        other_rehearsal_song = RehearsalSongFactory(rehearsal__semester=semester, song=other_song)
+
+        response = self.client.get(reverse('scheduling:recordings'), {'song': target_song.pk})
+
+        choices = list(response.context['form'].fields['rehearsal_song'].queryset)
+        self.assertEqual(choices, [target_rehearsal_song])
+        self.assertNotIn(other_rehearsal_song, choices)
+
+    def test_omitting_song_param_returns_the_full_unfiltered_semester_dropdown(self):
+        """Without `?song=`, every current-Semester RehearsalSong is offered, across all Songs (no regression)."""
+        semester = SemesterFactory()
+        first_rehearsal_song = RehearsalSongFactory(rehearsal__semester=semester, song__semester=semester)
+        second_rehearsal_song = RehearsalSongFactory(rehearsal__semester=semester, song__semester=semester)
+
+        response = self.client.get(reverse('scheduling:recordings'))
+
+        choices = list(response.context['form'].fields['rehearsal_song'].queryset)
+        self.assertIn(first_rehearsal_song, choices)
+        self.assertIn(second_rehearsal_song, choices)
+
+    def test_song_with_no_scheduled_slots_renders_an_empty_dropdown_without_erroring(self):
+        """A Song with zero RehearsalSong rows yet renders a normal empty dropdown, not an error (issue #102)."""
+        semester = SemesterFactory()
+        song_with_no_slots = SongFactory(semester=semester)
+
+        response = self.client.get(reverse('scheduling:recordings'), {'song': song_with_no_slots.pk})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(list(response.context['form'].fields['rehearsal_song'].queryset), [])
+
+    def test_non_numeric_song_param_returns_404(self):
+        """A malformed `?song=` value 404s rather than raising a 500 from an invalid queryset lookup."""
+        SemesterFactory()
+
+        response = self.client.get(reverse('scheduling:recordings'), {'song': 'not-a-number'})
+
+        self.assertEqual(response.status_code, 404)
+
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class RecordingUploadViewPostTests(TestCase):
@@ -91,6 +135,23 @@ class RecordingUploadViewPostTests(TestCase):
         self.assertEqual(recording.rehearsal_song, self.rehearsal_song)
         self.assertEqual(recording.uploaded_by, self.person)
         self.assertEqual(recording.note, 'First take')
+
+    def test_confirm_rejects_a_rehearsal_song_outside_the_song_param_scope(self):
+        """A `?song=<id>` confirm POST rejects a RehearsalSong choice for a different Song (issue #102)."""
+        other_song_rehearsal_song = RehearsalSongFactory(rehearsal__semester=self.semester, song__semester=self.semester)
+
+        response = self.client.post(
+            f"{reverse('scheduling:recordings')}?song={self.rehearsal_song.song_id}",
+            data={
+                'rehearsal_song': other_song_rehearsal_song.pk,
+                'object_key': 'recordings/take-one.mp3',
+                'note': '',
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.context['form'].errors)
+        self.assertFalse(Recording.objects.exists())
 
     @patch('scheduling.services._recording_storage')
     def test_confirm_surfaces_a_missing_upload_as_a_form_error_without_creating_a_recording(
