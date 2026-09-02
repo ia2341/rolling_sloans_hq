@@ -8,7 +8,12 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from identity.factories import PersonFactory
-from scheduling.factories import RehearsalSongFactory, SemesterFactory, SongFactory
+from scheduling.factories import (
+    RecordingFactory,
+    RehearsalSongFactory,
+    SemesterFactory,
+    SongFactory,
+)
 from scheduling.models import Recording
 
 PASSWORD = 'a-strong-test-password-123'
@@ -31,6 +36,16 @@ class AnonymousAccessTests(TestCase):
         response = self.client.post(url, data='{}', content_type='application/json')
 
         self.assertNotEqual(response.status_code, 200)
+
+    def test_delete_redirects_anonymous_users_to_login(self):
+        """An anonymous POST to a Recording's delete URL redirects to the login page rather than deleting it."""
+        recording = RecordingFactory()
+        url = reverse('scheduling:recordings-delete', args=[recording.pk])
+
+        response = self.client.post(url)
+
+        self.assertRedirects(response, f"{reverse('identity:login')}?next={url}")
+        self.assertTrue(Recording.objects.filter(pk=recording.pk).exists())
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)
@@ -237,3 +252,36 @@ class RecordingPresignViewTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 400)
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class RecordingDeleteViewTests(TestCase):
+    def setUp(self):
+        """Log in a synthetic Person before each test."""
+        self.person = PersonFactory(password=PASSWORD)
+        self.client.login(username=self.person.email, password=PASSWORD)
+
+    def test_deletes_the_requesting_users_own_recording_and_redirects_to_the_song_detail_page(self):
+        """A member deleting their own Recording removes it and redirects back to its Song's detail page."""
+        rehearsal_song = RehearsalSongFactory()
+        recording = RecordingFactory(rehearsal_song=rehearsal_song, uploaded_by=self.person)
+
+        response = self.client.post(reverse('scheduling:recordings-delete', args=[recording.pk]))
+
+        self.assertRedirects(response, reverse('scheduling:song-detail', args=[rehearsal_song.song_id]))
+        self.assertFalse(Recording.objects.filter(pk=recording.pk).exists())
+
+    def test_rejects_deletion_of_another_members_recording(self):
+        """A member cannot delete a Recording they did not upload; the row survives and the request 404s."""
+        other_recording = RecordingFactory()
+
+        response = self.client.post(reverse('scheduling:recordings-delete', args=[other_recording.pk]))
+
+        self.assertEqual(response.status_code, 404)
+        self.assertTrue(Recording.objects.filter(pk=other_recording.pk).exists())
+
+    def test_unknown_recording_returns_404(self):
+        """A delete POST for a nonexistent Recording id 404s."""
+        response = self.client.post(reverse('scheduling:recordings-delete', args=[999999]))
+
+        self.assertEqual(response.status_code, 404)

@@ -37,10 +37,12 @@ from scheduling.services import (
     attendance_suggestion_for,
     breaks_for,
     confirm_recording_upload,
+    create_recording_playback_url,
     declare_conflict,
     future_rehearsals_for,
     get_current_semester,
     next_attended_rehearsal_for,
+    recording_groups_for,
     rehearsal_count_target,
     rehearsal_schedule_for,
     reserve_recording_upload,
@@ -189,11 +191,24 @@ class SongDetailView(BaseView, DetailView):
         return _scoped_to_current_semester(Song, get_current_semester())
 
     def get_context_data(self, **kwargs):
-        """Add the Song's SongRoleAssignments, Recordings, and rehearsal-count target vs. actual."""
+        """Add the Song's SongRoleAssignments, Recordings grouped by RehearsalSong slot, and rehearsal-count target vs. actual."""
         context = super().get_context_data(**kwargs)
         song = self.object
         context['assignments'] = SongRoleAssignment.objects.filter(song=song)
-        context['recordings'] = Recording.objects.filter(rehearsal_song__song=song)
+        context['recording_groups'] = [
+            {
+                'rehearsal_song': group.rehearsal_song,
+                'recordings': [
+                    {
+                        'recording': recording,
+                        'playback_url': create_recording_playback_url(recording),
+                        'can_delete': recording.uploaded_by_id == self.request.user.pk,
+                    }
+                    for recording in group.recordings
+                ],
+            }
+            for group in recording_groups_for(song)
+        ]
         context['rehearsal_count_target'] = rehearsal_count_target(song)
         context['rehearsal_count_actual'] = song.rehearsalsong_set.count()
         return context
@@ -688,3 +703,22 @@ class RecordingPresignView(BaseView, View):
             'fields': reservation.fields,
             'object_key': reservation.object_key,
         })
+
+
+class RecordingDeleteView(BaseView, View):
+    """`/me/recordings/<pk>/delete/`: a member deletes their own Recording from a Song's detail page (issue #104).
+
+    Ownership-gated server-side (not just template-hidden): the lookup is
+    scoped to `uploaded_by=request.user`, so a non-uploader's request 404s
+    rather than deleting another member's Recording, mirroring the
+    "no cross-member deletion" rule the delete control's template-side
+    hiding is only a UX shortcut for.
+    """
+
+    def post(self, request, pk):
+        """Delete the requesting member's own target Recording and redirect back to its Song's detail page."""
+        recording = get_object_or_404(Recording, pk=pk, uploaded_by=request.user)
+        song_id = recording.rehearsal_song.song_id
+        recording.delete()
+        messages.success(request, 'Recording deleted.')
+        return redirect('scheduling:song-detail', pk=song_id)

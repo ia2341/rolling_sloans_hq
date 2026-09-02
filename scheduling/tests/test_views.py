@@ -314,8 +314,8 @@ class SongDetailViewTests(TestCase):
         self.person = PersonFactory(password=PASSWORD)
         self.client.login(username=self.person.email, password=PASSWORD)
 
-    def test_renders_assignments_and_recordings(self):
-        """Lists the Song's SongRoleAssignments and Recordings."""
+    def test_renders_assignments_and_recordings_grouped_by_rehearsal_song_slot(self):
+        """Lists the Song's SongRoleAssignments, and groups Recordings by their RehearsalSong slot."""
         semester = SemesterFactory()
         song = SongFactory(semester=semester)
         assignment = SongRoleAssignmentFactory(song=song)
@@ -327,7 +327,52 @@ class SongDetailViewTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(assignment, response.context['assignments'])
-        self.assertIn(recording, response.context['recordings'])
+        [group] = response.context['recording_groups']
+        self.assertEqual(group['rehearsal_song'], rehearsal_song)
+        [entry] = group['recordings']
+        self.assertEqual(entry['recording'], recording)
+
+    def test_recordings_from_multiple_slots_form_separate_groups(self):
+        """Two RehearsalSong slots for the same Song produce two separate recording groups."""
+        semester = SemesterFactory()
+        song = SongFactory(semester=semester)
+        earlier_rehearsal = RehearsalFactory(semester=semester, date=date(2026, 1, 1))
+        later_rehearsal = RehearsalFactory(semester=semester, date=date(2026, 2, 1))
+        earlier_slot = RehearsalSongFactory(song=song, rehearsal=earlier_rehearsal)
+        later_slot = RehearsalSongFactory(song=song, rehearsal=later_rehearsal)
+        RecordingFactory(rehearsal_song=earlier_slot)
+        RecordingFactory(rehearsal_song=later_slot)
+
+        response = self.client.get(reverse('scheduling:song-detail', args=[song.pk]))
+
+        groups = response.context['recording_groups']
+        self.assertEqual(len(groups), 2)
+        self.assertEqual(groups[0]['rehearsal_song'], earlier_slot)
+        self.assertEqual(groups[1]['rehearsal_song'], later_slot)
+
+    def test_delete_control_flag_is_true_only_for_the_requesting_users_own_recording(self):
+        """Each recording entry's can_delete flag reflects uploaded_by == request.user, not other members' uploads."""
+        semester = SemesterFactory()
+        song = SongFactory(semester=semester)
+        rehearsal_song = RehearsalSongFactory(song=song, rehearsal__semester=semester)
+        own_recording = RecordingFactory(rehearsal_song=rehearsal_song, uploaded_by=self.person)
+        other_recording = RecordingFactory(rehearsal_song=rehearsal_song)
+
+        response = self.client.get(reverse('scheduling:song-detail', args=[song.pk]))
+
+        [group] = response.context['recording_groups']
+        can_delete_by_recording = {entry['recording'].pk: entry['can_delete'] for entry in group['recordings']}
+        self.assertTrue(can_delete_by_recording[own_recording.pk])
+        self.assertFalse(can_delete_by_recording[other_recording.pk])
+
+    def test_zero_slots_and_zero_recordings_render_cleanly(self):
+        """A Song with no scheduled RehearsalSong slots (and so no Recordings) renders an empty state, not an error."""
+        song = SongFactory(semester=SemesterFactory())
+
+        response = self.client.get(reverse('scheduling:song-detail', args=[song.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['recording_groups'], [])
 
     def test_computes_rehearsal_count_target_vs_actual(self):
         """actual counts this Song's RehearsalSong rows; target counts the Semester's non-Dress Rehearsals."""

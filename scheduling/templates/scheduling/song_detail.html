@@ -14,11 +14,27 @@
 </ul>
 
 <h2>Recordings</h2>
-<ul>
-  {% for recording in recordings %}
-    <li>{{ recording.uploaded_at }} — {{ recording.uploaded_by }}</li>
-  {% empty %}
-    <li>No recordings yet.</li>
-  {% endfor %}
-</ul>
+<p><a href="{% url 'scheduling:recordings' %}?song={{ song.pk }}">Add Recording</a></p>
+{% for group in recording_groups %}
+  <h3>{{ group.rehearsal_song.rehearsal.date }} — slot {{ group.rehearsal_song.order }}</h3>
+  <ul>
+    {% for entry in group.recordings %}
+      <li>
+        {{ entry.recording.uploaded_by }} — {{ entry.recording.uploaded_at }}
+        ({{ entry.recording.file_size }} bytes)
+        {% if entry.recording.note %}— {{ entry.recording.note }}{% endif %}
+        <br>
+        <audio controls src="{{ entry.playback_url }}"></audio>
+        {% if entry.can_delete %}
+          <form method="post" action="{% url 'scheduling:recordings-delete' entry.recording.pk %}">
+            {% csrf_token %}
+            <button type="submit">Delete</button>
+          </form>
+        {% endif %}
+      </li>
+    {% endfor %}
+  </ul>
+{% empty %}
+  <p>No recordings yet.</p>
+{% endfor %}
 {% endblock %}

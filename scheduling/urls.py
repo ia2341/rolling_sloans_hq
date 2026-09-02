@@ -14,6 +14,7 @@ urlpatterns = [
     path('me/conflicts/<int:rehearsal_id>/', views.ConflictDetailView.as_view(), name='conflict-detail'),
     path('me/recordings/', views.RecordingUploadView.as_view(), name='recordings'),
     path('me/recordings/presign/', views.RecordingPresignView.as_view(), name='recordings-presign'),
+    path('me/recordings/<int:pk>/delete/', views.RecordingDeleteView.as_view(), name='recordings-delete'),
     path('manage/schedule/', views.RehearsalManageView.as_view(), name='manage-schedule'),
     path('manage/schedule/<int:pk>/edit/', views.RehearsalEditView.as_view(), name='manage-schedule-edit'),
     path('manage/setlist/', views.SongManageView.as_view(), name='manage-setlist'),
