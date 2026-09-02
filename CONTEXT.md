@@ -27,6 +27,10 @@ _Avoid_: Track, Number
 **Setlist**:
 The ordered collection of a Semester's Songs (by concert position). Not a separate entity — it's the Songs belonging to a Semester, in order.
 
+**Role Requirement**:
+The target headcount for one Role on one Song (e.g. three singers). A target admins track fill-status against, never a cap — nothing prevents assigning more or fewer people than requested.
+_Avoid_: Quota, Cap
+
 **Role Assignment**:
 The fact that a specific Person fills a specific Role on a specific Song. One Person can hold multiple Role Assignments across different songs, or even multiple roles on the same song.
 _Avoid_: Casting
@@ -34,12 +38,40 @@ _Avoid_: Casting
 **Role mismatch**:
 The condition where a Role Assignment's Role isn't among the Roles the assigned Person declared on their Membership for that semester. Surfaced as a flag for an admin to resolve — either by changing the assignment or updating the person's declared roles — never a hard block.
 
+**Backup**:
+A Person covering a Role on a Song at one specific Rehearsal, standing in because the Role's usual holder has a Conflict. Scoped to that Rehearsal alone — it never changes the Song's Role Assignment or the Person's declared roles on their Membership. A valid, expected state, not an error.
+_Avoid_: Substitute, Fill-in, Understudy
+
 **Rehearsal**:
 A dated, timed event within a Semester during which some of that semester's Songs are worked through, one after another in timed blocks.
 _Avoid_: Practice, Session
 
 **Dress Rehearsal**:
-The Rehearsal whose song coverage always tracks the Semester's current setlist, in concert order — not a fixed set of songs chosen in advance, since it should reflect whatever the setlist looks like at the time.
+The Rehearsal whose song coverage always tracks the Semester's current setlist, in concert order — not a fixed set of songs chosen in advance, since it should reflect whatever the setlist looks like at the time. Attendance is **mandatory**: every member is expected there, so no Conflict can be declared against it (ADR-0006).
+
+**Rehearsal Pattern**:
+The recurring shape of a Semester's rehearsal calendar — its Rehearsal Times, the range of dates they run over, and its Skip Dates. Records what was asked for, not what exists: the Rehearsals themselves are the source of truth, and changing a Pattern changes nothing until it is used to generate.
+_Avoid_: Schedule template, Recurrence
+
+**Rehearsal Time**:
+One recurring day-and-time within a Rehearsal Pattern (e.g. "Wednesdays, 7–11pm"). A Semester usually has a couple that hold steady across the term, and each carries its own start and end — different days legitimately run different lengths.
+_Avoid_: Slot *(collides with a Song's timed block inside a Rehearsal)*, Weekly time
+
+**Skip Date**:
+A date inside a Semester's range on which no Rehearsal happens even though a Rehearsal Time matches it — a holiday, a break, an exam week.
+_Avoid_: Blackout, Exception
+
+**Conflict**:
+A Person's declared unavailability for one Rehearsal other than the Dress Rehearsal, where attendance is mandatory (ADR-0006) — either **full** (not there at all) or **partial** (there for some of it). Editable in place at any time; there is no submission deadline or edit lock. The *absence* of a Conflict is implicit full availability, not an explicit "available" status — the distinction is deliberate, so a future confirmed-available status stays expressible.
+_Avoid_: Absence, Excuse, Unavailability
+
+**Conflict Window**:
+One disjoint range of time a Person is unavailable within a partial Conflict's Rehearsal. Several Windows express non-contiguous unavailability (e.g. away 6–7pm and again 8:30–9pm). A full Conflict has no Windows.
+_Avoid_: Gap, Exception
+
+**Running Order**:
+The sequence of Songs within one specific Rehearsal — what gets worked through in what order that evening. Distinct from concert position, which belongs to the Setlist: a Rehearsal has a Running Order, a Semester has a Setlist. The Dress Rehearsal has no Running Order of its own, since its songs always track the Setlist in concert order.
+_Avoid_: Rehearsal order, Song order *(both collide with concert position)*
 
 **Conflict**:
 A Person's declared unavailability for one Rehearsal — either the whole of it, or part. The absence of a Conflict means that Person is available; there is no separate "confirmed available" declaration. A Person declares at most one Conflict per Rehearsal, and may change or withdraw it at any time.

@@ -382,6 +382,17 @@ class FutureRehearsalsForTests(TestCase):
 
         self.assertEqual(result, [])
 
+    def test_dress_rehearsal_is_excluded(self):
+        """Dress Rehearsal attendance is mandatory (ADR-0006), so it never appears in the declarable list."""
+        semester = SemesterFactory()
+        today = timezone.localdate()
+        ordinary = RehearsalFactory(semester=semester, date=today + timedelta(days=1))
+        RehearsalFactory(semester=semester, date=today + timedelta(days=2), is_full_setlist=True)
+
+        result = future_rehearsals_for(semester)
+
+        self.assertEqual(result, [ordinary])
+
 
 class DeclareConflictTests(TestCase):
     def setUp(self):
@@ -456,6 +467,17 @@ class DeclareConflictTests(TestCase):
         self.assertEqual(len(windows), 1)
         self.assertEqual(windows[0].unavailable_start, time(19, 0))
         self.assertEqual(windows[0].unavailable_end, time(19, 30))
+
+    def test_dress_rehearsal_is_rejected(self):
+        """Dress Rehearsal attendance is mandatory (ADR-0006), so no declaration against it is accepted."""
+        dress_rehearsal = RehearsalFactory(is_full_setlist=True)
+
+        with self.assertRaises(ValueError):
+            declare_conflict(
+                person=self.person, rehearsal=dress_rehearsal, declaration_type='full_absence',
+            )
+
+        self.assertFalse(Conflict.objects.filter(rehearsal=dress_rehearsal).exists())
 
     def test_editing_from_partial_to_full_absence_clears_the_window(self):
         """Editing a partial Conflict to full_absence leaves no ConflictWindow behind."""

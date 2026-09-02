@@ -33,6 +33,7 @@ from scheduling.services import (
     CONFLICT_EARLY_DEPARTURE,
     CONFLICT_LATE_ARRIVAL,
     RecordingUploadError,
+    assigned_songs_for,
     assignment_matrix_for,
     attendance_suggestion_for,
     breaks_for,
@@ -40,6 +41,7 @@ from scheduling.services import (
     conflict_history_for,
     create_recording_playback_url,
     declare_conflict,
+    declared_roles_for,
     future_rehearsals_for,
     get_current_semester,
     next_attended_rehearsal_for,
@@ -205,6 +207,98 @@ class MembersView(BaseView, TemplateView):
         return context
 
 
+class MemberDetailView(BaseView, View):
+    """`/members/<int:pk>/`: one Person's page for the current Semester (issue #138).
+
+    Two rendering modes, and no third: read-only for a teammate's pk,
+    editable in place for `request.user.pk`. The editable mode carries the
+    always-inline `MembershipRolesForm`, with no edit toggle, and is the
+    only mode with any mutation surface at all — a POST to another
+    Person's pk is a 404, not a rejected form. Issue #130 adds the third,
+    admin-editable mode here.
+
+    Every field this renders has an explicit verdict in
+    `docs/person-page-visibility.md`; ADR 0005 keeps Conflict and derived
+    attendance data off the page for everyone, its owner included, because
+    the boundary is drawn around the surface rather than the viewer.
+
+    A Person with no current-Semester `Membership` 404s — except your own
+    pk, which builds an unsaved `Membership` instead, so a newly-invited
+    member can declare Roles before an admin rosters them. With no current
+    Semester at all nobody holds such a Membership, so a teammate's pk
+    404s by the same rule while your own page renders an empty state.
+    """
+
+    template_name = 'scheduling/member_detail.html'
+
+    def get(self, request, pk):
+        """Render `pk`'s page: read-only for a teammate, or your own with the inline Roles form."""
+        semester = get_current_semester()
+        person = self._get_person_or_404(request, pk, semester)
+        return render(request, self.template_name, self._build_context(request, person, semester))
+
+    def post(self, request, pk):
+        """Persist your own declared Roles, or 404 — a teammate's page has no mutation surface."""
+        if pk != request.user.pk:
+            raise Http404('A member can only edit their own declared Roles.')
+        semester = get_current_semester()
+        if semester is None:
+            return render(request, self.template_name, self._build_context(request, request.user, semester))
+        membership = self._get_or_build_membership(request.user, semester)
+        form = MembershipRolesForm(request.POST, instance=membership)
+        if form.is_valid():
+            form.instance = self._membership_for_writing(request.user, semester)
+            form.save()
+            messages.success(request, 'Profile updated.')
+            return redirect('scheduling:member-detail', pk=request.user.pk)
+        context = self._build_context(request, request.user, semester)
+        context['form'] = form
+        return render(request, self.template_name, context)
+
+    def _get_person_or_404(self, request, pk, semester):
+        """Return your own Person unchecked, or a teammate holding a current-Semester Membership, else 404."""
+        if pk == request.user.pk:
+            return request.user
+        membership = get_object_or_404(
+            _scoped_to_current_semester(Membership, semester).select_related('person'), person_id=pk,
+        )
+        return membership.person
+
+    def _build_context(self, request, person, semester):
+        """Build the render context for `person`, adding the inline Roles form only on your own page."""
+        is_self = person.pk == request.user.pk
+        context = {'person': person, 'is_self': is_self, 'semester': semester, 'membership': None}
+        if semester is None:
+            return context
+        membership = self._get_or_build_membership(person, semester)
+        context['membership'] = membership
+        context['declared_roles'] = declared_roles_for(membership)
+        context['assignments'] = assigned_songs_for(person, semester) if membership.pk else []
+        if is_self:
+            context['form'] = MembershipRolesForm(instance=membership)
+        return context
+
+    def _get_or_build_membership(self, person, semester):
+        """Return `person`'s Membership for `semester`, or an unsaved one if they hold none yet."""
+        membership = Membership.objects.filter(person=person, semester=semester).first()
+        return membership or Membership(person=person, semester=semester)
+
+    def _membership_for_writing(self, person, semester):
+        """Return the saved Membership to write the submitted Roles onto, creating it on a first submission.
+
+        The read path deliberately hands back an *unsaved* Membership for a
+        not-yet-rostered member, so merely viewing the page rosters nobody
+        — but two concurrent first submissions would then each try to
+        insert it, and the loser would 500 on
+        `unique_membership_per_person_per_semester`. `get_or_create`
+        absorbs that race, and the form only ever carries `roles` (its
+        `Meta.fields` is empty), so re-pointing it at the row that won
+        writes the same Roles either way.
+        """
+        membership, _ = Membership.objects.get_or_create(person=person, semester=semester)
+        return membership
+
+
 class SongDetailView(BaseView, DetailView):
     """A single Song's role assignments, rehearsal-count progress, and recordings."""
 
@@ -238,48 +332,6 @@ class SongDetailView(BaseView, DetailView):
         context['rehearsal_count_target'] = rehearsal_count_target(song)
         context['rehearsal_count_actual'] = song.rehearsalsong_set.count()
         return context
-
-
-class ProfileView(BaseView, View):
-    """`/me/profile/`: a member views/edits their own declared Roles for the current Semester."""
-
-    template_name = 'scheduling/profile.html'
-
-    def get(self, request):
-        """Render the member's current declared Roles for the current Semester."""
-        semester = get_current_semester()
-        return render(request, self.template_name, self._build_context(semester))
-
-    def post(self, request):
-        """Validate and persist the member's declared Roles, or re-render the form with errors."""
-        semester = get_current_semester()
-        if semester is None:
-            return render(request, self.template_name, self._build_context(semester))
-        form = MembershipRolesForm(request.POST, instance=self._get_or_build_membership(semester))
-        if form.is_valid():
-            form.save()
-            messages.success(request, 'Profile updated.')
-            return redirect('scheduling:profile')
-        return render(request, self.template_name, {'form': form, 'semester': semester})
-
-    def _build_context(self, semester):
-        """Build the GET-time context for `semester`: the bound form plus Roles/Songs stats, or neither if there's no Semester yet."""
-        if semester is None:
-            return {'semester': None}
-        membership = self._get_or_build_membership(semester)
-        return {
-            'form': MembershipRolesForm(instance=membership),
-            'semester': semester,
-            'roles_count': membership.membershiprole_set.count() if membership.pk else 0,
-            'songs_played_count': SongRoleAssignment.objects.filter(
-                person=self.request.user, song__semester=semester,
-            ).values('song').distinct().count(),
-        }
-
-    def _get_or_build_membership(self, semester):
-        """Return the member's Membership for `semester`, or an unsaved one if none exists yet."""
-        membership = Membership.objects.filter(person=self.request.user, semester=semester).first()
-        return membership or Membership(person=self.request.user, semester=semester)
 
 
 def _declare_prefix(rehearsal):
@@ -427,10 +479,17 @@ class ConflictsView(BaseView, View):
         return render(request, self.template_name, context)
 
     def post(self, request):
-        """Declare a Conflict for the Rehearsal named in the POST body, or re-render that row with its errors."""
+        """Declare a Conflict for the Rehearsal named in the POST body, or re-render that row with its errors.
+
+        The Dress Rehearsal is out of the lookup's reach (is_full_setlist=False),
+        so a hand-crafted POST naming it 404s here rather than reaching
+        declare_conflict()'s ValueError as a 500 (ADR-0006).
+        """
         semester = get_current_semester()
         rehearsal = get_object_or_404(
-            _scoped_to_current_semester(Rehearsal, semester).filter(date__gte=timezone.localdate()),
+            _scoped_to_current_semester(Rehearsal, semester).filter(
+                date__gte=timezone.localdate(), is_full_setlist=False,
+            ),
             pk=request.POST.get('rehearsal_id'),
         )
         if Conflict.objects.filter(person=request.user, rehearsal=rehearsal).exists():
@@ -783,12 +842,16 @@ class RecordingUploadView(BaseView, View):
         })
 
     def _requested_song(self, raw_song_id):
-        """Return the current Semester's `?song=<id>` Song, or None when unscoped or no such Song exists."""
-        if raw_song_id is None:
+        """Return the current Semester's `?song=<id>` Song, or None when unscoped or no such Song exists.
+
+        Short-circuits before parsing when there's no current Semester, mirroring
+        `_rehearsal_songs()` — otherwise a malformed `?song=` would start 404ing on
+        a Semester-less database, where it used to render normally.
+        """
+        semester = get_current_semester()
+        if raw_song_id is None or semester is None:
             return None
-        return Song.objects.filter(
-            pk=self._parse_song_id(raw_song_id), semester=get_current_semester(),
-        ).first()
+        return Song.objects.filter(pk=self._parse_song_id(raw_song_id), semester=semester).first()
 
     def _rehearsal_songs(self, request):
         """Return the current Semester's RehearsalSongs, filtered to `?song=<id>` when given.

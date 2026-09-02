@@ -4,7 +4,7 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from identity.factories import PersonFactory
-from scheduling.factories import SongFactory
+from scheduling.factories import SemesterFactory, SongFactory
 
 PASSWORD = 'a-strong-test-password-123'
 
@@ -16,17 +16,25 @@ NAV_ROUTES = {
     'scheduling:conflicts': 'Conflicts',
     'scheduling:setlist': 'Songs',
     'scheduling:members': 'Band Members',
-    'scheduling:profile': 'Profile',
+    'scheduling:member-detail': 'Profile',
 }
+
+
+def nav_url(view_name, person):
+    """Reverse a nav route, supplying `person`'s pk for the per-person Profile tab."""
+    if view_name == 'scheduling:member-detail':
+        return reverse(view_name, args=[person.pk])
+    return reverse(view_name)
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class AnonymousAccessTests(TestCase):
     def test_each_nav_route_redirects_anonymous_users_to_login(self):
         """An anonymous request to any of the nav routes redirects to login."""
+        person = PersonFactory()
         for view_name in NAV_ROUTES:
             with self.subTest(view_name=view_name):
-                url = reverse(view_name)
+                url = nav_url(view_name, person)
 
                 response = self.client.get(url)
 
@@ -44,7 +52,7 @@ class NavRenderingTests(TestCase):
         """Each of the nav routes renders with aria-current="page" on its own tab link and no other."""
         for view_name, label in NAV_ROUTES.items():
             with self.subTest(view_name=view_name):
-                response = self.client.get(reverse(view_name))
+                response = self.client.get(nav_url(view_name, self.person))
 
                 content = response.content.decode()
                 self.assertEqual(response.status_code, 200)
@@ -64,6 +72,15 @@ class NavRenderingTests(TestCase):
         song = SongFactory()
 
         response = self.client.get(reverse('scheduling:song-detail', args=[song.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, NAV_MARKER)
+
+    def test_member_detail_renders_the_nav(self):
+        """member_detail.html renders the shared nav — your own page is reachable without a Membership."""
+        SemesterFactory()
+
+        response = self.client.get(reverse('scheduling:member-detail', args=[self.person.pk]))
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, NAV_MARKER)
