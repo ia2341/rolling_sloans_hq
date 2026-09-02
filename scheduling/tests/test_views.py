@@ -202,6 +202,45 @@ class ScheduleViewTests(TestCase):
         self.assertContains(response, '(Dress Rehearsal)')
         self.assertContains(response, 'You:')
 
+    def test_view_all_dress_rehearsal_row_is_mandatory_never_not_needed(self):
+        """A Dress Rehearsal row reads as mandatory with the full window, even for a Person with no assignments (issue #149)."""
+        semester = SemesterFactory()
+        RehearsalFactory(
+            semester=semester, date=timezone.localdate() + timedelta(days=1), is_full_setlist=True,
+        )
+        SongFactory(semester=semester, position=1)
+
+        response = self.client.get(reverse('scheduling:schedule'), {'view': 'all'})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, 'Not needed')
+        self.assertContains(response, 'Mandatory &mdash; You:')
+
+    def test_view_all_regular_rehearsal_row_still_says_not_needed(self):
+        """A non-Dress Rehearsal the Person has no assignment at still reads "Not needed" — issue #149 changes only the Dress Rehearsal."""
+        semester = SemesterFactory()
+        RehearsalFactory(semester=semester, date=timezone.localdate() + timedelta(days=1))
+
+        response = self.client.get(reverse('scheduling:schedule'), {'view': 'all'})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Not needed')
+
+    def test_dress_rehearsal_detail_marks_attendance_mandatory_for_an_unassigned_person(self):
+        """The Dress Rehearsal's detail view shows the mandatory note and a window, not "not needed" (issue #149)."""
+        semester = SemesterFactory()
+        dress_rehearsal = RehearsalFactory(
+            semester=semester, date=timezone.localdate() + timedelta(days=1), is_full_setlist=True,
+        )
+        SongFactory(semester=semester, position=1)
+
+        response = self.client.get(reverse('scheduling:schedule'), {'rehearsal': dress_rehearsal.pk})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Attendance at the Dress Rehearsal is mandatory.')
+        self.assertContains(response, 'Arrive around')
+        self.assertNotContains(response, "You're not needed at this rehearsal.")
+
     def test_view_all_row_links_to_rehearsal_detail(self):
         """Each row in ?view=all links to that Rehearsal's ?rehearsal=<id> detail."""
         semester = SemesterFactory()
@@ -673,6 +712,22 @@ class OverviewViewTests(TestCase):
         suggestion = response.context['next_rehearsal_suggestion']
         self.assertEqual(suggestion.arrival_time, dress_rehearsal.start_time)
         self.assertEqual(suggestion.departure_time, dress_rehearsal.end_time)
+
+    def test_dress_rehearsal_suggestion_covers_a_person_with_no_assignments(self):
+        """An unassigned Person still gets the Dress Rehearsal's full window on the Overview, never a "not needed" note (issue #149)."""
+        semester = SemesterFactory()
+        today = timezone.localdate()
+        dress_rehearsal = RehearsalFactory(semester=semester, date=today + timedelta(days=1), is_full_setlist=True)
+        SongFactory(semester=semester, position=1)
+
+        response = self.client.get(reverse('scheduling:overview'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['next_rehearsal'], dress_rehearsal)
+        suggestion = response.context['next_rehearsal_suggestion']
+        self.assertEqual(suggestion.arrival_time, dress_rehearsal.start_time)
+        self.assertEqual(suggestion.departure_time, dress_rehearsal.end_time)
+        self.assertNotContains(response, 'not needed at this rehearsal')
 
     def test_song_progress_table_lists_current_semesters_songs_in_position_order(self):
         """The song-progress table lists only the current Semester's Songs, in position order (issue #93)."""

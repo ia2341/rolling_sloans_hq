@@ -384,7 +384,8 @@ def next_attended_rehearsal_for(person, semester):
     "Next" is not necessarily the band's literal next Rehearsal: this walks
     the Semester's upcoming Rehearsals in date order and returns the first
     one with a non-None attendance_suggestion_for (issue #94), skipping any
-    Rehearsal the Person isn't needed at. Deliberately not
+    Rehearsal the Person isn't needed at — never the Dress Rehearsal, whose
+    suggestion is non-None for everyone (ADR-0006). Deliberately not
     Rehearsal.attendance_for alone: that only reports endpoint (start/end)
     attendance, so a Person assigned only to a middle RehearsalSong (or a
     middle Dress Rehearsal setlist song) would be wrongly skipped. Also the
@@ -503,11 +504,11 @@ def attendance_suggestion_for(rehearsal, person):
     arrival_buffer_minutes/departure_buffer_minutes (already defaulted from
     the Semester at Rehearsal creation time). Falls back to the Rehearsal's
     own start_time/end_time, with no buffer applied, whenever
-    attendance_for reports full-window attendance (needed at both ends) —
-    and, for the Dress Rehearsal (ADR-0003, no persisted RehearsalSong
-    rows), whenever the Person has any assignment among the live setlist at
-    all, since there's no per-song clock time to derive a narrower window
-    from.
+    attendance_for reports full-window attendance (needed at both ends).
+    The Dress Rehearsal (ADR-0003, no persisted RehearsalSong rows) always
+    returns that full window for every Person, assigned or not: attendance
+    there is mandatory (ADR-0006), and there's no per-song clock time to
+    derive a narrower window from anyway.
     """
     if rehearsal.is_full_setlist:
         return _dress_rehearsal_attendance_suggestion(rehearsal, person)
@@ -515,12 +516,17 @@ def attendance_suggestion_for(rehearsal, person):
 
 
 def _dress_rehearsal_attendance_suggestion(rehearsal, person):
-    """Return the Dress Rehearsal's own start/end as `person`'s suggestion, or None if they have no assignment."""
-    has_assignment = SongRoleAssignment.objects.filter(
-        person=person, song__in=rehearsal.dress_rehearsal_songs,
-    ).exists()
-    if not has_assignment:
-        return None
+    """Return the Dress Rehearsal's own start/end as every `person`'s suggestion (ADR-0006, issue #149).
+
+    Never None: attendance at the Dress Rehearsal is mandatory, so a Person
+    holding no Role Assignment on any setlist Song is expected for the whole
+    window just the same as an assigned one — `person` is unused for that
+    reason. The window is the Rehearsal's own start_time/end_time, which
+    already carry the Semester's setup/teardown grace (Rehearsal.save()
+    derives end_time from them), with no arrival/departure buffer applied,
+    matching the full-window fallback in
+    _regular_rehearsal_attendance_suggestion.
+    """
     return AttendanceSuggestion(arrival_time=rehearsal.start_time, departure_time=rehearsal.end_time)
 
 
