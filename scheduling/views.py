@@ -479,10 +479,17 @@ class ConflictsView(BaseView, View):
         return render(request, self.template_name, context)
 
     def post(self, request):
-        """Declare a Conflict for the Rehearsal named in the POST body, or re-render that row with its errors."""
+        """Declare a Conflict for the Rehearsal named in the POST body, or re-render that row with its errors.
+
+        The Dress Rehearsal is out of the lookup's reach (is_full_setlist=False),
+        so a hand-crafted POST naming it 404s here rather than reaching
+        declare_conflict()'s ValueError as a 500 (ADR-0006).
+        """
         semester = get_current_semester()
         rehearsal = get_object_or_404(
-            _scoped_to_current_semester(Rehearsal, semester).filter(date__gte=timezone.localdate()),
+            _scoped_to_current_semester(Rehearsal, semester).filter(
+                date__gte=timezone.localdate(), is_full_setlist=False,
+            ),
             pk=request.POST.get('rehearsal_id'),
         )
         if Conflict.objects.filter(person=request.user, rehearsal=rehearsal).exists():
