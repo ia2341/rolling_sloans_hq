@@ -47,6 +47,7 @@ Two Django apps today:
 - `0002` — a `Role Assignment` whose Role isn't on the Person's Membership is saved anyway and flagged `is_role_mismatch`, never hard-blocked (admins are the sole authors and need to assign ahead of profile updates).
 - `0003` — the Dress Rehearsal's songs are derived live from the current setlist at read-time, not snapshotted into `RehearsalSong` rows, so it can't go stale if the setlist changes after scheduling.
 - `0004` — `Recording` files live in a private R2 bucket; uploads go client→R2 via a Django-issued presigned PUT, and playback uses short-lived signed URLs — never public objects, never proxied through the Django app server.
+- `0005` — `Conflict` data (especially the free-text `reason`) is never rendered on a member-facing surface, admin viewers included; admins read it only through admin-only surfaces. Field-by-field verdicts for `/members/` and `/members/<pk>/` live in `docs/person-page-visibility.md`.
 
 **Config** (`config/settings.py`) is entirely environment-driven via `django-environ`, reading `.env` locally / host-injected vars in production — no setting is ever a literal secret. Notable non-defaults: 30-day sliding session expiry (`SESSION_SAVE_EVERY_REQUEST = True`), `SITE_URL` required and validated at startup when `DEBUG=False` (used to build absolute links like invite/reset URLs outside request context), TLS-everywhere settings gated behind `not DEBUG`, and object storage (`STORAGES['default']`) pointed at an S3-compatible backend (Cloudflare R2) per ADR 0004.
 
