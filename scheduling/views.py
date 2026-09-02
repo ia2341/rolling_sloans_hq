@@ -212,10 +212,10 @@ class MemberDetailView(BaseView, View):
 
     Two rendering modes, and no third: read-only for a teammate's pk,
     editable in place for `request.user.pk`. The editable mode carries the
-    always-inline `MembershipRolesForm` `/me/profile/` renders today (no
-    edit toggle), and is the only mode with any mutation surface at all —
-    a POST to another Person's pk is a 404, not a rejected form. Issue #130
-    adds the third, admin-editable mode here.
+    always-inline `MembershipRolesForm`, with no edit toggle, and is the
+    only mode with any mutation surface at all — a POST to another
+    Person's pk is a 404, not a rejected form. Issue #130 adds the third,
+    admin-editable mode here.
 
     Every field this renders has an explicit verdict in
     `docs/person-page-visibility.md`; ADR 0005 keeps Conflict and derived
@@ -223,11 +223,10 @@ class MemberDetailView(BaseView, View):
     the boundary is drawn around the surface rather than the viewer.
 
     A Person with no current-Semester `Membership` 404s — except your own
-    pk, which keeps `ProfileView`'s unsaved-Membership path so a
-    newly-invited member can declare Roles before an admin rosters them.
-    With no current Semester at all nobody holds such a Membership, so a
-    teammate's pk 404s by the same rule while your own page renders an
-    empty state.
+    pk, which builds an unsaved `Membership` instead, so a newly-invited
+    member can declare Roles before an admin rosters them. With no current
+    Semester at all nobody holds such a Membership, so a teammate's pk
+    404s by the same rule while your own page renders an empty state.
     """
 
     template_name = 'scheduling/member_detail.html'
@@ -333,48 +332,6 @@ class SongDetailView(BaseView, DetailView):
         context['rehearsal_count_target'] = rehearsal_count_target(song)
         context['rehearsal_count_actual'] = song.rehearsalsong_set.count()
         return context
-
-
-class ProfileView(BaseView, View):
-    """`/me/profile/`: a member views/edits their own declared Roles for the current Semester."""
-
-    template_name = 'scheduling/profile.html'
-
-    def get(self, request):
-        """Render the member's current declared Roles for the current Semester."""
-        semester = get_current_semester()
-        return render(request, self.template_name, self._build_context(semester))
-
-    def post(self, request):
-        """Validate and persist the member's declared Roles, or re-render the form with errors."""
-        semester = get_current_semester()
-        if semester is None:
-            return render(request, self.template_name, self._build_context(semester))
-        form = MembershipRolesForm(request.POST, instance=self._get_or_build_membership(semester))
-        if form.is_valid():
-            form.save()
-            messages.success(request, 'Profile updated.')
-            return redirect('scheduling:profile')
-        return render(request, self.template_name, {'form': form, 'semester': semester})
-
-    def _build_context(self, semester):
-        """Build the GET-time context for `semester`: the bound form plus Roles/Songs stats, or neither if there's no Semester yet."""
-        if semester is None:
-            return {'semester': None}
-        membership = self._get_or_build_membership(semester)
-        return {
-            'form': MembershipRolesForm(instance=membership),
-            'semester': semester,
-            'roles_count': membership.membershiprole_set.count() if membership.pk else 0,
-            'songs_played_count': SongRoleAssignment.objects.filter(
-                person=self.request.user, song__semester=semester,
-            ).values('song').distinct().count(),
-        }
-
-    def _get_or_build_membership(self, semester):
-        """Return the member's Membership for `semester`, or an unsaved one if none exists yet."""
-        membership = Membership.objects.filter(person=self.request.user, semester=semester).first()
-        return membership or Membership(person=self.request.user, semester=semester)
 
 
 def _declare_prefix(rehearsal):

@@ -11,7 +11,6 @@ urlpatterns = [
     path('songs/<int:pk>/', views.SongDetailView.as_view(), name='song-detail'),
     path('members/', views.MembersView.as_view(), name='members'),
     path('members/<int:pk>/', views.MemberDetailView.as_view(), name='member-detail'),
-    path('me/profile/', views.ProfileView.as_view(), name='profile'),
     path('me/conflicts/', views.ConflictsView.as_view(), name='conflicts'),
     path('me/conflicts/<int:rehearsal_id>/edit/', views.ConflictEditView.as_view(), name='conflict-edit'),
     path('me/conflicts/<int:rehearsal_id>/delete/', views.ConflictDeleteView.as_view(), name='conflict-delete'),
