@@ -61,6 +61,25 @@ class RecordingUploadViewGetTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(list(response.context['form'].fields['rehearsal_song'].queryset), [])
+        self.assertContains(response, 'No songs have been scheduled into a rehearsal yet')
+
+    def test_song_with_no_scheduled_slots_shows_an_explanatory_empty_state_message(self):
+        """`?song=<id>` for a Song with no RehearsalSong rows yet explains the empty dropdown (issue #119)."""
+        semester = SemesterFactory()
+        song_with_no_slots = SongFactory(semester=semester)
+
+        response = self.client.get(reverse('scheduling:recordings'), {'song': song_with_no_slots.pk})
+
+        self.assertContains(response, 'No songs have been scheduled into a rehearsal yet')
+
+    def test_no_empty_state_message_when_rehearsal_songs_are_available(self):
+        """The empty-state message is absent once the current Semester has scheduled RehearsalSong rows."""
+        semester = SemesterFactory()
+        RehearsalSongFactory(rehearsal__semester=semester, song__semester=semester)
+
+        response = self.client.get(reverse('scheduling:recordings'))
+
+        self.assertNotContains(response, 'No songs have been scheduled into a rehearsal yet')
 
     def test_offers_only_the_current_semesters_rehearsal_songs(self):
         """The RehearsalSong picker is scoped to the current Semester, per get_current_semester()."""

@@ -746,8 +746,12 @@ class RecordingUploadView(BaseView, View):
         return redirect('scheduling:recordings')
 
     def _render(self, form):
-        """Render the picker/confirm template with `form` (bound or unbound)."""
-        return render(self.request, self.template_name, {'form': form})
+        """Render the picker/confirm template with `form` and whether it has any RehearsalSong options."""
+        has_rehearsal_song_options = form.fields['rehearsal_song'].queryset.exists()
+        return render(self.request, self.template_name, {
+            'form': form,
+            'has_rehearsal_song_options': has_rehearsal_song_options,
+        })
 
     def _rehearsal_songs(self, request):
         """Return the current Semester's RehearsalSongs, filtered to `?song=<id>` when given.
