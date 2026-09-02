@@ -371,18 +371,30 @@ class Rehearsal(models.Model):
         comes from the live setlist (dress_rehearsal_songs) instead.
         """
         if self.is_full_setlist:
-            songs = list(self.dress_rehearsal_songs)
-            if not songs:
-                return RehearsalAttendance(needed_from_start=False, needed_until_end=False)
-            first_song, last_song = songs[0], songs[-1]
-        else:
-            bounds = RehearsalSong.objects.filter(rehearsal=self).aggregate(
-                first=models.Min('order'), last=models.Max('order'),
-            )
-            if bounds['first'] is None:
-                return RehearsalAttendance(needed_from_start=False, needed_until_end=False)
-            first_song = RehearsalSong.objects.get(rehearsal=self, order=bounds['first']).song
-            last_song = RehearsalSong.objects.get(rehearsal=self, order=bounds['last']).song
+            return self._dress_attendance_for(person)
+        bounds = RehearsalSong.objects.filter(rehearsal=self).aggregate(
+            first=models.Min('order'), last=models.Max('order'),
+        )
+        if bounds['first'] is None:
+            return RehearsalAttendance(needed_from_start=False, needed_until_end=False)
+        assigned_orders = set(slots_for_person(self, person).values_list('order', flat=True))
+        return RehearsalAttendance(
+            needed_from_start=bounds['first'] in assigned_orders,
+            needed_until_end=bounds['last'] in assigned_orders,
+        )
+
+    def _dress_attendance_for(self, person):
+        """Return `person`'s start/end need at the Dress Rehearsal, read off the live setlist (ADR-0003).
+
+        Kept apart from the slot-based path in attendance_for() because the
+        Dress Rehearsal has no RehearsalSong rows to ask slots_for_person()
+        about: its first/last "slot" is the first/last Song of the current
+        setlist, computed live so it can't go stale.
+        """
+        songs = list(self.dress_rehearsal_songs)
+        if not songs:
+            return RehearsalAttendance(needed_from_start=False, needed_until_end=False)
+        first_song, last_song = songs[0], songs[-1]
         assigned_song_ids = set(
             SongRoleAssignment.objects.filter(
                 person=person, song__in=(first_song, last_song),
@@ -485,6 +497,32 @@ class RehearsalSong(models.Model):
     def __str__(self):
         """Return "<song> @ <rehearsal> (order <order>)" for admin/debug display."""
         return f'{self.song} @ {self.rehearsal} (order {self.order})'
+
+
+def slots_for_person(rehearsal, person):
+    """Return the RehearsalSong rows in `rehearsal`'s Running Order that `person` is on (issue #173).
+
+    The single definition of "which slots is this Person on at this
+    Rehearsal", shared by Rehearsal.attendance_for() and by
+    services._regular_rehearsal_attendance_suggestion()/breaks_for(), so
+    that widening it later (to count Backups, ADR-0007) is one edit rather
+    than three that could disagree. Membership is derived today from the
+    Person's SongRoleAssignments on the slot's Song, exactly as each of
+    those reads derived it before.
+
+    Internal to the scheduling app despite the plain name: it lives here
+    rather than in services.py only because models.py cannot import
+    services.py. The tested surface stays the three public reads. It is
+    deliberately not used by services.performers_for(), which is a
+    Song-level Setlist read rather than a rehearsal-slot one (ADR-0007).
+
+    Returned unordered and distinct: a Person holding two Role Assignments
+    on the same Song must not yield that slot twice, since breaks_for()
+    walks the rows pairwise.
+    """
+    return RehearsalSong.objects.filter(
+        rehearsal=rehearsal, song__songroleassignment__person=person,
+    ).distinct()
 
 
 class Conflict(models.Model):

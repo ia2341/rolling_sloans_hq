@@ -22,6 +22,7 @@ from scheduling.models import (
     Semester,
     Song,
     SongRoleAssignment,
+    slots_for_person,
 )
 
 MAX_RECORDING_FILE_SIZE = 50 * 1024 * 1024
@@ -583,10 +584,10 @@ def _dress_rehearsal_attendance_suggestion(rehearsal, person):
 
 
 def _regular_rehearsal_attendance_suggestion(rehearsal, person):
-    """Return `person`'s suggestion for a non-Dress Rehearsal, derived from their assigned RehearsalSong slots."""
-    bounds = RehearsalSong.objects.filter(
-        rehearsal=rehearsal, song__songroleassignment__person=person,
-    ).aggregate(earliest_start=models.Min('start_time'), latest_end=models.Max('end_time'))
+    """Return `person`'s suggestion for a non-Dress Rehearsal, derived from the slots they are on."""
+    bounds = slots_for_person(rehearsal, person).aggregate(
+        earliest_start=models.Min('start_time'), latest_end=models.Max('end_time'),
+    )
     if bounds['earliest_start'] is None:
         return None
     attendance = rehearsal.attendance_for(person)
@@ -661,11 +662,7 @@ def breaks_for(rehearsal, person) -> list[Break]:
     """
     if rehearsal.is_full_setlist:
         return []
-    assigned_slots = list(
-        RehearsalSong.objects.filter(
-            rehearsal=rehearsal, song__songroleassignment__person=person,
-        ).distinct().order_by('order'),
-    )
+    assigned_slots = list(slots_for_person(rehearsal, person).order_by('order'))
     breaks = []
     for earlier, later in pairwise(assigned_slots):
         if earlier.end_time < later.start_time:
