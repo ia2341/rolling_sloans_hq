@@ -9,6 +9,7 @@
 {% if semester %}
   <h2>{{ semester }}</h2>
   <h3>Upcoming rehearsals</h3>
+  <p>Attendance at the Dress Rehearsal is mandatory, so it is not listed here and no conflict can be declared for it.</p>
   <ul>
     {% for row in rows %}
       <li data-rehearsal-id="{{ row.rehearsal.pk }}"{% if row.is_selected %} data-preselected="true"{% endif %}>

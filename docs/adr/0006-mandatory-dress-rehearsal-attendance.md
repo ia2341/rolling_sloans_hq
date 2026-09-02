@@ -1,0 +1,17 @@
+# Dress Rehearsal attendance is mandatory, enforced in the domain rather than the schema
+
+Attendance at the Dress Rehearsal is mandatory for every member, so there is nothing to declare a `Conflict` against. No `Conflict` may point at a `Rehearsal` with `is_full_setlist=True`. This supersedes the previous implicit rule that any `Rehearsal` may carry a `Conflict` — implicit only in the sense that nothing said otherwise: `future_rehearsals_for()` returned the Dress Rehearsal like any other Rehearsal and `declare_conflict()` accepted it.
+
+The rule is enforced in four places, deliberately overlapping, the same belt-and-suspenders shape `RehearsalSong` already uses to keep its rows off the Dress Rehearsal: `Conflict.clean()` (so a ModelForm surfaces a field error rather than a 500), `Conflict.save()` (so `.objects.create()` and the Django admin are covered, not only callers that run `full_clean()`), `declare_conflict()` (rejecting before any DB write), and `future_rehearsals_for()` (so the Dress Rehearsal never reaches the declare UI at all).
+
+**There is deliberately no DB-level constraint.** A `CheckConstraint` would have to reach through the `rehearsal` FK to read `is_full_setlist`, which Django's constraint expressions cannot do. Model plus service enforcement is the ceiling here; this is recorded so a future reader stops hunting for a missing constraint rather than concluding one was forgotten. A denormalised `is_full_setlist` copy on `Conflict`, or a trigger, would buy a database guarantee at the cost of a field that can drift or of SQL that lives outside the model layer — neither trade is worth it for a rule with exactly one write path in the application.
+
+The change matters beyond the Conflicts page. ADR 0003 derives the Dress Rehearsal's songs live from the current setlist, so a setlist reorder shifts every Dress Rehearsal slot time; under the old rule that could silently invalidate the `ConflictWindow`s a member had already declared against those times. Making attendance mandatory removes that whole class of fallout instead of having to reconcile it.
+
+## Consequences
+
+- `/me/conflicts/` no longer lists the Dress Rehearsal under Upcoming Rehearsals, and carries a line saying attendance there is mandatory. The note is load-bearing: a rehearsal that is simply absent, with no explanation, reads as a scheduling bug to the member looking for it.
+- A hand-crafted POST naming the Dress Rehearsal 404s in `ConflictsView.post()` — the Rehearsal lookup is scoped to `is_full_setlist=False` — rather than reaching `declare_conflict()`'s `ValueError` as a 500.
+- Migration `0014_delete_dress_rehearsal_conflicts` deletes any `Conflict` rows (and their cascading `ConflictWindow`s) that predate the rule. Without it those rows would be neither readable as the domain now expects nor fixable through the UI, since the Dress Rehearsal no longer appears there.
+- Flipping `is_full_setlist` to true on a Rehearsal that already has Conflicts is left unhandled: the existing rows survive and become unreachable, exactly as the pre-migration rows were. That is its own decision, not this one.
+- The attendance *suggestion* semantics for the Dress Rehearsal, and how the Schedule page renders it, are untouched here.

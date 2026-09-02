@@ -468,8 +468,31 @@ class Conflict(models.Model):
             return False
         return Conflict.objects.filter(pk=self.pk, type=self.PARTIAL).exists()
 
+    def clean(self):
+        """Surface an attempted Dress Rehearsal Conflict as a normal form error, not a 500 (ADR-0006)."""
+        if self.rehearsal_id and self.rehearsal.is_full_setlist:
+            raise ValidationError({
+                'rehearsal': (
+                    'Attendance at the Dress Rehearsal (is_full_setlist=True) is mandatory, '
+                    'so a Conflict cannot be declared against it.'
+                ),
+            })
+
     def save(self, *args, **kwargs):
-        """Save, then clear stale ConflictWindow rows if type just flipped from PARTIAL to FULL_CONFLICT."""
+        """Reject a Dress Rehearsal Conflict, save, then clear stale ConflictWindows on a PARTIAL-to-FULL flip.
+
+        Mirrors RehearsalSong.save()'s belt-and-suspenders check, so the
+        mandatory-attendance rule of ADR-0006 holds for every write path
+        (e.g. .objects.create(), the Django admin), not only callers that
+        run full_clean() first. There is deliberately no DB-level
+        CheckConstraint backing it: a constraint expression cannot reach
+        through the `rehearsal` FK to read is_full_setlist.
+        """
+        if self.rehearsal.is_full_setlist:
+            raise ValueError(
+                'Attendance at the Dress Rehearsal (is_full_setlist=True) is mandatory, '
+                'so a Conflict cannot be declared against it.'
+            )
         flipped_to_full = self.type == self.FULL_CONFLICT and self._was_partial_in_db()
         super().save(*args, **kwargs)
         if flipped_to_full:
