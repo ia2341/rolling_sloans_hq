@@ -268,6 +268,27 @@ class Rehearsal(models.Model):
                 )
             self.end_time = end.time()
 
+    def _blocked_full_setlist_flip_count(self):
+        """Return how many Conflicts block making this saved Rehearsal the Dress Rehearsal, else 0 (issue #150).
+
+        Non-zero only for an existing row being flipped to
+        is_full_setlist=True while members have declared Conflicts against
+        it: ADR-0006 forbids those rows, and discarding them silently would
+        lose declared unavailability, so the flip is refused instead.
+        """
+        if self._state.adding or not self.is_full_setlist:
+            return 0
+        return Conflict.objects.filter(rehearsal=self).count()
+
+    def _blocked_full_setlist_flip_message(self, count):
+        """Phrase the refused flip, naming only the Conflict count — never who declared it, or why (ADR-0005)."""
+        members = 'member has' if count == 1 else 'members have'
+        return (
+            f'{count} {members} declared a Conflict against this Rehearsal, and attendance at the '
+            'Dress Rehearsal is mandatory (ADR-0006). Clear those Conflicts in the Django admin '
+            'Conflict list before making this the Dress Rehearsal.'
+        )
+
     def clean(self):
         """Surface the midnight-wraparound case as a normal form error, not a 500.
 
@@ -279,17 +300,37 @@ class Rehearsal(models.Model):
         which full_clean() converts to a ValidationError, so it would escape
         as a 500. Skip defaulting until those required fields are actually
         set and let clean_fields()'s own required-field errors stand.
+
+        Also refuses a flip to is_full_setlist=True on a Rehearsal that
+        already carries Conflicts (issue #150). RehearsalForm and the Django
+        admin both reach this through ModelForm._post_clean(), so neither
+        needs its own copy of the rule and the message renders once.
         """
         if self._state.adding and self.semester_id is not None and self.date is not None:
             try:
                 self._apply_semester_defaults()
             except ValueError as exc:
                 raise ValidationError({'end_time': str(exc)}) from exc
+        blocking_conflicts = self._blocked_full_setlist_flip_count()
+        if blocking_conflicts:
+            raise ValidationError({
+                'is_full_setlist': self._blocked_full_setlist_flip_message(blocking_conflicts),
+            })
 
     def save(self, *args, **kwargs):
-        """Fill grace periods and end_time from the Semester's defaults on first save only."""
+        """Fill grace periods and end_time from the Semester's defaults on first save only, refusing a blocked flip.
+
+        The Conflict check is repeated here, rather than left to clean(),
+        for the same belt-and-suspenders reason Conflict.save() and
+        RehearsalSong.save() carry theirs: callers that skip full_clean()
+        (.objects.update()-style scripts, factories) must not be able to
+        create the Conflict rows ADR-0006 declares invalid either.
+        """
         if self._state.adding:
             self._apply_semester_defaults()
+        blocking_conflicts = self._blocked_full_setlist_flip_count()
+        if blocking_conflicts:
+            raise ValueError(self._blocked_full_setlist_flip_message(blocking_conflicts))
         super().save(*args, **kwargs)
 
     def __str__(self):
