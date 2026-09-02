@@ -167,6 +167,25 @@ class ConflictsViewGetTests(TestCase):
         [row] = response.context['rows']
         self.assertFalse(row['is_selected'])
 
+    def test_selected_row_renders_the_markers_the_prefill_script_targets(self):
+        """A selected Upcoming row renders the data-preselected marker and the declare-form class conflicts.js focuses (issue #100)."""
+        rehearsal = RehearsalFactory(semester=self.semester, date=timezone.localdate() + timedelta(days=1))
+
+        response = self.client.get(reverse('scheduling:conflicts'), {'rehearsal': rehearsal.pk})
+
+        self.assertContains(response, 'data-preselected="true"')
+        self.assertContains(response, 'conflict-new-form')
+
+    def test_already_declared_selected_row_renders_no_declare_form_to_focus(self):
+        """An already-declared selected Rehearsal renders its History marker but no declare form for the script to focus (issue #100)."""
+        rehearsal = RehearsalFactory(semester=self.semester, date=timezone.localdate() + timedelta(days=1))
+        ConflictFactory(person=self.person, rehearsal=rehearsal, type=Conflict.FULL_CONFLICT)
+
+        response = self.client.get(reverse('scheduling:conflicts'), {'rehearsal': rehearsal.pk})
+
+        self.assertContains(response, 'data-preselected="true"')
+        self.assertNotContains(response, 'conflict-new-form')
+
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class ConflictsViewPostTests(TestCase):
