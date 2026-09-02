@@ -20,3 +20,21 @@ document.addEventListener('DOMContentLoaded', function () {
     updateVisibility();
   });
 });
+
+// `?rehearsal=<id>` pre-fill from My Schedule's "Add a conflict" link (issue #100).
+// The server marks the matching row with data-preselected="true" — an
+// Upcoming row (undeclared) or a History row (already declared), never
+// both. Scroll it into view; an Upcoming row also gets its declare form
+// focused, standing in for "expand" since it's already always rendered open.
+document.addEventListener('DOMContentLoaded', function () {
+  var row = document.querySelector('[data-preselected="true"]');
+  if (!row) {
+    return;
+  }
+  row.scrollIntoView({ block: 'center' });
+  row.classList.add('conflict-preselected');
+  var firstField = row.querySelector('.conflict-declare-form input, .conflict-declare-form select, .conflict-declare-form textarea');
+  if (firstField) {
+    firstField.focus();
+  }
+});
