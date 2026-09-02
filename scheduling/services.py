@@ -497,6 +497,7 @@ CONFLICT_TYPE_LABELS = {
     CONFLICT_FULL_ABSENCE: 'Full absence',
     CONFLICT_LATE_ARRIVAL: 'Late arrival',
     CONFLICT_EARLY_DEPARTURE: 'Early departure',
+    None: 'Partial (custom)',
 }
 
 
@@ -561,22 +562,31 @@ class ConflictHistoryRow:
     is_future: bool
 
 
-def _derive_declaration(conflict) -> tuple[str, time | None]:
+def _derive_declaration(conflict) -> tuple[str | None, time | None]:
     """Return (declaration_type, declared_time) derived from `conflict`'s type and, for partial, its ConflictWindow.
 
     Never guessed from raw field presence by a template (issue #99): a
-    full_conflict Conflict is always full_absence; a partial Conflict's
-    single ConflictWindow is late_arrival if it touches the Rehearsal's
-    start_time, else early_departure (it touches the end_time instead) —
-    declare_conflict only ever creates a window in one of those two shapes.
+    full_conflict Conflict is always full_absence; a partial Conflict whose
+    single ConflictWindow is anchored at the Rehearsal's start_time is
+    late_arrival, or at its end_time is early_departure — the only two
+    shapes declare_conflict itself ever creates. `ConflictWindow` carries no
+    DB-level constraint tying it to that invariant (e.g. the Django admin
+    can attach zero, several, or an unanchored window), so any Conflict
+    whose windows don't match exactly one of those two shapes is reported
+    as (None, None) rather than crashing on a missing window or guessing
+    from a single arbitrarily-picked one.
     """
     if conflict.type == Conflict.FULL_CONFLICT:
         return CONFLICT_FULL_ABSENCE, None
-    window = conflict.conflictwindow_set.first()
     rehearsal = conflict.rehearsal
-    if window.unavailable_start == rehearsal.start_time:
-        return CONFLICT_LATE_ARRIVAL, window.unavailable_end
-    return CONFLICT_EARLY_DEPARTURE, window.unavailable_start
+    windows = list(conflict.conflictwindow_set.all())
+    if len(windows) == 1:
+        window = windows[0]
+        if window.unavailable_start == rehearsal.start_time:
+            return CONFLICT_LATE_ARRIVAL, window.unavailable_end
+        if window.unavailable_end == rehearsal.end_time:
+            return CONFLICT_EARLY_DEPARTURE, window.unavailable_start
+    return None, None
 
 
 def conflict_history_for(semester, person) -> list[ConflictHistoryRow]:

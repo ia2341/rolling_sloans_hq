@@ -451,6 +451,29 @@ class ConflictHistoryForTests(TestCase):
         self.assertEqual(row.type_label, 'Early departure')
         self.assertEqual(row.declared_time, time(19, 0))
 
+    def test_partial_conflict_with_no_window_derives_none_instead_of_crashing(self):
+        """A PARTIAL Conflict with zero ConflictWindow rows (e.g. admin-created) derives (None, None), not an AttributeError."""
+        rehearsal = RehearsalFactory(semester=self.semester, start_time=time(18, 0), end_time=time(19, 30))
+        ConflictFactory(person=self.person, rehearsal=rehearsal, type=Conflict.PARTIAL)
+
+        [row] = conflict_history_for(self.semester, self.person)
+
+        self.assertIsNone(row.declaration_type)
+        self.assertEqual(row.type_label, 'Partial (custom)')
+        self.assertIsNone(row.declared_time)
+
+    def test_window_touching_neither_boundary_derives_none_instead_of_mislabeling(self):
+        """A ConflictWindow anchored at neither the Rehearsal's start nor end derives (None, None), not a guessed label."""
+        rehearsal = RehearsalFactory(semester=self.semester, start_time=time(18, 0), end_time=time(19, 30))
+        conflict = ConflictFactory(person=self.person, rehearsal=rehearsal, type=Conflict.PARTIAL)
+        ConflictWindowFactory(conflict=conflict, unavailable_start=time(18, 30), unavailable_end=time(19, 0))
+
+        [row] = conflict_history_for(self.semester, self.person)
+
+        self.assertIsNone(row.declaration_type)
+        self.assertEqual(row.type_label, 'Partial (custom)')
+        self.assertIsNone(row.declared_time)
+
     def test_scoped_to_the_given_semester(self):
         """A Conflict on a Rehearsal from a different Semester is not included."""
         other_rehearsal = RehearsalFactory()
