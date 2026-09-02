@@ -142,12 +142,13 @@ class MembersViewTests(TestCase):
         self.assertEqual(counts, {'Anders Placeholder': 1, 'Zoe Placeholder': 0})
 
     def test_each_name_links_to_the_person_page(self):
-        """A member's name links to /members/<pk>/, the per-person page slice 2 of map #135 builds."""
+        """A member's name links to their own /members/<pk>/ page (issue #138, slice 2 of map #135)."""
         MembershipFactory(semester=self.semester, person=self.person)
 
         response = self.client.get(reverse('scheduling:members'))
 
-        self.assertContains(response, f'href="/members/{self.person.pk}/"')
+        expected_href = reverse('scheduling:member-detail', args=[self.person.pk])
+        self.assertContains(response, f'href="{expected_href}"')
 
     def test_does_not_expose_email_or_admin_status(self):
         """The roster is deliberately name/roles/songs only — no email column, no admin badge."""
