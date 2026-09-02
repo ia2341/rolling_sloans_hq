@@ -7,7 +7,7 @@ The field-by-field verdicts governing the two member-facing roster routes:
 
 Both routes are member-facing surfaces for every logged-in Person, admins included. Admin status changes nothing about what these two pages render; the admin edit layer of issue #130 attaches to `/members/<pk>/` and is bound by the same verdicts.
 
-**How to read a verdict.** *Teammate* is any logged-in Person viewing someone else's row or page. *Self* is a Person viewing their own. **`never`** means never on **these two surfaces** — it is not a claim about the whole application. Several fields marked `never` here are legitimately rendered elsewhere: `Song.artist` on the Song page, `Conflict.reason` on `/conflicts/` for its owner and in `ConflictAdmin` for an admin.
+**How to read a verdict.** *Teammate* is any logged-in Person viewing someone else's row or page. *Self* is a Person viewing their own. **`never`** means never on **these two surfaces** — it is not a claim about the whole application. Several fields marked `never` here are legitimately rendered elsewhere: `Song.artist` on the Song page, `Conflict.reason` on `/schedule/` for its owner and in `ConflictAdmin` for an admin.
 
 **Anything not listed below is `never` by default.** New fields on the models covered here do not become visible by being added; they become visible by being added to this table with a verdict.
 
@@ -65,7 +65,7 @@ Every field, for everyone, including the owner: **`never`**. See [ADR 0005](adr/
 | Field | Teammate | Self | Notes |
 | --- | --- | --- | --- |
 | `Conflict.reason` | ❌ never | ❌ never | The free-text field ADR 0005 exists to protect |
-| `Conflict.type`, `rehearsal`, `created_at`, `updated_at` | ❌ never | ❌ never | The owner reads these at `/conflicts/` |
+| `Conflict.type`, `rehearsal`, `created_at`, `updated_at` | ❌ never | ❌ never | The owner reads these at `/schedule/` |
 | `ConflictWindow.unavailable_start`, `unavailable_end` | ❌ never | ❌ never | |
 
 ### Derived attendance data (`scheduling/services.py`, `Rehearsal.attendance_for`)
