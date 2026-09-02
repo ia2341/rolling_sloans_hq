@@ -11,6 +11,7 @@ from scheduling.factories import (
     ConflictWindowFactory,
     MembershipFactory,
     MembershipRoleFactory,
+    RecordingFactory,
     RehearsalFactory,
     RehearsalSongFactory,
     RoleFactory,
@@ -26,6 +27,8 @@ from scheduling.services import (
     conflict_history_for,
     declare_conflict,
     future_rehearsals_for,
+    performers_for,
+    recording_count_for,
     rehearsal_schedule_for,
     song_rehearsal_progress,
     songs_with_progress_for,
@@ -97,6 +100,82 @@ class SongRehearsalProgressTests(TestCase):
         progress = song_rehearsal_progress(self.song)
 
         self.assertEqual(progress.total, 1)
+
+
+class PerformersForTests(TestCase):
+    def test_no_assignments_yields_empty_list(self):
+        """A Song with no SongRoleAssignments yields an empty performers list."""
+        song = SongFactory()
+
+        performers = performers_for(song)
+
+        self.assertEqual(performers, [])
+
+    def test_dedupes_a_person_appearing_under_multiple_roles(self):
+        """A Person assigned to two Roles on the same Song appears once, listing both Roles."""
+        song = SongFactory()
+        person = PersonFactory()
+        singer = RoleFactory(name='Singer')
+        guitarist = RoleFactory(name='Guitarist')
+        SongRoleAssignmentFactory(song=song, person=person, role=singer)
+        SongRoleAssignmentFactory(song=song, person=person, role=guitarist)
+
+        performers = performers_for(song)
+
+        self.assertEqual(len(performers), 1)
+        self.assertEqual(performers[0].person, person)
+        self.assertCountEqual(performers[0].roles, [singer, guitarist])
+
+    def test_distinct_people_each_get_their_own_entry(self):
+        """Two different People assigned to the same Song each get their own SongPerformer entry."""
+        song = SongFactory()
+        role = RoleFactory()
+        first_person = SongRoleAssignmentFactory(song=song, role=role).person
+        second_person = SongRoleAssignmentFactory(song=song, role=role).person
+
+        performers = performers_for(song)
+
+        self.assertCountEqual(
+            [performer.person for performer in performers], [first_person, second_person],
+        )
+
+    def test_scoped_to_the_given_song_only(self):
+        """SongRoleAssignments for a different Song are not included."""
+        song = SongFactory()
+        other_song = SongFactory(semester=song.semester)
+        SongRoleAssignmentFactory(song=other_song)
+
+        performers = performers_for(song)
+
+        self.assertEqual(performers, [])
+
+
+class RecordingCountForTests(TestCase):
+    def test_no_recordings_yields_zero(self):
+        """A Song with no Recordings yields a count of 0, not an error."""
+        song = SongFactory()
+
+        self.assertEqual(recording_count_for(song), 0)
+
+    def test_counts_recordings_across_every_rehearsal_song_slot(self):
+        """Recordings across multiple RehearsalSong slots for the Song all count."""
+        song = SongFactory()
+        first_slot = RehearsalSongFactory(song=song, rehearsal=RehearsalFactory(semester=song.semester))
+        second_slot = RehearsalSongFactory(song=song, rehearsal=RehearsalFactory(semester=song.semester))
+        RecordingFactory(rehearsal_song=first_slot)
+        RecordingFactory(rehearsal_song=first_slot)
+        RecordingFactory(rehearsal_song=second_slot)
+
+        self.assertEqual(recording_count_for(song), 3)
+
+    def test_scoped_to_the_given_song_only(self):
+        """Recordings on a different Song's RehearsalSong slots are not counted."""
+        song = SongFactory()
+        other_song = SongFactory(semester=song.semester)
+        other_slot = RehearsalSongFactory(song=other_song, rehearsal=RehearsalFactory(semester=song.semester))
+        RecordingFactory(rehearsal_song=other_slot)
+
+        self.assertEqual(recording_count_for(song), 0)
 
 
 class SongsWithProgressForTests(TestCase):
