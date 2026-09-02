@@ -8,6 +8,7 @@ from faker import Faker
 
 from identity.factories import PersonFactory
 from scheduling.factories import (
+    ConflictFactory,
     MembershipFactory,
     MembershipRoleFactory,
     RehearsalFactory,
@@ -182,6 +183,45 @@ class RehearsalManageViewTests(TestCase):
 
         self.assertRedirects(response, reverse('scheduling:manage-schedule'))
         self.assertTrue(Rehearsal.objects.get(pk=rehearsal.pk).is_full_setlist)
+
+    def test_edit_post_flipping_is_full_setlist_on_is_blocked_when_conflicts_exist(self):
+        """An edit making a Rehearsal with declared Conflicts the Dress Rehearsal re-renders with a counted error (issue #150)."""
+        rehearsal = RehearsalFactory(semester=self.semester, is_full_setlist=False)
+        ConflictFactory(rehearsal=rehearsal)
+        ConflictFactory(rehearsal=rehearsal)
+
+        response = self.client.post(
+            reverse('scheduling:manage-schedule-edit', args=[rehearsal.pk]),
+            {
+                'date': rehearsal.date, 'start_time': rehearsal.start_time, 'end_time': rehearsal.end_time,
+                'setup_grace_minutes': rehearsal.setup_grace_minutes,
+                'teardown_grace_minutes': rehearsal.teardown_grace_minutes,
+                'is_full_setlist': True,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        errors = response.context['form'].errors['is_full_setlist']
+        self.assertEqual(len(errors), 1)
+        self.assertIn('2', errors[0])
+        self.assertFalse(Rehearsal.objects.get(pk=rehearsal.pk).is_full_setlist)
+
+    def test_edit_post_flipping_is_full_setlist_off_stays_allowed(self):
+        """An edit turning the Dress Rehearsal back into an ordinary Rehearsal still succeeds (issue #150)."""
+        rehearsal = RehearsalFactory(semester=self.semester, is_full_setlist=True)
+
+        response = self.client.post(
+            reverse('scheduling:manage-schedule-edit', args=[rehearsal.pk]),
+            {
+                'date': rehearsal.date, 'start_time': rehearsal.start_time, 'end_time': rehearsal.end_time,
+                'setup_grace_minutes': rehearsal.setup_grace_minutes,
+                'teardown_grace_minutes': rehearsal.teardown_grace_minutes,
+            },
+            follow=True,
+        )
+
+        self.assertRedirects(response, reverse('scheduling:manage-schedule'))
+        self.assertFalse(Rehearsal.objects.get(pk=rehearsal.pk).is_full_setlist)
 
     def test_invalid_edit_post_rerenders_form_with_errors(self):
         """An invalid edit POST re-renders the edit form with errors, leaving the Rehearsal unchanged."""

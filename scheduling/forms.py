@@ -133,6 +133,13 @@ class RehearsalForm(forms.ModelForm):
     `semester` is deliberately excluded: the view sets it on the instance
     before binding (a fresh Rehearsal for create, the existing one for
     edit), so it's never attacker-controlled via POST data.
+
+    There is deliberately no `clean()` here guarding the flip to
+    `is_full_setlist=True` on a Rehearsal with declared Conflicts (issue
+    #150): `Rehearsal.clean()` owns that rule, and `_post_clean()` surfaces
+    it as an `is_full_setlist` field error on this form. Duplicating it
+    would render the same message twice, since `Model.full_clean()` doesn't
+    filter `clean()`'s errors against fields the form already flagged.
     """
 
     class Meta:
