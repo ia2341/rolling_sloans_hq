@@ -1,0 +1,31 @@
+<!doctype html>
+<title>Manage assignments</title>
+<h1>{% if semester %}{{ semester }} Assignments{% else %}Manage assignments{% endif %}</h1>
+{% for message in messages %}
+  <p>{{ message }}</p>
+{% endfor %}
+{% if semester %}
+  <h2>Add an assignment</h2>
+  <form method="post">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button type="submit">Assign</button>
+  </form>
+  <h2>Assignments</h2>
+  <ul>
+    {% for assignment in assignments %}
+      <li>
+        {{ assignment.person }} as {{ assignment.role }} on {{ assignment.song }}
+        {% if assignment.is_role_mismatch %}&mdash; <strong>role mismatch</strong>{% endif %}
+        <form method="post" action="{% url 'scheduling:manage-assignments-delete' assignment.pk %}">
+          {% csrf_token %}
+          <button type="submit">Remove</button>
+        </form>
+      </li>
+    {% empty %}
+      <li>No assignments yet.</li>
+    {% endfor %}
+  </ul>
+{% else %}
+  <p>No Semester exists yet.</p>
+{% endif %}

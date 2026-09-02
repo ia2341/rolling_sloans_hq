@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}{{ song.title }}{% endblock %}
+{% block content %}
+<h1>{{ song.title }} — {{ song.artist }}</h1>
+<p>Rehearsed {{ rehearsal_count_actual }} of {{ rehearsal_count_target }} rehearsals.</p>
+
+<h2>Assignments</h2>
+<ul>
+  {% for assignment in assignments %}
+    <li>{{ assignment.person }} — {{ assignment.role }}{% if assignment.is_role_mismatch %} (role mismatch){% endif %}</li>
+  {% empty %}
+    <li>No assignments yet.</li>
+  {% endfor %}
+</ul>
+
+<h2>Recordings</h2>
+<ul>
+  {% for recording in recordings %}
+    <li>{{ recording.uploaded_at }} — {{ recording.uploaded_by }}</li>
+  {% empty %}
+    <li>No recordings yet.</li>
+  {% endfor %}
+</ul>
+{% endblock %}

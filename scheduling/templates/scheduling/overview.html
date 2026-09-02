@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}Overview{% endblock %}
+{% block content %}
+<h1>Overview</h1>
+
+{% if not semester %}
+<p>There is no active semester yet.</p>
+{% endif %}
+
+<h2>Next rehearsal</h2>
+{% if next_rehearsal %}
+  <p>
+    <a href="{% url 'scheduling:schedule' %}?rehearsal={{ next_rehearsal.pk }}">
+      {{ next_rehearsal.date }} {{ next_rehearsal.start_time }}&ndash;{{ next_rehearsal.end_time }}
+    </a>
+  </p>
+  {% if next_rehearsal_suggestion %}
+    <p>
+      Arrive around {{ next_rehearsal_suggestion.arrival_time }},
+      free to leave around {{ next_rehearsal_suggestion.departure_time }}.
+    </p>
+  {% endif %}
+{% else %}
+  <p>You're not needed at any upcoming rehearsal.</p>
+{% endif %}
+
+<h2>Upcoming rehearsals</h2>
+<ul>
+  {% for rehearsal, suggestion in upcoming_rehearsals %}
+    <li>
+      {{ rehearsal.date }} {{ rehearsal.start_time }}&ndash;{{ rehearsal.end_time }}:
+      {% if suggestion %}
+        arrive around {{ suggestion.arrival_time }}, free to leave around {{ suggestion.departure_time }}
+      {% else %}
+        not needed at this rehearsal
+      {% endif %}
+    </li>
+  {% empty %}
+    <li>No upcoming rehearsals.</li>
+  {% endfor %}
+</ul>
+
+<h2>Song progress</h2>
+{% if songs %}
+  <div>
+    <button type="button" id="sort-by-position" data-sort="position">Sort by setlist order</button>
+    <button type="button" id="sort-by-title" data-sort="title">Sort alphabetically</button>
+    <label>
+      <input type="checkbox" id="my-songs-only">
+      My songs only
+    </label>
+  </div>
+  <table id="song-progress-table">
+    <thead>
+      <tr>
+        <th>Song</th>
+        <th>Position</th>
+        <th>Progress</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for song in songs %}
+        <tr data-position="{{ song.position }}" data-title="{{ song.title }}" data-has-assignment="{{ song.has_assignment|yesno:"true,false" }}">
+          <td>{{ song.title }}</td>
+          <td>{{ song.position }}</td>
+          <td>{{ song.progress.completed }} of {{ song.progress.total }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% else %}
+  <p>No songs on the setlist yet.</p>
+{% endif %}
+
+<script src="{% static 'scheduling/js/overview.js' %}" defer></script>
+{% endblock %}

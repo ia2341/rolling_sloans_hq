@@ -1,9 +1,12 @@
 from django.contrib import admin
 
 from .models import (
+    Conflict,
+    ConflictWindow,
     Membership,
     MembershipRole,
     Rehearsal,
+    RehearsalSong,
     Role,
     Semester,
     Song,
@@ -20,6 +23,8 @@ class SemesterAdmin(admin.ModelAdmin):
         'default_setup_grace_minutes',
         'default_teardown_grace_minutes',
         'default_song_slot_count',
+        'default_arrival_buffer_minutes',
+        'default_departure_buffer_minutes',
     )
     search_fields = ('name',)
 
@@ -98,9 +103,54 @@ class SongRoleAssignmentAdmin(admin.ModelAdmin):
     readonly_fields = ('is_role_mismatch',)
 
 
+class RehearsalSongInline(admin.TabularInline):
+    """Edit a Rehearsal's scheduled Songs inline; start_time/end_time are computed on save (issue #37)."""
+
+    model = RehearsalSong
+    extra = 1
+    readonly_fields = ('start_time', 'end_time')
+
+
 @admin.register(Rehearsal)
 class RehearsalAdmin(admin.ModelAdmin):
     """Grace periods and end_time can be left blank on create to inherit the Semester's defaults (issue #36)."""
 
     list_display = ('semester', 'date', 'start_time', 'end_time', 'is_full_setlist')
     list_filter = ('semester', 'is_full_setlist')
+    inlines = (RehearsalSongInline,)
+
+
+@admin.register(RehearsalSong)
+class RehearsalSongAdmin(admin.ModelAdmin):
+    """Admin for a single Song's timed slot within a Rehearsal, for direct lookup/filtering (issue #37)."""
+
+    list_display = ('rehearsal', 'order', 'song', 'slot_count', 'start_time', 'end_time')
+    list_filter = ('rehearsal__semester',)
+    search_fields = ('song__title',)
+    readonly_fields = ('start_time', 'end_time')
+
+
+class ConflictWindowInline(admin.TabularInline):
+    """Edit a partial Conflict's unavailable time ranges inline on the Conflict admin page (issue #49)."""
+
+    model = ConflictWindow
+    extra = 1
+
+
+@admin.register(Conflict)
+class ConflictAdmin(admin.ModelAdmin):
+    """Admin for a Person's declared unavailability on a Rehearsal, editable in place (issue #48)."""
+
+    list_display = ('person', 'rehearsal', 'type', 'updated_at')
+    list_filter = ('type', 'rehearsal__semester')
+    search_fields = ('person__name', 'person__email')
+    readonly_fields = ('created_at', 'updated_at')
+    inlines = (ConflictWindowInline,)
+
+
+@admin.register(ConflictWindow)
+class ConflictWindowAdmin(admin.ModelAdmin):
+    """Admin for a single unavailable time range within a partial Conflict, for direct lookup/filtering (issue #49)."""
+
+    list_display = ('conflict', 'unavailable_start', 'unavailable_end')
+    list_filter = ('conflict__rehearsal__semester',)

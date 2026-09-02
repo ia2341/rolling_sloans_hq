@@ -1,0 +1,43 @@
+# Repository Guidelines
+
+## Project Structure & Module Organization
+
+This is a Django backend for a private, auth-gated band portal. Project configuration lives in `config/` (`settings.py`, root URLs, ASGI/WSGI). Domain code is grouped by app:
+
+- `identity/` owns the custom email-based `Person` user model, login, invitations, password flows, and related templates.
+- `scheduling/` owns semester-scoped band and rehearsal models.
+- Each app keeps tests in `<app>/tests/`, factories in `<app>/factories.py`, and schema changes in `<app>/migrations/`.
+
+Read `CONTEXT.md` before changing scheduling concepts, and read the relevant `docs/adr/` decision record before changing behavior it covers.
+
+## Build, Test, and Development Commands
+
+Create a virtual environment, install dependencies, and configure local environment values:
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+python manage.py migrate
+python manage.py runserver
+```
+
+Run all tests with `python manage.py test`; narrow feedback with, for example, `python manage.py test identity.tests.test_login`. Run `ruff check .` before submitting changes. Use `python manage.py check --deploy` when touching settings or deployment configuration.
+
+## Coding Style & Naming Conventions
+
+Follow conventional Django and Python style: four-space indentation, `snake_case` for functions and fields, `PascalCase` for classes, and descriptive test class names ending in `Tests`. Ruff is the project linter; migrations are intentionally excluded.
+
+Every function or method added or modified—including tests and factories—needs a concise docstring. Add reusable synthetic-data factories to the app-level `factories.py`, rather than static fixtures. Prefer soft deletion where historical references matter.
+
+## Testing Guidelines
+
+Use Django's built-in test runner with `factory_boy` and `Faker`. Name test files `test_<feature>.py` and test methods `test_<behavior>`. Cover model constraints, views, and services affected by a change. Do not add static fixture files; generate all test data at test time.
+
+## Commit & Pull Request Guidelines
+
+Recent history uses short imperative subjects, such as `Add RehearsalSong with computed slot times` and `Handle the Dress Rehearsal in attendance_for`. Keep commits focused and describe the user-visible behavior. PRs should explain the change, link the relevant issue when available, include test/lint results, and attach screenshots for template or admin UI changes.
+
+## Privacy & Configuration
+
+Never commit real members, emails, setlists, rehearsal details, recordings, or credentials. Use generated data and `@example.com` addresses in tests. Keep secrets in local `.env` or deployment-managed environment variables; `.env.example` must contain placeholders only.

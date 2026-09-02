@@ -1,0 +1,12 @@
+<li>
+  <a href="{% url 'scheduling:schedule' %}?rehearsal={{ row.rehearsal.pk }}">
+    {{ row.rehearsal.date }} {{ row.rehearsal.start_time }}&ndash;{{ row.rehearsal.end_time }}
+    {% if row.rehearsal.is_full_setlist %}(Dress Rehearsal){% endif %}
+  </a>
+  &mdash;
+  {% if row.attendance_suggestion %}
+    You: {{ row.attendance_suggestion.arrival_time }}&ndash;{{ row.attendance_suggestion.departure_time }}
+  {% else %}
+    Not needed
+  {% endif %}
+</li>
