@@ -15,8 +15,9 @@
     <tbody>
       {% for membership in members %}
         <tr>
-          {# Hardcoded rather than reversed: slice 2 of map 135 adds the scheduling:member-detail route this points at. #}
-          <td><a href="/members/{{ membership.person.pk }}/">{{ membership.person.name }}</a></td>
+          <td>
+            <a href="{% url 'scheduling:member-detail' membership.person.pk %}">{{ membership.person.name }}</a>
+          </td>
           <td>
             {% for membership_role in membership.membershiprole_set.all %}
               {{ membership_role.role }}{% if not forloop.last %}, {% endif %}

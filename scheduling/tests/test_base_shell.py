@@ -4,7 +4,7 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from identity.factories import PersonFactory
-from scheduling.factories import SongFactory
+from scheduling.factories import SemesterFactory, SongFactory
 
 PASSWORD = 'a-strong-test-password-123'
 
@@ -64,6 +64,15 @@ class NavRenderingTests(TestCase):
         song = SongFactory()
 
         response = self.client.get(reverse('scheduling:song-detail', args=[song.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, NAV_MARKER)
+
+    def test_member_detail_renders_the_nav(self):
+        """member_detail.html renders the shared nav — your own page is reachable without a Membership."""
+        SemesterFactory()
+
+        response = self.client.get(reverse('scheduling:member-detail', args=[self.person.pk]))
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, NAV_MARKER)
