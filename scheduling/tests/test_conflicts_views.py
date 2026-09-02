@@ -115,6 +115,77 @@ class ConflictsViewGetTests(TestCase):
         self.assertIsNone(row['conflict'])
         self.assertIsNotNone(row['form'])
 
+    def test_rehearsal_query_param_marks_the_matching_undeclared_row_selected(self):
+        """`?rehearsal=<id>` naming an undeclared future Rehearsal marks its Upcoming row selected, no other rows (issue #100)."""
+        other = RehearsalFactory(semester=self.semester, date=timezone.localdate() + timedelta(days=1))
+        target = RehearsalFactory(semester=self.semester, date=timezone.localdate() + timedelta(days=2))
+
+        response = self.client.get(reverse('scheduling:conflicts'), {'rehearsal': target.pk})
+
+        rows = {row['rehearsal'].pk: row['is_selected'] for row in response.context['rows']}
+        self.assertEqual(rows, {other.pk: False, target.pk: True})
+
+    def test_rehearsal_query_param_naming_an_already_declared_rehearsal_marks_its_history_row_selected(self):
+        """`?rehearsal=<id>` naming an already-declared Rehearsal marks its History row selected, not an Upcoming row (issue #100)."""
+        rehearsal = RehearsalFactory(semester=self.semester, date=timezone.localdate() + timedelta(days=1))
+        ConflictFactory(person=self.person, rehearsal=rehearsal, type=Conflict.FULL_CONFLICT)
+
+        response = self.client.get(reverse('scheduling:conflicts'), {'rehearsal': rehearsal.pk})
+
+        [row] = response.context['rows']
+        self.assertFalse(row['is_selected'])
+        [history_row] = response.context['history']
+        self.assertTrue(history_row['is_selected'])
+
+    def test_rehearsal_query_param_for_a_nonexistent_rehearsal_selects_nothing(self):
+        """`?rehearsal=<id>` naming no real Rehearsal renders normally with nothing marked selected, not a 404 (issue #100)."""
+        rehearsal = RehearsalFactory(semester=self.semester, date=timezone.localdate() + timedelta(days=1))
+
+        response = self.client.get(reverse('scheduling:conflicts'), {'rehearsal': '999999'})
+
+        self.assertEqual(response.status_code, 200)
+        [row] = response.context['rows']
+        self.assertFalse(row['is_selected'])
+        self.assertEqual(row['rehearsal'], rehearsal)
+
+    def test_non_numeric_rehearsal_query_param_selects_nothing_instead_of_erroring(self):
+        """A non-numeric `?rehearsal=` value renders normally with nothing selected, not a 500 (issue #100)."""
+        RehearsalFactory(semester=self.semester, date=timezone.localdate() + timedelta(days=1))
+
+        response = self.client.get(reverse('scheduling:conflicts'), {'rehearsal': 'not-an-id'})
+
+        self.assertEqual(response.status_code, 200)
+        [row] = response.context['rows']
+        self.assertFalse(row['is_selected'])
+
+    def test_missing_rehearsal_query_param_selects_nothing(self):
+        """With no `?rehearsal=` param at all, no row is marked selected (issue #100)."""
+        RehearsalFactory(semester=self.semester, date=timezone.localdate() + timedelta(days=1))
+
+        response = self.client.get(reverse('scheduling:conflicts'))
+
+        [row] = response.context['rows']
+        self.assertFalse(row['is_selected'])
+
+    def test_selected_row_renders_the_markers_the_prefill_script_targets(self):
+        """A selected Upcoming row renders the data-preselected marker and the declare-form class conflicts.js focuses (issue #100)."""
+        rehearsal = RehearsalFactory(semester=self.semester, date=timezone.localdate() + timedelta(days=1))
+
+        response = self.client.get(reverse('scheduling:conflicts'), {'rehearsal': rehearsal.pk})
+
+        self.assertContains(response, 'data-preselected="true"')
+        self.assertContains(response, 'conflict-new-form')
+
+    def test_already_declared_selected_row_renders_no_declare_form_to_focus(self):
+        """An already-declared selected Rehearsal renders its History marker but no declare form for the script to focus (issue #100)."""
+        rehearsal = RehearsalFactory(semester=self.semester, date=timezone.localdate() + timedelta(days=1))
+        ConflictFactory(person=self.person, rehearsal=rehearsal, type=Conflict.FULL_CONFLICT)
+
+        response = self.client.get(reverse('scheduling:conflicts'), {'rehearsal': rehearsal.pk})
+
+        self.assertContains(response, 'data-preselected="true"')
+        self.assertNotContains(response, 'conflict-new-form')
+
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class ConflictsViewPostTests(TestCase):

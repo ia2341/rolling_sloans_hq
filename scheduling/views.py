@@ -280,13 +280,18 @@ def _declared_time_initial(row):
     return {}
 
 
-def _build_conflicts_context(person, error_rehearsal=None, error_form=None):
-    """Build /me/conflicts/'s shared context for GET and every POST failure re-render (issues #98, #99).
+def _build_conflicts_context(person, error_rehearsal=None, error_form=None, selected_rehearsal_id=None):
+    """Build /me/conflicts/'s shared context for GET and every POST failure re-render (issues #98, #99, #100).
 
     `error_rehearsal`/`error_form` inject a just-submitted invalid form back
     into its own row, wherever that Rehearsal's row lives — the Upcoming
     Rehearsals list (a declare submission) or the History list (an edit
     submission); a Rehearsal never appears in both, so no row is ambiguous.
+
+    `selected_rehearsal_id` marks the row matching `?rehearsal=<id>` (issue
+    #100) as selected, wherever it lives, the same way error_rehearsal does;
+    it need not match any row (a stale or bogus id), in which case nothing
+    is marked selected.
     """
     semester = get_current_semester()
     if semester is None:
@@ -296,27 +301,34 @@ def _build_conflicts_context(person, error_rehearsal=None, error_form=None):
         conflict.rehearsal_id: conflict for conflict in Conflict.objects.filter(person=person, rehearsal__in=rehearsals)
     }
     rows = [
-        _build_declare_row(rehearsal, existing_conflicts.get(rehearsal.pk), error_rehearsal, error_form)
+        _build_declare_row(rehearsal, existing_conflicts.get(rehearsal.pk), error_rehearsal, error_form, selected_rehearsal_id)
         for rehearsal in rehearsals
     ]
     history = [
-        _build_history_row(row, error_rehearsal, error_form) for row in conflict_history_for(semester, person)
+        _build_history_row(row, error_rehearsal, error_form, selected_rehearsal_id)
+        for row in conflict_history_for(semester, person)
     ]
     return {'semester': semester, 'rows': rows, 'history': history}
 
 
-def _build_declare_row(rehearsal, conflict, error_rehearsal, error_form):
-    """Return one Upcoming Rehearsals row: its Rehearsal, plus either its existing Conflict or its declare form."""
+def _build_declare_row(rehearsal, conflict, error_rehearsal, error_form, selected_rehearsal_id=None):
+    """Return one Upcoming Rehearsals row: its Rehearsal, plus either its existing Conflict or its declare form.
+
+    An already-declared Rehearsal is never marked selected here even when it
+    matches `?rehearsal=<id>` — issue #100 directs that case to its History
+    row instead, per the disabled-row rule (issue #98).
+    """
     if conflict is not None:
-        return {'rehearsal': rehearsal, 'conflict': conflict, 'form': None}
+        return {'rehearsal': rehearsal, 'conflict': conflict, 'form': None, 'is_selected': False}
+    is_selected = rehearsal.pk == selected_rehearsal_id
     if error_rehearsal is not None and error_rehearsal.pk == rehearsal.pk:
         form = error_form
     else:
         form = DeclareConflictForm(rehearsal=rehearsal, prefix=_declare_prefix(rehearsal))
-    return {'rehearsal': rehearsal, 'conflict': None, 'form': form}
+    return {'rehearsal': rehearsal, 'conflict': None, 'form': form, 'is_selected': is_selected}
 
 
-def _build_history_row(row, error_rehearsal, error_form):
+def _build_history_row(row, error_rehearsal, error_form, selected_rehearsal_id=None):
     """Return one History row: `row`'s display fields, plus an edit form when its Rehearsal is still future (issue #99)."""
     context_row = {
         'rehearsal': row.rehearsal,
@@ -325,6 +337,7 @@ def _build_history_row(row, error_rehearsal, error_form):
         'declared_time': row.declared_time,
         'reason': row.conflict.reason,
         'is_future': row.is_future,
+        'is_selected': row.rehearsal.pk == selected_rehearsal_id,
         'form': None,
     }
     if not row.is_future:
@@ -338,6 +351,16 @@ def _build_history_row(row, error_rehearsal, error_form):
             prefix=_history_edit_prefix(row.rehearsal),
         )
     return context_row
+
+
+def _parse_selected_rehearsal_id(raw_id):
+    """Return `?rehearsal=<id>` (issue #100) parsed as an int, or None for a missing/non-numeric value."""
+    if raw_id is None:
+        return None
+    try:
+        return int(raw_id)
+    except ValueError:
+        return None
 
 
 def _future_rehearsal_with_conflict_or_404(request, rehearsal_id, action):
@@ -372,8 +395,15 @@ class ConflictsView(BaseView, View):
     template_name = 'scheduling/conflicts.html'
 
     def get(self, request):
-        """Render every future Rehearsal, each paired with its declare form or its existing Conflict, plus History."""
-        return render(request, self.template_name, _build_conflicts_context(request.user))
+        """Render every future Rehearsal, each paired with its declare form or its existing Conflict, plus History.
+
+        `?rehearsal=<id>` (issue #100, matching My Schedule's "Add a
+        conflict" link) marks the matching row selected, wherever it lives,
+        for the page's client-side scroll/expand/highlight.
+        """
+        selected_rehearsal_id = _parse_selected_rehearsal_id(request.GET.get('rehearsal'))
+        context = _build_conflicts_context(request.user, selected_rehearsal_id=selected_rehearsal_id)
+        return render(request, self.template_name, context)
 
     def post(self, request):
         """Declare a Conflict for the Rehearsal named in the POST body, or re-render that row with its errors."""

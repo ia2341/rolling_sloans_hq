@@ -11,12 +11,12 @@
   <h3>Upcoming rehearsals</h3>
   <ul>
     {% for row in rows %}
-      <li data-rehearsal-id="{{ row.rehearsal.pk }}">
+      <li data-rehearsal-id="{{ row.rehearsal.pk }}"{% if row.is_selected %} data-preselected="true"{% endif %}>
         {{ row.rehearsal.date }} {{ row.rehearsal.start_time }}&ndash;{{ row.rehearsal.end_time }}
         {% if row.conflict %}
           <p>You've already declared a conflict for this rehearsal. See <a href="#history">History</a>.</p>
         {% else %}
-          <form method="post" action="{% url 'scheduling:conflicts' %}" class="conflict-declare-form">
+          <form method="post" action="{% url 'scheduling:conflicts' %}" class="conflict-declare-form conflict-new-form">
             {% csrf_token %}
             <input type="hidden" name="rehearsal_id" value="{{ row.rehearsal.pk }}">
             {% include "scheduling/_conflict_declaration_fields.html" with form=row.form %}
@@ -32,7 +32,7 @@
   <h3 id="history">History</h3>
   <ul>
     {% for row in history %}
-      <li data-rehearsal-id="{{ row.rehearsal.pk }}">
+      <li data-rehearsal-id="{{ row.rehearsal.pk }}"{% if row.is_selected %} data-preselected="true"{% endif %}>
         {{ row.rehearsal.date }} &mdash; {{ row.type_label }}
         {% if row.declared_time %} ({{ row.declared_time }}){% endif %}
         {% if row.reason %} &mdash; {{ row.reason }}{% endif %}
