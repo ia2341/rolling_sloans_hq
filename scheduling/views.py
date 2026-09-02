@@ -111,7 +111,7 @@ class ScheduleView(BaseView, TemplateView):
         context = super().get_context_data(**kwargs)
         semester = get_current_semester()
         context['semester'] = semester
-        context['view'] = self._resolve_view()
+        context['view_mode'] = self._resolve_view()
         context['rehearsal'] = None
         context['matrix'] = None
         context['my_song_ids'] = set()
@@ -119,7 +119,7 @@ class ScheduleView(BaseView, TemplateView):
         context['my_breaks'] = []
         context['schedule'] = None
         if semester is not None:
-            if context['view'] == self.VIEW_ALL:
+            if context['view_mode'] == self.VIEW_ALL:
                 context['schedule'] = rehearsal_schedule_for(semester, self.request.user)
             else:
                 rehearsal = self._resolve_rehearsal(semester)

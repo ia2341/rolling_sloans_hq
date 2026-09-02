@@ -6,7 +6,7 @@
 
 {% if not semester %}
   <p>There is no active semester yet.</p>
-{% elif view == 'all' %}
+{% elif view_mode == 'all' %}
   <p><a href="{% url 'scheduling:schedule' %}">Back to next rehearsal</a></p>
   <h2>All Rehearsals</h2>
 

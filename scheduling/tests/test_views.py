@@ -217,7 +217,7 @@ class ScheduleViewTests(TestCase):
 
         response = self.client.get(reverse('scheduling:schedule'))
 
-        self.assertEqual(response.context['view'], 'next')
+        self.assertEqual(response.context['view_mode'], 'next')
         self.assertIsNone(response.context['schedule'])
 
     def test_arrival_and_departure_render_for_a_needed_rehearsal(self):
