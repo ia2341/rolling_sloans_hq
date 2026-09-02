@@ -35,6 +35,10 @@ _Avoid_: Quota, Cap
 The fact that a specific Person fills a specific Role on a specific Song. One Person can hold multiple Role Assignments across different songs, or even multiple roles on the same song.
 _Avoid_: Casting
 
+**Standing Assignment**:
+A Role Assignment, named this way when contrasting it with a Backup: it holds for every Rehearsal and for the concert, where a Backup holds for one Rehearsal. The same fact and the same row — the word only marks which scope is meant.
+_Avoid_: Permanent assignment, Default assignment
+
 **Role mismatch**:
 The condition where a Role Assignment's Role isn't among the Roles the assigned Person declared on their Membership for that semester. Surfaced as a flag for an admin to resolve — either by changing the assignment or updating the person's declared roles — never a hard block.
 
