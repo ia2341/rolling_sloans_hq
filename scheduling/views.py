@@ -247,7 +247,7 @@ class MemberDetailView(BaseView, View):
         """Persist your own declared Roles, or 404 — a teammate's page has no mutation surface."""
         if pk != request.user.pk:
             raise Http404('A member can only edit their own declared Roles.')
-        semester = get_viewing_semester(self.request)
+        semester = get_viewing_semester(request)
         if semester is None:
             return render(request, self.template_name, self._build_context(request, request.user, semester))
         membership = self._get_or_build_membership(request.user, semester)
@@ -361,6 +361,10 @@ def _declared_time_initial(row):
 
 def _build_conflicts_context(request, error_rehearsal=None, error_form=None, selected_rehearsal_id=None):
     """Build /me/conflicts/'s shared context for GET and every POST failure re-render (issues #98, #99, #100).
+
+    Takes the whole `request` rather than just the Person, since the page is
+    scoped to `get_viewing_semester(request)` and the rows are always
+    `request.user`'s own — the two can't come from different places.
 
     `error_rehearsal`/`error_form` inject a just-submitted invalid form back
     into its own row, wherever that Rehearsal's row lives — the Upcoming
@@ -492,7 +496,7 @@ class ConflictsView(BaseView, View):
         so a hand-crafted POST naming it 404s here rather than reaching
         declare_conflict()'s ValueError as a 500 (ADR-0006).
         """
-        semester = get_viewing_semester(self.request)
+        semester = get_viewing_semester(request)
         rehearsal = get_object_or_404(
             _scoped_to_viewing_semester(Rehearsal, semester).filter(
                 date__gte=timezone.localdate(), is_full_setlist=False,
@@ -583,7 +587,7 @@ class RehearsalManageView(AdminRequiredMixin, View):
 
     def post(self, request):
         """Validate the create form and save a new Rehearsal in the viewing Semester, or re-render with errors."""
-        semester = get_viewing_semester(self.request)
+        semester = get_viewing_semester(request)
         if semester is None:
             messages.error(request, 'Create a Semester before scheduling Rehearsals.')
             return redirect('scheduling:manage-schedule')
@@ -640,7 +644,7 @@ class SongManageView(AdminRequiredMixin, View):
 
     def post(self, request):
         """Validate the create form and append a new Song at the end of the viewing Semester's setlist."""
-        semester = get_viewing_semester(self.request)
+        semester = get_viewing_semester(request)
         if semester is None:
             messages.error(request, 'Create a Semester before adding Songs.')
             return redirect('scheduling:manage-setlist')
@@ -699,7 +703,7 @@ class SongDeleteView(AdminRequiredMixin, View):
 
     def post(self, request, pk):
         """Delete the viewing Semester's target Song and redirect back to the setlist with a success message."""
-        song = get_object_or_404(_scoped_to_viewing_semester(Song, get_viewing_semester(self.request)), pk=pk)
+        song = get_object_or_404(_scoped_to_viewing_semester(Song, get_viewing_semester(request)), pk=pk)
         song.delete()
         messages.success(request, 'Song removed.')
         return redirect('scheduling:manage-setlist')
@@ -719,7 +723,7 @@ class SongMoveView(AdminRequiredMixin, View):
 
     def post(self, request, pk, direction):
         """Swap the viewing Semester's target Song's position with its previous/next neighbor, if one exists."""
-        song = get_object_or_404(_scoped_to_viewing_semester(Song, get_viewing_semester(self.request)), pk=pk)
+        song = get_object_or_404(_scoped_to_viewing_semester(Song, get_viewing_semester(request)), pk=pk)
         with transaction.atomic():
             _lock_semester(song.semester)
             song.refresh_from_db()
@@ -757,7 +761,7 @@ class SongRoleAssignmentManageView(AdminRequiredMixin, View):
 
     def post(self, request):
         """Validate the create form and save a new SongRoleAssignment, or re-render with errors."""
-        semester = get_viewing_semester(self.request)
+        semester = get_viewing_semester(request)
         if semester is None:
             messages.error(request, 'Create a Semester with Songs before assigning Roles.')
             return redirect('scheduling:manage-assignments')
@@ -786,7 +790,7 @@ class SongRoleAssignmentDeleteView(AdminRequiredMixin, View):
 
     def post(self, request, pk):
         """Delete the viewing Semester's target SongRoleAssignment and redirect with a success message."""
-        songs = _scoped_to_viewing_semester(Song, get_viewing_semester(self.request))
+        songs = _scoped_to_viewing_semester(Song, get_viewing_semester(request))
         assignment = get_object_or_404(SongRoleAssignment, pk=pk, song__in=songs)
         assignment.delete()
         messages.success(request, 'Assignment removed.')
