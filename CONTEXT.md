@@ -28,8 +28,8 @@ _Avoid_: Track, Number
 The ordered collection of a Semester's Songs (by concert position). Not a separate entity — it's the Songs belonging to a Semester, in order.
 
 **Role Requirement**:
-The target headcount for one Role on one Song (e.g. three singers). A target admins track fill-status against, never a cap — nothing prevents assigning more or fewer people than requested.
-_Avoid_: Quota, Cap
+The target headcount for one Role on one Song (e.g. three singers). A target admins track fill-status against, never a cap — nothing prevents assigning more or fewer people than requested. It is *only* a target: a Role Requirement confers no assignability, so a Person can hold a Role Assignment on a Song that carries no Requirement for that Role, and writing a Requirement is not how a Role becomes assignable.
+_Avoid_: Quota, Cap, Gate
 
 **Role Assignment**:
 The fact that a specific Person fills a specific Role on a specific Song. One Person can hold multiple Role Assignments across different songs, or even multiple roles on the same song.
