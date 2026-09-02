@@ -40,7 +40,23 @@ CI (`.github/workflows/ci.yml`) runs `ruff check .`, `manage.py test` against a 
 Two Django apps today:
 
 - **`identity`** — auth and account lifecycle. `Person` (`identity/models.py`) is a custom `AbstractBaseUser` (`AUTH_USER_MODEL = 'identity.Person'`) keyed on email, with a single `is_admin` flag that `Person.save()` mirrors onto `is_staff`/`is_superuser` — there's no separate Group/Permission scheme. Accounts are never self-registered: `identity/services.py`'s `invite_person()` is the only path to a loggable-in `Person` (besides the Django admin), creating the user with an unusable password and emailing a one-time set-password link (Django's `PasswordResetTokenGenerator`, reused under "set password" wording) inside one atomic transaction — if the invite email fails to send, the `Person` row rolls back so the email stays free for a retry.
-- **`scheduling`** — the domain model described in `CONTEXT.md`. Only `Semester` and `Role` exist so far; `Membership`, `Song`, `Rehearsal`, `RehearsalSong`, `Recording`, and `Role Assignment` are designed in `CONTEXT.md` but not yet implemented. Read `CONTEXT.md` before adding any scheduling model or field — it defines the project's ubiquitous language (e.g. "Song" is scoped to one semester, never reused across terms).
+- **`scheduling`** — the domain described in `CONTEXT.md`, now largely implemented: `Semester`, `Role`, `Membership`, `MembershipRole`, `Song`, `SongRoleRequirement`, `SongRoleAssignment`, `Rehearsal`, `RehearsalSong`, `Conflict`, `ConflictWindow`, `Recording`. Read `CONTEXT.md` before adding any scheduling model or field — it defines the project's ubiquitous language (e.g. "Song" is scoped to one semester, never reused across terms; "Running Order" is a rehearsal's sequence, distinct from the Setlist's concert position).
+
+### How a scheduling request is put together
+
+The non-obvious shape here is that **`scheduling/services.py` is the read-model layer, not just a write layer.** Views are deliberately thin: they resolve the current semester, call service functions, and hand the returned dataclasses (`AssignmentMatrix`, `RehearsalSchedule`, `SongPerformer`, `AttendanceSuggestion`, `RecordingSlotGroup`, …) straight to a template. Derived reads — attendance inference, rehearsal progress, the Song×Role×Person matrix, recording grouping, presigned R2 URLs — live in services, so put new derived logic there rather than in a view or a template tag.
+
+- **Auth is structural, not per-view.** `config/views.py` defines `BaseView` (a `LoginRequiredMixin` every non-auth view in the project mixes in, so none can forget to gate itself) and `AdminRequiredMixin` (adds a 403 for a logged-in non-admin, used by every `manage/*` view). Mix one in ahead of the Django generic class; don't hand-roll a gate.
+- **Route shape** (`scheduling/urls.py`): band-wide reads at the root (`/`, `/schedule/`, `/setlist/`, `/songs/<pk>/`, `/members/`), per-person self-service under `/me/` (`profile`, `conflicts`, `recordings`), and admin management under `/manage/`. Note `/members/<pk>/` — the read-only other-person page assumed by ADR 0005 and `docs/person-page-visibility.md` — is **not built yet**.
+- **"The current semester" is defined in exactly one place**: `services.get_current_semester()` (most recently created `Semester`, or `None`). Reuse it; don't re-derive recency. `Semester` has no draft/published state yet — that's a decision recorded on the admin-experience map, not yet in the model.
+- **Song position mutations must hold a lock.** `views._lock_semester()` row-locks the `Semester` inside `transaction.atomic()` so concurrent creates/moves can't collide on `unique_song_position_per_semester`. Any new code that renumbers positions needs the same treatment — and note `RehearsalSong` has a `UniqueConstraint(rehearsal, order)`, so a reorder cannot write new `order` values row by row.
+- **`RehearsalSong.save()` derives and persists `start_time`/`end_time`** from `order` + `slot_count` + the Semester's `default_song_slot_count`. Reordering a rehearsal therefore changes *when each song happens*, which changes which `ConflictWindow`s overlap it — relevant to anything computing availability.
+
+### Frontend
+
+Server-rendered Django templates (`templates/base.html` is the nav shell; per-app templates under `<app>/templates/<app>/`), full-page POST/redirect flows, and a few small hand-rolled vanilla-JS files under `scheduling/static/scheduling/js/` for progressive enhancement. There is **no** `package.json`, no bundler, and no CSS file in the repo yet.
+
+A decision on the admin UI stack has been made but **not yet implemented**: Django templates + HTMX + Alpine + Pico.css + SortableJS, vendored and pinned under `static/`, with no node toolchain and no DRF; the seam for any future API is `services.py`, not an HTTP layer. See issue #123 for the full rationale before introducing a frontend dependency.
 
 **Read `docs/adr/*.md` before touching related behavior** — each records a deliberate rejection of the "obvious" alternative:
 - `0001` — `Song` and `Membership` are re-created fresh per `Semester`; only `Person` persists across semesters.
@@ -53,8 +69,9 @@ Two Django apps today:
 
 ## Conventions
 
-- **Per-app `factories.py`** (not under `tests/`) define `factory_boy` model factories other apps can import — e.g. `identity/factories.py:PersonFactory`, `scheduling/factories.py:SemesterFactory`/`RoleFactory`. Add a factory here, not a static fixture, whenever a model needs test data.
+- **Per-app `factories.py`** (not under `tests/`) define `factory_boy` model factories other apps can import — `identity/factories.py:PersonFactory`, and one in `scheduling/factories.py` for every scheduling model. Add a factory here, not a static fixture, whenever a model needs test data.
 - **Soft-delete over hard-delete** where history matters: `Role.is_active` retires a role with no deletion path (`RoleAdmin.has_delete_permission` returns `False`); the same pattern should be followed for any model where historical references must stay intact (see ADR 0002 for the reasoning that generalizes this).
+- **`AGENTS.md` covers the same ground** for other agents (structure, style, testing, commit/PR expectations). When you change a convention here, check whether it also needs changing there, so the two don't drift.
 - **Docstrings are required on every function/method you add or modify** (views, model methods, factories, signal handlers, tests included) — CodeRabbit enforces an 80% diff-scoped coverage threshold on every PR. One line is enough for simple cases.
 
 ## Privacy constraint (read `CONTRIBUTING.md` for full detail)
