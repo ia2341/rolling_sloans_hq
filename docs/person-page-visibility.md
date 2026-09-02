@@ -66,6 +66,8 @@ Every field, for everyone, including the owner: **`never`**. See [ADR 0005](adr/
 | --- | --- | --- | --- |
 | `Conflict.reason` | ❌ never | ❌ never | The free-text field ADR 0005 exists to protect |
 | `Conflict.type`, `rehearsal`, `created_at`, `updated_at` | ❌ never | ❌ never | The owner reads these at `/schedule/` |
+| `Conflict.status` | ❌ never | ❌ never | The Adjudication outcome. The owner reads it at `/schedule/`, and an admin at `/manage/conflicts/<rehearsal_id>/`; neither of those is one of these two routes |
+| The Adjudication note | ❌ never | ❌ never | Admin-authored, and read by the Conflict's owner only — at `/schedule/`, alongside the status. Same verdict as `reason` here, for the same reason: this page has no Rehearsal in scope and is read by teammates |
 | `ConflictWindow.unavailable_start`, `unavailable_end` | ❌ never | ❌ never | |
 
 ### Derived attendance data (`scheduling/services.py`, `Rehearsal.attendance_for`)

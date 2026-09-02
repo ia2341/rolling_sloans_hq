@@ -74,7 +74,7 @@ The sequence of Songs within one specific Rehearsal — what gets worked through
 _Avoid_: Rehearsal order, Song order *(both collide with concert position)*
 
 **Adjudication**:
-An admin's decision to approve or reject a Conflict. Every Conflict is pending until adjudicated, and an adjudicated one returns to pending if its Person edits it. Adjudicating does not by itself change the schedule — approving records that the band will work around the Person, not how.
+An admin's decision to approve or reject a Conflict — pending until made, then approved or rejected. Adjudicating does not by itself change the schedule: approving records that the band will work around the Person, not how, and the Running Order and Backups that actually accommodate them are separate acts an admin carries out afterwards. Rejecting preserves the declaration rather than discarding it — the Person is simply told the band expects them there. An Adjudication may carry a short note from the admin, which the Person reads alongside the outcome. It is not a record: a Person's edit returns their Conflict to pending and takes the note with it, so nothing distinguishes a re-edited Conflict from one never adjudicated, and pending is not a queue that empties — a Conflict for a Rehearsal now past keeps whatever state it was left in.
 _Avoid_: Approval *(names only one of the two outcomes)*, Review
 
 **Accommodation**:
