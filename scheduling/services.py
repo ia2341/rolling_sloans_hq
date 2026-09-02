@@ -632,9 +632,19 @@ CONFLICT_TYPE_LABELS = {
 
 
 def future_rehearsals_for(semester) -> list[Rehearsal]:
-    """Return `semester`'s Rehearsals dated today or later, in date order (issue #98's Upcoming Rehearsals list)."""
+    """Return `semester`'s declarable Rehearsals dated today or later, in date order (issue #98's Upcoming Rehearsals list).
+
+    The Dress Rehearsal is excluded: attendance there is mandatory, so
+    there is nothing to declare against it (ADR-0006). The Conflicts page
+    says so in place of the missing row, rather than letting it silently
+    vanish.
+    """
     today = timezone.localdate()
-    return list(Rehearsal.objects.filter(semester=semester, date__gte=today).order_by('date', 'start_time'))
+    return list(
+        Rehearsal.objects.filter(
+            semester=semester, date__gte=today, is_full_setlist=False,
+        ).order_by('date', 'start_time'),
+    )
 
 
 def declare_conflict(person, rehearsal, declaration_type, declared_time=None, reason='', allow_edit=True) -> Conflict:
@@ -657,7 +667,15 @@ def declare_conflict(person, rehearsal, declaration_type, declared_time=None, re
     declare endpoint) instead rejects an already-declared Rehearsal with an
     IntegrityError, including one that only started existing after the
     caller's own pre-check raced a concurrent declaration.
+
+    A Dress Rehearsal is rejected outright before any DB write: attendance
+    there is mandatory (ADR-0006).
     """
+    if rehearsal.is_full_setlist:
+        raise ValueError(
+            'Attendance at the Dress Rehearsal (is_full_setlist=True) is mandatory, '
+            'so a Conflict cannot be declared against it.'
+        )
     with transaction.atomic():
         if declaration_type == CONFLICT_FULL_ABSENCE:
             conflict, created = Conflict.objects.update_or_create(

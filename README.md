@@ -17,6 +17,8 @@ Several design decisions that reject the "obvious" alternative are recorded as A
 - [`0002`](docs/adr/0002-role-mismatch-soft-flag.md) — a `Role Assignment` whose Role isn't on the Person's Membership is saved anyway and flagged, never hard-blocked.
 - [`0003`](docs/adr/0003-dress-rehearsal-live-derivation.md) — the Dress Rehearsal's songs are derived live from the current setlist, not snapshotted.
 - [`0004`](docs/adr/0004-recording-storage-access-pattern.md) — `Recording` files live in a private R2 bucket via presigned uploads and short-lived signed playback URLs, never public objects or a proxy through the app server.
+- [`0005`](docs/adr/0005-conflict-privacy-boundary.md) — `Conflict` data is never rendered on a member-facing surface, admin viewers included.
+- [`0006`](docs/adr/0006-mandatory-dress-rehearsal-attendance.md) — Dress Rehearsal attendance is mandatory, so no `Conflict` may point at it; enforced in the model and services, never by a DB constraint.
 
 Configuration (`config/settings.py`) is entirely environment-driven via `django-environ` — no setting is ever a literal secret.
 
