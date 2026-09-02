@@ -13,7 +13,11 @@
   </ul>
 {% endif %}
 {% if not has_rehearsal_song_options %}
-  <p>No songs have been scheduled into a rehearsal yet, so there's nothing to upload a recording for.</p>
+  {% if is_scoped_to_one_song %}
+    <p>{% if requested_song %}&ldquo;{{ requested_song.title }}&rdquo;{% else %}That song{% endif %} hasn't been scheduled into a rehearsal yet, so there's nothing to upload a recording for.</p>
+  {% else %}
+    <p>No songs have been scheduled into a rehearsal yet, so there's nothing to upload a recording for.</p>
+  {% endif %}
 {% endif %}
 <form id="recording-upload-form" method="post">
   {% csrf_token %}
