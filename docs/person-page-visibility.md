@@ -81,6 +81,18 @@ Every field, for everyone, including the owner: **`never`**. See [ADR 0005](adr/
 
 Every field, for everyone: **`never`**. A Recording's identity is the `RehearsalSong` slot it belongs to (`CONTEXT.md`), and the uploader is provenance rather than ownership — so Recordings are reached from the Song side only. A person-side listing would add a second signed-URL issuance path (ADR 0004) for no information the Song page doesn't already carry.
 
+### `Backup`
+
+Every field, for everyone, including the person backing up: **`never`** on these two routes. See [ADR 0007](adr/0007-rehearsal-scoped-backup.md).
+
+| Field | Teammate | Self | Notes |
+| --- | --- | --- | --- |
+| `rehearsal_song`, `role`, `person` | ❌ never | ❌ never | A Backup is scoped to one Rehearsal slot and this page has no Rehearsal in scope — the same reason `attendance_for` is `never` above. The Backup itself **is** member-visible on the Schedule, rendered as "*name* (backup)" |
+| `covering_for` | ❌ never | ❌ never | **Admin surfaces only, everywhere.** Naming the covered Person discloses that they declared a `Conflict` for that date, which is exactly what ADR 0005 keeps off member-facing routes. ADR 0005 governs rendering, not storage |
+| `is_role_mismatch` | ❌ never | ❌ never | Same verdict and same reasoning as `SongRoleAssignment.is_role_mismatch` above: an admin queue marker per ADR 0002, not a fact about the Person |
+
+This section states a verdict the "anything not listed is `never`" default already gives, because a reader will actively wonder: a Backup *is* shown to all members on the Schedule, so its absence here would otherwise read as an oversight rather than a decision.
+
 ## The not-in-semester self case
 
 `/members/<pk>/` 404s for a Person with no current-`Semester` `Membership` — **except** your own pk, which preserves the unsaved-`Membership` path so a newly-invited member can declare Roles before an admin rosters them. In that state the page renders:
