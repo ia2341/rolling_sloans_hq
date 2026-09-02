@@ -15,6 +15,7 @@ NAV_ROUTES = {
     'scheduling:schedule': 'My Schedule',
     'scheduling:conflicts': 'Conflicts',
     'scheduling:setlist': 'Songs',
+    'scheduling:members': 'Band Members',
     'scheduling:profile': 'Profile',
 }
 
@@ -22,7 +23,7 @@ NAV_ROUTES = {
 @override_settings(SECURE_SSL_REDIRECT=False)
 class AnonymousAccessTests(TestCase):
     def test_each_nav_route_redirects_anonymous_users_to_login(self):
-        """An anonymous request to any of the five nav routes redirects to login."""
+        """An anonymous request to any of the nav routes redirects to login."""
         for view_name in NAV_ROUTES:
             with self.subTest(view_name=view_name):
                 url = reverse(view_name)
@@ -40,7 +41,7 @@ class NavRenderingTests(TestCase):
         self.client.login(username=self.person.email, password=PASSWORD)
 
     def test_each_route_marks_its_own_tab_as_current(self):
-        """Each of the five nav routes renders with aria-current="page" on its own tab link and no other."""
+        """Each of the nav routes renders with aria-current="page" on its own tab link and no other."""
         for view_name, label in NAV_ROUTES.items():
             with self.subTest(view_name=view_name):
                 response = self.client.get(reverse(view_name))

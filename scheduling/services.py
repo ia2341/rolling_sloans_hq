@@ -14,6 +14,7 @@ from django.utils import timezone
 from scheduling.models import (
     Conflict,
     ConflictWindow,
+    MembershipRole,
     Recording,
     Rehearsal,
     RehearsalSong,
@@ -206,6 +207,35 @@ def get_current_semester() -> Semester | None:
     re-deriving its own notion of recency.
     """
     return Semester.objects.order_by('-id').first()
+
+
+def roster_for(memberships):
+    """Return `memberships` as the Band Members roster: ordered by Person name, carrying Roles and a Song count (issue #137).
+
+    Takes a Membership queryset rather than a Semester so the caller keeps
+    the no-current-Semester empty state in one place (the
+    `_scoped_to_current_semester` idiom in `views.py`).
+
+    Each row is annotated with `songs_count` — the number of distinct Songs
+    in that Membership's own Semester the Person holds any
+    SongRoleAssignment on, counted regardless of is_role_mismatch per
+    ADR-0002 — and prefetches its MembershipRoles in Role-name order. Both
+    are batched deliberately: the roster's cardinality is the band, so the
+    per-row lookups `SetlistView` does per Song would grow the query count
+    with the roster.
+    """
+    return memberships.select_related('person').prefetch_related(
+        models.Prefetch(
+            'membershiprole_set',
+            queryset=MembershipRole.objects.select_related('role').order_by('role__name'),
+        ),
+    ).annotate(
+        songs_count=Count(
+            'person__songroleassignment__song',
+            filter=Q(person__songroleassignment__song__semester=models.F('semester')),
+            distinct=True,
+        ),
+    ).order_by('person__name')
 
 
 @dataclass(frozen=True)
