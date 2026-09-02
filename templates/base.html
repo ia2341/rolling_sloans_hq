@@ -1,5 +1,18 @@
-<!doctype html>
-<title>{% block title %}Rolling Sloans{% endblock %}</title>
+{% load static %}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Rolling Sloans{% endblock %}</title>
+  {# Vendored under static/ with the version in each filename — no CDN, so no #}
+  {# third party ever sees a member's IP or referer (issue #168, decisions on #123). #}
+  <link rel="stylesheet" href="{% static 'vendor/pico-2.1.1.min.css' %}">
+  <link rel="stylesheet" href="{% static 'css/app.css' %}">
+  <script src="{% static 'vendor/htmx-2.0.10.min.js' %}" defer></script>
+  <script src="{% static 'vendor/alpine-3.17.1.min.js' %}" defer></script>
+  {% block head %}{% endblock %}
+</head>
+<body>
 <nav>
   <a href="{% url 'scheduling:overview' %}"{% if request.resolver_match.view_name == 'scheduling:overview' %} aria-current="page"{% endif %}>Overview</a>
   <a href="{% url 'scheduling:schedule' %}"{% if request.resolver_match.view_name == 'scheduling:schedule' %} aria-current="page"{% endif %}>My Schedule</a>
@@ -14,3 +27,5 @@
   </form>
 </nav>
 {% block content %}{% endblock %}
+</body>
+</html>

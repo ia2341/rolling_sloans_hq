@@ -1,0 +1,77 @@
+/*
+ * The portal's only hand-written stylesheet. Pico.css is the baseline; this
+ * sheet is the thin layer on top of it.
+ *
+ * Every value that could plausibly be reused lives as a custom property in
+ * :root, so a later surface reaches for a token rather than re-picking a
+ * number. Pico's own custom properties (--pico-*) are set here too, which is
+ * the supported way to retheme it — overriding its selectors is not.
+ *
+ * Deliberately small: the admin UI decision (issue #123) accepted visual
+ * drift from Pico's defaults, so nothing here chases a particular look.
+ */
+
+:root {
+  /* Layout */
+  --rs-content-max-width: 70rem;
+  --rs-gutter: 1rem;
+
+  /* Spacing scale */
+  --rs-space-xs: 0.25rem;
+  --rs-space-sm: 0.5rem;
+  --rs-space-md: 1rem;
+  --rs-space-lg: 2rem;
+
+  /* Semantic colors, expressed through Pico's palette so light and dark
+     schemes both follow. */
+  --rs-muted-color: var(--pico-muted-color);
+  --rs-border-color: var(--pico-muted-border-color);
+  --rs-danger-color: var(--pico-del-color);
+
+  /* Pico theming hooks. */
+  --pico-font-size: 100%;
+}
+
+/* Keep the nav and page content on one column of the same width, rather than
+   letting Pico's container-less <nav> run the full viewport. */
+body > nav,
+body > main,
+body > .rs-content {
+  max-width: var(--rs-content-max-width);
+  margin-inline: auto;
+  padding-inline: var(--rs-gutter);
+}
+
+/* The shell's nav is a flat row of links plus the logout form; Pico only
+   styles <nav> when its links sit in a <ul>. */
+body > nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--rs-space-md);
+  padding-block: var(--rs-space-md);
+  border-bottom: 1px solid var(--rs-border-color);
+}
+
+body > nav form {
+  margin-block-end: 0;
+  margin-inline-start: auto;
+}
+
+body > nav [aria-current='page'] {
+  font-weight: bold;
+}
+
+/* Tables of songs, members and rehearsals are wider than a phone. Let them
+   scroll inside their own box instead of widening the page. */
+.rs-scroll-x {
+  overflow-x: auto;
+}
+
+.rs-muted {
+  color: var(--rs-muted-color);
+}
+
+.rs-danger {
+  color: var(--rs-danger-color);
+}

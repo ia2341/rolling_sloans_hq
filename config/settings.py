@@ -42,6 +42,11 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    # Serves everything under STATIC_ROOT in production, where nothing else
+    # is fronting the app. It has to sit directly after SecurityMiddleware
+    # so a static response still gets the security headers but skips the
+    # session, auth and CSRF work it has no use for.
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -132,6 +137,16 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 
+# The top-level static/ directory holds the vendored admin UI stack (HTMX,
+# Alpine, Pico.css, SortableJS — each pinned by version in its filename) and
+# the hand-written override sheet. Per-app static/ directories are still
+# picked up by AppDirectoriesFinder; this only adds the project-wide one.
+STATICFILES_DIRS = [BASE_DIR / 'static']
+
+# collectstatic target. Not committed; the deploy build regenerates it (see
+# build.sh), and WhiteNoise serves it from there.
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 
@@ -149,8 +164,14 @@ STORAGES = {
     'default': {
         'BACKEND': 'storages.backends.s3.S3Storage',
     },
+    # WhiteNoise's non-manifest backend: it gzips/brotlis each collected file
+    # alongside the original, but does not rewrite filenames into content
+    # hashes. Hashing is deliberately skipped — the vendored libraries already
+    # carry their version in the filename, and a manifest backend makes every
+    # {% static %} call fail until collectstatic has run, which would mean
+    # running it before the test suite for no gain here.
     'staticfiles': {
-        'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage',
+        'BACKEND': 'whitenoise.storage.CompressedStaticFilesStorage',
     },
 }
 

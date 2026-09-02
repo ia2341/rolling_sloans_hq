@@ -56,6 +56,27 @@ python manage.py test identity.tests.test_login.LoginViewTests.test_valid_login
 ruff check .
 ```
 
+## Static assets
+
+The admin UI stack is vendored, pinned and committed under the top-level
+`static/` directory — HTMX, Alpine, [Pico.css](https://picocss.com) and
+SortableJS, each with its version in the filename, plus one hand-written
+override sheet (`static/css/app.css`) built on CSS custom properties as
+tokens. There is no `package.json`, no bundler and no CDN: a CDN would
+announce every member's IP and referer to a third party on each page load of
+what is meant to be a private portal. Bumping a library means downloading the
+new file, renaming it, and updating the `{% static %}` reference.
+
+In production WhiteNoise serves whatever `collectstatic` wrote to
+`STATIC_ROOT`, so the deploy build must run it — that is what `build.sh` is
+for, and it is the host's build command.
+
+## Deploy
+
+```bash
+./build.sh   # pip install, collectstatic, migrate — the host's build command
+```
+
 ## Deploy-config smoke test
 
 ```bash
