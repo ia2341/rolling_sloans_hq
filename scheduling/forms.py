@@ -6,7 +6,6 @@ from django import forms
 from django.db import transaction
 
 from scheduling.models import (
-    ConflictWindow,
     Membership,
     MembershipRole,
     Rehearsal,
@@ -71,7 +70,7 @@ class MembershipRolesForm(forms.ModelForm):
 
 
 class DeclareConflictForm(forms.Form):
-    """One Upcoming Rehearsals row's inline conflict declaration (issue #98).
+    """One Conflicts-page row's inline conflict declaration: a fresh one, or an edit of an existing one (issues #98, #99).
 
     Not a ModelForm: one submission maps to a Conflict plus an optional
     ConflictWindow across three different shapes (see
@@ -87,7 +86,7 @@ class DeclareConflictForm(forms.Form):
     reason = forms.CharField(max_length=255, required=False)
 
     def __init__(self, *args, rehearsal=None, **kwargs):
-        """Stash `rehearsal` for span validation in clean() (mirrors ConflictWindowForm)."""
+        """Stash `rehearsal` for span validation in clean()."""
         super().__init__(*args, **kwargs)
         self.rehearsal = rehearsal
 
@@ -118,49 +117,6 @@ class DeclareConflictForm(forms.Form):
         if declaration_type == CONFLICT_EARLY_DEPARTURE:
             return self.cleaned_data.get('departure_time')
         return None
-
-
-class ConflictWindowForm(forms.ModelForm):
-    """One partial-conflict time window, validated against its Rehearsal's span (issue #58).
-
-    The parent Conflict may not exist in the database yet (a member's first
-    partial-conflict submission for a Rehearsal), so validation can't rely
-    on ConflictWindow.clean()'s conflict_id lookup; the Rehearsal is passed
-    in directly and checked here instead.
-    """
-
-    class Meta:
-        model = ConflictWindow
-        fields: ClassVar[list[str]] = ['unavailable_start', 'unavailable_end']
-
-    def __init__(self, *args, rehearsal=None, **kwargs):
-        """Stash `rehearsal` for span validation in clean()."""
-        super().__init__(*args, **kwargs)
-        self.rehearsal = rehearsal
-
-    def clean(self):
-        """Reject a window outside the Rehearsal's time span as a field error, not a 500."""
-        cleaned_data = super().clean()
-        start = cleaned_data.get('unavailable_start')
-        end = cleaned_data.get('unavailable_end')
-        if self.rehearsal and start and end:
-            if start >= end:
-                message = 'End time must be after start time.'
-                self.add_error('unavailable_start', message)
-                self.add_error('unavailable_end', message)
-                return cleaned_data
-            in_span = self.rehearsal.start_time <= start <= self.rehearsal.end_time
-            in_span = in_span and self.rehearsal.start_time <= end <= self.rehearsal.end_time
-            if not in_span:
-                message = "Must fall within the Rehearsal's time span."
-                self.add_error('unavailable_start', message)
-                self.add_error('unavailable_end', message)
-        return cleaned_data
-
-
-ConflictWindowFormSet = forms.modelformset_factory(
-    ConflictWindow, form=ConflictWindowForm, extra=1, can_delete=True,
-)
 
 
 class RehearsalForm(forms.ModelForm):

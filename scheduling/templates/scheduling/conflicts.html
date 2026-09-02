@@ -14,38 +14,45 @@
       <li data-rehearsal-id="{{ row.rehearsal.pk }}">
         {{ row.rehearsal.date }} {{ row.rehearsal.start_time }}&ndash;{{ row.rehearsal.end_time }}
         {% if row.conflict %}
-          <p>You've already declared a conflict for this rehearsal. See History (coming soon).</p>
+          <p>You've already declared a conflict for this rehearsal. See <a href="#history">History</a>.</p>
         {% else %}
-          <form method="post" class="conflict-declare-form">
+          <form method="post" action="{% url 'scheduling:conflicts' %}" class="conflict-declare-form">
             {% csrf_token %}
             <input type="hidden" name="rehearsal_id" value="{{ row.rehearsal.pk }}">
-            {{ row.form.non_field_errors }}
-            <fieldset>
-              {% for radio in row.form.declaration_type %}
-                <label>{{ radio.tag }} {{ radio.choice_label }}</label>
-              {% endfor %}
-              {{ row.form.declaration_type.errors }}
-            </fieldset>
-            <p class="conflict-time-field" data-shows-for="late_arrival">
-              {{ row.form.arrival_time.label_tag }}
-              {{ row.form.arrival_time }}
-              {{ row.form.arrival_time.errors }}
-            </p>
-            <p class="conflict-time-field" data-shows-for="early_departure">
-              {{ row.form.departure_time.label_tag }}
-              {{ row.form.departure_time }}
-              {{ row.form.departure_time.errors }}
-            </p>
-            <p>
-              {{ row.form.reason.label_tag }}
-              {{ row.form.reason }}
-            </p>
+            {% include "scheduling/_conflict_declaration_fields.html" with form=row.form %}
             <button type="submit">Submit</button>
           </form>
         {% endif %}
       </li>
     {% empty %}
       <li>No upcoming rehearsals scheduled.</li>
+    {% endfor %}
+  </ul>
+
+  <h3 id="history">History</h3>
+  <ul>
+    {% for row in history %}
+      <li data-rehearsal-id="{{ row.rehearsal.pk }}">
+        {{ row.rehearsal.date }} &mdash; {{ row.type_label }}
+        {% if row.declared_time %} ({{ row.declared_time }}){% endif %}
+        {% if row.reason %} &mdash; {{ row.reason }}{% endif %}
+        {% if row.is_future %}
+          <details>
+            <summary>Edit</summary>
+            <form method="post" action="{% url 'scheduling:conflict-edit' row.rehearsal.pk %}" class="conflict-declare-form">
+              {% csrf_token %}
+              {% include "scheduling/_conflict_declaration_fields.html" with form=row.form %}
+              <button type="submit">Save</button>
+            </form>
+          </details>
+          <form method="post" action="{% url 'scheduling:conflict-delete' row.rehearsal.pk %}">
+            {% csrf_token %}
+            <button type="submit">Delete</button>
+          </form>
+        {% endif %}
+      </li>
+    {% empty %}
+      <li>No declared conflicts yet.</li>
     {% endfor %}
   </ul>
 {% else %}
