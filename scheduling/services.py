@@ -126,6 +126,39 @@ def create_recording_playback_url(recording: Recording) -> str:
     return _presign('get_object', recording.file.name, http_method='GET')
 
 
+@dataclass(frozen=True)
+class RecordingSlotGroup:
+    """One RehearsalSong slot's Recordings, for the Song detail page's grouped display (issue #104)."""
+
+    rehearsal_song: RehearsalSong
+    recordings: list[Recording]
+
+
+def recording_groups_for(song: Song) -> list[RecordingSlotGroup]:
+    """Return `song`'s Recordings grouped by RehearsalSong slot, ordered by Rehearsal date then slot order.
+
+    Slots with no Recordings are omitted rather than rendered empty, so the
+    Song detail page shows only slots that actually have takes.
+    """
+    recordings = (
+        Recording.objects.filter(rehearsal_song__song=song)
+        .select_related('rehearsal_song__rehearsal', 'uploaded_by')
+        .order_by('rehearsal_song__rehearsal__date', 'rehearsal_song__order', 'uploaded_at')
+    )
+    grouped: dict[int, list[Recording]] = {}
+    slots_in_order: list[RehearsalSong] = []
+    for recording in recordings:
+        rehearsal_song = recording.rehearsal_song
+        if rehearsal_song.pk not in grouped:
+            grouped[rehearsal_song.pk] = []
+            slots_in_order.append(rehearsal_song)
+        grouped[rehearsal_song.pk].append(recording)
+    return [
+        RecordingSlotGroup(rehearsal_song=rehearsal_song, recordings=grouped[rehearsal_song.pk])
+        for rehearsal_song in slots_in_order
+    ]
+
+
 def _presign(client_method: str, object_key: str, http_method: str, extra_params=None) -> str:
     """Return a short-lived signed R2 URL for the given S3 client method and object key."""
     storage = _recording_storage()
