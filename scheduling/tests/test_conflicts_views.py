@@ -1,9 +1,10 @@
 """Member conflicts self-service: /me/conflicts/ (issue #58)."""
 
-from datetime import time
+from datetime import time, timedelta
 
 from django.test import TestCase, override_settings
 from django.urls import reverse
+from django.utils import timezone
 
 from identity.factories import PersonFactory
 from scheduling.factories import (
@@ -46,109 +47,169 @@ class ConflictsViewGetTests(TestCase):
         self.semester = SemesterFactory()
 
     def test_shows_no_active_semester_message_when_none_exists(self):
-        """With no Semester at all, the page renders without a form instead of erroring."""
+        """With no Semester at all, the page renders without any rows instead of erroring."""
         self.semester.delete()
 
         response = self.client.get(reverse('scheduling:conflicts'))
 
         self.assertEqual(response.status_code, 200)
-        self.assertNotIn('form', response.context)
+        self.assertNotIn('rows', response.context)
 
-    def test_lists_current_semesters_rehearsals(self):
-        """Renders successfully, listing only the current Semester's Rehearsals."""
-        RehearsalFactory(semester=self.semester)
+    def test_lists_only_current_semesters_future_rehearsals(self):
+        """Renders successfully, listing only the current Semester's future Rehearsals."""
+        other_semester = SemesterFactory()
+        RehearsalFactory(semester=other_semester, date=timezone.localdate() + timedelta(days=1))
         current_semester = SemesterFactory()
-        current_rehearsal = RehearsalFactory(semester=current_semester)
+        past_rehearsal = RehearsalFactory(semester=current_semester, date=timezone.localdate() - timedelta(days=1))
+        future_rehearsal = RehearsalFactory(semester=current_semester, date=timezone.localdate() + timedelta(days=1))
 
         response = self.client.get(reverse('scheduling:conflicts'))
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(list(response.context['rehearsals']), [current_rehearsal])
+        rehearsals = [row['rehearsal'] for row in response.context['rows']]
+        self.assertEqual(rehearsals, [future_rehearsal])
+        self.assertNotIn(past_rehearsal, rehearsals)
 
-    def test_preselects_rehearsals_with_existing_full_conflict(self):
-        """A Rehearsal the member has already marked FULL_CONFLICT is preselected in the form."""
-        rehearsal = RehearsalFactory(semester=self.semester)
-        ConflictFactory(person=self.person, rehearsal=rehearsal, type=Conflict.FULL_CONFLICT)
+    def test_undeclared_rehearsal_gets_a_declare_form(self):
+        """A future Rehearsal with no existing Conflict for the member gets a declare form, and no Conflict."""
+        rehearsal = RehearsalFactory(semester=self.semester, date=timezone.localdate() + timedelta(days=1))
 
         response = self.client.get(reverse('scheduling:conflicts'))
 
-        self.assertEqual(response.status_code, 200)
-        self.assertIn(rehearsal, response.context['form'].initial['full_conflict_rehearsals'])
+        row = response.context['rows'][0]
+        self.assertEqual(row['rehearsal'], rehearsal)
+        self.assertIsNone(row['conflict'])
+        self.assertIsNotNone(row['form'])
+
+    def test_already_declared_rehearsal_has_no_declare_form(self):
+        """A future Rehearsal with an existing Conflict for the member surfaces that Conflict instead of a form."""
+        rehearsal = RehearsalFactory(semester=self.semester, date=timezone.localdate() + timedelta(days=1))
+        conflict = ConflictFactory(person=self.person, rehearsal=rehearsal, type=Conflict.FULL_CONFLICT)
+
+        response = self.client.get(reverse('scheduling:conflicts'))
+
+        row = response.context['rows'][0]
+        self.assertEqual(row['conflict'], conflict)
+        self.assertIsNone(row['form'])
+        self.assertContains(response, "already declared a conflict")
+
+    def test_another_persons_conflict_does_not_disable_this_persons_row(self):
+        """A Rehearsal only shows as declared for the member who actually declared a Conflict on it."""
+        other_person = PersonFactory()
+        rehearsal = RehearsalFactory(semester=self.semester, date=timezone.localdate() + timedelta(days=1))
+        ConflictFactory(person=other_person, rehearsal=rehearsal, type=Conflict.FULL_CONFLICT)
+
+        response = self.client.get(reverse('scheduling:conflicts'))
+
+        row = response.context['rows'][0]
+        self.assertIsNone(row['conflict'])
+        self.assertIsNotNone(row['form'])
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class ConflictsViewPostTests(TestCase):
     def setUp(self):
-        """Log in a synthetic Person and create the current Semester before each test."""
+        """Log in a synthetic Person and create the current Semester and a future Rehearsal before each test."""
         self.person = PersonFactory(password=PASSWORD)
         self.client.login(username=self.person.email, password=PASSWORD)
         self.semester = SemesterFactory()
-
-    def test_valid_post_creates_full_conflicts_and_redirects_with_message(self):
-        """Selecting a Rehearsal creates a FULL_CONFLICT Conflict and redirects with a success message."""
-        rehearsal = RehearsalFactory(semester=self.semester)
-
-        response = self.client.post(
-            reverse('scheduling:conflicts'), {'full_conflict_rehearsals': [rehearsal.pk]}, follow=True,
+        self.rehearsal = RehearsalFactory(
+            semester=self.semester, date=timezone.localdate() + timedelta(days=1), start_time=time(18, 0),
         )
 
+    def _post_data(self, rehearsal, **fields):
+        """Build POST data for `rehearsal`'s declare form, prefixed the way the view expects."""
+        prefix = f'rehearsal-{rehearsal.pk}'
+        data = {'rehearsal_id': str(rehearsal.pk)}
+        for name, value in fields.items():
+            data[f'{prefix}-{name}'] = value
+        return data
+
+    def test_full_absence_post_creates_full_conflict_and_redirects_with_message(self):
+        """Declaring full absence creates a FULL_CONFLICT Conflict with no window, and redirects."""
+        data = self._post_data(self.rehearsal, declaration_type='full_absence', reason='Out of town.')
+
+        response = self.client.post(reverse('scheduling:conflicts'), data, follow=True)
+
         self.assertRedirects(response, reverse('scheduling:conflicts'))
-        conflict = Conflict.objects.get(person=self.person, rehearsal=rehearsal)
+        conflict = Conflict.objects.get(person=self.person, rehearsal=self.rehearsal)
         self.assertEqual(conflict.type, Conflict.FULL_CONFLICT)
+        self.assertEqual(conflict.reason, 'Out of town.')
+        self.assertFalse(ConflictWindow.objects.filter(conflict=conflict).exists())
         messages = [str(m) for m in response.context['messages']]
-        self.assertIn('Conflicts updated.', messages)
+        self.assertIn('Conflict declared.', messages)
 
-    def test_valid_post_removes_deselected_full_conflicts(self):
-        """Deselecting a previously-full-conflict Rehearsal deletes its Conflict row."""
-        rehearsal = RehearsalFactory(semester=self.semester)
-        ConflictFactory(person=self.person, rehearsal=rehearsal, type=Conflict.FULL_CONFLICT)
+    def test_late_arrival_post_creates_partial_conflict_with_arrival_window(self):
+        """Declaring a late arrival creates a PARTIAL Conflict windowed from the Rehearsal's start to the given time."""
+        data = self._post_data(self.rehearsal, declaration_type='late_arrival', arrival_time='18:30')
 
-        self.client.post(reverse('scheduling:conflicts'), {'full_conflict_rehearsals': []})
+        self.client.post(reverse('scheduling:conflicts'), data)
 
-        self.assertFalse(Conflict.objects.filter(person=self.person, rehearsal=rehearsal).exists())
-
-    def test_post_does_not_touch_partial_conflicts_for_deselected_rehearsals(self):
-        """A partial Conflict (not represented by the checkbox) survives an unrelated bulk POST."""
-        rehearsal = RehearsalFactory(semester=self.semester)
-        conflict = ConflictFactory(person=self.person, rehearsal=rehearsal, type=Conflict.PARTIAL)
-        ConflictWindowFactory(conflict=conflict)
-
-        self.client.post(reverse('scheduling:conflicts'), {'full_conflict_rehearsals': []})
-
-        conflict.refresh_from_db()
+        conflict = Conflict.objects.get(person=self.person, rehearsal=self.rehearsal)
         self.assertEqual(conflict.type, Conflict.PARTIAL)
-        self.assertTrue(ConflictWindow.objects.filter(conflict=conflict).exists())
+        window = ConflictWindow.objects.get(conflict=conflict)
+        self.assertEqual(window.unavailable_start, self.rehearsal.start_time)
+        self.assertEqual(window.unavailable_end, time(18, 30))
+
+    def test_early_departure_post_creates_partial_conflict_with_departure_window(self):
+        """Declaring an early departure creates a PARTIAL Conflict windowed from the given time to the Rehearsal's end."""
+        data = self._post_data(self.rehearsal, declaration_type='early_departure', departure_time='19:00')
+
+        self.client.post(reverse('scheduling:conflicts'), data)
+
+        conflict = Conflict.objects.get(person=self.person, rehearsal=self.rehearsal)
+        self.assertEqual(conflict.type, Conflict.PARTIAL)
+        window = ConflictWindow.objects.get(conflict=conflict)
+        self.assertEqual(window.unavailable_start, time(19, 0))
+        self.assertEqual(window.unavailable_end, self.rehearsal.end_time)
 
     def test_post_is_scoped_to_the_logged_in_user_only(self):
-        """A member's bulk POST can never edit another Person's Conflict — there is no person parameter."""
+        """A member's declare POST never touches another Person's Conflict for the same Rehearsal."""
         other_person = PersonFactory()
-        rehearsal = RehearsalFactory(semester=self.semester)
-        other_conflict = ConflictFactory(person=other_person, rehearsal=rehearsal, type=Conflict.FULL_CONFLICT)
+        other_conflict = ConflictFactory(person=other_person, rehearsal=self.rehearsal, type=Conflict.FULL_CONFLICT)
+        data = self._post_data(self.rehearsal, declaration_type='full_absence')
 
-        self.client.post(reverse('scheduling:conflicts'), {'full_conflict_rehearsals': []})
+        self.client.post(reverse('scheduling:conflicts'), data)
 
         other_conflict.refresh_from_db()
         self.assertEqual(other_conflict.type, Conflict.FULL_CONFLICT)
+        self.assertTrue(Conflict.objects.filter(person=self.person, rehearsal=self.rehearsal).exists())
 
-    def test_invalid_post_rerenders_form_with_errors(self):
-        """A POST referencing a nonexistent Rehearsal id re-renders the form with a field error, not a 500."""
-        response = self.client.post(reverse('scheduling:conflicts'), {'full_conflict_rehearsals': [999999]})
+    def test_arrival_time_outside_rehearsal_span_rerenders_form_with_errors(self):
+        """An arrival_time outside the Rehearsal's span re-renders the page with a field error, not a 500."""
+        data = self._post_data(self.rehearsal, declaration_type='late_arrival', arrival_time='17:00')
+
+        response = self.client.post(reverse('scheduling:conflicts'), data)
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'is not one of the available choices')
-        self.assertFalse(Conflict.objects.filter(person=self.person).exists())
+        self.assertContains(response, "Must fall within the Rehearsal&#x27;s time span.")
+        self.assertFalse(Conflict.objects.filter(person=self.person, rehearsal=self.rehearsal).exists())
 
-    def test_selecting_a_rehearsal_with_an_existing_partial_conflict_leaves_it_untouched(self):
-        """Selecting a Rehearsal that already has a PARTIAL Conflict never promotes it, preserving its windows."""
-        rehearsal = RehearsalFactory(semester=self.semester)
-        conflict = ConflictFactory(person=self.person, rehearsal=rehearsal, type=Conflict.PARTIAL)
-        window = ConflictWindowFactory(conflict=conflict)
+    def test_missing_required_time_rerenders_that_rows_form_with_errors(self):
+        """Declaring late_arrival without an arrival_time re-renders the page with a field error, not a 500."""
+        data = self._post_data(self.rehearsal, declaration_type='late_arrival')
 
-        self.client.post(reverse('scheduling:conflicts'), {'full_conflict_rehearsals': [rehearsal.pk]})
+        response = self.client.post(reverse('scheduling:conflicts'), data)
 
-        conflict.refresh_from_db()
-        self.assertEqual(conflict.type, Conflict.PARTIAL)
-        self.assertTrue(ConflictWindow.objects.filter(pk=window.pk).exists())
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Enter the time you will arrive.')
+        self.assertFalse(Conflict.objects.filter(person=self.person, rehearsal=self.rehearsal).exists())
+
+    def test_post_for_rehearsal_with_existing_conflict_is_rejected(self):
+        """A POST naming a Rehearsal the member already declared a Conflict for 404s instead of creating a duplicate."""
+        ConflictFactory(person=self.person, rehearsal=self.rehearsal, type=Conflict.FULL_CONFLICT)
+        data = self._post_data(self.rehearsal, declaration_type='full_absence')
+
+        response = self.client.post(reverse('scheduling:conflicts'), data)
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(Conflict.objects.filter(person=self.person, rehearsal=self.rehearsal).count(), 1)
+
+    def test_post_referencing_a_nonexistent_rehearsal_404s(self):
+        """A POST naming a nonexistent rehearsal_id 404s instead of erroring."""
+        response = self.client.post(reverse('scheduling:conflicts'), {'rehearsal_id': '999999'})
+
+        self.assertEqual(response.status_code, 404)
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)

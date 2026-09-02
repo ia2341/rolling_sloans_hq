@@ -11,8 +11,8 @@ from django.views.generic import DetailView, TemplateView
 
 from config.views import AdminRequiredMixin, BaseView
 from scheduling.forms import (
-    BulkConflictForm,
     ConflictWindowFormSet,
+    DeclareConflictForm,
     MembershipRolesForm,
     RecordingUploadForm,
     RehearsalForm,
@@ -36,6 +36,8 @@ from scheduling.services import (
     attendance_suggestion_for,
     breaks_for,
     confirm_recording_upload,
+    declare_conflict,
+    future_rehearsals_for,
     get_current_semester,
     next_attended_rehearsal_for,
     rehearsal_count_target,
@@ -223,59 +225,71 @@ class ProfileView(BaseView, View):
 
 
 class ConflictsView(BaseView, View):
-    """`/me/conflicts/`: bulk-toggles full-conflict status across the current Semester's Rehearsals (issue #58).
+    """`/me/conflicts/`: the Upcoming Rehearsals section of the unified Conflicts page (issue #98).
 
-    Only ever touches FULL_CONFLICT rows for `request.user` — a partial
-    Conflict (with its ConflictWindows) is left alone here and is only
-    editable through ConflictDetailView, since a checkbox can't represent
-    a set of time windows.
+    Lists every future Rehearsal (date >= today) in the current Semester.
+    A Rehearsal with no existing Conflict for `request.user` gets an inline
+    declare form (full absence / late arrival / early departure); one that
+    already has a Conflict renders as a disabled row pointing to History —
+    that list is built in a follow-up ticket (#99), out of scope here.
     """
 
     template_name = 'scheduling/conflicts.html'
 
     def get(self, request):
-        """Render the bulk-toggle form, preselected with the member's currently full-conflict Rehearsals."""
+        """Render every future Rehearsal, each paired with its declare form or its existing Conflict."""
         return render(request, self.template_name, self._build_context())
 
     def post(self, request):
-        """Apply the submitted full-conflict toggles, or re-render with errors."""
+        """Declare a Conflict for the Rehearsal named in the POST body, or re-render that row with its errors."""
         semester = get_current_semester()
-        if semester is None:
-            return render(request, self.template_name, self._build_context())
-        rehearsals = _scoped_to_current_semester(Rehearsal, semester)
-        form = BulkConflictForm(request.POST, rehearsals=rehearsals)
+        rehearsal = get_object_or_404(
+            _scoped_to_current_semester(Rehearsal, semester), pk=request.POST.get('rehearsal_id'),
+        )
+        if Conflict.objects.filter(person=request.user, rehearsal=rehearsal).exists():
+            raise Http404('A Conflict already exists for this Rehearsal.')
+        form = DeclareConflictForm(request.POST, rehearsal=rehearsal, prefix=self._prefix_for(rehearsal))
         if form.is_valid():
-            self._apply_bulk_toggle(rehearsals, form.cleaned_data['full_conflict_rehearsals'])
-            messages.success(request, 'Conflicts updated.')
+            declare_conflict(
+                person=request.user,
+                rehearsal=rehearsal,
+                declaration_type=form.cleaned_data['declaration_type'],
+                declared_time=form.declared_time,
+                reason=form.cleaned_data['reason'],
+            )
+            messages.success(request, 'Conflict declared.')
             return redirect('scheduling:conflicts')
-        return render(request, self.template_name, {'form': form, 'semester': semester, 'rehearsals': rehearsals})
+        return render(request, self.template_name, self._build_context(error_rehearsal=rehearsal, error_form=form))
 
-    def _build_context(self):
-        """Build the GET-time context: the bound form plus the current Semester's Rehearsals, or neither."""
+    def _prefix_for(self, rehearsal):
+        """Return the per-row form prefix that keeps each Rehearsal's declare form's field ids unique on the page."""
+        return f'rehearsal-{rehearsal.pk}'
+
+    def _build_context(self, error_rehearsal=None, error_form=None):
+        """Build context: the current Semester plus each future Rehearsal paired with its row state."""
         semester = get_current_semester()
         if semester is None:
             return {'semester': None}
-        rehearsals = _scoped_to_current_semester(Rehearsal, semester)
-        currently_full = rehearsals.filter(conflict__person=self.request.user, conflict__type=Conflict.FULL_CONFLICT)
-        form = BulkConflictForm(rehearsals=rehearsals, initial={'full_conflict_rehearsals': currently_full})
-        return {'form': form, 'semester': semester, 'rehearsals': rehearsals}
+        rehearsals = future_rehearsals_for(semester)
+        existing_conflicts = {
+            conflict.rehearsal_id: conflict
+            for conflict in Conflict.objects.filter(person=self.request.user, rehearsal__in=rehearsals)
+        }
+        rows = [
+            self._build_row(rehearsal, existing_conflicts.get(rehearsal.pk), error_rehearsal, error_form)
+            for rehearsal in rehearsals
+        ]
+        return {'semester': semester, 'rows': rows}
 
-    def _apply_bulk_toggle(self, rehearsals, full_conflict_rehearsals):
-        """Create a FULL_CONFLICT Conflict for each selected Rehearsal with none yet; drop full-conflict rows for the rest.
-
-        An existing PARTIAL Conflict is left untouched even when its
-        Rehearsal is selected: promoting it here would delete its
-        ConflictWindow rows (per Conflict.save()'s partial-to-full cascade),
-        silently losing the member's saved partial-conflict times.
-        """
-        selected_ids = {rehearsal.pk for rehearsal in full_conflict_rehearsals}
-        for rehearsal in rehearsals:
-            existing = Conflict.objects.filter(person=self.request.user, rehearsal=rehearsal).first()
-            if rehearsal.pk in selected_ids:
-                if existing is None:
-                    Conflict.objects.create(person=self.request.user, rehearsal=rehearsal, type=Conflict.FULL_CONFLICT)
-            elif existing is not None and existing.type == Conflict.FULL_CONFLICT:
-                existing.delete()
+    def _build_row(self, rehearsal, conflict, error_rehearsal, error_form):
+        """Return one Upcoming Rehearsals row: its Rehearsal, plus either its existing Conflict or its declare form."""
+        if conflict is not None:
+            return {'rehearsal': rehearsal, 'conflict': conflict, 'form': None}
+        if error_rehearsal is not None and error_rehearsal.pk == rehearsal.pk:
+            form = error_form
+        else:
+            form = DeclareConflictForm(rehearsal=rehearsal, prefix=self._prefix_for(rehearsal))
+        return {'rehearsal': rehearsal, 'conflict': None, 'form': form}
 
 
 class ConflictDetailView(BaseView, View):

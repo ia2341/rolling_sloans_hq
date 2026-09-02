@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load static %}
 {% block title %}My conflicts{% endblock %}
 {% block content %}
 <h1>My conflicts</h1>
@@ -7,22 +8,48 @@
 {% endfor %}
 {% if semester %}
   <h2>{{ semester }}</h2>
-  <form method="post">
-    {% csrf_token %}
-    {{ form.as_p }}
-    <button type="submit">Save</button>
-  </form>
+  <h3>Upcoming rehearsals</h3>
   <ul>
-    {% for rehearsal in rehearsals %}
-      <li>
-        {{ rehearsal.date }} {{ rehearsal.start_time }}&ndash;{{ rehearsal.end_time }}
-        &mdash; <a href="{% url 'scheduling:conflict-detail' rehearsal.pk %}">enter partial conflict</a>
+    {% for row in rows %}
+      <li data-rehearsal-id="{{ row.rehearsal.pk }}">
+        {{ row.rehearsal.date }} {{ row.rehearsal.start_time }}&ndash;{{ row.rehearsal.end_time }}
+        {% if row.conflict %}
+          <p>You've already declared a conflict for this rehearsal. See History (coming soon).</p>
+        {% else %}
+          <form method="post" class="conflict-declare-form">
+            {% csrf_token %}
+            <input type="hidden" name="rehearsal_id" value="{{ row.rehearsal.pk }}">
+            {{ row.form.non_field_errors }}
+            <fieldset>
+              {% for radio in row.form.declaration_type %}
+                <label>{{ radio.tag }} {{ radio.choice_label }}</label>
+              {% endfor %}
+              {{ row.form.declaration_type.errors }}
+            </fieldset>
+            <p class="conflict-time-field" data-shows-for="late_arrival">
+              {{ row.form.arrival_time.label_tag }}
+              {{ row.form.arrival_time }}
+              {{ row.form.arrival_time.errors }}
+            </p>
+            <p class="conflict-time-field" data-shows-for="early_departure">
+              {{ row.form.departure_time.label_tag }}
+              {{ row.form.departure_time }}
+              {{ row.form.departure_time.errors }}
+            </p>
+            <p>
+              {{ row.form.reason.label_tag }}
+              {{ row.form.reason }}
+            </p>
+            <button type="submit">Submit</button>
+          </form>
+        {% endif %}
       </li>
     {% empty %}
-      <li>No rehearsals scheduled.</li>
+      <li>No upcoming rehearsals scheduled.</li>
     {% endfor %}
   </ul>
 {% else %}
   <p>There is no active semester yet.</p>
 {% endif %}
+<script src="{% static 'scheduling/js/conflicts.js' %}" defer></script>
 {% endblock %}
