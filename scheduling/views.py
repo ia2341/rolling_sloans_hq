@@ -49,6 +49,7 @@ from scheduling.services import (
     rehearsal_count_target,
     rehearsal_schedule_for,
     reserve_recording_upload,
+    roster_for,
     song_rehearsal_progress,
     songs_with_progress_for,
     upcoming_rehearsals_for,
@@ -181,6 +182,26 @@ class SetlistView(BaseView, TemplateView):
             song.progress = song_rehearsal_progress(song)
             song.recording_count = recording_count_for(song)
         context['songs'] = songs
+        return context
+
+
+class MembersView(BaseView, TemplateView):
+    """`/members/`: the Band Members roster for the current Semester — name, declared Roles, Song count (issue #137).
+
+    Read-only and identical for admins and members: no email column and no
+    admin badge, both of which stay confined to the admin-only people
+    management page. Admin edit affordances are a future hook point
+    (issue #130).
+    """
+
+    template_name = 'scheduling/members.html'
+
+    def get_context_data(self, **kwargs):
+        """Add the current Semester and its roster, or an empty roster when there's no current Semester yet."""
+        context = super().get_context_data(**kwargs)
+        semester = get_current_semester()
+        context['semester'] = semester
+        context['members'] = roster_for(_scoped_to_current_semester(Membership, semester))
         return context
 
 

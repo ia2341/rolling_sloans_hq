@@ -5,6 +5,7 @@
   <a href="{% url 'scheduling:schedule' %}"{% if request.resolver_match.view_name == 'scheduling:schedule' %} aria-current="page"{% endif %}>My Schedule</a>
   <a href="{% url 'scheduling:conflicts' %}"{% if request.resolver_match.view_name == 'scheduling:conflicts' %} aria-current="page"{% endif %}>Conflicts</a>
   <a href="{% url 'scheduling:setlist' %}"{% if request.resolver_match.view_name == 'scheduling:setlist' %} aria-current="page"{% endif %}>Songs</a>
+  <a href="{% url 'scheduling:members' %}"{% if request.resolver_match.view_name == 'scheduling:members' %} aria-current="page"{% endif %}>Band Members</a>
   <a href="{% url 'scheduling:profile' %}"{% if request.resolver_match.view_name == 'scheduling:profile' %} aria-current="page"{% endif %}>Profile</a>
   <form method="post" action="{% url 'identity:logout' %}">
     {% csrf_token %}

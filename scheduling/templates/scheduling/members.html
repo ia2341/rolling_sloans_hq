@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Band Members{% endblock %}
+{% block content %}
+<h1>{% if semester %}{{ semester }} Band Members{% else %}Band Members{% endif %}</h1>
+
+{% if members %}
+  <table id="members-table">
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Roles</th>
+        <th>Songs</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for membership in members %}
+        <tr>
+          {# Hardcoded rather than reversed: slice 2 of map 135 adds the scheduling:member-detail route this points at. #}
+          <td><a href="/members/{{ membership.person.pk }}/">{{ membership.person.name }}</a></td>
+          <td>
+            {% for membership_role in membership.membershiprole_set.all %}
+              {{ membership_role.role }}{% if not forloop.last %}, {% endif %}
+            {% empty %}
+              &mdash;
+            {% endfor %}
+          </td>
+          <td>{{ membership.songs_count }} Song{{ membership.songs_count|pluralize }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% else %}
+  <p>No band members on the roster yet.</p>
+{% endif %}
+{% endblock %}
