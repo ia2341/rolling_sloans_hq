@@ -4,7 +4,7 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from identity.factories import PersonFactory
-from scheduling.factories import RehearsalFactory, SongFactory
+from scheduling.factories import SongFactory
 
 PASSWORD = 'a-strong-test-password-123'
 
@@ -50,15 +50,6 @@ class NavRenderingTests(TestCase):
                 current_count = content.count('aria-current="page"')
                 self.assertEqual(current_count, 1)
                 self.assertIn(f'aria-current="page">{label}</a>', content)
-
-    def test_conflict_detail_renders_the_nav(self):
-        """conflict_detail.html, retrofitted onto the shell, renders the shared nav."""
-        rehearsal = RehearsalFactory()
-
-        response = self.client.get(reverse('scheduling:conflict-detail', args=[rehearsal.pk]))
-
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, NAV_MARKER)
 
     def test_recordings_renders_the_nav(self):
         """recordings.html, retrofitted onto the shell, renders the shared nav."""

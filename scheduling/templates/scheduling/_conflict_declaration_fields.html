@@ -1,0 +1,21 @@
+{{ form.non_field_errors }}
+<fieldset>
+  {% for radio in form.declaration_type %}
+    <label>{{ radio.tag }} {{ radio.choice_label }}</label>
+  {% endfor %}
+  {{ form.declaration_type.errors }}
+</fieldset>
+<p class="conflict-time-field" data-shows-for="late_arrival">
+  {{ form.arrival_time.label_tag }}
+  {{ form.arrival_time }}
+  {{ form.arrival_time.errors }}
+</p>
+<p class="conflict-time-field" data-shows-for="early_departure">
+  {{ form.departure_time.label_tag }}
+  {{ form.departure_time }}
+  {{ form.departure_time.errors }}
+</p>
+<p>
+  {{ form.reason.label_tag }}
+  {{ form.reason }}
+</p>
