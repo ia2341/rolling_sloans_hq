@@ -75,6 +75,17 @@ class ScheduleViewTests(TestCase):
         self.assertIsNone(response.context['semester'])
         self.assertIsNone(response.context['rehearsal'])
 
+    def test_no_upcoming_rehearsal_still_links_to_view_all(self):
+        """With a Semester but no next Rehearsal for the member, still offers a way to reach ?view=all."""
+        SemesterFactory()
+
+        response = self.client.get(reverse('scheduling:schedule'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.context['rehearsal'])
+        expected_href = f"{reverse('scheduling:schedule')}?view=all"
+        self.assertContains(response, f'href="{expected_href}"')
+
     def test_defaults_to_members_next_rehearsal_when_no_query_param(self):
         """With no ?rehearsal= param, drills into the member's own next Rehearsal."""
         semester = SemesterFactory()
@@ -156,6 +167,58 @@ class ScheduleViewTests(TestCase):
 
         expected_href = f"{reverse('scheduling:conflicts')}?rehearsal={rehearsal.pk}"
         self.assertContains(response, f'href="{expected_href}"')
+
+    def test_view_all_lists_semesters_rehearsals_with_past_collapsed_and_future_expanded(self):
+        """?view=all shows past Rehearsals inside a collapsed <details>, future ones outside it and expanded."""
+        semester = SemesterFactory()
+        today = timezone.localdate()
+        past = RehearsalFactory(semester=semester, date=today - timedelta(days=1))
+        future = RehearsalFactory(semester=semester, date=today + timedelta(days=1))
+
+        response = self.client.get(reverse('scheduling:schedule'), {'view': 'all'})
+
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode()
+        details_start = content.index('<details>')
+        details_end = content.index('</details>')
+        self.assertIn(f'?rehearsal={past.pk}"', content[details_start:details_end])
+        self.assertNotIn(f'?rehearsal={future.pk}"', content[details_start:details_end])
+        self.assertIn(f'?rehearsal={future.pk}"', content[details_end:])
+        self.assertNotIn('open', content[details_start:content.index('>', details_start)])
+
+    def test_view_all_row_shows_is_full_setlist_flag_and_attendance_summary(self):
+        """A Dress Rehearsal row shows the Dress Rehearsal indicator; a needed row shows the attendance summary."""
+        semester = SemesterFactory()
+        RehearsalFactory(
+            semester=semester, date=timezone.localdate() + timedelta(days=1), is_full_setlist=True,
+        )
+        song = SongFactory(semester=semester, position=1)
+        SongRoleAssignmentFactory(song=song, person=self.person)
+
+        response = self.client.get(reverse('scheduling:schedule'), {'view': 'all'})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '(Dress Rehearsal)')
+        self.assertContains(response, 'You:')
+
+    def test_view_all_row_links_to_rehearsal_detail(self):
+        """Each row in ?view=all links to that Rehearsal's ?rehearsal=<id> detail."""
+        semester = SemesterFactory()
+        rehearsal = RehearsalFactory(semester=semester, date=timezone.localdate() + timedelta(days=1))
+
+        response = self.client.get(reverse('scheduling:schedule'), {'view': 'all'})
+
+        expected_href = f"{reverse('scheduling:schedule')}?rehearsal={rehearsal.pk}"
+        self.assertContains(response, f'href="{expected_href}"')
+
+    def test_default_view_is_next_not_all(self):
+        """With no ?view= param, the rehearsal-detail matrix view renders, not the All-Rehearsals list."""
+        SemesterFactory()
+
+        response = self.client.get(reverse('scheduling:schedule'))
+
+        self.assertEqual(response.context['view_mode'], 'next')
+        self.assertIsNone(response.context['schedule'])
 
     def test_arrival_and_departure_render_for_a_needed_rehearsal(self):
         """A Person needed at the Rehearsal sees their arrival/departure suggestion, unconditionally (issue #96)."""
