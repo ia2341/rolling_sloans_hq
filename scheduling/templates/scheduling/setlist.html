@@ -4,6 +4,10 @@
 {% block content %}
 <h1>{% if semester %}{{ semester }} Setlist{% else %}Setlist{% endif %}</h1>
 
+<div id="page-level-add-recording">
+  <a href="{% url 'scheduling:recordings' %}" class="button" id="add-recording-page-level">Add a Recording</a>
+</div>
+
 {% if songs %}
   <div>
     <button type="button" id="sort-by-position" data-sort="position">Sort by setlist order</button>

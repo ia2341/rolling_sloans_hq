@@ -358,6 +358,24 @@ class SetlistViewTests(TestCase):
         [rendered_song] = response.context['songs']
         self.assertEqual(rendered_song.recording_count, 2)
 
+    def test_renders_page_level_add_a_recording_link_with_no_song_param(self):
+        """The Songs list has a page-level 'Add a Recording' link to the unfiltered recordings picker (issue #89).
+
+        This link is distinct from the per-row `+` buttons (which carry a `?song=` param), so it must point at
+        the bare recordings URL with no query string at all.
+        """
+        semester = SemesterFactory()
+        SongFactory(semester=semester)
+
+        response = self.client.get(reverse('scheduling:setlist'))
+
+        self.assertEqual(response.status_code, 200)
+        recordings_url = reverse('scheduling:recordings')
+        self.assertContains(
+            response,
+            f'<a href="{recordings_url}" class="button" id="add-recording-page-level">Add a Recording</a>',
+        )
+
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class SongDetailViewTests(TestCase):
