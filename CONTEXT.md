@@ -84,3 +84,17 @@ _Avoid_: Fix, Resolution, Rescheduling
 **Recording**:
 An uploaded audio file of a member's take on one song's slot at one rehearsal (a RehearsalSong) — not the rehearsal or song in the abstract. Multiple Recordings can exist for the same RehearsalSong (e.g. several takes), each with its own uploader and optional note.
 _Avoid_: Upload, Track
+
+**Pending Buffer**:
+The set of unsaved edits an admin has accumulated on a bulk-edit surface but not yet committed — the rows added, changed, and marked for removal, held client-side between one "Save Changes" and the next. A Buffer is a proposal, not a state of the band: nothing in it is true until it is saved, and abandoning the page discards it whole.
+_Avoid_: Draft, Staged changes *("draft" is taken — an unpublished Semester)*
+
+**Preview**:
+The server's answer to "what would saving this Pending Buffer do?", computed by running the real save and discarding it. A Preview never changes anything: it reports Validation Errors and Fallout, and is the only way an admin sees consequences the server alone can compute (slot times, Role mismatches, unfillable Role Requirements, what a removal destroys).
+_Avoid_: Dry run, Simulation *(both suggest an approximation of the save; a Preview is the save itself, thrown away)*
+
+**Fallout**:
+What saving a Pending Buffer would *do to existing data* — consequences of a save that is perfectly valid. **Loud** Fallout destroys or breaks something (a removal wiping a Person's Role Assignments, a Role Requirement left unfillable); **quiet** Fallout is worth noticing but benign (a newly-flagged Role mismatch, a Membership left with no declared Roles). Fallout never blocks a save, in either tier (ADR-0002).
+
+Distinct from a **Validation Error**, which means the Buffer cannot be saved at all (a slot overrun, a duplicate Running Order position, an unparseable length) and always blocks. The two are never presented as one list: an admin who learns that loud Fallout is sometimes ignorable will start ignoring Validation Errors too.
+_Avoid_: Warning, Side effect *("warning" blurs the blocking/non-blocking line the two terms exist to draw)*

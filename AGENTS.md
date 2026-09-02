@@ -8,7 +8,7 @@ This is a Django backend for a private, auth-gated band portal. Project configur
 - `scheduling/` owns semester-scoped band and rehearsal models.
 - Each app keeps tests in `<app>/tests/`, factories in `<app>/factories.py`, and schema changes in `<app>/migrations/`.
 
-Read `CONTEXT.md` before changing scheduling concepts, and read the relevant `docs/adr/` decision record before changing behavior it covers.
+Read `CONTEXT.md` before changing scheduling concepts, and read the relevant `docs/adr/` decision record before changing behavior it covers. Never call an irreversible side effect (mail, R2 deletion, any external API) inline inside a service function — register it with `transaction.on_commit()`, since admin previews run the real save and roll it back (ADR 0008).
 
 ## Build, Test, and Development Commands
 
