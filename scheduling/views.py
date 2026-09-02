@@ -41,6 +41,7 @@ from scheduling.services import (
     get_current_semester,
     next_attended_rehearsal_for,
     rehearsal_count_target,
+    rehearsal_schedule_for,
     reserve_recording_upload,
     songs_with_progress_for,
     upcoming_rehearsals_for,
@@ -91,40 +92,55 @@ class OverviewView(BaseView, TemplateView):
 
 
 class ScheduleView(BaseView, TemplateView):
-    """`/schedule/`: the shared rehearsal-detail view — a Rehearsal's Song x Role x Person assignment matrix (issue #95).
+    """`/schedule/`: the shared rehearsal-detail view, plus the All-Rehearsals list (issues #95, #97).
 
-    Defaults (no `?rehearsal=` param) to the logged-in member's own next
-    Rehearsal; `?rehearsal=<id>` drills into any Rehearsal in the current
-    Semester. Read-only and identical for admins and members — admin write
-    affordances are a future hook point (issue #69).
+    Defaults (`?view=next`, or no `?view=` at all) to a Rehearsal's Song x
+    Role x Person assignment matrix — the member's own next Rehearsal
+    unless `?rehearsal=<id>` drills into a specific one. `?view=all` instead
+    lists the current Semester's full schedule, split into a collapsed past
+    section and an expanded future section, each row linking to its own
+    `?rehearsal=<id>` detail. Read-only and identical for admins and
+    members — admin write affordances are a future hook point (issue #69).
     """
 
     template_name = 'scheduling/schedule.html'
 
+    VIEW_ALL = 'all'
+    VIEW_NEXT = 'next'
+
     def get_context_data(self, **kwargs):
-        """Add the resolved Rehearsal (if any), its assignment matrix, and the member's own attendance/breaks (issue #96)."""
+        """Add either the All-Rehearsals schedule, or the resolved Rehearsal's matrix plus the member's own attendance/breaks (issues #95, #96, #97)."""
         context = super().get_context_data(**kwargs)
         semester = get_current_semester()
         context['semester'] = semester
+        context['view_mode'] = self._resolve_view()
         context['rehearsal'] = None
         context['matrix'] = None
         context['my_song_ids'] = set()
         context['my_attendance_suggestion'] = None
         context['my_breaks'] = []
+        context['schedule'] = None
         if semester is not None:
-            rehearsal = self._resolve_rehearsal(semester)
-            context['rehearsal'] = rehearsal
-            if rehearsal is not None:
-                matrix = assignment_matrix_for(rehearsal)
-                context['matrix'] = matrix
-                context['my_song_ids'] = set(
-                    SongRoleAssignment.objects.filter(
-                        person=self.request.user, song__in=[row.song for row in matrix.rows],
-                    ).values_list('song_id', flat=True)
-                )
-                context['my_attendance_suggestion'] = attendance_suggestion_for(rehearsal, self.request.user)
-                context['my_breaks'] = breaks_for(rehearsal, self.request.user)
+            if context['view_mode'] == self.VIEW_ALL:
+                context['schedule'] = rehearsal_schedule_for(semester, self.request.user)
+            else:
+                rehearsal = self._resolve_rehearsal(semester)
+                context['rehearsal'] = rehearsal
+                if rehearsal is not None:
+                    matrix = assignment_matrix_for(rehearsal)
+                    context['matrix'] = matrix
+                    context['my_song_ids'] = set(
+                        SongRoleAssignment.objects.filter(
+                            person=self.request.user, song__in=[row.song for row in matrix.rows],
+                        ).values_list('song_id', flat=True)
+                    )
+                    context['my_attendance_suggestion'] = attendance_suggestion_for(rehearsal, self.request.user)
+                    context['my_breaks'] = breaks_for(rehearsal, self.request.user)
         return context
+
+    def _resolve_view(self):
+        """Return VIEW_ALL for `?view=all`, else VIEW_NEXT (the default rehearsal-detail view)."""
+        return self.VIEW_ALL if self.request.GET.get('view') == self.VIEW_ALL else self.VIEW_NEXT
 
     def _resolve_rehearsal(self, semester):
         """Return the `?rehearsal=<id>` Rehearsal (404 outside the current Semester), or the member's next Rehearsal."""
