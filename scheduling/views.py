@@ -374,6 +374,7 @@ class ConflictsView(BaseView, View):
                     declaration_type=form.cleaned_data['declaration_type'],
                     declared_time=form.declared_time,
                     reason=form.cleaned_data['reason'],
+                    allow_edit=False,
                 )
             except IntegrityError:
                 # A concurrent request won the race past the exists() check above.

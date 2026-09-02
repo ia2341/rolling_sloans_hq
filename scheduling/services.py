@@ -506,7 +506,7 @@ def future_rehearsals_for(semester) -> list[Rehearsal]:
     return list(Rehearsal.objects.filter(semester=semester, date__gte=today).order_by('date', 'start_time'))
 
 
-def declare_conflict(person, rehearsal, declaration_type, declared_time=None, reason='') -> Conflict:
+def declare_conflict(person, rehearsal, declaration_type, declared_time=None, reason='', allow_edit=True) -> Conflict:
     """Create or edit-in-place `person`'s Conflict for `rehearsal` from an inline declaration (issues #98, #99).
 
     The three declaration types map to the model layer as follows, and
@@ -522,16 +522,18 @@ def declare_conflict(person, rehearsal, declaration_type, declared_time=None, re
     a Rehearsal `person` has already declared for edits that existing row
     in place (History's inline edit, issue #99) rather than raising or
     creating a second one; a call against an undeclared Rehearsal creates a
-    fresh one (issue #98's declare form).
+    fresh one (issue #98's declare form). `allow_edit=False` (the initial
+    declare endpoint) instead rejects an already-declared Rehearsal with an
+    IntegrityError, including one that only started existing after the
+    caller's own pre-check raced a concurrent declaration.
     """
     with transaction.atomic():
         if declaration_type == CONFLICT_FULL_ABSENCE:
-            conflict, _created = Conflict.objects.update_or_create(
+            conflict, created = Conflict.objects.update_or_create(
                 person=person, rehearsal=rehearsal, defaults={'type': Conflict.FULL_CONFLICT, 'reason': reason},
             )
-            return conflict
-        if declaration_type in (CONFLICT_LATE_ARRIVAL, CONFLICT_EARLY_DEPARTURE):
-            conflict, _created = Conflict.objects.update_or_create(
+        elif declaration_type in (CONFLICT_LATE_ARRIVAL, CONFLICT_EARLY_DEPARTURE):
+            conflict, created = Conflict.objects.update_or_create(
                 person=person, rehearsal=rehearsal, defaults={'type': Conflict.PARTIAL, 'reason': reason},
             )
             conflict.conflictwindow_set.all().delete()
@@ -540,8 +542,11 @@ def declare_conflict(person, rehearsal, declaration_type, declared_time=None, re
             else:
                 window_start, window_end = declared_time, rehearsal.end_time
             ConflictWindow.objects.create(conflict=conflict, unavailable_start=window_start, unavailable_end=window_end)
-            return conflict
-        raise ValueError(f'Unknown conflict declaration_type: {declaration_type!r}')
+        else:
+            raise ValueError(f'Unknown conflict declaration_type: {declaration_type!r}')
+        if not created and not allow_edit:
+            raise IntegrityError(f'A Conflict already exists for person={person.pk} rehearsal={rehearsal.pk}.')
+        return conflict
 
 
 @dataclass(frozen=True)

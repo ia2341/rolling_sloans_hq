@@ -366,7 +366,7 @@ class ConflictEditViewTests(TestCase):
         response = self.client.post(reverse('scheduling:conflict-edit', args=[self.rehearsal.pk]), data)
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Must fall within the Rehearsal&#x27;s time span.")
+        self.assertContains(response, "Must fall within the Rehearsal&#x27;s time span, after it starts.")
         self.conflict.refresh_from_db()
         self.assertEqual(self.conflict.type, Conflict.FULL_CONFLICT)
 
