@@ -1,4 +1,4 @@
-"""Shared scheduling service functions (issue #92, issue #95, issue #98)."""
+"""Shared scheduling service functions (issue #92, issue #95, issue #98, issue #99)."""
 
 from datetime import time, timedelta
 
@@ -7,8 +7,11 @@ from django.utils import timezone
 
 from identity.factories import PersonFactory
 from scheduling.factories import (
+    ConflictFactory,
+    ConflictWindowFactory,
     MembershipFactory,
     MembershipRoleFactory,
+    RecordingFactory,
     RehearsalFactory,
     RehearsalSongFactory,
     RoleFactory,
@@ -21,8 +24,11 @@ from scheduling.models import Conflict, ConflictWindow
 from scheduling.services import (
     assignment_matrix_for,
     breaks_for,
+    conflict_history_for,
     declare_conflict,
     future_rehearsals_for,
+    performers_for,
+    recording_count_for,
     rehearsal_schedule_for,
     song_rehearsal_progress,
     songs_with_progress_for,
@@ -94,6 +100,82 @@ class SongRehearsalProgressTests(TestCase):
         progress = song_rehearsal_progress(self.song)
 
         self.assertEqual(progress.total, 1)
+
+
+class PerformersForTests(TestCase):
+    def test_no_assignments_yields_empty_list(self):
+        """A Song with no SongRoleAssignments yields an empty performers list."""
+        song = SongFactory()
+
+        performers = performers_for(song)
+
+        self.assertEqual(performers, [])
+
+    def test_dedupes_a_person_appearing_under_multiple_roles(self):
+        """A Person assigned to two Roles on the same Song appears once, listing both Roles."""
+        song = SongFactory()
+        person = PersonFactory()
+        singer = RoleFactory(name='Singer')
+        guitarist = RoleFactory(name='Guitarist')
+        SongRoleAssignmentFactory(song=song, person=person, role=singer)
+        SongRoleAssignmentFactory(song=song, person=person, role=guitarist)
+
+        performers = performers_for(song)
+
+        self.assertEqual(len(performers), 1)
+        self.assertEqual(performers[0].person, person)
+        self.assertCountEqual(performers[0].roles, [singer, guitarist])
+
+    def test_distinct_people_each_get_their_own_entry(self):
+        """Two different People assigned to the same Song each get their own SongPerformer entry."""
+        song = SongFactory()
+        role = RoleFactory()
+        first_person = SongRoleAssignmentFactory(song=song, role=role).person
+        second_person = SongRoleAssignmentFactory(song=song, role=role).person
+
+        performers = performers_for(song)
+
+        self.assertCountEqual(
+            [performer.person for performer in performers], [first_person, second_person],
+        )
+
+    def test_scoped_to_the_given_song_only(self):
+        """SongRoleAssignments for a different Song are not included."""
+        song = SongFactory()
+        other_song = SongFactory(semester=song.semester)
+        SongRoleAssignmentFactory(song=other_song)
+
+        performers = performers_for(song)
+
+        self.assertEqual(performers, [])
+
+
+class RecordingCountForTests(TestCase):
+    def test_no_recordings_yields_zero(self):
+        """A Song with no Recordings yields a count of 0, not an error."""
+        song = SongFactory()
+
+        self.assertEqual(recording_count_for(song), 0)
+
+    def test_counts_recordings_across_every_rehearsal_song_slot(self):
+        """Recordings across multiple RehearsalSong slots for the Song all count."""
+        song = SongFactory()
+        first_slot = RehearsalSongFactory(song=song, rehearsal=RehearsalFactory(semester=song.semester))
+        second_slot = RehearsalSongFactory(song=song, rehearsal=RehearsalFactory(semester=song.semester))
+        RecordingFactory(rehearsal_song=first_slot)
+        RecordingFactory(rehearsal_song=first_slot)
+        RecordingFactory(rehearsal_song=second_slot)
+
+        self.assertEqual(recording_count_for(song), 3)
+
+    def test_scoped_to_the_given_song_only(self):
+        """Recordings on a different Song's RehearsalSong slots are not counted."""
+        song = SongFactory()
+        other_song = SongFactory(semester=song.semester)
+        other_slot = RehearsalSongFactory(song=other_song, rehearsal=RehearsalFactory(semester=song.semester))
+        RecordingFactory(rehearsal_song=other_slot)
+
+        self.assertEqual(recording_count_for(song), 0)
 
 
 class SongsWithProgressForTests(TestCase):
@@ -345,6 +427,165 @@ class DeclareConflictTests(TestCase):
             declare_conflict(person=self.person, rehearsal=self.rehearsal, declaration_type='not-a-real-type')
 
         self.assertFalse(Conflict.objects.filter(person=self.person, rehearsal=self.rehearsal).exists())
+
+    def test_resubmitting_edits_the_existing_conflict_instead_of_creating_a_second_one(self):
+        """A second declare_conflict call against the same (person, rehearsal) edits the row in place (issue #99)."""
+        first = declare_conflict(
+            person=self.person, rehearsal=self.rehearsal, declaration_type='full_absence', reason='Sick.',
+        )
+
+        second = declare_conflict(
+            person=self.person, rehearsal=self.rehearsal, declaration_type='late_arrival', declared_time=time(18, 30),
+        )
+
+        self.assertEqual(first.pk, second.pk)
+        self.assertEqual(Conflict.objects.filter(person=self.person, rehearsal=self.rehearsal).count(), 1)
+        self.assertEqual(second.type, Conflict.PARTIAL)
+
+    def test_editing_from_late_arrival_to_early_departure_replaces_the_window(self):
+        """Editing a partial Conflict to the other partial shape drops the stale window and adds the new one."""
+        declare_conflict(
+            person=self.person, rehearsal=self.rehearsal, declaration_type='late_arrival', declared_time=time(18, 30),
+        )
+
+        conflict = declare_conflict(
+            person=self.person, rehearsal=self.rehearsal, declaration_type='early_departure', declared_time=time(19, 0),
+        )
+
+        windows = list(ConflictWindow.objects.filter(conflict=conflict))
+        self.assertEqual(len(windows), 1)
+        self.assertEqual(windows[0].unavailable_start, time(19, 0))
+        self.assertEqual(windows[0].unavailable_end, time(19, 30))
+
+    def test_editing_from_partial_to_full_absence_clears_the_window(self):
+        """Editing a partial Conflict to full_absence leaves no ConflictWindow behind."""
+        declare_conflict(
+            person=self.person, rehearsal=self.rehearsal, declaration_type='late_arrival', declared_time=time(18, 30),
+        )
+
+        conflict = declare_conflict(person=self.person, rehearsal=self.rehearsal, declaration_type='full_absence')
+
+        self.assertEqual(conflict.type, Conflict.FULL_CONFLICT)
+        self.assertFalse(ConflictWindow.objects.filter(conflict=conflict).exists())
+
+
+class ConflictHistoryForTests(TestCase):
+    def setUp(self):
+        """Build a Semester and a Person to view History for."""
+        self.semester = SemesterFactory()
+        self.person = PersonFactory()
+
+    def test_only_includes_rehearsals_with_a_submitted_conflict(self):
+        """A Rehearsal with no Conflict for this Person is not in History; one with a Conflict is."""
+        RehearsalFactory(semester=self.semester)
+        declared = RehearsalFactory(semester=self.semester)
+        ConflictFactory(person=self.person, rehearsal=declared, type=Conflict.FULL_CONFLICT)
+
+        rows = conflict_history_for(self.semester, self.person)
+
+        self.assertEqual([row.rehearsal for row in rows], [declared])
+
+    def test_another_persons_conflict_is_not_included(self):
+        """A Conflict declared by a different Person for the same Rehearsal is not in this Person's History."""
+        other_person = PersonFactory()
+        rehearsal = RehearsalFactory(semester=self.semester)
+        ConflictFactory(person=other_person, rehearsal=rehearsal, type=Conflict.FULL_CONFLICT)
+
+        rows = conflict_history_for(self.semester, self.person)
+
+        self.assertEqual(rows, [])
+
+    def test_full_conflict_derives_full_absence_label_with_no_declared_time(self):
+        """A FULL_CONFLICT Conflict derives the full_absence type and label, with no declared_time."""
+        rehearsal = RehearsalFactory(semester=self.semester)
+        ConflictFactory(person=self.person, rehearsal=rehearsal, type=Conflict.FULL_CONFLICT)
+
+        [row] = conflict_history_for(self.semester, self.person)
+
+        self.assertEqual(row.declaration_type, 'full_absence')
+        self.assertEqual(row.type_label, 'Full absence')
+        self.assertIsNone(row.declared_time)
+
+    def test_window_touching_start_time_derives_late_arrival(self):
+        """A ConflictWindow starting at the Rehearsal's start_time derives late_arrival, with declared_time=window end."""
+        rehearsal = RehearsalFactory(semester=self.semester, start_time=time(18, 0), end_time=time(19, 30))
+        conflict = ConflictFactory(person=self.person, rehearsal=rehearsal, type=Conflict.PARTIAL)
+        ConflictWindowFactory(conflict=conflict, unavailable_start=time(18, 0), unavailable_end=time(18, 30))
+
+        [row] = conflict_history_for(self.semester, self.person)
+
+        self.assertEqual(row.declaration_type, 'late_arrival')
+        self.assertEqual(row.type_label, 'Late arrival')
+        self.assertEqual(row.declared_time, time(18, 30))
+
+    def test_window_touching_end_time_derives_early_departure(self):
+        """A ConflictWindow ending at the Rehearsal's end_time derives early_departure, with declared_time=window start."""
+        rehearsal = RehearsalFactory(semester=self.semester, start_time=time(18, 0), end_time=time(19, 30))
+        conflict = ConflictFactory(person=self.person, rehearsal=rehearsal, type=Conflict.PARTIAL)
+        ConflictWindowFactory(conflict=conflict, unavailable_start=time(19, 0), unavailable_end=time(19, 30))
+
+        [row] = conflict_history_for(self.semester, self.person)
+
+        self.assertEqual(row.declaration_type, 'early_departure')
+        self.assertEqual(row.type_label, 'Early departure')
+        self.assertEqual(row.declared_time, time(19, 0))
+
+    def test_partial_conflict_with_no_window_derives_none_instead_of_crashing(self):
+        """A PARTIAL Conflict with zero ConflictWindow rows (e.g. admin-created) derives (None, None), not an AttributeError."""
+        rehearsal = RehearsalFactory(semester=self.semester, start_time=time(18, 0), end_time=time(19, 30))
+        ConflictFactory(person=self.person, rehearsal=rehearsal, type=Conflict.PARTIAL)
+
+        [row] = conflict_history_for(self.semester, self.person)
+
+        self.assertIsNone(row.declaration_type)
+        self.assertEqual(row.type_label, 'Partial (custom)')
+        self.assertIsNone(row.declared_time)
+
+    def test_window_touching_neither_boundary_derives_none_instead_of_mislabeling(self):
+        """A ConflictWindow anchored at neither the Rehearsal's start nor end derives (None, None), not a guessed label."""
+        rehearsal = RehearsalFactory(semester=self.semester, start_time=time(18, 0), end_time=time(19, 30))
+        conflict = ConflictFactory(person=self.person, rehearsal=rehearsal, type=Conflict.PARTIAL)
+        ConflictWindowFactory(conflict=conflict, unavailable_start=time(18, 30), unavailable_end=time(19, 0))
+
+        [row] = conflict_history_for(self.semester, self.person)
+
+        self.assertIsNone(row.declaration_type)
+        self.assertEqual(row.type_label, 'Partial (custom)')
+        self.assertIsNone(row.declared_time)
+
+    def test_scoped_to_the_given_semester(self):
+        """A Conflict on a Rehearsal from a different Semester is not included."""
+        other_rehearsal = RehearsalFactory()
+        ConflictFactory(person=self.person, rehearsal=other_rehearsal, type=Conflict.FULL_CONFLICT)
+
+        rows = conflict_history_for(self.semester, self.person)
+
+        self.assertEqual(rows, [])
+
+    def test_past_and_future_rehearsals_are_flagged_accordingly(self):
+        """A past Rehearsal's row has is_future=False; a future one's has is_future=True."""
+        today = timezone.localdate()
+        past = RehearsalFactory(semester=self.semester, date=today - timedelta(days=1))
+        future = RehearsalFactory(semester=self.semester, date=today + timedelta(days=1))
+        ConflictFactory(person=self.person, rehearsal=past, type=Conflict.FULL_CONFLICT)
+        ConflictFactory(person=self.person, rehearsal=future, type=Conflict.FULL_CONFLICT)
+
+        rows = conflict_history_for(self.semester, self.person)
+
+        by_rehearsal = {row.rehearsal: row.is_future for row in rows}
+        self.assertFalse(by_rehearsal[past])
+        self.assertTrue(by_rehearsal[future])
+
+    def test_rows_ordered_by_date_then_start_time(self):
+        """History rows are ordered by Rehearsal date, then start_time."""
+        later = RehearsalFactory(semester=self.semester, start_time=time(19, 0))
+        earlier = RehearsalFactory(semester=self.semester, date=later.date, start_time=time(17, 0))
+        ConflictFactory(person=self.person, rehearsal=later, type=Conflict.FULL_CONFLICT)
+        ConflictFactory(person=self.person, rehearsal=earlier, type=Conflict.FULL_CONFLICT)
+
+        rows = conflict_history_for(self.semester, self.person)
+
+        self.assertEqual([row.rehearsal for row in rows], [earlier, later])
 
 
 class RehearsalScheduleForTests(TestCase):

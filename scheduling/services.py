@@ -260,6 +260,50 @@ def songs_with_progress_for(semester, person) -> list[Song]:
     return songs
 
 
+@dataclass(frozen=True)
+class SongPerformer:
+    """One Person who performs on a Song, plus every Role they fill on it (issue #103)."""
+
+    person: object
+    roles: list[Role]
+
+
+def performers_for(song) -> list[SongPerformer]:
+    """Return `song`'s distinct performers, ordered by name, each carrying every Role they fill on it.
+
+    A Person appearing under multiple roles on the same Song (e.g. singer
+    and guitarist) is deduped into one SongPerformer listing all their
+    Roles, rather than showing up as separate rows — the Songs page
+    performers column (issue #103) needs one entry per person, not per
+    SongRoleAssignment.
+    """
+    assignments = SongRoleAssignment.objects.filter(song=song).select_related('person', 'role').order_by(
+        'person__name', 'role__name',
+    )
+    roles_by_person_id: dict[int, list[Role]] = {}
+    people_in_order = []
+    for assignment in assignments:
+        if assignment.person_id not in roles_by_person_id:
+            roles_by_person_id[assignment.person_id] = []
+            people_in_order.append(assignment.person)
+        roles_by_person_id[assignment.person_id].append(assignment.role)
+    return [
+        SongPerformer(person=person, roles=roles_by_person_id[person.id])
+        for person in people_in_order
+    ]
+
+
+def recording_count_for(song) -> int:
+    """Return the all-time count of Recordings across every RehearsalSong slot for `song` (issue #103).
+
+    Purely informational for the Songs page's recording-count column: 0 is
+    a normal, valid count, not an error state, and this counts every past
+    Recording regardless of which RehearsalSong slot it was uploaded
+    against.
+    """
+    return Recording.objects.filter(rehearsal_song__song=song).count()
+
+
 def rehearsal_count_target(song) -> int:
     """Return how many Rehearsals a Song is targeted to appear in.
 
@@ -526,6 +570,12 @@ CONFLICT_DECLARATION_CHOICES = (
     (CONFLICT_LATE_ARRIVAL, 'Arrive late at'),
     (CONFLICT_EARLY_DEPARTURE, 'Leave early at'),
 )
+CONFLICT_TYPE_LABELS = {
+    CONFLICT_FULL_ABSENCE: 'Full absence',
+    CONFLICT_LATE_ARRIVAL: 'Late arrival',
+    CONFLICT_EARLY_DEPARTURE: 'Early departure',
+    None: 'Partial (custom)',
+}
 
 
 def future_rehearsals_for(semester) -> list[Rehearsal]:
@@ -534,31 +584,108 @@ def future_rehearsals_for(semester) -> list[Rehearsal]:
     return list(Rehearsal.objects.filter(semester=semester, date__gte=today).order_by('date', 'start_time'))
 
 
-def declare_conflict(person, rehearsal, declaration_type, declared_time=None, reason='') -> Conflict:
-    """Create a Conflict (plus, for a partial type, its one ConflictWindow) from an inline declaration (issue #98).
+def declare_conflict(person, rehearsal, declaration_type, declared_time=None, reason='', allow_edit=True) -> Conflict:
+    """Create or edit-in-place `person`'s Conflict for `rehearsal` from an inline declaration (issues #98, #99).
 
     The three declaration types map to the model layer as follows, and
-    this is the only place that mapping is implemented — the Upcoming
-    Rehearsals view never calls Conflict/ConflictWindow .save() directly:
+    this is the only place that mapping is implemented — the Conflicts page
+    never calls Conflict/ConflictWindow .save() directly:
     - full_absence: a FULL_CONFLICT Conflict, no ConflictWindow.
     - late_arrival: a PARTIAL Conflict with one ConflictWindow spanning
       the Rehearsal's start_time to `declared_time`.
     - early_departure: a PARTIAL Conflict with one ConflictWindow spanning
       `declared_time` to the Rehearsal's end_time.
+
+    Conflict has a unique (person, rehearsal) constraint, so a call against
+    a Rehearsal `person` has already declared for edits that existing row
+    in place (History's inline edit, issue #99) rather than raising or
+    creating a second one; a call against an undeclared Rehearsal creates a
+    fresh one (issue #98's declare form). `allow_edit=False` (the initial
+    declare endpoint) instead rejects an already-declared Rehearsal with an
+    IntegrityError, including one that only started existing after the
+    caller's own pre-check raced a concurrent declaration.
     """
     with transaction.atomic():
         if declaration_type == CONFLICT_FULL_ABSENCE:
-            return Conflict.objects.create(
-                person=person, rehearsal=rehearsal, type=Conflict.FULL_CONFLICT, reason=reason,
+            conflict, created = Conflict.objects.update_or_create(
+                person=person, rehearsal=rehearsal, defaults={'type': Conflict.FULL_CONFLICT, 'reason': reason},
             )
-        if declaration_type in (CONFLICT_LATE_ARRIVAL, CONFLICT_EARLY_DEPARTURE):
-            conflict = Conflict.objects.create(
-                person=person, rehearsal=rehearsal, type=Conflict.PARTIAL, reason=reason,
+        elif declaration_type in (CONFLICT_LATE_ARRIVAL, CONFLICT_EARLY_DEPARTURE):
+            conflict, created = Conflict.objects.update_or_create(
+                person=person, rehearsal=rehearsal, defaults={'type': Conflict.PARTIAL, 'reason': reason},
             )
+            conflict.conflictwindow_set.all().delete()
             if declaration_type == CONFLICT_LATE_ARRIVAL:
                 window_start, window_end = rehearsal.start_time, declared_time
             else:
                 window_start, window_end = declared_time, rehearsal.end_time
             ConflictWindow.objects.create(conflict=conflict, unavailable_start=window_start, unavailable_end=window_end)
-            return conflict
-        raise ValueError(f'Unknown conflict declaration_type: {declaration_type!r}')
+        else:
+            raise ValueError(f'Unknown conflict declaration_type: {declaration_type!r}')
+        if not created and not allow_edit:
+            raise IntegrityError(f'A Conflict already exists for person={person.pk} rehearsal={rehearsal.pk}.')
+        return conflict
+
+
+@dataclass(frozen=True)
+class ConflictHistoryRow:
+    """One History row: a Person's existing Conflict for a Rehearsal, with its display fields pre-derived (issue #99)."""
+
+    rehearsal: Rehearsal
+    conflict: Conflict
+    declaration_type: str
+    type_label: str
+    declared_time: time | None
+    is_future: bool
+
+
+def _derive_declaration(conflict) -> tuple[str | None, time | None]:
+    """Return (declaration_type, declared_time) derived from `conflict`'s type and, for partial, its ConflictWindow.
+
+    Never guessed from raw field presence by a template (issue #99): a
+    full_conflict Conflict is always full_absence; a partial Conflict whose
+    single ConflictWindow is anchored at the Rehearsal's start_time is
+    late_arrival, or at its end_time is early_departure — the only two
+    shapes declare_conflict itself ever creates. `ConflictWindow` carries no
+    DB-level constraint tying it to that invariant (e.g. the Django admin
+    can attach zero, several, or an unanchored window), so any Conflict
+    whose windows don't match exactly one of those two shapes is reported
+    as (None, None) rather than crashing on a missing window or guessing
+    from a single arbitrarily-picked one.
+    """
+    if conflict.type == Conflict.FULL_CONFLICT:
+        return CONFLICT_FULL_ABSENCE, None
+    rehearsal = conflict.rehearsal
+    windows = list(conflict.conflictwindow_set.all())
+    if len(windows) == 1:
+        window = windows[0]
+        if window.unavailable_start == rehearsal.start_time:
+            return CONFLICT_LATE_ARRIVAL, window.unavailable_end
+        if window.unavailable_end == rehearsal.end_time:
+            return CONFLICT_EARLY_DEPARTURE, window.unavailable_start
+    return None, None
+
+
+def conflict_history_for(semester, person) -> list[ConflictHistoryRow]:
+    """Return every Rehearsal in `semester` that `person` has declared a Conflict for, in date order (issue #99).
+
+    Includes past and future Rehearsals alike — History is the record of
+    every declaration made, not just the still-editable ones; `is_future`
+    tells the view/template which rows may offer Edit/Delete.
+    """
+    today = timezone.localdate()
+    conflicts = Conflict.objects.filter(
+        person=person, rehearsal__semester=semester,
+    ).select_related('rehearsal').prefetch_related('conflictwindow_set').order_by('rehearsal__date', 'rehearsal__start_time')
+    rows = []
+    for conflict in conflicts:
+        declaration_type, declared_time = _derive_declaration(conflict)
+        rows.append(ConflictHistoryRow(
+            rehearsal=conflict.rehearsal,
+            conflict=conflict,
+            declaration_type=declaration_type,
+            type_label=CONFLICT_TYPE_LABELS[declaration_type],
+            declared_time=declared_time,
+            is_future=conflict.rehearsal.date >= today,
+        ))
+    return rows

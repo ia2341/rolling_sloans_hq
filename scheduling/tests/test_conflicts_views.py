@@ -1,4 +1,4 @@
-"""Member conflicts self-service: /me/conflicts/ (issue #58)."""
+"""Member conflicts self-service: /me/conflicts/ (issues #58, #98, #99)."""
 
 from datetime import time, timedelta
 from unittest.mock import patch
@@ -29,12 +29,21 @@ class AnonymousAccessTests(TestCase):
 
         self.assertRedirects(response, f"{reverse('identity:login')}?next={url}")
 
-    def test_conflict_detail_redirects_anonymous_users_to_login(self):
-        """An anonymous request to /me/conflicts/<rehearsal_id>/ redirects to the login page."""
+    def test_conflict_edit_redirects_anonymous_users_to_login(self):
+        """An anonymous request to /me/conflicts/<rehearsal_id>/edit/ redirects to the login page."""
         rehearsal = RehearsalFactory()
-        url = reverse('scheduling:conflict-detail', args=[rehearsal.pk])
+        url = reverse('scheduling:conflict-edit', args=[rehearsal.pk])
 
-        response = self.client.get(url)
+        response = self.client.post(url)
+
+        self.assertRedirects(response, f"{reverse('identity:login')}?next={url}")
+
+    def test_conflict_delete_redirects_anonymous_users_to_login(self):
+        """An anonymous request to /me/conflicts/<rehearsal_id>/delete/ redirects to the login page."""
+        rehearsal = RehearsalFactory()
+        url = reverse('scheduling:conflict-delete', args=[rehearsal.pk])
+
+        response = self.client.post(url)
 
         self.assertRedirects(response, f"{reverse('identity:login')}?next={url}")
 
@@ -261,157 +270,188 @@ class ConflictsViewPostTests(TestCase):
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)
-class ConflictDetailViewGetTests(TestCase):
+class ConflictsViewHistoryGetTests(TestCase):
     def setUp(self):
         """Log in a synthetic Person and create the current Semester before each test."""
         self.person = PersonFactory(password=PASSWORD)
         self.client.login(username=self.person.email, password=PASSWORD)
         self.semester = SemesterFactory()
 
-    def test_404_for_rehearsal_from_an_older_semester(self):
-        """A Rehearsal belonging to a non-current Semester is not reachable by id."""
-        old_semester = SemesterFactory()
-        old_rehearsal = RehearsalFactory(semester=old_semester)
-        SemesterFactory()  # becomes the current Semester
+    def test_history_only_includes_rehearsals_with_a_submitted_conflict(self):
+        """A Rehearsal with no Conflict for this member is absent from History; a declared one is present."""
+        RehearsalFactory(semester=self.semester)
+        declared = RehearsalFactory(semester=self.semester)
+        ConflictFactory(person=self.person, rehearsal=declared, type=Conflict.FULL_CONFLICT)
 
-        response = self.client.get(reverse('scheduling:conflict-detail', args=[old_rehearsal.pk]))
+        response = self.client.get(reverse('scheduling:conflicts'))
 
-        self.assertEqual(response.status_code, 404)
+        rehearsals = [row['rehearsal'] for row in response.context['history']]
+        self.assertEqual(rehearsals, [declared])
 
-    def test_shows_empty_formset_when_no_existing_conflict(self):
-        """With no existing Conflict for this Rehearsal, the formset starts with no bound windows."""
-        rehearsal = RehearsalFactory(semester=self.semester)
+    def test_future_history_row_gets_an_edit_form_prefilled_from_the_existing_conflict(self):
+        """A future declared Rehearsal's History row carries an edit form pre-filled with its Conflict's values."""
+        rehearsal = RehearsalFactory(
+            semester=self.semester, date=timezone.localdate() + timedelta(days=1), start_time=time(18, 0),
+        )
+        conflict = ConflictFactory(person=self.person, rehearsal=rehearsal, type=Conflict.PARTIAL, reason='Traffic.')
+        ConflictWindowFactory(conflict=conflict, unavailable_start=time(18, 0), unavailable_end=time(18, 30))
 
-        response = self.client.get(reverse('scheduling:conflict-detail', args=[rehearsal.pk]))
+        response = self.client.get(reverse('scheduling:conflicts'))
 
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.context['formset'].initial_form_count(), 0)
+        [row] = response.context['history']
+        self.assertTrue(row['is_future'])
+        self.assertIsNotNone(row['form'])
+        self.assertEqual(row['form'].initial['declaration_type'], 'late_arrival')
+        self.assertEqual(row['form'].initial['arrival_time'], time(18, 30))
+        self.assertEqual(row['form'].initial['reason'], 'Traffic.')
 
-    def test_shows_existing_windows(self):
-        """The member's existing ConflictWindows for this Rehearsal are preloaded into the formset."""
-        rehearsal = RehearsalFactory(semester=self.semester)
-        conflict = ConflictFactory(person=self.person, rehearsal=rehearsal, type=Conflict.PARTIAL)
-        window = ConflictWindowFactory(conflict=conflict)
+    def test_past_history_row_has_no_edit_form(self):
+        """A past declared Rehearsal's History row carries no edit form."""
+        rehearsal = RehearsalFactory(semester=self.semester, date=timezone.localdate() - timedelta(days=1))
+        ConflictFactory(person=self.person, rehearsal=rehearsal, type=Conflict.FULL_CONFLICT)
 
-        response = self.client.get(reverse('scheduling:conflict-detail', args=[rehearsal.pk]))
+        response = self.client.get(reverse('scheduling:conflicts'))
 
-        self.assertEqual(response.status_code, 200)
-        formset = response.context['formset']
-        self.assertEqual(formset.initial_form_count(), 1)
-        self.assertEqual(formset.forms[0].instance, window)
+        [row] = response.context['history']
+        self.assertFalse(row['is_future'])
+        self.assertIsNone(row['form'])
+
+    def test_history_row_shows_derived_type_label_and_reason(self):
+        """A History row's type_label/reason surface the Conflict's derived declaration and reason text."""
+        rehearsal = RehearsalFactory(semester=self.semester, date=timezone.localdate() + timedelta(days=1))
+        ConflictFactory(person=self.person, rehearsal=rehearsal, type=Conflict.FULL_CONFLICT, reason='Out of town.')
+
+        response = self.client.get(reverse('scheduling:conflicts'))
+
+        self.assertContains(response, 'Full absence')
+        self.assertContains(response, 'Out of town.')
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)
-class ConflictDetailViewPostTests(TestCase):
+class ConflictEditViewTests(TestCase):
     def setUp(self):
-        """Log in a synthetic Person, create the current Semester and a Rehearsal, before each test."""
+        """Log in a synthetic Person and create the current Semester and a future declared Rehearsal before each test."""
         self.person = PersonFactory(password=PASSWORD)
         self.client.login(username=self.person.email, password=PASSWORD)
         self.semester = SemesterFactory()
-        self.rehearsal = RehearsalFactory(semester=self.semester, start_time=time(18, 0))
+        self.rehearsal = RehearsalFactory(
+            semester=self.semester, date=timezone.localdate() + timedelta(days=1), start_time=time(18, 0),
+        )
+        self.conflict = ConflictFactory(person=self.person, rehearsal=self.rehearsal, type=Conflict.FULL_CONFLICT)
 
-    def _management_form_data(self, total=1, initial=0):
-        """Build the Django formset management-form fields for `total` forms, `initial` of them pre-existing."""
-        return {
-            'form-TOTAL_FORMS': str(total),
-            'form-INITIAL_FORMS': str(initial),
-            'form-MIN_NUM_FORMS': '0',
-            'form-MAX_NUM_FORMS': '1000',
-        }
+    def _post_data(self, rehearsal, **fields):
+        """Build POST data for `rehearsal`'s History edit form, prefixed the way the view expects."""
+        prefix = f'history-{rehearsal.pk}'
+        return {f'{prefix}-{name}': value for name, value in fields.items()}
 
-    def test_valid_post_creates_partial_conflict_and_windows_and_redirects_with_message(self):
-        """A valid POST with a window creates a PARTIAL Conflict and its ConflictWindow, and redirects."""
-        data = {
-            **self._management_form_data(),
-            'form-0-unavailable_start': '18:15',
-            'form-0-unavailable_end': '18:45',
-        }
+    def test_valid_edit_updates_the_existing_conflict_and_redirects(self):
+        """A valid edit updates the existing Conflict in place (no second row) and redirects with a message."""
+        data = self._post_data(self.rehearsal, declaration_type='late_arrival', arrival_time='18:30')
 
         response = self.client.post(
-            reverse('scheduling:conflict-detail', args=[self.rehearsal.pk]), data, follow=True,
+            reverse('scheduling:conflict-edit', args=[self.rehearsal.pk]), data, follow=True,
         )
 
-        self.assertRedirects(response, reverse('scheduling:conflict-detail', args=[self.rehearsal.pk]))
-        conflict = Conflict.objects.get(person=self.person, rehearsal=self.rehearsal)
-        self.assertEqual(conflict.type, Conflict.PARTIAL)
-        self.assertTrue(ConflictWindow.objects.filter(conflict=conflict).exists())
+        self.assertRedirects(response, reverse('scheduling:conflicts'))
+        self.assertEqual(Conflict.objects.filter(person=self.person, rehearsal=self.rehearsal).count(), 1)
+        self.conflict.refresh_from_db()
+        self.assertEqual(self.conflict.type, Conflict.PARTIAL)
         messages = [str(m) for m in response.context['messages']]
         self.assertIn('Conflict updated.', messages)
 
-    def test_valid_post_with_no_windows_deletes_existing_conflict(self):
-        """Submitting with all windows deleted removes the Conflict row entirely (back to implicit availability)."""
-        conflict = ConflictFactory(person=self.person, rehearsal=self.rehearsal, type=Conflict.PARTIAL)
-        window = ConflictWindowFactory(conflict=conflict)
-        data = {
-            **self._management_form_data(total=1, initial=1),
-            'form-0-id': str(window.pk),
-            'form-0-unavailable_start': '18:15',
-            'form-0-unavailable_end': '18:45',
-            'form-0-DELETE': 'on',
-        }
+    def test_invalid_edit_rerenders_the_conflicts_page_with_errors(self):
+        """An edit submission outside the Rehearsal's span re-renders the page with a field error, not a 500."""
+        data = self._post_data(self.rehearsal, declaration_type='late_arrival', arrival_time='05:00')
 
-        self.client.post(reverse('scheduling:conflict-detail', args=[self.rehearsal.pk]), data)
-
-        self.assertFalse(Conflict.objects.filter(person=self.person, rehearsal=self.rehearsal).exists())
-
-    def test_invalid_post_rerenders_formset_with_errors(self):
-        """A window outside the Rehearsal's time span re-renders the formset with a field error, not a 500."""
-        data = {
-            **self._management_form_data(),
-            'form-0-unavailable_start': '17:00',
-            'form-0-unavailable_end': '17:30',
-        }
-
-        response = self.client.post(reverse('scheduling:conflict-detail', args=[self.rehearsal.pk]), data)
+        response = self.client.post(reverse('scheduling:conflict-edit', args=[self.rehearsal.pk]), data)
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Must fall within the Rehearsal&#x27;s time span.")
-        self.assertFalse(Conflict.objects.filter(person=self.person, rehearsal=self.rehearsal).exists())
+        self.assertContains(response, "Must fall within the Rehearsal&#x27;s time span, after it starts.")
+        self.conflict.refresh_from_db()
+        self.assertEqual(self.conflict.type, Conflict.FULL_CONFLICT)
 
-    def test_reversed_window_rerenders_formset_with_errors(self):
-        """A window with unavailable_end before unavailable_start re-renders the formset with a field error."""
-        data = {
-            **self._management_form_data(),
-            'form-0-unavailable_start': '18:45',
-            'form-0-unavailable_end': '18:15',
-        }
+    def test_edit_is_scoped_to_the_logged_in_user_only(self):
+        """A member's edit POST edits their own Conflict but never touches another Person's for the same Rehearsal."""
+        other_person = PersonFactory(password=PASSWORD)
+        other_conflict = ConflictFactory(person=other_person, rehearsal=self.rehearsal, type=Conflict.FULL_CONFLICT)
+        data = self._post_data(self.rehearsal, declaration_type='late_arrival', arrival_time='18:30')
 
-        response = self.client.post(reverse('scheduling:conflict-detail', args=[self.rehearsal.pk]), data)
-
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'End time must be after start time.')
-        self.assertFalse(Conflict.objects.filter(person=self.person, rehearsal=self.rehearsal).exists())
-
-    def test_zero_length_window_rerenders_formset_with_errors(self):
-        """A window with unavailable_end equal to unavailable_start re-renders the formset with a field error."""
-        data = {
-            **self._management_form_data(),
-            'form-0-unavailable_start': '18:15',
-            'form-0-unavailable_end': '18:15',
-        }
-
-        response = self.client.post(reverse('scheduling:conflict-detail', args=[self.rehearsal.pk]), data)
-
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'End time must be after start time.')
-        self.assertFalse(Conflict.objects.filter(person=self.person, rehearsal=self.rehearsal).exists())
-
-    def test_post_does_not_affect_another_members_conflict_for_same_rehearsal(self):
-        """A member's POST for this Rehearsal never touches another member's Conflict/windows for it."""
-        other_person = PersonFactory()
-        other_conflict = ConflictFactory(person=other_person, rehearsal=self.rehearsal, type=Conflict.PARTIAL)
-        other_window = ConflictWindowFactory(conflict=other_conflict)
-        data = {
-            **self._management_form_data(),
-            'form-0-unavailable_start': '18:15',
-            'form-0-unavailable_end': '18:45',
-        }
-
-        self.client.post(reverse('scheduling:conflict-detail', args=[self.rehearsal.pk]), data)
+        self.client.post(reverse('scheduling:conflict-edit', args=[self.rehearsal.pk]), data)
 
         other_conflict.refresh_from_db()
-        self.assertEqual(other_conflict.type, Conflict.PARTIAL)
-        self.assertTrue(ConflictWindow.objects.filter(pk=other_window.pk).exists())
-        self.assertNotEqual(
-            Conflict.objects.get(person=self.person, rehearsal=self.rehearsal).pk, other_conflict.pk,
+        self.assertEqual(other_conflict.type, Conflict.FULL_CONFLICT)
+        self.conflict.refresh_from_db()
+        self.assertEqual(self.conflict.type, Conflict.PARTIAL)
+
+    def test_edit_of_undeclared_rehearsal_404s(self):
+        """An edit POST naming a Rehearsal the member never declared a Conflict for 404s."""
+        undeclared = RehearsalFactory(semester=self.semester, date=timezone.localdate() + timedelta(days=1))
+        data = self._post_data(undeclared, declaration_type='full_absence')
+
+        response = self.client.post(reverse('scheduling:conflict-edit', args=[undeclared.pk]), data)
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_edit_of_a_past_rehearsal_is_rejected_server_side_even_when_directly_posted(self):
+        """A crafted edit POST naming a past declared Rehearsal 404s, independent of any template-hidden control."""
+        past_rehearsal = RehearsalFactory(semester=self.semester, date=timezone.localdate() - timedelta(days=1))
+        past_conflict = ConflictFactory(person=self.person, rehearsal=past_rehearsal, type=Conflict.FULL_CONFLICT)
+        data = self._post_data(past_rehearsal, declaration_type='late_arrival', arrival_time='18:30')
+
+        response = self.client.post(reverse('scheduling:conflict-edit', args=[past_rehearsal.pk]), data)
+
+        self.assertEqual(response.status_code, 404)
+        past_conflict.refresh_from_db()
+        self.assertEqual(past_conflict.type, Conflict.FULL_CONFLICT)
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class ConflictDeleteViewTests(TestCase):
+    def setUp(self):
+        """Log in a synthetic Person and create the current Semester and a future declared Rehearsal before each test."""
+        self.person = PersonFactory(password=PASSWORD)
+        self.client.login(username=self.person.email, password=PASSWORD)
+        self.semester = SemesterFactory()
+        self.rehearsal = RehearsalFactory(semester=self.semester, date=timezone.localdate() + timedelta(days=1))
+        self.conflict = ConflictFactory(person=self.person, rehearsal=self.rehearsal, type=Conflict.PARTIAL)
+        self.window = ConflictWindowFactory(conflict=self.conflict)
+
+    def test_valid_delete_removes_the_conflict_and_its_windows_and_redirects(self):
+        """Deleting a future Conflict removes it (and its ConflictWindows, via cascade) and redirects with a message."""
+        response = self.client.post(
+            reverse('scheduling:conflict-delete', args=[self.rehearsal.pk]), follow=True,
         )
+
+        self.assertRedirects(response, reverse('scheduling:conflicts'))
+        self.assertFalse(Conflict.objects.filter(pk=self.conflict.pk).exists())
+        self.assertFalse(ConflictWindow.objects.filter(pk=self.window.pk).exists())
+        messages = [str(m) for m in response.context['messages']]
+        self.assertIn('Conflict removed.', messages)
+
+    def test_delete_is_scoped_to_the_logged_in_user_only(self):
+        """A member's delete POST never removes another Person's Conflict for the same Rehearsal."""
+        other_person = PersonFactory()
+        other_conflict = ConflictFactory(person=other_person, rehearsal=self.rehearsal, type=Conflict.FULL_CONFLICT)
+
+        self.client.post(reverse('scheduling:conflict-delete', args=[self.rehearsal.pk]))
+
+        self.assertTrue(Conflict.objects.filter(pk=other_conflict.pk).exists())
+        self.assertFalse(Conflict.objects.filter(pk=self.conflict.pk).exists())
+
+    def test_delete_of_undeclared_rehearsal_404s(self):
+        """A delete POST naming a Rehearsal the member never declared a Conflict for 404s."""
+        undeclared = RehearsalFactory(semester=self.semester, date=timezone.localdate() + timedelta(days=1))
+
+        response = self.client.post(reverse('scheduling:conflict-delete', args=[undeclared.pk]))
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_delete_of_a_past_rehearsal_is_rejected_server_side_even_when_directly_posted(self):
+        """A crafted delete POST naming a past declared Rehearsal 404s, independent of any template-hidden control."""
+        past_rehearsal = RehearsalFactory(semester=self.semester, date=timezone.localdate() - timedelta(days=1))
+        past_conflict = ConflictFactory(person=self.person, rehearsal=past_rehearsal, type=Conflict.FULL_CONFLICT)
+
+        response = self.client.post(reverse('scheduling:conflict-delete', args=[past_rehearsal.pk]))
+
+        self.assertEqual(response.status_code, 404)
+        self.assertTrue(Conflict.objects.filter(pk=past_conflict.pk).exists())

@@ -20,6 +20,7 @@ from scheduling.factories import (
     SongRoleAssignmentFactory,
     SongRoleRequirementFactory,
 )
+from scheduling.models import Song
 
 PASSWORD = 'a-strong-test-password-123'
 
@@ -292,19 +293,70 @@ class SetlistViewTests(TestCase):
         songs = list(response.context['songs'])
         self.assertEqual(songs, [first_song, second_song])
 
-    def test_includes_rehearsal_count_progress_per_song(self):
-        """Each Song in context carries its rehearsal-count actual/target progress indicators."""
+    def test_row_data_title_attributes_support_correct_client_side_alphabetical_sort(self):
+        """Each row's data-title attribute matches its Song's title, agreeing with Song.objects.order_by('title')."""
+        semester = SemesterFactory()
+        second_alphabetically = SongFactory(semester=semester, title='Banana Pancakes', position=1)
+        first_alphabetically = SongFactory(semester=semester, title='Aloha', position=2)
+
+        response = self.client.get(reverse('scheduling:setlist'))
+
+        self.assertEqual(response.status_code, 200)
+        title_order_from_db = list(
+            Song.objects.filter(semester=semester).order_by('title').values_list('title', flat=True),
+        )
+        self.assertEqual(title_order_from_db, [first_alphabetically.title, second_alphabetically.title])
+        self.assertContains(response, f'data-title="{first_alphabetically.title}"')
+        self.assertContains(response, f'data-title="{second_alphabetically.title}"')
+
+    def test_includes_rehearsal_progress_per_song(self):
+        """Each Song in context carries its remaining/total rehearsal progress (issue #92)."""
         semester = SemesterFactory()
         song = SongFactory(semester=semester)
-        rehearsal = RehearsalFactory(semester=semester, is_full_setlist=False)
+        rehearsal = RehearsalFactory(
+            semester=semester, is_full_setlist=False, date=timezone.localdate() + timedelta(days=1),
+        )
         RehearsalSongFactory(song=song, rehearsal=rehearsal, order=1)
 
         response = self.client.get(reverse('scheduling:setlist'))
 
         self.assertEqual(response.status_code, 200)
         [rendered_song] = response.context['songs']
-        self.assertEqual(rendered_song.rehearsal_count_actual, 1)
-        self.assertEqual(rendered_song.rehearsal_count_target, 1)
+        self.assertEqual(rendered_song.progress.remaining, 1)
+        self.assertEqual(rendered_song.progress.total, 1)
+
+    def test_includes_deduped_performers_per_song(self):
+        """Each Song in context carries its performers-per-song, deduped by person across roles."""
+        semester = SemesterFactory()
+        song = SongFactory(semester=semester)
+        person = PersonFactory()
+        singer = RoleFactory(name='Singer')
+        guitarist = RoleFactory(name='Guitarist')
+        SongRoleAssignmentFactory(song=song, person=person, role=singer)
+        SongRoleAssignmentFactory(song=song, person=person, role=guitarist)
+
+        response = self.client.get(reverse('scheduling:setlist'))
+
+        self.assertEqual(response.status_code, 200)
+        [rendered_song] = response.context['songs']
+        self.assertEqual(len(rendered_song.performers), 1)
+        self.assertEqual(rendered_song.performers[0].person, person)
+        self.assertCountEqual(rendered_song.performers[0].roles, [singer, guitarist])
+
+    def test_includes_recording_count_per_song(self):
+        """Each Song in context carries its all-time Recording count across every RehearsalSong slot."""
+        semester = SemesterFactory()
+        song = SongFactory(semester=semester)
+        rehearsal = RehearsalFactory(semester=semester)
+        rehearsal_song = RehearsalSongFactory(song=song, rehearsal=rehearsal)
+        RecordingFactory(rehearsal_song=rehearsal_song)
+        RecordingFactory(rehearsal_song=rehearsal_song)
+
+        response = self.client.get(reverse('scheduling:setlist'))
+
+        self.assertEqual(response.status_code, 200)
+        [rendered_song] = response.context['songs']
+        self.assertEqual(rendered_song.recording_count, 2)
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)
