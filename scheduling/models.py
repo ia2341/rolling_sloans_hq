@@ -272,11 +272,15 @@ class Rehearsal(models.Model):
         """Surface the midnight-wraparound case as a normal form error, not a 500.
 
         Model.full_clean() (as run by ModelForm, e.g. the admin add form)
-        calls clean() before save() is ever reached, so raising
-        ValidationError here lets it show up as a field error instead of an
-        unhandled ValueError escaping ModelAdmin.save_model().
+        calls clean() after clean_fields() regardless of whether clean_fields()
+        found errors, so a blank `semester` or `date` reaches here too —
+        dereferencing self.semester or calling datetime.combine(self.date, ...)
+        in that state raises Semester.DoesNotExist or TypeError, neither of
+        which full_clean() converts to a ValidationError, so it would escape
+        as a 500. Skip defaulting until those required fields are actually
+        set and let clean_fields()'s own required-field errors stand.
         """
-        if self._state.adding:
+        if self._state.adding and self.semester_id is not None and self.date is not None:
             try:
                 self._apply_semester_defaults()
             except ValueError as exc:

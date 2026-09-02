@@ -2,6 +2,7 @@
 
 from datetime import time
 
+from django.core.exceptions import ValidationError
 from django.test import TestCase
 
 from scheduling.factories import RehearsalFactory, SemesterFactory
@@ -141,6 +142,25 @@ class RehearsalIsFullSetlistTests(TestCase):
         reloaded.is_full_setlist = False
         reloaded.save()
         self.assertFalse(Rehearsal.objects.get(pk=rehearsal.pk).is_full_setlist)
+
+
+class RehearsalCleanWithMissingRequiredFieldsTests(TestCase):
+    def test_full_clean_with_blank_semester_raises_validation_error_not_500(self):
+        """full_clean() on a Rehearsal with no semester surfaces a normal field error, not a DoesNotExist crash."""
+        rehearsal = Rehearsal(date='2026-09-15', start_time=time(19, 0))
+
+        with self.assertRaises(ValidationError) as ctx:
+            rehearsal.full_clean()
+        self.assertIn('semester', ctx.exception.message_dict)
+
+    def test_full_clean_with_blank_date_raises_validation_error_not_500(self):
+        """full_clean() on a Rehearsal with no date surfaces a normal field error, not a TypeError crash."""
+        semester = SemesterFactory()
+        rehearsal = Rehearsal(semester=semester, start_time=time(19, 0))
+
+        with self.assertRaises(ValidationError) as ctx:
+            rehearsal.full_clean()
+        self.assertIn('date', ctx.exception.message_dict)
 
 
 class RehearsalFieldTests(TestCase):
