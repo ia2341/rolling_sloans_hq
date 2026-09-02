@@ -3,7 +3,7 @@
 import json
 
 from django.contrib import messages
-from django.db import models, transaction
+from django.db import IntegrityError, models, transaction
 from django.http import Http404, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
@@ -268,13 +268,17 @@ class ConflictsView(BaseView, View):
             raise Http404('A Conflict already exists for this Rehearsal.')
         form = DeclareConflictForm(request.POST, rehearsal=rehearsal, prefix=self._prefix_for(rehearsal))
         if form.is_valid():
-            declare_conflict(
-                person=request.user,
-                rehearsal=rehearsal,
-                declaration_type=form.cleaned_data['declaration_type'],
-                declared_time=form.declared_time,
-                reason=form.cleaned_data['reason'],
-            )
+            try:
+                declare_conflict(
+                    person=request.user,
+                    rehearsal=rehearsal,
+                    declaration_type=form.cleaned_data['declaration_type'],
+                    declared_time=form.declared_time,
+                    reason=form.cleaned_data['reason'],
+                )
+            except IntegrityError:
+                # A concurrent request won the race past the exists() check above.
+                raise Http404('A Conflict already exists for this Rehearsal.') from None
             messages.success(request, 'Conflict declared.')
             return redirect('scheduling:conflicts')
         return render(request, self.template_name, self._build_context(error_rehearsal=rehearsal, error_form=form))

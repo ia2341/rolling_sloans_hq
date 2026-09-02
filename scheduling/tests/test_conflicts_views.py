@@ -1,6 +1,7 @@
 """Member conflicts self-service: /me/conflicts/ (issue #58)."""
 
 from datetime import time, timedelta
+from unittest.mock import patch
 
 from django.test import TestCase, override_settings
 from django.urls import reverse
@@ -226,6 +227,18 @@ class ConflictsViewPostTests(TestCase):
         data = self._post_data(self.rehearsal, declaration_type='full_absence')
 
         response = self.client.post(reverse('scheduling:conflicts'), data)
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(Conflict.objects.filter(person=self.person, rehearsal=self.rehearsal).count(), 1)
+
+    def test_concurrent_duplicate_declaration_404s_instead_of_500(self):
+        """A request that loses a race against a concurrent duplicate declaration 404s, not a 500 IntegrityError."""
+        ConflictFactory(person=self.person, rehearsal=self.rehearsal, type=Conflict.FULL_CONFLICT)
+        data = self._post_data(self.rehearsal, declaration_type='full_absence')
+
+        with patch('scheduling.views.Conflict.objects.filter') as mock_filter:
+            mock_filter.return_value.exists.return_value = False
+            response = self.client.post(reverse('scheduling:conflicts'), data)
 
         self.assertEqual(response.status_code, 404)
         self.assertEqual(Conflict.objects.filter(person=self.person, rehearsal=self.rehearsal).count(), 1)
