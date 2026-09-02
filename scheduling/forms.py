@@ -15,6 +15,11 @@ from scheduling.models import (
     Song,
     SongRoleAssignment,
 )
+from scheduling.services import (
+    CONFLICT_DECLARATION_CHOICES,
+    CONFLICT_EARLY_DEPARTURE,
+    CONFLICT_LATE_ARRIVAL,
+)
 
 
 class MembershipRolesForm(forms.ModelForm):
@@ -65,24 +70,62 @@ class MembershipRolesForm(forms.ModelForm):
                 MembershipRole.objects.create(membership=membership, role=role)
 
 
-class BulkConflictForm(forms.Form):
-    """Toggles full-conflict status across the current Semester's Rehearsals in one POST (issue #58).
+class DeclareConflictForm(forms.Form):
+    """One Upcoming Rehearsals row's inline conflict declaration (issue #98).
 
-    Not a ModelForm: this writes across many (person, rehearsal)-keyed
-    Conflict rows in one submission, with no single model instance to bind
-    to, so a plain Form fits the shape better.
+    Not a ModelForm: one submission maps to a Conflict plus an optional
+    ConflictWindow across three different shapes (see
+    scheduling.services.declare_conflict), with no single model instance to
+    bind to. Carries separate arrival_time/departure_time fields, rather
+    than one generic time field, so the page's conditional show/hide can
+    key off which one applies to the selected declaration_type.
     """
 
-    full_conflict_rehearsals = forms.ModelMultipleChoiceField(
-        queryset=Rehearsal.objects.none(),
-        required=False,
-        widget=forms.CheckboxSelectMultiple,
-    )
+    declaration_type = forms.ChoiceField(choices=CONFLICT_DECLARATION_CHOICES, widget=forms.RadioSelect)
+    arrival_time = forms.TimeField(required=False, label='Arrive late at')
+    departure_time = forms.TimeField(required=False, label='Leave early at')
+    reason = forms.CharField(max_length=255, required=False)
 
-    def __init__(self, *args, rehearsals=None, **kwargs):
-        """Restrict the `full_conflict_rehearsals` choices to `rehearsals` (the current Semester's)."""
+    def __init__(self, *args, rehearsal=None, **kwargs):
+        """Stash `rehearsal` for span validation in clean() (mirrors ConflictWindowForm)."""
         super().__init__(*args, **kwargs)
-        self.fields['full_conflict_rehearsals'].queryset = rehearsals if rehearsals is not None else Rehearsal.objects.none()
+        self.rehearsal = rehearsal
+
+    def clean(self):
+        """Require the matching time field for late_arrival/early_departure, and that it falls within the Rehearsal's span."""
+        cleaned_data = super().clean()
+        declaration_type = cleaned_data.get('declaration_type')
+        if declaration_type == CONFLICT_LATE_ARRIVAL:
+            self._require_arrival_time(cleaned_data)
+        if declaration_type == CONFLICT_EARLY_DEPARTURE:
+            self._require_departure_time(cleaned_data)
+        return cleaned_data
+
+    def _require_arrival_time(self, cleaned_data):
+        """Add a field error if arrival_time is blank, or set but not strictly after the Rehearsal's start (matching the model's strict-inequality rule)."""
+        time_value = cleaned_data.get('arrival_time')
+        if not time_value:
+            self.add_error('arrival_time', 'Enter the time you will arrive.')
+        elif self.rehearsal and not (self.rehearsal.start_time < time_value <= self.rehearsal.end_time):
+            self.add_error('arrival_time', "Must fall within the Rehearsal's time span, after it starts.")
+
+    def _require_departure_time(self, cleaned_data):
+        """Add a field error if departure_time is blank, or set but not strictly before the Rehearsal's end (matching the model's strict-inequality rule)."""
+        time_value = cleaned_data.get('departure_time')
+        if not time_value:
+            self.add_error('departure_time', 'Enter the time you will leave.')
+        elif self.rehearsal and not (self.rehearsal.start_time <= time_value < self.rehearsal.end_time):
+            self.add_error('departure_time', "Must fall within the Rehearsal's time span, before it ends.")
+
+    @property
+    def declared_time(self):
+        """Return whichever of arrival_time/departure_time applies to the selected declaration_type, else None."""
+        declaration_type = self.cleaned_data.get('declaration_type')
+        if declaration_type == CONFLICT_LATE_ARRIVAL:
+            return self.cleaned_data.get('arrival_time')
+        if declaration_type == CONFLICT_EARLY_DEPARTURE:
+            return self.cleaned_data.get('departure_time')
+        return None
 
 
 class ConflictWindowForm(forms.ModelForm):

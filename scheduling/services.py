@@ -12,6 +12,8 @@ from django.db.models import Count, Q
 from django.utils import timezone
 
 from scheduling.models import (
+    Conflict,
+    ConflictWindow,
     Recording,
     Rehearsal,
     RehearsalSong,
@@ -481,3 +483,49 @@ def breaks_for(rehearsal, person) -> list[Break]:
         if earlier.end_time < later.start_time:
             breaks.append(Break(start_time=earlier.end_time, end_time=later.start_time))
     return breaks
+
+
+CONFLICT_FULL_ABSENCE = 'full_absence'
+CONFLICT_LATE_ARRIVAL = 'late_arrival'
+CONFLICT_EARLY_DEPARTURE = 'early_departure'
+CONFLICT_DECLARATION_CHOICES = (
+    (CONFLICT_FULL_ABSENCE, 'Unavailable for entire rehearsal'),
+    (CONFLICT_LATE_ARRIVAL, 'Arrive late at'),
+    (CONFLICT_EARLY_DEPARTURE, 'Leave early at'),
+)
+
+
+def future_rehearsals_for(semester) -> list[Rehearsal]:
+    """Return `semester`'s Rehearsals dated today or later, in date order (issue #98's Upcoming Rehearsals list)."""
+    today = timezone.localdate()
+    return list(Rehearsal.objects.filter(semester=semester, date__gte=today).order_by('date', 'start_time'))
+
+
+def declare_conflict(person, rehearsal, declaration_type, declared_time=None, reason='') -> Conflict:
+    """Create a Conflict (plus, for a partial type, its one ConflictWindow) from an inline declaration (issue #98).
+
+    The three declaration types map to the model layer as follows, and
+    this is the only place that mapping is implemented — the Upcoming
+    Rehearsals view never calls Conflict/ConflictWindow .save() directly:
+    - full_absence: a FULL_CONFLICT Conflict, no ConflictWindow.
+    - late_arrival: a PARTIAL Conflict with one ConflictWindow spanning
+      the Rehearsal's start_time to `declared_time`.
+    - early_departure: a PARTIAL Conflict with one ConflictWindow spanning
+      `declared_time` to the Rehearsal's end_time.
+    """
+    with transaction.atomic():
+        if declaration_type == CONFLICT_FULL_ABSENCE:
+            return Conflict.objects.create(
+                person=person, rehearsal=rehearsal, type=Conflict.FULL_CONFLICT, reason=reason,
+            )
+        if declaration_type in (CONFLICT_LATE_ARRIVAL, CONFLICT_EARLY_DEPARTURE):
+            conflict = Conflict.objects.create(
+                person=person, rehearsal=rehearsal, type=Conflict.PARTIAL, reason=reason,
+            )
+            if declaration_type == CONFLICT_LATE_ARRIVAL:
+                window_start, window_end = rehearsal.start_time, declared_time
+            else:
+                window_start, window_end = declared_time, rehearsal.end_time
+            ConflictWindow.objects.create(conflict=conflict, unavailable_start=window_start, unavailable_end=window_end)
+            return conflict
+        raise ValueError(f'Unknown conflict declaration_type: {declaration_type!r}')

@@ -1,4 +1,4 @@
-"""Shared scheduling service functions (issue #92, issue #95)."""
+"""Shared scheduling service functions (issue #92, issue #95, issue #98)."""
 
 from datetime import time, timedelta
 
@@ -17,9 +17,12 @@ from scheduling.factories import (
     SongRoleAssignmentFactory,
     SongRoleRequirementFactory,
 )
+from scheduling.models import Conflict, ConflictWindow
 from scheduling.services import (
     assignment_matrix_for,
     breaks_for,
+    declare_conflict,
+    future_rehearsals_for,
     rehearsal_schedule_for,
     song_rehearsal_progress,
     songs_with_progress_for,
@@ -271,6 +274,77 @@ class AssignmentMatrixForTests(TestCase):
 
         [cell] = matrix.rows[0].cells
         self.assertEqual(cell.assignments, [])
+
+
+class FutureRehearsalsForTests(TestCase):
+    def test_returns_only_todays_and_future_rehearsals_in_date_order(self):
+        """Rehearsals dated before today are excluded; today's and later ones come back in date order."""
+        semester = SemesterFactory()
+        today = timezone.localdate()
+        yesterday = RehearsalFactory(semester=semester, date=today - timedelta(days=1))
+        later = RehearsalFactory(semester=semester, date=today + timedelta(days=2))
+        todays = RehearsalFactory(semester=semester, date=today)
+
+        result = future_rehearsals_for(semester)
+
+        self.assertNotIn(yesterday, result)
+        self.assertEqual(result, [todays, later])
+
+    def test_scoped_to_the_given_semester(self):
+        """A Rehearsal belonging to a different Semester is never included."""
+        semester = SemesterFactory()
+        other_semester = SemesterFactory()
+        RehearsalFactory(semester=other_semester, date=timezone.localdate() + timedelta(days=1))
+
+        result = future_rehearsals_for(semester)
+
+        self.assertEqual(result, [])
+
+
+class DeclareConflictTests(TestCase):
+    def setUp(self):
+        """Build a Person and a Rehearsal with a known time span for every test."""
+        self.person = PersonFactory()
+        self.rehearsal = RehearsalFactory(start_time=time(18, 0), end_time=time(19, 30))
+
+    def test_full_absence_creates_full_conflict_with_no_window(self):
+        """full_absence creates a FULL_CONFLICT Conflict and no ConflictWindow."""
+        conflict = declare_conflict(
+            person=self.person, rehearsal=self.rehearsal, declaration_type='full_absence', reason='Sick.',
+        )
+
+        self.assertEqual(conflict.type, Conflict.FULL_CONFLICT)
+        self.assertEqual(conflict.reason, 'Sick.')
+        self.assertFalse(ConflictWindow.objects.filter(conflict=conflict).exists())
+
+    def test_late_arrival_creates_partial_conflict_with_window_from_rehearsal_start(self):
+        """late_arrival creates a PARTIAL Conflict with one window from the Rehearsal's start_time to declared_time."""
+        conflict = declare_conflict(
+            person=self.person, rehearsal=self.rehearsal, declaration_type='late_arrival', declared_time=time(18, 30),
+        )
+
+        self.assertEqual(conflict.type, Conflict.PARTIAL)
+        window = ConflictWindow.objects.get(conflict=conflict)
+        self.assertEqual(window.unavailable_start, time(18, 0))
+        self.assertEqual(window.unavailable_end, time(18, 30))
+
+    def test_early_departure_creates_partial_conflict_with_window_to_rehearsal_end(self):
+        """early_departure creates a PARTIAL Conflict with one window from declared_time to the Rehearsal's end_time."""
+        conflict = declare_conflict(
+            person=self.person, rehearsal=self.rehearsal, declaration_type='early_departure', declared_time=time(19, 0),
+        )
+
+        self.assertEqual(conflict.type, Conflict.PARTIAL)
+        window = ConflictWindow.objects.get(conflict=conflict)
+        self.assertEqual(window.unavailable_start, time(19, 0))
+        self.assertEqual(window.unavailable_end, time(19, 30))
+
+    def test_unknown_declaration_type_raises(self):
+        """An unrecognized declaration_type raises rather than silently creating anything."""
+        with self.assertRaises(ValueError):
+            declare_conflict(person=self.person, rehearsal=self.rehearsal, declaration_type='not-a-real-type')
+
+        self.assertFalse(Conflict.objects.filter(person=self.person, rehearsal=self.rehearsal).exists())
 
 
 class RehearsalScheduleForTests(TestCase):
