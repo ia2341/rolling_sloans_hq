@@ -181,9 +181,9 @@ class ScheduleViewTests(TestCase):
         content = response.content.decode()
         details_start = content.index('<details>')
         details_end = content.index('</details>')
-        self.assertIn(str(past.pk), content[details_start:details_end])
-        self.assertNotIn(str(future.pk), content[details_start:details_end])
-        self.assertIn(str(future.pk), content[details_end:])
+        self.assertIn(f'?rehearsal={past.pk}"', content[details_start:details_end])
+        self.assertNotIn(f'?rehearsal={future.pk}"', content[details_start:details_end])
+        self.assertIn(f'?rehearsal={future.pk}"', content[details_end:])
         self.assertNotIn('open', content[details_start:content.index('>', details_start)])
 
     def test_view_all_row_shows_is_full_setlist_flag_and_attendance_summary(self):
