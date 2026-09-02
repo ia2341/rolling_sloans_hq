@@ -173,6 +173,13 @@ class RecordingUploadViewGetTests(TestCase):
 
         self.assertEqual(response.status_code, 404)
 
+    def test_non_numeric_song_param_still_renders_when_there_is_no_current_semester(self):
+        """With no Semester there's nothing to scope to, so a malformed `?song=` renders rather than 404ing."""
+        response = self.client.get(reverse('scheduling:recordings'), {'song': 'not-a-number'})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(list(response.context['form'].fields['rehearsal_song'].queryset), [])
+
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class RecordingUploadViewPostTests(TestCase):

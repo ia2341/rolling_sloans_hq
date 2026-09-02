@@ -878,12 +878,16 @@ class RecordingUploadView(BaseView, View):
         })
 
     def _requested_song(self, raw_song_id):
-        """Return the current Semester's `?song=<id>` Song, or None when unscoped or no such Song exists."""
-        if raw_song_id is None:
+        """Return the current Semester's `?song=<id>` Song, or None when unscoped or no such Song exists.
+
+        Short-circuits before parsing when there's no current Semester, mirroring
+        `_rehearsal_songs()` — otherwise a malformed `?song=` would start 404ing on
+        a Semester-less database, where it used to render normally.
+        """
+        semester = get_current_semester()
+        if raw_song_id is None or semester is None:
             return None
-        return Song.objects.filter(
-            pk=self._parse_song_id(raw_song_id), semester=get_current_semester(),
-        ).first()
+        return Song.objects.filter(pk=self._parse_song_id(raw_song_id), semester=semester).first()
 
     def _rehearsal_songs(self, request):
         """Return the current Semester's RehearsalSongs, filtered to `?song=<id>` when given.
