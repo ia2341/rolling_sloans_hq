@@ -33,6 +33,7 @@ from scheduling.services import (
     CONFLICT_EARLY_DEPARTURE,
     CONFLICT_LATE_ARRIVAL,
     RecordingUploadError,
+    assigned_songs_for,
     assignment_matrix_for,
     attendance_suggestion_for,
     breaks_for,
@@ -40,6 +41,7 @@ from scheduling.services import (
     conflict_history_for,
     create_recording_playback_url,
     declare_conflict,
+    declared_roles_for,
     future_rehearsals_for,
     get_current_semester,
     next_attended_rehearsal_for,
@@ -203,6 +205,99 @@ class MembersView(BaseView, TemplateView):
         context['semester'] = semester
         context['members'] = roster_for(_scoped_to_current_semester(Membership, semester))
         return context
+
+
+class MemberDetailView(BaseView, View):
+    """`/members/<int:pk>/`: one Person's page for the current Semester (issue #138).
+
+    Two rendering modes, and no third: read-only for a teammate's pk,
+    editable in place for `request.user.pk`. The editable mode carries the
+    always-inline `MembershipRolesForm` `/me/profile/` renders today (no
+    edit toggle), and is the only mode with any mutation surface at all —
+    a POST to another Person's pk is a 404, not a rejected form. Issue #130
+    adds the third, admin-editable mode here.
+
+    Every field this renders has an explicit verdict in
+    `docs/person-page-visibility.md`; ADR 0005 keeps Conflict and derived
+    attendance data off the page for everyone, its owner included, because
+    the boundary is drawn around the surface rather than the viewer.
+
+    A Person with no current-Semester `Membership` 404s — except your own
+    pk, which keeps `ProfileView`'s unsaved-Membership path so a
+    newly-invited member can declare Roles before an admin rosters them.
+    With no current Semester at all nobody holds such a Membership, so a
+    teammate's pk 404s by the same rule while your own page renders an
+    empty state.
+    """
+
+    template_name = 'scheduling/member_detail.html'
+
+    def get(self, request, pk):
+        """Render `pk`'s page: read-only for a teammate, or your own with the inline Roles form."""
+        semester = get_current_semester()
+        person = self._get_person_or_404(request, pk, semester)
+        return render(request, self.template_name, self._build_context(request, person, semester))
+
+    def post(self, request, pk):
+        """Persist your own declared Roles, or 404 — a teammate's page has no mutation surface."""
+        if pk != request.user.pk:
+            raise Http404('A member can only edit their own declared Roles.')
+        semester = get_current_semester()
+        if semester is None:
+            return render(request, self.template_name, self._build_context(request, request.user, semester))
+        membership = self._get_or_build_membership(request.user, semester)
+        form = MembershipRolesForm(request.POST, instance=membership)
+        if form.is_valid():
+            form.instance = self._membership_for_writing(request.user, semester)
+            form.save()
+            messages.success(request, 'Profile updated.')
+            return redirect('scheduling:member-detail', pk=request.user.pk)
+        context = self._build_context(request, request.user, semester)
+        context['form'] = form
+        return render(request, self.template_name, context)
+
+    def _get_person_or_404(self, request, pk, semester):
+        """Return your own Person unchecked, or a teammate holding a current-Semester Membership, else 404."""
+        if pk == request.user.pk:
+            return request.user
+        membership = get_object_or_404(
+            _scoped_to_current_semester(Membership, semester).select_related('person'), person_id=pk,
+        )
+        return membership.person
+
+    def _build_context(self, request, person, semester):
+        """Build the render context for `person`, adding the inline Roles form only on your own page."""
+        is_self = person.pk == request.user.pk
+        context = {'person': person, 'is_self': is_self, 'semester': semester, 'membership': None}
+        if semester is None:
+            return context
+        membership = self._get_or_build_membership(person, semester)
+        context['membership'] = membership
+        context['declared_roles'] = declared_roles_for(membership)
+        context['assignments'] = assigned_songs_for(person, semester) if membership.pk else []
+        if is_self:
+            context['form'] = MembershipRolesForm(instance=membership)
+        return context
+
+    def _get_or_build_membership(self, person, semester):
+        """Return `person`'s Membership for `semester`, or an unsaved one if they hold none yet."""
+        membership = Membership.objects.filter(person=person, semester=semester).first()
+        return membership or Membership(person=person, semester=semester)
+
+    def _membership_for_writing(self, person, semester):
+        """Return the saved Membership to write the submitted Roles onto, creating it on a first submission.
+
+        The read path deliberately hands back an *unsaved* Membership for a
+        not-yet-rostered member, so merely viewing the page rosters nobody
+        — but two concurrent first submissions would then each try to
+        insert it, and the loser would 500 on
+        `unique_membership_per_person_per_semester`. `get_or_create`
+        absorbs that race, and the form only ever carries `roles` (its
+        `Meta.fields` is empty), so re-pointing it at the row that won
+        writes the same Roles either way.
+        """
+        membership, _ = Membership.objects.get_or_create(person=person, semester=semester)
+        return membership
 
 
 class SongDetailView(BaseView, DetailView):

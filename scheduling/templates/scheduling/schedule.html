@@ -82,7 +82,7 @@
           {% for cell in row.cells %}
             <td>
               {% for assignment in cell.assignments %}
-                <span{% if assignment.is_role_mismatch %} class="role-mismatch"{% endif %}>{{ assignment.person }}</span>{% if not forloop.last %}, {% endif %}
+                <span{% if assignment.is_role_mismatch %} class="role-mismatch"{% endif %}>{{ assignment.person.name }}</span>{% if not forloop.last %}, {% endif %}
               {% empty %}
                 &mdash;
               {% endfor %}

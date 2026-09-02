@@ -7,7 +7,7 @@
 <h2>Assignments</h2>
 <ul>
   {% for assignment in assignments %}
-    <li>{{ assignment.person }} — {{ assignment.role }}{% if assignment.is_role_mismatch %} (role mismatch){% endif %}</li>
+    <li>{{ assignment.person.name }} — {{ assignment.role }}{% if assignment.is_role_mismatch %} (role mismatch){% endif %}</li>
   {% empty %}
     <li>No assignments yet.</li>
   {% endfor %}
@@ -20,7 +20,7 @@
   <ul>
     {% for entry in group.recordings %}
       <li>
-        {{ entry.recording.uploaded_by }} — {{ entry.recording.uploaded_at }}
+        {{ entry.recording.uploaded_by.name }} — {{ entry.recording.uploaded_at }}
         ({{ entry.recording.file_size }} bytes)
         {% if entry.recording.note %}— {{ entry.recording.note }}{% endif %}
         <br>

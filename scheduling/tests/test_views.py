@@ -478,6 +478,67 @@ class SongDetailViewTests(TestCase):
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)
+class MemberFacingEmailPrivacyTests(TestCase):
+    """A Person is identified by name, never by email, on every member-facing page (issue #138).
+
+    `Person.__str__` returns the email address, so rendering a Person object
+    directly leaks it to every logged-in member — contradicting the
+    `email → self only` verdict in `docs/person-page-visibility.md`. Each
+    page below therefore renders `.name` explicitly.
+    """
+
+    def setUp(self):
+        """Log in a viewer, and build a current-Semester Song a separate teammate performs on and recorded."""
+        self.viewer = PersonFactory(password=PASSWORD)
+        self.client.login(username=self.viewer.email, password=PASSWORD)
+        self.semester = SemesterFactory()
+        self.teammate = PersonFactory(name='Teammate Placeholder')
+        self.song = SongFactory(semester=self.semester)
+        self.rehearsal = RehearsalFactory(semester=self.semester)
+        self.rehearsal_song = RehearsalSongFactory(song=self.song, rehearsal=self.rehearsal, order=1)
+        self.role = RoleFactory()
+        # The matrix's columns are the Roles carrying a requirement on the Song, so the
+        # assignment only reaches a cell once that requirement exists.
+        SongRoleRequirementFactory(song=self.song, role=self.role)
+        SongRoleAssignmentFactory(song=self.song, person=self.teammate, role=self.role)
+
+    def test_song_page_identifies_an_uploader_by_name_not_email(self):
+        """The Recordings list on /songs/<id>/ shows the uploader's name, never their email address."""
+        # A distinct Person from the assigned performer, so the name assertion
+        # can only be satisfied by the Recordings list.
+        uploader = PersonFactory(name='Uploader Placeholder')
+        RecordingFactory(rehearsal_song=self.rehearsal_song, uploaded_by=uploader)
+
+        response = self.client.get(reverse('scheduling:song-detail', args=[self.song.pk]))
+
+        self.assertContains(response, 'Uploader Placeholder')
+        self.assertNotContains(response, uploader.email)
+
+    def test_song_page_identifies_an_assigned_performer_by_name_not_email(self):
+        """The Assignments list on /songs/<id>/ shows each performer's name, never their email address."""
+        response = self.client.get(reverse('scheduling:song-detail', args=[self.song.pk]))
+
+        self.assertContains(response, 'Teammate Placeholder')
+        self.assertNotContains(response, self.teammate.email)
+
+    def test_setlist_identifies_performers_by_name_not_email(self):
+        """The Songs page performers column shows each performer's name, never their email address."""
+        response = self.client.get(reverse('scheduling:setlist'))
+
+        self.assertContains(response, 'Teammate Placeholder')
+        self.assertNotContains(response, self.teammate.email)
+
+    def test_schedule_matrix_identifies_assignees_by_name_not_email(self):
+        """The rehearsal assignment matrix shows each assignee's name, never their email address."""
+        url = f"{reverse('scheduling:schedule')}?rehearsal={self.rehearsal.pk}"
+
+        response = self.client.get(url)
+
+        self.assertContains(response, 'Teammate Placeholder')
+        self.assertNotContains(response, self.teammate.email)
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
 class OverviewViewTests(TestCase):
     def setUp(self):
         """Log in a synthetic Person before each test."""

@@ -238,6 +238,29 @@ def roster_for(memberships):
     ).order_by('person__name')
 
 
+def declared_roles_for(membership):
+    """Return `membership`'s declared Roles for its Semester, in name order (issue #138).
+
+    Empty for an unsaved Membership — the not-yet-rostered self case on
+    `/members/<pk>/`, which has no MembershipRole rows to reach.
+    """
+    if membership.pk is None:
+        return Role.objects.none()
+    return Role.objects.filter(membershiprole__membership=membership).order_by('name')
+
+
+def assigned_songs_for(person, semester):
+    """Return `person`'s SongRoleAssignments on `semester`'s Songs, in setlist-position order (issue #138).
+
+    Counted and rendered regardless of `is_role_mismatch` per ADR-0002 —
+    the flag itself stays off this surface
+    (`docs/person-page-visibility.md`).
+    """
+    return SongRoleAssignment.objects.filter(
+        person=person, song__semester=semester,
+    ).select_related('song', 'role').order_by('song__position')
+
+
 @dataclass(frozen=True)
 class SongRehearsalProgress:
     """A Song's RehearsalSong counts split by whether the rehearsal has already happened."""
