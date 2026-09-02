@@ -504,12 +504,15 @@ class MemberFacingEmailPrivacyTests(TestCase):
 
     def test_song_page_identifies_an_uploader_by_name_not_email(self):
         """The Recordings list on /songs/<id>/ shows the uploader's name, never their email address."""
-        RecordingFactory(rehearsal_song=self.rehearsal_song, uploaded_by=self.teammate)
+        # A distinct Person from the assigned performer, so the name assertion
+        # can only be satisfied by the Recordings list.
+        uploader = PersonFactory(name='Uploader Placeholder')
+        RecordingFactory(rehearsal_song=self.rehearsal_song, uploaded_by=uploader)
 
         response = self.client.get(reverse('scheduling:song-detail', args=[self.song.pk]))
 
-        self.assertContains(response, 'Teammate Placeholder')
-        self.assertNotContains(response, self.teammate.email)
+        self.assertContains(response, 'Uploader Placeholder')
+        self.assertNotContains(response, uploader.email)
 
     def test_song_page_identifies_an_assigned_performer_by_name_not_email(self):
         """The Assignments list on /songs/<id>/ shows each performer's name, never their email address."""

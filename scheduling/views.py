@@ -248,6 +248,7 @@ class MemberDetailView(BaseView, View):
         membership = self._get_or_build_membership(request.user, semester)
         form = MembershipRolesForm(request.POST, instance=membership)
         if form.is_valid():
+            form.instance = self._membership_for_writing(request.user, semester)
             form.save()
             messages.success(request, 'Profile updated.')
             return redirect('scheduling:member-detail', pk=request.user.pk)
@@ -282,6 +283,21 @@ class MemberDetailView(BaseView, View):
         """Return `person`'s Membership for `semester`, or an unsaved one if they hold none yet."""
         membership = Membership.objects.filter(person=person, semester=semester).first()
         return membership or Membership(person=person, semester=semester)
+
+    def _membership_for_writing(self, person, semester):
+        """Return the saved Membership to write the submitted Roles onto, creating it on a first submission.
+
+        The read path deliberately hands back an *unsaved* Membership for a
+        not-yet-rostered member, so merely viewing the page rosters nobody
+        — but two concurrent first submissions would then each try to
+        insert it, and the loser would 500 on
+        `unique_membership_per_person_per_semester`. `get_or_create`
+        absorbs that race, and the form only ever carries `roles` (its
+        `Meta.fields` is empty), so re-pointing it at the row that won
+        writes the same Roles either way.
+        """
+        membership, _ = Membership.objects.get_or_create(person=person, semester=semester)
+        return membership
 
 
 class SongDetailView(BaseView, DetailView):

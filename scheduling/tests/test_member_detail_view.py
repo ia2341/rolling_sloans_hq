@@ -7,6 +7,7 @@ merely un-linked. ADR 0005 supplies the Conflict/attendance boundary.
 """
 
 from datetime import time
+from unittest.mock import patch
 
 from django.test import TestCase, override_settings
 from django.urls import reverse
@@ -26,6 +27,7 @@ from scheduling.factories import (
     SongRoleAssignmentFactory,
 )
 from scheduling.models import Conflict, Membership, MembershipRole
+from scheduling.views import MemberDetailView
 
 PASSWORD = 'a-strong-test-password-123'
 
@@ -419,6 +421,27 @@ class SelfViewPostTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'is not one of the available choices')
         self.assertFalse(Membership.objects.filter(person=self.person, semester=self.semester).exists())
+
+    def test_first_time_post_that_loses_the_creation_race_still_saves_its_roles(self):
+        """A concurrent first submission whose Membership was created under it writes its Roles to that row.
+
+        Both requests read no Membership and build an unsaved one; patching
+        the lookup to return a stale unsaved instance stands in for the
+        loser, which must not 500 on
+        `unique_membership_per_person_per_semester`.
+        """
+        role = RoleFactory()
+        winner = Membership.objects.create(person=self.person, semester=self.semester)
+        stale = Membership(person=self.person, semester=self.semester)
+
+        with patch.object(MemberDetailView, '_get_or_build_membership', return_value=stale):
+            response = self.client.post(member_detail_url(self.person), {'roles': [role.pk]})
+
+        self.assertRedirects(response, member_detail_url(self.person))
+        self.assertEqual(Membership.objects.filter(person=self.person, semester=self.semester).count(), 1)
+        self.assertEqual(
+            list(MembershipRole.objects.filter(membership=winner).values_list('role', flat=True)), [role.pk],
+        )
 
     def test_post_with_no_current_semester_saves_nothing(self):
         """With no Semester at all, a POST to your own page re-renders the empty state instead of erroring."""
