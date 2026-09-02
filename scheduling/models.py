@@ -271,10 +271,14 @@ class Rehearsal(models.Model):
     def _blocked_full_setlist_flip_count(self):
         """Return how many Conflicts block making this saved Rehearsal the Dress Rehearsal, else 0 (issue #150).
 
-        Non-zero only for an existing row being flipped to
-        is_full_setlist=True while members have declared Conflicts against
-        it: ADR-0006 forbids those rows, and discarding them silently would
-        lose declared unavailability, so the flip is refused instead.
+        Non-zero only when a saved Rehearsal is about to be written with
+        is_full_setlist=True while Conflicts still point at it. It reads the
+        pending value rather than diffing against the stored one: a
+        Rehearsal that is already the Dress Rehearsal can carry no
+        Conflicts (ADR-0006 keeps them off it from the Conflict side), so
+        "about to be true with Conflicts" is exactly the flip. Discarding
+        those declarations silently would lose data ADR-0005 treats as
+        sensitive, so the write is refused instead.
         """
         if self._state.adding or not self.is_full_setlist:
             return 0
