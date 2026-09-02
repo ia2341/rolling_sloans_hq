@@ -22,6 +22,21 @@ class SemesterFactoryTests(unittest.TestCase):
         self.assertTrue(semester.name)
         self.assertGreater(semester.default_rehearsal_duration_minutes, 0)
 
+    def test_builds_a_published_semester_by_default(self):
+        """The default variant is published — the only state a member can see."""
+        self.assertIsNotNone(SemesterFactory.build().published_at)
+
+    def test_the_draft_trait_builds_an_unpublished_semester(self):
+        """`draft=True` leaves published_at null, which is what makes a Semester a draft."""
+        self.assertIsNone(SemesterFactory.build(draft=True).published_at)
+
+    def test_successive_published_semesters_are_strictly_ordered(self):
+        """Each default published_at is strictly greater than the last, so the newest built one is unambiguously live."""
+        earlier = SemesterFactory.build()
+        later = SemesterFactory.build()
+
+        self.assertLess(earlier.published_at, later.published_at)
+
 
 class RoleFactoryTests(unittest.TestCase):
     def test_builds_active_role_by_default(self):

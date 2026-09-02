@@ -164,7 +164,7 @@ class SongForm(forms.ModelForm):
 
 
 class SongRoleAssignmentForm(forms.ModelForm):
-    """Assigns a Person to a Role on a Song, restricted to the current Semester's Songs (issue #60).
+    """Assigns a Person to a Role on a Song, restricted to the viewing Semester's Songs (issue #60).
 
     `is_role_mismatch` is excluded: SongRoleAssignment.save() always
     recomputes it from the Person's current Membership, so it's never a
@@ -176,7 +176,7 @@ class SongRoleAssignmentForm(forms.ModelForm):
         fields: ClassVar[list[str]] = ['song', 'role', 'person']
 
     def __init__(self, *args, songs=None, **kwargs):
-        """Restrict the `song` choices to `songs` (the current Semester's) and `role` to active Roles."""
+        """Restrict the `song` choices to `songs` (the viewing Semester's) and `role` to active Roles."""
         super().__init__(*args, **kwargs)
         self.fields['song'].queryset = songs if songs is not None else Song.objects.none()
         self.fields['role'].queryset = Role.objects.filter(is_active=True)
@@ -196,7 +196,7 @@ class RecordingUploadForm(forms.Form):
     note = forms.CharField(required=False, widget=forms.Textarea)
 
     def __init__(self, *args, rehearsal_songs=None, **kwargs):
-        """Restrict the `rehearsal_song` choices to `rehearsal_songs` (the current Semester's)."""
+        """Restrict the `rehearsal_song` choices to `rehearsal_songs` (the viewing Semester's)."""
         super().__init__(*args, **kwargs)
         self.fields['rehearsal_song'].queryset = (
             rehearsal_songs if rehearsal_songs is not None else RehearsalSong.objects.none()

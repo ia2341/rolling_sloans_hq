@@ -10,9 +10,18 @@ from django.dispatch import receiver
 
 
 class Semester(models.Model):
-    """A term (e.g. "Fall 2026") carrying default timing values for its Rehearsals and Songs."""
+    """A term (e.g. "Fall 2026") carrying default timing values for its Rehearsals and Songs.
+
+    Also carries the semester lifecycle (ADR-0010): a Semester whose
+    `published_at` is null is a **draft** — it exists, an admin can build it
+    out, and no member sees it — and the **Live Semester** is the one with
+    the greatest `published_at`. `created_at` exists so semesters can be
+    ordered chronologically without leaning on primary keys.
+    """
 
     name = models.CharField(max_length=255)
+    created_at = models.DateTimeField(auto_now_add=True)
+    published_at = models.DateTimeField(null=True, blank=True, db_index=True)
     default_rehearsal_duration_minutes = models.PositiveIntegerField()
     default_setup_grace_minutes = models.PositiveIntegerField()
     default_teardown_grace_minutes = models.PositiveIntegerField()
