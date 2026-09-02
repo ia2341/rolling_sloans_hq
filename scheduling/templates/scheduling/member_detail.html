@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% comment %}
+One Person's page for the current Semester (issue #138). Every field here has
+a verdict in docs/person-page-visibility.md; anything not in that table is
+`never`, so do not add a field to this template without adding its row first.
+Notably absent by decision, not oversight: is_role_mismatch (ADR 0002), all
+Conflict and derived attendance data (ADR 0005), Recordings, and every
+admin-status field.
+{% endcomment %}
+{% block title %}{{ person.name }}{% endblock %}
+{% block content %}
+<h1>{{ person.name }}</h1>
+{% for message in messages %}
+  <p>{{ message }}</p>
+{% endfor %}
+{% if is_self %}
+  <p>Email: {{ person.email }}</p>
+  <p><a href="{% url 'identity:password-change' %}">Change password</a></p>
+{% endif %}
+
+{% if semester %}
+  <h2>{{ semester }}</h2>
+  {% if membership.pk %}
+    <h3>Declared roles</h3>
+    <p>
+      {% for role in declared_roles %}
+        {{ role.name }}{% if not forloop.last %}, {% endif %}
+      {% empty %}
+        &mdash;
+      {% endfor %}
+    </p>
+
+    <h3>Songs assigned</h3>
+    <ul>
+      {% for assignment in assignments %}
+        <li>
+          <a href="{% url 'scheduling:song-detail' assignment.song.pk %}">{{ assignment.song.title }}</a>
+          &mdash; {{ assignment.role.name }}
+        </li>
+      {% empty %}
+        <li>No songs assigned yet.</li>
+      {% endfor %}
+    </ul>
+  {% elif is_self %}
+    <p>You are not on the roster for this semester yet.</p>
+  {% endif %}
+
+  {% if form %}
+    <form method="post">
+      {% csrf_token %}
+      {{ form.as_p }}
+      <button type="submit">Save</button>
+    </form>
+  {% endif %}
+{% else %}
+  <p>There is no active semester yet.</p>
+{% endif %}
+{% endblock %}

@@ -33,7 +33,7 @@
           <td>{{ song.artist }}</td>
           <td>
             {% for performer in song.performers %}
-              {{ performer.person }} ({{ performer.roles|join:", " }}){% if not forloop.last %}, {% endif %}
+              {{ performer.person.name }} ({{ performer.roles|join:", " }}){% if not forloop.last %}, {% endif %}
             {% empty %}
               &mdash;
             {% endfor %}

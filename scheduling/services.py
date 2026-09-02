@@ -238,6 +238,29 @@ def roster_for(memberships):
     ).order_by('person__name')
 
 
+def declared_roles_for(membership):
+    """Return `membership`'s declared Roles for its Semester, in name order (issue #138).
+
+    Empty for an unsaved Membership — the not-yet-rostered self case on
+    `/members/<pk>/`, which has no MembershipRole rows to reach.
+    """
+    if membership.pk is None:
+        return Role.objects.none()
+    return Role.objects.filter(membershiprole__membership=membership).order_by('name')
+
+
+def assigned_songs_for(person, semester):
+    """Return `person`'s SongRoleAssignments on `semester`'s Songs, in setlist-position order (issue #138).
+
+    Counted and rendered regardless of `is_role_mismatch` per ADR-0002 —
+    the flag itself stays off this surface
+    (`docs/person-page-visibility.md`).
+    """
+    return SongRoleAssignment.objects.filter(
+        person=person, song__semester=semester,
+    ).select_related('song', 'role').order_by('song__position')
+
+
 @dataclass(frozen=True)
 class SongRehearsalProgress:
     """A Song's RehearsalSong counts split by whether the rehearsal has already happened."""
@@ -361,7 +384,8 @@ def next_attended_rehearsal_for(person, semester):
     "Next" is not necessarily the band's literal next Rehearsal: this walks
     the Semester's upcoming Rehearsals in date order and returns the first
     one with a non-None attendance_suggestion_for (issue #94), skipping any
-    Rehearsal the Person isn't needed at. Deliberately not
+    Rehearsal the Person isn't needed at — never the Dress Rehearsal, whose
+    suggestion is non-None for everyone (ADR-0006). Deliberately not
     Rehearsal.attendance_for alone: that only reports endpoint (start/end)
     attendance, so a Person assigned only to a middle RehearsalSong (or a
     middle Dress Rehearsal setlist song) would be wrongly skipped. Also the
@@ -480,11 +504,11 @@ def attendance_suggestion_for(rehearsal, person):
     arrival_buffer_minutes/departure_buffer_minutes (already defaulted from
     the Semester at Rehearsal creation time). Falls back to the Rehearsal's
     own start_time/end_time, with no buffer applied, whenever
-    attendance_for reports full-window attendance (needed at both ends) —
-    and, for the Dress Rehearsal (ADR-0003, no persisted RehearsalSong
-    rows), whenever the Person has any assignment among the live setlist at
-    all, since there's no per-song clock time to derive a narrower window
-    from.
+    attendance_for reports full-window attendance (needed at both ends).
+    The Dress Rehearsal (ADR-0003, no persisted RehearsalSong rows) always
+    returns that full window for every Person, assigned or not: attendance
+    there is mandatory (ADR-0006), and there's no per-song clock time to
+    derive a narrower window from anyway.
     """
     if rehearsal.is_full_setlist:
         return _dress_rehearsal_attendance_suggestion(rehearsal, person)
@@ -492,12 +516,17 @@ def attendance_suggestion_for(rehearsal, person):
 
 
 def _dress_rehearsal_attendance_suggestion(rehearsal, person):
-    """Return the Dress Rehearsal's own start/end as `person`'s suggestion, or None if they have no assignment."""
-    has_assignment = SongRoleAssignment.objects.filter(
-        person=person, song__in=rehearsal.dress_rehearsal_songs,
-    ).exists()
-    if not has_assignment:
-        return None
+    """Return the Dress Rehearsal's own start/end as every `person`'s suggestion (ADR-0006, issue #149).
+
+    Never None: attendance at the Dress Rehearsal is mandatory, so a Person
+    holding no Role Assignment on any setlist Song is expected for the whole
+    window just the same as an assigned one — `person` is unused for that
+    reason. The window is the Rehearsal's own start_time/end_time, which
+    already carry the Semester's setup/teardown grace (Rehearsal.save()
+    derives end_time from them), with no arrival/departure buffer applied,
+    matching the full-window fallback in
+    _regular_rehearsal_attendance_suggestion.
+    """
     return AttendanceSuggestion(arrival_time=rehearsal.start_time, departure_time=rehearsal.end_time)
 
 
@@ -609,9 +638,19 @@ CONFLICT_TYPE_LABELS = {
 
 
 def future_rehearsals_for(semester) -> list[Rehearsal]:
-    """Return `semester`'s Rehearsals dated today or later, in date order (issue #98's Upcoming Rehearsals list)."""
+    """Return `semester`'s declarable Rehearsals dated today or later, in date order (issue #98's Upcoming Rehearsals list).
+
+    The Dress Rehearsal is excluded: attendance there is mandatory, so
+    there is nothing to declare against it (ADR-0006). The Conflicts page
+    says so in place of the missing row, rather than letting it silently
+    vanish.
+    """
     today = timezone.localdate()
-    return list(Rehearsal.objects.filter(semester=semester, date__gte=today).order_by('date', 'start_time'))
+    return list(
+        Rehearsal.objects.filter(
+            semester=semester, date__gte=today, is_full_setlist=False,
+        ).order_by('date', 'start_time'),
+    )
 
 
 def declare_conflict(person, rehearsal, declaration_type, declared_time=None, reason='', allow_edit=True) -> Conflict:
@@ -634,7 +673,15 @@ def declare_conflict(person, rehearsal, declaration_type, declared_time=None, re
     declare endpoint) instead rejects an already-declared Rehearsal with an
     IntegrityError, including one that only started existing after the
     caller's own pre-check raced a concurrent declaration.
+
+    A Dress Rehearsal is rejected outright before any DB write: attendance
+    there is mandatory (ADR-0006).
     """
+    if rehearsal.is_full_setlist:
+        raise ValueError(
+            'Attendance at the Dress Rehearsal (is_full_setlist=True) is mandatory, '
+            'so a Conflict cannot be declared against it.'
+        )
     with transaction.atomic():
         if declaration_type == CONFLICT_FULL_ABSENCE:
             conflict, created = Conflict.objects.update_or_create(

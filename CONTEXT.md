@@ -47,7 +47,7 @@ A dated, timed event within a Semester during which some of that semester's Song
 _Avoid_: Practice, Session
 
 **Dress Rehearsal**:
-The Rehearsal whose song coverage always tracks the Semester's current setlist, in concert order — not a fixed set of songs chosen in advance, since it should reflect whatever the setlist looks like at the time.
+The Rehearsal whose song coverage always tracks the Semester's current setlist, in concert order — not a fixed set of songs chosen in advance, since it should reflect whatever the setlist looks like at the time. Attendance is **mandatory**: every member is expected there, so no Conflict can be declared against it (ADR-0006).
 
 **Rehearsal Pattern**:
 The recurring shape of a Semester's rehearsal calendar — its Rehearsal Times, the range of dates they run over, and its Skip Dates. Records what was asked for, not what exists: the Rehearsals themselves are the source of truth, and changing a Pattern changes nothing until it is used to generate.
@@ -62,7 +62,7 @@ A date inside a Semester's range on which no Rehearsal happens even though a Reh
 _Avoid_: Blackout, Exception
 
 **Conflict**:
-A Person's declared unavailability for one Rehearsal — either **full** (not there at all) or **partial** (there for some of it). Editable in place at any time; there is no submission deadline or edit lock. The *absence* of a Conflict is implicit full availability, not an explicit "available" status — the distinction is deliberate, so a future confirmed-available status stays expressible.
+A Person's declared unavailability for one Rehearsal other than the Dress Rehearsal, where attendance is mandatory (ADR-0006) — either **full** (not there at all) or **partial** (there for some of it). Editable in place at any time; there is no submission deadline or edit lock. The *absence* of a Conflict is implicit full availability, not an explicit "available" status — the distinction is deliberate, so a future confirmed-available status stays expressible.
 _Avoid_: Absence, Excuse, Unavailability
 
 **Conflict Window**:

@@ -1,8 +1,9 @@
-"""Rehearsal.attendance_for: derived arrival/departure need for a Person (issue #38)."""
+"""Rehearsal.attendance_for and the Dress Rehearsal attendance suggestion (issues #38, #149)."""
 
 from django.test import TestCase
 
 from identity.factories import PersonFactory
+from scheduling import services
 from scheduling.factories import (
     RehearsalFactory,
     RehearsalSongFactory,
@@ -120,3 +121,44 @@ class DressRehearsalAttendanceForTests(TestCase):
 
         self.assertFalse(attendance.needed_from_start)
         self.assertFalse(attendance.needed_until_end)
+
+
+class DressRehearsalAttendanceSuggestionTests(TestCase):
+    """attendance_suggestion_for on the Dress Rehearsal: mandatory for everyone (ADR-0006, issue #149)."""
+
+    def setUp(self):
+        """Build a Dress Rehearsal over a two-Song setlist, plus an unassigned Person."""
+        self.semester = SemesterFactory()
+        self.rehearsal = RehearsalFactory(semester=self.semester, is_full_setlist=True)
+        self.role = RoleFactory()
+        self.first_song = SongFactory(semester=self.semester, position=1)
+        self.last_song = SongFactory(semester=self.semester, position=2)
+        self.person = PersonFactory()
+
+    def test_person_with_no_assignments_gets_the_full_rehearsal_window(self):
+        """A Person holding no Role Assignment on any setlist Song is still expected for the whole window."""
+        suggestion = services.attendance_suggestion_for(self.rehearsal, self.person)
+
+        self.assertIsNotNone(suggestion)
+        self.assertEqual(suggestion.arrival_time, self.rehearsal.start_time)
+        self.assertEqual(suggestion.departure_time, self.rehearsal.end_time)
+
+    def test_person_with_an_assignment_gets_the_same_full_rehearsal_window(self):
+        """An assigned Person's window is the Rehearsal's own start/end, no buffer applied."""
+        SongRoleAssignmentFactory(song=self.first_song, role=self.role, person=self.person)
+
+        suggestion = services.attendance_suggestion_for(self.rehearsal, self.person)
+
+        self.assertEqual(suggestion.arrival_time, self.rehearsal.start_time)
+        self.assertEqual(suggestion.departure_time, self.rehearsal.end_time)
+
+    def test_empty_setlist_still_yields_the_full_rehearsal_window(self):
+        """A Dress Rehearsal with no setlist Songs yet is still mandatory, so the window still renders."""
+        empty_semester = SemesterFactory()
+        empty_rehearsal = RehearsalFactory(semester=empty_semester, is_full_setlist=True)
+
+        suggestion = services.attendance_suggestion_for(empty_rehearsal, self.person)
+
+        self.assertIsNotNone(suggestion)
+        self.assertEqual(suggestion.arrival_time, empty_rehearsal.start_time)
+        self.assertEqual(suggestion.departure_time, empty_rehearsal.end_time)

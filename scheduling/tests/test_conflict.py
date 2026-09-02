@@ -2,6 +2,7 @@
 
 from datetime import date, time
 
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.test import TestCase
 
@@ -126,3 +127,42 @@ class ConflictFieldTests(TestCase):
 
         reloaded = Conflict.objects.get(pk=conflict.pk)
         self.assertEqual(reloaded.reason, 'Out of town for a wedding.')
+
+
+class ConflictDressRehearsalTests(TestCase):
+    """Dress Rehearsal attendance is mandatory, so no Conflict may point at one (ADR-0006)."""
+
+    def setUp(self):
+        """Build a Person and a Dress Rehearsal for every test."""
+        self.person = PersonFactory()
+        self.dress_rehearsal = RehearsalFactory(is_full_setlist=True)
+
+    def test_clean_rejects_a_conflict_on_the_dress_rehearsal(self):
+        """clean() raises a ValidationError so a ModelForm surfaces it as a field error, not a 500."""
+        conflict = Conflict(
+            person=self.person, rehearsal=self.dress_rehearsal, type=Conflict.FULL_CONFLICT,
+        )
+
+        with self.assertRaises(ValidationError) as raised:
+            conflict.clean()
+
+        self.assertIn('rehearsal', raised.exception.message_dict)
+
+    def test_save_rejects_a_conflict_on_the_dress_rehearsal(self):
+        """save() raises for every write path, including .objects.create() and the Django admin."""
+        with self.assertRaises(ValueError):
+            Conflict.objects.create(
+                person=self.person, rehearsal=self.dress_rehearsal, type=Conflict.FULL_CONFLICT,
+            )
+
+        self.assertFalse(Conflict.objects.filter(rehearsal=self.dress_rehearsal).exists())
+
+    def test_an_ordinary_rehearsal_is_still_accepted(self):
+        """A Conflict on a non-Dress Rehearsal passes both clean() and save() untouched."""
+        rehearsal = RehearsalFactory(is_full_setlist=False)
+
+        conflict = Conflict(person=self.person, rehearsal=rehearsal, type=Conflict.FULL_CONFLICT)
+        conflict.clean()
+        conflict.save()
+
+        self.assertTrue(Conflict.objects.filter(pk=conflict.pk).exists())

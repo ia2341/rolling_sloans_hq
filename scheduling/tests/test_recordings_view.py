@@ -63,12 +63,45 @@ class RecordingUploadViewGetTests(TestCase):
         self.assertEqual(list(response.context['form'].fields['rehearsal_song'].queryset), [])
         self.assertContains(response, 'No songs have been scheduled into a rehearsal yet')
 
-    def test_song_with_no_scheduled_slots_shows_an_explanatory_empty_state_message(self):
-        """`?song=<id>` for a Song with no RehearsalSong rows yet explains the empty dropdown (issue #119)."""
+    def test_song_with_no_scheduled_slots_shows_a_message_naming_that_song(self):
+        """`?song=<id>` for a Song with no RehearsalSong rows yet blames that Song, not the whole Semester."""
         semester = SemesterFactory()
-        song_with_no_slots = SongFactory(semester=semester)
+        song_with_no_slots = SongFactory(semester=semester, title='Only Unscheduled Song')
 
         response = self.client.get(reverse('scheduling:recordings'), {'song': song_with_no_slots.pk})
+
+        self.assertContains(response, 'Only Unscheduled Song')
+        self.assertContains(response, "hasn't been scheduled into a rehearsal yet")
+        self.assertNotContains(response, 'No songs have been scheduled into a rehearsal yet')
+
+    def test_unscheduled_song_message_does_not_claim_the_semester_has_no_scheduled_songs(self):
+        """With other Songs already scheduled, `?song=<unscheduled id>` must not claim none are (issue #121)."""
+        semester = SemesterFactory()
+        RehearsalSongFactory(rehearsal__semester=semester, song__semester=semester)
+        song_with_no_slots = SongFactory(semester=semester, title='Skipped Number')
+
+        response = self.client.get(reverse('scheduling:recordings'), {'song': song_with_no_slots.pk})
+
+        self.assertNotContains(response, 'No songs have been scheduled into a rehearsal yet')
+        self.assertContains(response, 'Skipped Number')
+        self.assertContains(response, "hasn't been scheduled into a rehearsal yet")
+
+    def test_unknown_song_param_falls_back_to_a_song_scoped_message(self):
+        """A `?song=<id>` matching no current-Semester Song still scopes the message to that song, not the Semester."""
+        semester = SemesterFactory()
+        RehearsalSongFactory(rehearsal__semester=semester, song__semester=semester)
+
+        response = self.client.get(reverse('scheduling:recordings'), {'song': 99_999})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, 'No songs have been scheduled into a rehearsal yet')
+        self.assertContains(response, "hasn't been scheduled into a rehearsal yet")
+
+    def test_semester_wide_empty_state_message_when_no_song_param_is_given(self):
+        """Without `?song=`, an empty dropdown keeps the Semester-wide wording (issue #119, no regression)."""
+        SemesterFactory()
+
+        response = self.client.get(reverse('scheduling:recordings'))
 
         self.assertContains(response, 'No songs have been scheduled into a rehearsal yet')
 
@@ -139,6 +172,13 @@ class RecordingUploadViewGetTests(TestCase):
         response = self.client.get(reverse('scheduling:recordings'), {'song': 'not-a-number'})
 
         self.assertEqual(response.status_code, 404)
+
+    def test_non_numeric_song_param_still_renders_when_there_is_no_current_semester(self):
+        """With no Semester there's nothing to scope to, so a malformed `?song=` renders rather than 404ing."""
+        response = self.client.get(reverse('scheduling:recordings'), {'song': 'not-a-number'})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(list(response.context['form'].fields['rehearsal_song'].queryset), [])
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)

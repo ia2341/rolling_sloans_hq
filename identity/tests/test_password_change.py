@@ -51,5 +51,5 @@ class PasswordChangeViewTests(TestCase):
         reloaded = Person.objects.get(pk=self.person.pk)
         self.assertTrue(reloaded.check_password(NEW_PASSWORD))
         self.assertFalse(reloaded.check_password(OLD_PASSWORD))
-        whoami = self.client.get(reverse('scheduling:profile'))
+        whoami = self.client.get(reverse('scheduling:member-detail', args=[self.person.pk]))
         self.assertTrue(whoami.wsgi_request.user.is_authenticated)

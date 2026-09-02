@@ -5,7 +5,7 @@ from datetime import time
 from django.core.exceptions import ValidationError
 from django.test import TestCase
 
-from scheduling.factories import RehearsalFactory, SemesterFactory
+from scheduling.factories import ConflictFactory, RehearsalFactory, SemesterFactory
 from scheduling.models import Rehearsal
 
 
@@ -142,6 +142,78 @@ class RehearsalIsFullSetlistTests(TestCase):
         reloaded.is_full_setlist = False
         reloaded.save()
         self.assertFalse(Rehearsal.objects.get(pk=rehearsal.pk).is_full_setlist)
+
+
+class RehearsalFullSetlistFlipWithConflictsTests(TestCase):
+    """A Rehearsal members have declared Conflicts against can't become the Dress Rehearsal (issue #150, ADR-0006)."""
+
+    def test_flip_on_is_blocked_when_conflicts_have_been_declared(self):
+        """save() refuses the flip and names the count, so no write path can create Conflicts ADR-0006 forbids."""
+        rehearsal = RehearsalFactory(is_full_setlist=False)
+        ConflictFactory(rehearsal=rehearsal)
+        ConflictFactory(rehearsal=rehearsal)
+
+        rehearsal.is_full_setlist = True
+        with self.assertRaises(ValueError) as raised:
+            rehearsal.save()
+
+        self.assertIn('2', str(raised.exception))
+        self.assertFalse(Rehearsal.objects.get(pk=rehearsal.pk).is_full_setlist)
+
+    def test_clean_reports_the_blocked_flip_as_a_field_error_naming_the_count(self):
+        """clean() surfaces the blocked flip as an is_full_setlist error naming the count, not a 500."""
+        rehearsal = RehearsalFactory(is_full_setlist=False)
+        ConflictFactory(rehearsal=rehearsal)
+
+        rehearsal.is_full_setlist = True
+        with self.assertRaises(ValidationError) as raised:
+            rehearsal.clean()
+
+        self.assertIn('1', raised.exception.message_dict['is_full_setlist'][0])
+
+    def test_the_blocked_flip_message_names_no_member_and_no_reason(self):
+        """The message carries only a count — never who declared, or why (ADR-0005)."""
+        rehearsal = RehearsalFactory(is_full_setlist=False)
+        conflict = ConflictFactory(rehearsal=rehearsal, reason='Out of town for a wedding.')
+
+        rehearsal.is_full_setlist = True
+        with self.assertRaises(ValidationError) as raised:
+            rehearsal.clean()
+
+        message = raised.exception.message_dict['is_full_setlist'][0]
+        self.assertNotIn(conflict.reason, message)
+        self.assertNotIn(conflict.person.email, message)
+
+    def test_flip_on_is_free_for_a_rehearsal_with_no_conflicts_of_its_own(self):
+        """A Rehearsal nobody has declared against still becomes the Dress Rehearsal, whatever siblings carry."""
+        rehearsal = RehearsalFactory(is_full_setlist=False)
+        ConflictFactory()  # a Conflict against some other Rehearsal doesn't block this one
+
+        rehearsal.is_full_setlist = True
+        rehearsal.clean()
+        rehearsal.save()
+
+        self.assertTrue(Rehearsal.objects.get(pk=rehearsal.pk).is_full_setlist)
+
+    def test_flip_back_off_stays_allowed(self):
+        """Turning the Dress Rehearsal back into an ordinary Rehearsal is never blocked."""
+        rehearsal = RehearsalFactory(is_full_setlist=True)
+
+        rehearsal.is_full_setlist = False
+        rehearsal.clean()
+        rehearsal.save()
+
+        self.assertFalse(Rehearsal.objects.get(pk=rehearsal.pk).is_full_setlist)
+
+    def test_unrelated_edits_are_unaffected_by_existing_conflicts(self):
+        """A Rehearsal with Conflicts still saves ordinary edits, so long as is_full_setlist stays false."""
+        rehearsal = RehearsalFactory(is_full_setlist=False)
+        ConflictFactory(rehearsal=rehearsal)
+
+        rehearsal.setup_grace_minutes = 45
+        rehearsal.save()
+
+        self.assertEqual(Rehearsal.objects.get(pk=rehearsal.pk).setup_grace_minutes, 45)
 
 
 class RehearsalCleanWithMissingRequiredFieldsTests(TestCase):

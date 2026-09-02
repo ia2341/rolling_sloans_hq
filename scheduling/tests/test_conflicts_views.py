@@ -115,6 +115,39 @@ class ConflictsViewGetTests(TestCase):
         self.assertIsNone(row['conflict'])
         self.assertIsNotNone(row['form'])
 
+    def test_dress_rehearsal_is_absent_and_explained(self):
+        """The Dress Rehearsal drops out of Upcoming Rehearsals, replaced by the mandatory-attendance note (ADR-0006)."""
+        ordinary = RehearsalFactory(semester=self.semester, date=timezone.localdate() + timedelta(days=1))
+        dress_rehearsal = RehearsalFactory(
+            semester=self.semester, date=timezone.localdate() + timedelta(days=2), is_full_setlist=True,
+        )
+
+        response = self.client.get(reverse('scheduling:conflicts'))
+
+        rehearsals = [row['rehearsal'] for row in response.context['rows']]
+        self.assertEqual(rehearsals, [ordinary])
+        self.assertNotIn(dress_rehearsal, rehearsals)
+        self.assertContains(response, 'Dress Rehearsal is mandatory')
+
+    def test_posting_a_declaration_for_the_dress_rehearsal_is_rejected(self):
+        """A hand-crafted POST naming the Dress Rehearsal 404s instead of creating a Conflict (ADR-0006)."""
+        dress_rehearsal = RehearsalFactory(
+            semester=self.semester, date=timezone.localdate() + timedelta(days=1), is_full_setlist=True,
+        )
+        prefix = f'rehearsal-{dress_rehearsal.pk}'
+
+        response = self.client.post(
+            reverse('scheduling:conflicts'),
+            {
+                'rehearsal_id': dress_rehearsal.pk,
+                f'{prefix}-declaration_type': 'full_absence',
+                f'{prefix}-reason': '',
+            },
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertFalse(Conflict.objects.filter(rehearsal=dress_rehearsal).exists())
+
     def test_rehearsal_query_param_marks_the_matching_undeclared_row_selected(self):
         """`?rehearsal=<id>` naming an undeclared future Rehearsal marks its Upcoming row selected, no other rows (issue #100)."""
         other = RehearsalFactory(semester=self.semester, date=timezone.localdate() + timedelta(days=1))
