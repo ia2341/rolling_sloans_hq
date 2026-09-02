@@ -767,12 +767,28 @@ class RecordingUploadView(BaseView, View):
         return redirect('scheduling:recordings')
 
     def _render(self, form):
-        """Render the picker/confirm template with `form` and whether it has any RehearsalSong options."""
-        has_rehearsal_song_options = form.fields['rehearsal_song'].queryset.exists()
+        """Render the picker/confirm template with `form`, its option count, and any `?song=` scope.
+
+        The empty-dropdown message has to differ by entry point: semester-wide
+        when the picker is unfiltered, but scoped to the one Song when
+        `?song=<id>` narrowed it — otherwise a single unscheduled Song's page
+        wrongly reports that *no* Song is scheduled (issue #121).
+        """
+        raw_song_id = self.request.GET.get('song')
         return render(self.request, self.template_name, {
             'form': form,
-            'has_rehearsal_song_options': has_rehearsal_song_options,
+            'has_rehearsal_song_options': form.fields['rehearsal_song'].queryset.exists(),
+            'is_scoped_to_one_song': raw_song_id is not None,
+            'requested_song': self._requested_song(raw_song_id),
         })
+
+    def _requested_song(self, raw_song_id):
+        """Return the current Semester's `?song=<id>` Song, or None when unscoped or no such Song exists."""
+        if raw_song_id is None:
+            return None
+        return Song.objects.filter(
+            pk=self._parse_song_id(raw_song_id), semester=get_current_semester(),
+        ).first()
 
     def _rehearsal_songs(self, request):
         """Return the current Semester's RehearsalSongs, filtered to `?song=<id>` when given.
