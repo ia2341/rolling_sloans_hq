@@ -4,7 +4,10 @@
     {% if row.rehearsal.is_full_setlist %}(Dress Rehearsal){% endif %}
   </a>
   &mdash;
-  {% if row.attendance_suggestion %}
+  {% if row.rehearsal.is_full_setlist %}
+    {# Attendance is mandatory here (ADR-0006), so this branch can never render "Not needed". #}
+    Mandatory{% if row.attendance_suggestion %} &mdash; You: {{ row.attendance_suggestion.arrival_time }}&ndash;{{ row.attendance_suggestion.departure_time }}{% endif %}
+  {% elif row.attendance_suggestion %}
     You: {{ row.attendance_suggestion.arrival_time }}&ndash;{{ row.attendance_suggestion.departure_time }}
   {% else %}
     Not needed
