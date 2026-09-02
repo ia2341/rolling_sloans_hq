@@ -8,6 +8,8 @@ This is a Django backend for a private, auth-gated band portal. Project configur
 - `scheduling/` owns semester-scoped band and rehearsal models.
 - Each app keeps tests in `<app>/tests/`, factories in `<app>/factories.py`, and schema changes in `<app>/migrations/`.
 
+Frontend assets are vendored, pinned and committed under the top-level `static/` directory (Pico.css, HTMX, Alpine, SortableJS), with one hand-written override sheet at `static/css/app.css`. Never add a `package.json`, a bundler, a node toolchain, a CDN reference or DRF; bump a vendored library by committing the new file under its new version-stamped name and updating the `{% static %}` reference. WhiteNoise serves `STATIC_ROOT` in production, so the deploy build has to run `collectstatic` (`build.sh`).
+
 Read `CONTEXT.md` before changing scheduling concepts, and read the relevant `docs/adr/` decision record before changing behavior it covers. Never call an irreversible side effect (mail, R2 deletion, any external API) inline inside a service function — register it with `transaction.on_commit()`, since admin previews run the real save and roll it back (ADR 0008).
 
 ## Build, Test, and Development Commands
