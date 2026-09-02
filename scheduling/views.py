@@ -41,9 +41,12 @@ from scheduling.services import (
     future_rehearsals_for,
     get_current_semester,
     next_attended_rehearsal_for,
+    performers_for,
+    recording_count_for,
     rehearsal_count_target,
     rehearsal_schedule_for,
     reserve_recording_upload,
+    song_rehearsal_progress,
     songs_with_progress_for,
     upcoming_rehearsals_for,
 )
@@ -160,19 +163,20 @@ class ScheduleView(BaseView, TemplateView):
 
 
 class SetlistView(BaseView, TemplateView):
-    """Lists the current Semester's Songs in concert-position order, with rehearsal-count progress per Song."""
+    """Sortable Songs table: order/title, artist, performers, rehearsals-remaining, and recording count (issue #103)."""
 
     template_name = 'scheduling/setlist.html'
 
     def get_context_data(self, **kwargs):
-        """Add the current Semester's Songs, each annotated with its rehearsal-count actual/target."""
+        """Add the current Semester's Songs, each annotated with performers, rehearsal progress, and recording count."""
         context = super().get_context_data(**kwargs)
         semester = get_current_semester()
         context['semester'] = semester
-        songs = list(_scoped_to_current_semester(Song, semester))
+        songs = list(_scoped_to_current_semester(Song, semester).order_by('position'))
         for song in songs:
-            song.rehearsal_count_actual = song.rehearsalsong_set.count()
-            song.rehearsal_count_target = rehearsal_count_target(song)
+            song.performers = performers_for(song)
+            song.progress = song_rehearsal_progress(song)
+            song.recording_count = recording_count_for(song)
         context['songs'] = songs
         return context
 

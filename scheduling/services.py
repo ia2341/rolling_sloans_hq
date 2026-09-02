@@ -227,6 +227,50 @@ def songs_with_progress_for(semester, person) -> list[Song]:
     return songs
 
 
+@dataclass(frozen=True)
+class SongPerformer:
+    """One Person who performs on a Song, plus every Role they fill on it (issue #103)."""
+
+    person: object
+    roles: list[Role]
+
+
+def performers_for(song) -> list[SongPerformer]:
+    """Return `song`'s distinct performers, ordered by name, each carrying every Role they fill on it.
+
+    A Person appearing under multiple roles on the same Song (e.g. singer
+    and guitarist) is deduped into one SongPerformer listing all their
+    Roles, rather than showing up as separate rows — the Songs page
+    performers column (issue #103) needs one entry per person, not per
+    SongRoleAssignment.
+    """
+    assignments = SongRoleAssignment.objects.filter(song=song).select_related('person', 'role').order_by(
+        'person__name', 'role__name',
+    )
+    roles_by_person_id: dict[int, list[Role]] = {}
+    people_in_order = []
+    for assignment in assignments:
+        if assignment.person_id not in roles_by_person_id:
+            roles_by_person_id[assignment.person_id] = []
+            people_in_order.append(assignment.person)
+        roles_by_person_id[assignment.person_id].append(assignment.role)
+    return [
+        SongPerformer(person=person, roles=roles_by_person_id[person.id])
+        for person in people_in_order
+    ]
+
+
+def recording_count_for(song) -> int:
+    """Return the all-time count of Recordings across every RehearsalSong slot for `song` (issue #103).
+
+    Purely informational for the Songs page's recording-count column: 0 is
+    a normal, valid count, not an error state, and this counts every past
+    Recording regardless of which RehearsalSong slot it was uploaded
+    against.
+    """
+    return Recording.objects.filter(rehearsal_song__song=song).count()
+
+
 def rehearsal_count_target(song) -> int:
     """Return how many Rehearsals a Song is targeted to appear in.
 

@@ -1,15 +1,55 @@
 {% extends "base.html" %}
+{% load static %}
 {% block title %}Setlist{% endblock %}
 {% block content %}
 <h1>{% if semester %}{{ semester }} Setlist{% else %}Setlist{% endif %}</h1>
-<ol>
-  {% for song in songs %}
-    <li>
-      <a href="{% url 'scheduling:song-detail' song.pk %}">{{ song.title }}</a> — {{ song.artist }}
-      ({{ song.rehearsal_count_actual }}/{{ song.rehearsal_count_target }} rehearsals)
-    </li>
-  {% empty %}
-    <li>No songs on the setlist yet.</li>
-  {% endfor %}
-</ol>
+
+{% if songs %}
+  <div>
+    <button type="button" id="sort-by-position" data-sort="position">Sort by setlist order</button>
+    <button type="button" id="sort-by-title" data-sort="title">Sort alphabetically</button>
+  </div>
+  <table id="setlist-table">
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Title</th>
+        <th>Artist</th>
+        <th>Performers</th>
+        <th>Rehearsals remaining</th>
+        <th>Recordings</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for song in songs %}
+        <tr data-position="{{ song.position }}" data-title="{{ song.title }}">
+          <td>{{ song.position }}</td>
+          <td><a href="{% url 'scheduling:song-detail' song.pk %}">{{ song.title }}</a></td>
+          <td>{{ song.artist }}</td>
+          <td>
+            {% for performer in song.performers %}
+              {{ performer.person }} ({{ performer.roles|join:", " }}){% if not forloop.last %}, {% endif %}
+            {% empty %}
+              &mdash;
+            {% endfor %}
+          </td>
+          <td>{{ song.progress.remaining }}/{{ song.progress.total }}</td>
+          <td>
+            <a href="{% url 'scheduling:song-detail' song.pk %}">
+              {{ song.recording_count }} Recording{{ song.recording_count|pluralize }}
+            </a>
+          </td>
+          <td>
+            <a href="{% url 'scheduling:recordings' %}?song={{ song.pk }}" aria-label="Add recording for {{ song.title }}">+</a>
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% else %}
+  <p>No songs on the setlist yet.</p>
+{% endif %}
+
+<script src="{% static 'scheduling/js/songs.js' %}" defer></script>
 {% endblock %}
