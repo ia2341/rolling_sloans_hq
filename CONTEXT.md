@@ -41,6 +41,20 @@ _Avoid_: Practice, Session
 **Dress Rehearsal**:
 The Rehearsal whose song coverage always tracks the Semester's current setlist, in concert order — not a fixed set of songs chosen in advance, since it should reflect whatever the setlist looks like at the time.
 
+**Conflict**:
+A Person's declared unavailability for one Rehearsal — either the whole of it, or part. The absence of a Conflict means that Person is available; there is no separate "confirmed available" declaration. A Person declares at most one Conflict per Rehearsal, and may change or withdraw it at any time.
+_Avoid_: Absence, Excuse, Unavailability *(as an entity)*
+
+**Conflict Window**:
+One time range within a Rehearsal that a partial Conflict's Person is unavailable for. A Conflict can carry several, when the unavailability isn't contiguous.
+
+**Adjudication**:
+An admin's decision to approve or reject a Conflict. Every Conflict is pending until adjudicated, and an adjudicated one returns to pending if its Person changes it. Adjudicating does not by itself change the schedule — approving records that the band will work around the Person, not how.
+_Avoid_: Approval *(names only one of the two outcomes)*, Review
+
+**Accommodation**:
+A running order for a Rehearsal under which every Person's assigned Songs fall outside their own Conflict Windows. What an admin weighs when adjudicating is whether an Accommodation *exists* for the set of Conflicts they're approving together — a question about the whole Rehearsal, not about one Conflict in isolation. A full-Rehearsal Conflict has no Accommodation to look for: the Person is simply absent.
+
 **Recording**:
 An uploaded audio file of a member's take on one song's slot at one rehearsal (a RehearsalSong) — not the rehearsal or song in the abstract. Multiple Recordings can exist for the same RehearsalSong (e.g. several takes), each with its own uploader and optional note.
 _Avoid_: Upload, Track
