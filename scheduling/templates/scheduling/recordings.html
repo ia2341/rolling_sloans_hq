@@ -12,6 +12,9 @@
     {% endfor %}
   </ul>
 {% endif %}
+{% if not has_rehearsal_song_options %}
+  <p>No songs have been scheduled into a rehearsal yet, so there's nothing to upload a recording for.</p>
+{% endif %}
 <form id="recording-upload-form" method="post">
   {% csrf_token %}
   {{ form.rehearsal_song.errors }}
