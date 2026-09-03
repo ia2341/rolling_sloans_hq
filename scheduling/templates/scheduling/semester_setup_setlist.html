@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}Import setlist{% endblock %}
+{% block content %}
+<h1>Import your setlist</h1>
+<p>
+  Paste a public Spotify playlist link to import its tracks in concert order, or add songs by
+  hand below. This step is optional — you can always come back to it from the Setlist tab.
+</p>
+
+{% for message in messages %}
+  <p>{{ message }}</p>
+{% endfor %}
+
+<div id="setlist-surface">
+{% include "scheduling/_setlist_edit.html" %}
+</div>
+
+<a href="{% url 'scheduling:manage-semester-setup-finish' pk=semester.pk %}" id="skip-setlist-import">Skip for now</a>
+
+<script src="{% static 'vendor/sortable-1.15.7.min.js' %}" defer></script>
+<script src="{% static 'scheduling/js/setlist_edit.js' %}" defer></script>
+{% endblock %}
