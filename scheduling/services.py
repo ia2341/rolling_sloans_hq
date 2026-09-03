@@ -1,11 +1,12 @@
 """Application services for the scheduling domain."""
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 from itertools import pairwise
 from uuid import uuid4
 
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 from django.core.files.storage import storages
 from django.db import IntegrityError, models, transaction
 from django.db.models import Count, Q
@@ -14,6 +15,7 @@ from django.utils import timezone
 from scheduling.models import (
     Conflict,
     ConflictWindow,
+    Membership,
     MembershipRole,
     Recording,
     Rehearsal,
@@ -24,6 +26,8 @@ from scheduling.models import (
     SongRoleAssignment,
     slots_for_person,
 )
+
+logger = logging.getLogger(__name__)
 
 MAX_RECORDING_FILE_SIZE = 50 * 1024 * 1024
 VIEWING_SEMESTER_SESSION_KEY = 'viewing_semester_id'
@@ -243,6 +247,73 @@ def publish_semester(semester: Semester) -> None:
     """
     semester.published_at = timezone.now()
     semester.save(update_fields=['published_at'])
+
+
+class LiveSemesterDeletionError(ValueError):
+    """Raised when a caller attempts to delete the Live Semester (issue #171)."""
+
+
+@dataclass(frozen=True)
+class SemesterDeletionSummary:
+    """Counts of what deleting a Semester would destroy, for the confirmation surface (issue #171)."""
+
+    member_count: int
+    song_count: int
+    rehearsal_count: int
+    recording_count: int
+
+
+def semester_deletion_summary(semester: Semester) -> SemesterDeletionSummary:
+    """Return the counts of Memberships, Songs, Rehearsals and Recordings a delete of `semester` would destroy."""
+    return SemesterDeletionSummary(
+        member_count=Membership.objects.filter(semester=semester).count(),
+        song_count=Song.objects.filter(semester=semester).count(),
+        rehearsal_count=Rehearsal.objects.filter(semester=semester).count(),
+        recording_count=Recording.objects.filter(rehearsal_song__rehearsal__semester=semester).count(),
+    )
+
+
+def delete_semester(semester: Semester) -> None:
+    """Hard-delete `semester` and everything scoped to it, including its Recordings' storage objects (issue #171).
+
+    Refuses the Live Semester so no caller — view or otherwise — can route
+    around that protection (ADR 0011). The cascade (FK `on_delete=CASCADE`)
+    destroys Memberships, MembershipRoles, Songs, SongRoleRequirements,
+    SongRoleAssignments, Rehearsals, RehearsalSongs, Conflicts,
+    ConflictWindows and Recordings; every Person row is untouched.
+
+    Recording object keys are collected before the cascade, since the rows
+    naming them are gone afterwards. Their storage deletion is registered
+    with `transaction.on_commit()` and is best-effort: a storage failure is
+    logged, never raised, and never rolls back or blocks the Semester
+    deletion that already committed.
+    """
+    if semester == get_live_semester():
+        raise LiveSemesterDeletionError('The Live Semester cannot be deleted.')
+    object_keys = list(
+        Recording.objects.filter(rehearsal_song__rehearsal__semester=semester).values_list('file', flat=True)
+    )
+    semester.delete()
+    if object_keys:
+        transaction.on_commit(lambda: _delete_recording_objects(object_keys))
+
+
+def _delete_recording_objects(object_keys: list[str]) -> None:
+    """Best-effort delete each of `object_keys` from private storage, logging rather than raising on failure.
+
+    Runs inside a `transaction.on_commit()` callback, after the Semester row
+    is already gone — any exception here must be swallowed, not just a
+    `ClientError` (a network-level outage raises `BotoCoreError`, not
+    `ClientError`), or it would surface as a 500 on a request that already
+    succeeded.
+    """
+    storage = _recording_storage()
+    client = storage.connection.meta.client
+    for object_key in object_keys:
+        try:
+            client.delete_object(Bucket=storage.bucket_name, Key=object_key)
+        except (ClientError, BotoCoreError):
+            logger.exception('Failed to delete recording object %r from storage after Semester deletion.', object_key)
 
 
 def get_viewing_semester(request) -> Semester | None:

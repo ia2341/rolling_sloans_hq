@@ -19,6 +19,9 @@
         {% csrf_token %}
         <button type="submit">Publish</button>
       </form>
+      {% if semester != live_semester %}
+        <a href="{% url 'scheduling:manage-semesters-delete' semester.pk %}">Delete</a>
+      {% endif %}
     </li>
   {% empty %}
     <li>No semesters exist yet.</li>
