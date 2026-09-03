@@ -1,0 +1,53 @@
+<h1>{% if semester %}{{ semester }} Band Members{% else %}Band Members{% endif %}</h1>
+
+<form method="post" action="{% url 'scheduling:members' %}" id="roster-edit-form">
+  {% csrf_token %}
+  <input type="hidden" name="roster_semester_id" value="{{ roster_semester_id }}">
+  <input type="hidden" name="roster_semester_updated_at" value="{{ roster_semester_updated_at }}">
+  {{ formset.management_form }}
+  {% if formset.non_form_errors %}
+    <ul class="errors">
+      {% for error in formset.non_form_errors %}<li>{{ error }}</li>{% endfor %}
+    </ul>
+  {% endif %}
+  {% if rows %}
+    <table id="roster-edit-table">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Roles</th>
+          <th>Remove</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+          <tr class="roster-edit-row">
+            {{ row.form.person_id }}
+            <td>
+              {{ row.form.name }}
+              {{ row.form.name.errors }}
+              {% if row.is_mismatched %}
+                <span class="roster-role-mismatch-flag" title="Assigned to a Song for a Role not on their declared Roles">&#9888;</span>
+              {% endif %}
+            </td>
+            <td>
+              {{ row.form.roles }}
+              {{ row.form.roles.errors }}
+            </td>
+            <td>
+              {% if row.is_self %}
+                <span class="roster-no-self-removal">You can't remove yourself from the Roster.</span>
+              {% else %}
+                {{ row.form.remove }} Remove
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p>No band members on the roster yet.</p>
+  {% endif %}
+  <button type="submit" id="save-roster-changes">Save Changes</button>
+</form>
+<a href="{% url 'scheduling:members' %}" id="cancel-roster-edit">Cancel</a>
