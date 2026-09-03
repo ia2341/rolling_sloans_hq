@@ -307,6 +307,7 @@ def _build_schedule_context(request, semester, view_mode, rehearsal, error_rehea
         'my_breaks': [],
         'my_availability': None,
         'schedule': None,
+        'cell_standing_assignees': {},
     }
     if semester is None:
         return context
@@ -334,6 +335,13 @@ def _build_schedule_context(request, semester, view_mode, rehearsal, error_rehea
     matrix = assignment_matrix_for(rehearsal)
     context['matrix'] = matrix
     context['can_edit_assignments'] = request.user.is_admin and assignment_grid_is_editable(rehearsal)
+    context['cell_standing_assignees'] = {
+        f'{row.song.pk}-{cell.role.pk}': [
+            {'id': person.pk, 'name': person.name} for person in cell.standing_assignees
+        ]
+        for row in matrix.rows
+        for cell in row.cells
+    }
     context['my_song_ids'] = set(
         SongRoleAssignment.objects.filter(
             person=request.user, song__in=[row.song for row in matrix.rows],
@@ -1694,14 +1702,20 @@ class AssignmentEditSaveView(AdminRequiredMixin, View):
         return _schedule_redirect(request, rehearsal)
 
     def _build_buffer(self, request):
-        """Turn the POST body's hidden Semester stamp, removed-id list, and added-entry list into an AssignmentEditBuffer."""
+        """Turn the POST body's hidden Semester stamp plus removed/added assignment and Backup lists into an AssignmentEditBuffer."""
         removed_ids = frozenset(_parse_assignment_ids(request.POST.getlist('removed_assignment_id')))
         added_entries = frozenset(_parse_added_entries(request.POST.getlist('added_assignment_entry')))
+        removed_backup_ids = frozenset(_parse_assignment_ids(request.POST.getlist('removed_backup_id')))
+        added_backup_entries = frozenset(_parse_added_backup_entries(request.POST.getlist('added_backup_entry')))
+        backup_covering_for_updates = frozenset(_parse_backup_covering_for_updates(request.POST))
         return AssignmentEditBuffer(
             semester_id=_parse_roster_int(request.POST.get('assignment_semester_id', '')),
             semester_updated_at=parse_datetime(request.POST.get('assignment_semester_updated_at', '')) or timezone.now(),
             removed_assignment_ids=removed_ids,
             added_entries=added_entries,
+            removed_backup_ids=removed_backup_ids,
+            added_backup_entries=added_backup_entries,
+            backup_covering_for_updates=backup_covering_for_updates,
         )
 
 
@@ -1730,8 +1744,60 @@ def _parse_added_entries(raw_values):
     return parsed
 
 
+def _parse_added_backup_entries(raw_values):
+    """Return the subset of `raw_values` (each "rehearsal_song_id:role_id:person_id:covering_for_id") that parse, dropping the rest (issue #216).
+
+    The fourth segment is the "covering for" pick and may be empty,
+    meaning no `covering_for` was chosen (ADR-0007: recording it is a
+    choice, never a demand).
+    """
+    parsed = []
+    for raw_value in raw_values:
+        parts = raw_value.split(':')
+        if len(parts) != 4:
+            continue
+        try:
+            rehearsal_song_id, role_id, person_id = (int(part) for part in parts[:3])
+        except ValueError:
+            continue
+        covering_for_raw = parts[3]
+        covering_for_id = None
+        if covering_for_raw:
+            try:
+                covering_for_id = int(covering_for_raw)
+            except ValueError:
+                continue
+        parsed.append((rehearsal_song_id, role_id, person_id, covering_for_id))
+    return parsed
+
+
+def _parse_backup_covering_for_updates(post):
+    """Return (backup_id, covering_for_id) pairs from every `backup_covering_for_<id>` field in `post` (issue #216).
+
+    Each already-persisted Backup chip's "covering for" select carries a
+    field name keyed by that Backup's id, so its current pick resubmits
+    on every save regardless of whether the admin changed it.
+    """
+    parsed = []
+    for key, raw_value in post.items():
+        if not key.startswith('backup_covering_for_'):
+            continue
+        try:
+            backup_id = int(key[len('backup_covering_for_'):])
+        except ValueError:
+            continue
+        covering_for_id = None
+        if raw_value:
+            try:
+                covering_for_id = int(raw_value)
+            except ValueError:
+                continue
+        parsed.append((backup_id, covering_for_id))
+    return parsed
+
+
 class AssignmentPickerView(AdminRequiredMixin, View):
-    """`/schedule/<rehearsal_id>/assignments/picker/<song_id>/<role_id>/`: the "+" popover's fetched-on-open contents (issue #211).
+    """`/schedule/<rehearsal_id>/assignments/picker/<song_id>/<role_id>/`: the "+" popover's fetched-on-open contents (issues #211, #216).
 
     Fetched only when a cell's "+" is clicked, over the existing roster
     read — an unopened cell issues no request, so a twelve-song six-role
@@ -1742,11 +1808,14 @@ class AssignmentPickerView(AdminRequiredMixin, View):
 
     def get(self, request, rehearsal_id, song_id, role_id):
         """Render the picker partial for one (Song, Role) cell on an editable grid, or 404."""
-        _editable_assignment_rehearsal_or_404(request, rehearsal_id)
+        rehearsal = _editable_assignment_rehearsal_or_404(request, rehearsal_id)
         semester = get_viewing_semester(request)
         song = get_object_or_404(_scoped_to_viewing_semester(Song, semester), pk=song_id)
         role = get_object_or_404(Role, pk=role_id)
-        picker = assignment_picker_for(song, role, semester)
+        rehearsal_song = None
+        if not rehearsal.is_full_setlist:
+            rehearsal_song = get_object_or_404(RehearsalSong, rehearsal=rehearsal, song=song)
+        picker = assignment_picker_for(song, role, semester, rehearsal_song=rehearsal_song)
         return render(request, 'scheduling/_assignment_picker.html', {'picker': picker})
 
 

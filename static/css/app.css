@@ -39,6 +39,11 @@
   /* Assignment-grid cell "+" picker trigger (issue #211) */
   --rs-cell-add-size: 1.5rem;
 
+  /* Backup chip (issue #216): a Standing Assignment's chip re-colored, so
+     "this evening only" reads as visually distinct at a glance. */
+  --rs-backup-chip-bg: var(--pico-primary-background);
+  --rs-backup-chip-border-color: var(--pico-primary-border);
+
   /* Pico theming hooks. */
   --pico-font-size: 100%;
 }
@@ -346,6 +351,18 @@ body > nav [aria-current='page'] {
   color: var(--rs-danger-color);
   cursor: pointer;
   line-height: 1;
+}
+
+/* Backup chip (issue #216): "this rehearsal only", never to be confused
+   with a standing assignment's chip. */
+.backup-chip {
+  background: var(--rs-backup-chip-bg);
+  border-color: var(--rs-backup-chip-border-color);
+}
+
+.backup-covering-for {
+  color: var(--rs-muted-color);
+  font-size: 0.85em;
 }
 
 /* Cell "+" popover picker trigger (issue #211): a small round button beside a

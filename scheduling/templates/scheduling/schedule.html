@@ -64,6 +64,7 @@
     {% include "scheduling/_availability.html" with availability=my_availability %}
   </div>
 
+  {{ cell_standing_assignees|json_script:"cell-standing-assignees-data" }}
   <div x-data="assignmentGrid()">
     {% if can_edit_assignments %}
       <p>
@@ -89,6 +90,16 @@
         </template>
         <template x-for="item in added" :key="item.key">
           <input type="hidden" name="added_assignment_entry" :value="item.songId + ':' + item.roleId + ':' + item.personId">
+        </template>
+        <template x-for="id in removedBackups" :key="id">
+          <input type="hidden" name="removed_backup_id" :value="id">
+        </template>
+        <template x-for="item in addedBackups" :key="item.key">
+          <input
+            type="hidden"
+            name="added_backup_entry"
+            :value="item.rehearsalSongId + ':' + item.roleId + ':' + item.personId + ':' + item.coveringForId"
+          >
         </template>
     {% endif %}
 
@@ -127,12 +138,38 @@
                         >&times;</button>
                       </span>
                     </template>
+                    <template x-for="item in addedBackupsFor({{ row.song.pk }}, {{ cell.role.pk }})" :key="item.key">
+                      <span class="assignment-chip backup-chip">
+                        <span x-text="item.personName"></span> (backup)
+                        <select
+                          :name="'backup_covering_for_' + item.key"
+                          x-model="item.coveringForId"
+                          aria-label="Covering for"
+                        >
+                          <option value="">&mdash;</option>
+                          <template
+                            x-for="assignee in standingAssigneesFor(item.songId, item.roleId, item.personId)"
+                            :key="assignee.id"
+                          >
+                            <option :value="assignee.id" x-text="assignee.name"></option>
+                          </template>
+                        </select>
+                        <button
+                          type="button"
+                          class="assignment-chip-remove"
+                          x-show="editing"
+                          @click="removeAddedBackup(item.key)"
+                          :aria-label="'Remove ' + item.personName"
+                        >&times;</button>
+                      </span>
+                    </template>
                     <button
                       type="button"
                       class="assignment-cell-add"
                       x-show="editing"
                       data-song-id="{{ row.song.pk }}"
                       data-role-id="{{ cell.role.pk }}"
+                      {% if row.rehearsal_song_id %}data-rehearsal-song-id="{{ row.rehearsal_song_id }}"{% endif %}
                       data-picker-url="{% url 'scheduling:schedule-assignments-picker' rehearsal.pk row.song.pk cell.role.pk %}"
                       @click="openPicker($event)"
                       aria-label="Add to {{ cell.role.name }} on {{ row.song.title }}"
