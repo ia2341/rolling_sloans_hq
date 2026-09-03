@@ -9,6 +9,7 @@ from django.urls import reverse_lazy
 from identity.models import Person
 from scheduling.fields import SongLengthField
 from scheduling.models import (
+    Conflict,
     Membership,
     MembershipRole,
     Rehearsal,
@@ -255,6 +256,29 @@ class RosterEditRowForm(forms.Form):
 # The Roster edit table's buffer: one `RosterEditRowForm` per existing Membership, with no add-row this
 # ticket (adding a Person to the Roster is a later slice of map #185, per issue #227's acceptance criteria).
 RosterEditFormSet = forms.formset_factory(RosterEditRowForm, extra=0)
+
+
+class AdjudicationRowForm(forms.Form):
+    """One row of a Rehearsal's adjudication table: an existing Conflict's verdict and optional note (issue #192).
+
+    `conflict_id` is hidden so the view can turn a valid row back into an
+    `AdjudicationEntry` without re-deriving which Conflict it belongs to —
+    `apply_adjudications()` is the one place that checks it actually
+    belongs to the target Rehearsal. `status` offers all three verdicts
+    (not just approve/reject) so an untouched pending row round-trips
+    unchanged. `note` is never required — a note is offered on an approval
+    exactly as readily as on a rejection, and an admin deciding a dozen
+    rows in one batch must not be made to type something in every one.
+    """
+
+    conflict_id = forms.IntegerField(widget=forms.HiddenInput)
+    status = forms.ChoiceField(choices=Conflict.STATUS_CHOICES)
+    note = forms.CharField(max_length=255, required=False)
+
+
+# One row per existing Conflict on the target Rehearsal — no add/remove, unlike RosterEditFormSet's
+# sibling shape, since a row here always names a Conflict that already exists (issue #192).
+AdjudicationFormSet = forms.formset_factory(AdjudicationRowForm, extra=0)
 
 
 class RosterAddRowForm(forms.Form):

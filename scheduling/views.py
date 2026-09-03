@@ -22,6 +22,7 @@ from config.views import AdminRequiredMixin, BaseView, PreviewMixin
 from identity.models import Person
 from identity.services import invite_person
 from scheduling.forms import (
+    AdjudicationFormSet,
     DeclareConflictForm,
     MembershipRolesForm,
     RecordingUploadForm,
@@ -50,13 +51,19 @@ from scheduling.models import (
 from scheduling.services import (
     CONFLICT_EARLY_DEPARTURE,
     CONFLICT_LATE_ARRIVAL,
+    AdjudicationBuffer,
+    AdjudicationEntry,
     LiveSemesterDeletionError,
     RecordingUploadError,
     RosterEditBuffer,
     RosterEditEntry,
     SelfRemovalError,
+    StaleAdjudicationSemesterError,
     StaleRosterSemesterError,
+    UnknownConflictError,
+    WrongAdjudicationSemesterError,
     WrongViewingSemesterError,
+    apply_adjudications,
     apply_roster_edits,
     assigned_songs_for,
     assignment_matrix_for,
@@ -64,6 +71,7 @@ from scheduling.services import (
     breaks_for,
     confirm_recording_upload,
     conflict_adjudication_index_for,
+    conflict_adjudication_rows_for,
     conflict_rows_by_rehearsal,
     create_or_reactivate_role,
     create_recording_playback_url,
@@ -1732,19 +1740,91 @@ class ConflictAdjudicationIndexView(AdminRequiredMixin, TemplateView):
         return context
 
 
-class ConflictAdjudicationDetailView(AdminRequiredMixin, TemplateView):
-    """`/manage/conflicts/<rehearsal_id>/`: one Rehearsal's adjudication table (issue #191, table itself is issue #192).
+class ConflictAdjudicationDetailView(AdminRequiredMixin, View):
+    """`/manage/conflicts/<rehearsal_id>/`: one Rehearsal's Conflicts, decided together under one Save Changes (issue #192).
 
     Reachable from the index and from an unconditional link on
-    `/schedule/`; this ticket only establishes the route, its Semester
-    scoping and its admin gating. The table that decides each Conflict is
-    #192's.
+    `/schedule/` (issue #191). Every row on the Rehearsal is editable in
+    the same request — including a row already approved or rejected, in
+    either direction — and one Save Changes commits the whole table
+    atomically via `apply_adjudications()`; leaving without saving writes
+    nothing, since GET never touches the database. A validation failure
+    (an over-long note, a Conflict id from another Rehearsal, a stale or
+    mismatched Semester stamp) writes nothing and re-renders with every
+    submitted decision and note preserved.
     """
 
     template_name = 'scheduling/manage_conflicts_detail.html'
 
     def get(self, request, rehearsal_id):
-        """Render the target Rehearsal, scoped to the viewing Semester (404 outside it)."""
+        """Render the target Rehearsal's Conflicts, scoped to the viewing Semester (404 outside it)."""
         semester = get_viewing_semester(request)
         rehearsal = get_object_or_404(_scoped_to_viewing_semester(Rehearsal, semester), pk=rehearsal_id)
-        return render(request, self.template_name, {'semester': semester, 'rehearsal': rehearsal})
+        rows = conflict_adjudication_rows_for(rehearsal)
+        formset = AdjudicationFormSet(initial=self._initial(rows), prefix='adjudication')
+        return self._render(request, semester, rehearsal, rows, formset)
+
+    def post(self, request, rehearsal_id):
+        """Validate and apply the whole adjudication Buffer atomically, or re-render with errors."""
+        semester = get_viewing_semester(request)
+        rehearsal = get_object_or_404(_scoped_to_viewing_semester(Rehearsal, semester), pk=rehearsal_id)
+        rows = conflict_adjudication_rows_for(rehearsal)
+        formset = AdjudicationFormSet(request.POST, prefix='adjudication')
+        submitted_semester_id = request.POST.get('semester_id', '')
+        submitted_stamp = request.POST.get('semester_updated_at', '')
+        if formset.is_valid():
+            buffer = self._build_buffer(rehearsal, formset, submitted_semester_id, submitted_stamp)
+            try:
+                apply_adjudications(buffer, viewing_semester=semester)
+            except (WrongAdjudicationSemesterError, StaleAdjudicationSemesterError, UnknownConflictError) as error:
+                messages.error(request, str(error))
+                return self._render(
+                    request, semester, rehearsal, rows, formset,
+                    semester_id=submitted_semester_id, stamp=submitted_stamp, status=200,
+                )
+            messages.success(request, 'Conflicts updated.')
+            return redirect('scheduling:manage-conflicts-detail', rehearsal_id=rehearsal.pk)
+        return self._render(
+            request, semester, rehearsal, rows, formset,
+            semester_id=submitted_semester_id, stamp=submitted_stamp, status=200,
+        )
+
+    def _initial(self, rows):
+        """Build the formset's initial data: one row per Conflict, at its current status with an empty note."""
+        return [
+            {'conflict_id': row.conflict.pk, 'status': row.status, 'note': ''}
+            for row in rows
+        ]
+
+    def _build_buffer(self, rehearsal, formset, submitted_semester_id, submitted_stamp):
+        """Turn a valid AdjudicationFormSet into an AdjudicationBuffer, carrying the Semester state it was rendered against.
+
+        `submitted_semester_id`/`submitted_stamp` are the hidden fields
+        stamped at render time, not the live session's viewing Semester —
+        `apply_adjudications()` is the one place that compares them
+        against current state, raising `WrongAdjudicationSemesterError`/
+        `StaleAdjudicationSemesterError` if either has moved since.
+        """
+        entries = [
+            AdjudicationEntry(
+                conflict_id=row['conflict_id'], status=row['status'], note=row['note'],
+            )
+            for row in formset.cleaned_data
+        ]
+        return AdjudicationBuffer(
+            rehearsal_id=rehearsal.pk,
+            semester_id=_parse_roster_int(submitted_semester_id),
+            semester_updated_at=parse_datetime(submitted_stamp) or timezone.now(),
+            entries=entries,
+        )
+
+    def _render(self, request, semester, rehearsal, rows, formset, semester_id=None, stamp=None, status=200):
+        """Render the table, pairing each row with its formset form by shared position."""
+        return render(request, self.template_name, {
+            'semester': semester,
+            'rehearsal': rehearsal,
+            'pairs': list(zip(rows, formset.forms, strict=True)),
+            'management_form': formset.management_form,
+            'semester_id': semester.pk if semester_id is None else semester_id,
+            'stamp': semester.updated_at.isoformat() if stamp is None else stamp,
+        }, status=status)
