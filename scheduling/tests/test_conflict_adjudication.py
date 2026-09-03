@@ -97,10 +97,11 @@ class ConflictAdjudicationMigrationTests(TestCase):
 class DeclareConflictResetsAdjudicationTests(TestCase):
     """Every path through declare_conflict() returns the row to pending with an empty note."""
 
-    def setUp(self):
+    @classmethod
+    def setUpTestData(cls):
         """Build a Person and a declarable (non-Dress) Rehearsal."""
-        self.person = PersonFactory()
-        self.rehearsal = RehearsalFactory(is_full_setlist=False)
+        cls.person = PersonFactory()
+        cls.rehearsal = RehearsalFactory(is_full_setlist=False)
 
     def _adjudicate(self, conflict, status=Conflict.APPROVED):
         """Stamp `conflict` with `status` and a synthesized note, as an admin's decision would."""
@@ -203,26 +204,27 @@ class AdjudicationDoesNotReachTheAttendanceReadsTests(TestCase):
     helpfully wiring approval into attendance.
     """
 
-    def setUp(self):
+    @classmethod
+    def setUpTestData(cls):
         """Build a future Rehearsal with three slots, a Person assigned to the first, and a Conflict for them."""
-        self.semester = SemesterFactory()
-        self.rehearsal = RehearsalFactory(
-            semester=self.semester,
+        cls.semester = SemesterFactory()
+        cls.rehearsal = RehearsalFactory(
+            semester=cls.semester,
             date=timezone.localdate() + timedelta(days=7),
             is_full_setlist=False,
         )
-        self.role = RoleFactory()
-        self.first_song = SongFactory(semester=self.semester)
-        self.middle_song = SongFactory(semester=self.semester)
-        self.last_song = SongFactory(semester=self.semester)
-        RehearsalSongFactory(rehearsal=self.rehearsal, song=self.first_song, order=1)
-        RehearsalSongFactory(rehearsal=self.rehearsal, song=self.middle_song, order=2)
-        RehearsalSongFactory(rehearsal=self.rehearsal, song=self.last_song, order=3)
-        self.person = PersonFactory()
-        SongRoleAssignmentFactory(song=self.first_song, role=self.role, person=self.person)
-        SongRoleAssignmentFactory(song=self.last_song, role=self.role, person=self.person)
-        self.conflict = ConflictFactory(
-            person=self.person, rehearsal=self.rehearsal, type=Conflict.FULL_CONFLICT, reason=fake.sentence(),
+        cls.role = RoleFactory()
+        cls.first_song = SongFactory(semester=cls.semester)
+        cls.middle_song = SongFactory(semester=cls.semester)
+        cls.last_song = SongFactory(semester=cls.semester)
+        RehearsalSongFactory(rehearsal=cls.rehearsal, song=cls.first_song, order=1)
+        RehearsalSongFactory(rehearsal=cls.rehearsal, song=cls.middle_song, order=2)
+        RehearsalSongFactory(rehearsal=cls.rehearsal, song=cls.last_song, order=3)
+        cls.person = PersonFactory()
+        SongRoleAssignmentFactory(song=cls.first_song, role=cls.role, person=cls.person)
+        SongRoleAssignmentFactory(song=cls.last_song, role=cls.role, person=cls.person)
+        cls.conflict = ConflictFactory(
+            person=cls.person, rehearsal=cls.rehearsal, type=Conflict.FULL_CONFLICT, reason=fake.sentence(),
         )
 
     def _under_each_status(self, read):

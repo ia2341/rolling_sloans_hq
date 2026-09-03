@@ -54,10 +54,11 @@ def _formset_payload(rows, semester):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class AnonymousAndNonAdminAccessTests(TestCase):
-    def setUp(self):
-        """Log in a synthetic non-admin Person with a Semester in place."""
-        self.person = PersonFactory(password=PASSWORD)
-        self.semester = SemesterFactory()
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic non-admin Person with a Semester in place."""
+        cls.person = PersonFactory(password=PASSWORD)
+        cls.semester = SemesterFactory()
 
     def test_anonymous_get_edit_mode_redirects_to_login(self):
         """An anonymous GET at ?mode=edit redirects to login, same as any other /members/ request."""
@@ -100,9 +101,13 @@ class AnonymousAndNonAdminAccessTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class EditRosterButtonTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic admin Person to log in as before each test."""
+        cls.admin = PersonFactory(password=PASSWORD, is_admin=True)
+
     def setUp(self):
-        """Log in a synthetic admin Person."""
-        self.admin = PersonFactory(password=PASSWORD, is_admin=True)
+        """Log in as the synthetic admin Person before each test."""
         self.client.login(username=self.admin.email, password=PASSWORD)
 
     def test_admin_sees_the_edit_roster_button_when_a_semester_exists(self):
@@ -131,15 +136,19 @@ class EditRosterButtonTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class EditModeRenderingTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic admin Person against a Semester with one other rostered Person."""
+        cls.admin = PersonFactory(password=PASSWORD, is_admin=True, name='Admin Placeholder')
+        cls.semester = SemesterFactory()
+        cls.role = RoleFactory(name='Bassist')
+        cls.other = PersonFactory(name='Other Placeholder')
+        cls.membership = MembershipFactory(semester=cls.semester, person=cls.other)
+        MembershipRoleFactory(membership=cls.membership, role=cls.role)
+
     def setUp(self):
-        """Log in a synthetic admin Person against a Semester with one other rostered Person."""
-        self.admin = PersonFactory(password=PASSWORD, is_admin=True, name='Admin Placeholder')
+        """Log in as the synthetic admin Person before each test."""
         self.client.login(username=self.admin.email, password=PASSWORD)
-        self.semester = SemesterFactory()
-        self.role = RoleFactory(name='Bassist')
-        self.other = PersonFactory(name='Other Placeholder')
-        self.membership = MembershipFactory(semester=self.semester, person=self.other)
-        MembershipRoleFactory(membership=self.membership, role=self.role)
 
     def test_edit_mode_renders_one_row_per_membership(self):
         """The edit table shows one editable row per existing Membership, with the Person's current name."""
@@ -225,14 +234,18 @@ class EditModeRenderingTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class SaveChangesTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic admin Person against a Semester with one other rostered Person and one active Role."""
+        cls.admin = PersonFactory(password=PASSWORD, is_admin=True)
+        cls.semester = SemesterFactory()
+        cls.role = RoleFactory(name='Bassist')
+        cls.other = PersonFactory(name='Original Name')
+        cls.membership = MembershipFactory(semester=cls.semester, person=cls.other)
+
     def setUp(self):
-        """Log in a synthetic admin Person against a Semester with one other rostered Person and one active Role."""
-        self.admin = PersonFactory(password=PASSWORD, is_admin=True)
+        """Log in as the synthetic admin Person before each test."""
         self.client.login(username=self.admin.email, password=PASSWORD)
-        self.semester = SemesterFactory()
-        self.role = RoleFactory(name='Bassist')
-        self.other = PersonFactory(name='Original Name')
-        self.membership = MembershipFactory(semester=self.semester, person=self.other)
 
     def test_save_changes_commits_a_name_edit_role_change_and_removal_together(self):
         """One Save Changes batch lands a name edit, a Role change, and a removal in the same transaction."""

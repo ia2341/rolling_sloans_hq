@@ -69,9 +69,11 @@ class InvitePersonTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class SetPasswordFlowTests(TestCase):
-    def setUp(self):
-        self.person = invite_person(**invite_args())
-        self.set_password_path = extract_set_password_path(mail.outbox[0].body)
+    @classmethod
+    def setUpTestData(cls):
+        """Invite a Person once and extract the set-password link every test in this class reuses."""
+        cls.person = invite_person(**invite_args())
+        cls.set_password_path = extract_set_password_path(mail.outbox[0].body)
 
     def test_link_leads_to_working_set_password_form(self):
         response = self.client.get(self.set_password_path, follow=True)

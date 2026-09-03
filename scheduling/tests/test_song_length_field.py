@@ -46,9 +46,10 @@ class FormatSongLengthTests(TestCase):
 class SongLengthFieldParseTests(TestCase):
     """`SongLengthField.clean()` parses M:SS, MM:SS and H:MM:SS as a musician means them."""
 
-    def setUp(self):
+    @classmethod
+    def setUpTestData(cls):
         """Bind an unbound field instance for the parsing assertions."""
-        self.field = SongLengthField()
+        cls.field = SongLengthField()
 
     def test_m_ss_is_minutes_and_seconds(self):
         """`3:45` is three minutes forty-five seconds, not three hours forty-five minutes."""
@@ -97,10 +98,11 @@ class SongLengthFieldParseTests(TestCase):
 class SongLengthFieldRejectionTests(TestCase):
     """Unparseable and out-of-range values raise a field error rather than coercing to a value."""
 
-    def setUp(self):
+    @classmethod
+    def setUpTestData(cls):
         """Bind a required field and an optional one for the rejection assertions."""
-        self.field = SongLengthField()
-        self.optional_field = SongLengthField(required=False)
+        cls.field = SongLengthField()
+        cls.optional_field = SongLengthField(required=False)
 
     def test_empty_is_required_error(self):
         """An empty value on a required field is a validation error, not a zero duration."""
@@ -165,9 +167,10 @@ class SongLengthFieldRejectionTests(TestCase):
 class SongEditFormLengthTests(TestCase):
     """The setlist edit grid's row form uses the M:SS field, so the admin's editing surface gets this behaviour."""
 
-    def setUp(self):
+    @classmethod
+    def setUpTestData(cls):
         """Build a Semester for the Songs these forms bind to."""
-        self.semester = SemesterFactory()
+        cls.semester = SemesterFactory()
 
     def test_form_uses_the_song_length_field(self):
         """SongEditForm's `length` is the M:SS field, not Django's default DurationField."""

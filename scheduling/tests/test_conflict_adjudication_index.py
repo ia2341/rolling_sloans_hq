@@ -27,10 +27,11 @@ def select(test_case, semester):
 class ConflictAdjudicationIndexForTests(TestCase):
     """`conflict_adjudication_index_for()`: the service function backing the index (issue #191)."""
 
-    def setUp(self):
+    @classmethod
+    def setUpTestData(cls):
         """Build a Semester with a well-defined 'today' to place rehearsals relative to."""
-        self.semester = SemesterFactory()
-        self.today = timezone.localdate()
+        cls.semester = SemesterFactory()
+        cls.today = timezone.localdate()
 
     def test_excludes_the_dress_rehearsal(self):
         """A future Dress Rehearsal never appears, regardless of its Conflict count."""
@@ -113,9 +114,13 @@ class AnonymousAccessTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class NonAdminAccessTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic non-admin Person to log in as before each test."""
+        cls.person = PersonFactory(password=PASSWORD, is_admin=False)
+
     def setUp(self):
-        """Log in a synthetic non-admin Person before each test."""
-        self.person = PersonFactory(password=PASSWORD, is_admin=False)
+        """Log in as the synthetic Person before each test."""
         self.client.login(username=self.person.email, password=PASSWORD)
 
     def test_manage_conflicts_is_forbidden_for_non_admin(self):
@@ -135,12 +140,16 @@ class NonAdminAccessTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class ConflictAdjudicationIndexViewTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic admin Person and a live Semester."""
+        cls.admin = PersonFactory(password=PASSWORD, is_admin=True)
+        cls.semester = SemesterFactory()
+        cls.today = timezone.localdate()
+
     def setUp(self):
-        """Log in a synthetic admin Person and build a live Semester."""
-        self.admin = PersonFactory(password=PASSWORD, is_admin=True)
+        """Log in as the synthetic admin Person before each test."""
         self.client.login(username=self.admin.email, password=PASSWORD)
-        self.semester = SemesterFactory()
-        self.today = timezone.localdate()
 
     def test_lists_future_non_dress_rehearsals_with_pending_counts(self):
         """The index renders each future, non-Dress Rehearsal with its pending Conflict count."""
@@ -197,11 +206,15 @@ class ConflictAdjudicationIndexViewTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class ConflictAdjudicationDetailViewTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic admin Person and a live Semester."""
+        cls.admin = PersonFactory(password=PASSWORD, is_admin=True)
+        cls.semester = SemesterFactory()
+
     def setUp(self):
-        """Log in a synthetic admin Person and build a live Semester."""
-        self.admin = PersonFactory(password=PASSWORD, is_admin=True)
+        """Log in as the synthetic admin Person before each test."""
         self.client.login(username=self.admin.email, password=PASSWORD)
-        self.semester = SemesterFactory()
 
     def test_renders_for_a_rehearsal_in_the_viewing_semester(self):
         """A GET for a Rehearsal in the viewing Semester renders successfully."""
@@ -226,11 +239,12 @@ class ConflictAdjudicationDetailViewTests(TestCase):
 class ScheduleAdminLinkTests(TestCase):
     """The unconditional, countless admin-only link out to a Rehearsal's adjudication table (ADR 0005)."""
 
-    def setUp(self):
+    @classmethod
+    def setUpTestData(cls):
         """Build a live Semester with one future, conflict-free Rehearsal."""
-        self.semester = SemesterFactory()
-        self.rehearsal = RehearsalFactory(
-            semester=self.semester, date=timezone.localdate() + timedelta(days=7), is_full_setlist=False,
+        cls.semester = SemesterFactory()
+        cls.rehearsal = RehearsalFactory(
+            semester=cls.semester, date=timezone.localdate() + timedelta(days=7), is_full_setlist=False,
         )
 
     def test_admin_sees_the_link_on_the_single_rehearsal_view_with_no_conflicts(self):

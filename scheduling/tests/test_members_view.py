@@ -31,11 +31,15 @@ class AnonymousAccessTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class MembersViewTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic Person and the current Semester."""
+        cls.person = PersonFactory(password=PASSWORD, name='Zoe Placeholder')
+        cls.semester = SemesterFactory()
+
     def setUp(self):
-        """Log in a synthetic Person and create the current Semester before each test."""
-        self.person = PersonFactory(password=PASSWORD, name='Zoe Placeholder')
+        """Log in as the synthetic Person before each test."""
         self.client.login(username=self.person.email, password=PASSWORD)
-        self.semester = SemesterFactory()
 
     def test_shows_empty_state_when_no_semester_exists(self):
         """With no Semester at all, the page renders an empty roster instead of erroring."""

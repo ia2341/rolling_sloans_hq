@@ -50,13 +50,17 @@ class AnonymousAccessTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class TeammateViewTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        """Build a viewer and roster a separate teammate on the current Semester."""
+        cls.semester = SemesterFactory()
+        cls.viewer = PersonFactory(password=PASSWORD, name='Viewer Placeholder')
+        cls.teammate = PersonFactory(name='Teammate Placeholder')
+        cls.membership = MembershipFactory(person=cls.teammate, semester=cls.semester)
+
     def setUp(self):
-        """Log in a viewer and roster a separate teammate on the current Semester."""
-        self.semester = SemesterFactory()
-        self.viewer = PersonFactory(password=PASSWORD, name='Viewer Placeholder')
+        """Log in as the viewer before each test."""
         self.client.login(username=self.viewer.email, password=PASSWORD)
-        self.teammate = PersonFactory(name='Teammate Placeholder')
-        self.membership = MembershipFactory(person=self.teammate, semester=self.semester)
 
     def test_renders_the_teammates_name_and_the_current_semester(self):
         """A teammate's page renders their name and the current Semester's name."""
@@ -173,14 +177,18 @@ class TeammateViewTests(TestCase):
 class NeverRenderedFieldTests(TestCase):
     """The `never` verdicts, asserted against both a teammate's page and the owner's own."""
 
+    @classmethod
+    def setUpTestData(cls):
+        """Build a viewer and roster a teammate, both on the current Semester."""
+        cls.semester = SemesterFactory()
+        cls.viewer = PersonFactory(password=PASSWORD, name='Viewer Placeholder')
+        cls.own_membership = MembershipFactory(person=cls.viewer, semester=cls.semester)
+        cls.teammate = PersonFactory(name='Teammate Placeholder', is_admin=True)
+        cls.teammate_membership = MembershipFactory(person=cls.teammate, semester=cls.semester)
+
     def setUp(self):
-        """Log in a viewer and roster a teammate, both on the current Semester."""
-        self.semester = SemesterFactory()
-        self.viewer = PersonFactory(password=PASSWORD, name='Viewer Placeholder')
+        """Log in as the viewer before each test."""
         self.client.login(username=self.viewer.email, password=PASSWORD)
-        self.own_membership = MembershipFactory(person=self.viewer, semester=self.semester)
-        self.teammate = PersonFactory(name='Teammate Placeholder', is_admin=True)
-        self.teammate_membership = MembershipFactory(person=self.teammate, semester=self.semester)
 
     def _assign_mismatched_song(self, person):
         """Assign `person` to a fresh current-Semester Song under an undeclared Role, so is_role_mismatch is True."""
@@ -308,10 +316,14 @@ class NeverRenderedFieldTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class SelfViewGetTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic Person and the current Semester."""
+        cls.semester = SemesterFactory()
+        cls.person = PersonFactory(password=PASSWORD, name='Owner Placeholder')
+
     def setUp(self):
-        """Log in a synthetic Person and create the current Semester before each test."""
-        self.semester = SemesterFactory()
-        self.person = PersonFactory(password=PASSWORD, name='Owner Placeholder')
+        """Log in as the synthetic Person before each test."""
         self.client.login(username=self.person.email, password=PASSWORD)
 
     def test_renders_own_name_email_and_change_password_link(self):
@@ -384,10 +396,14 @@ class SelfViewGetTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class SelfViewPostTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic Person and the current Semester."""
+        cls.semester = SemesterFactory()
+        cls.person = PersonFactory(password=PASSWORD, name='Owner Placeholder')
+
     def setUp(self):
-        """Log in a synthetic Person and create the current Semester before each test."""
-        self.semester = SemesterFactory()
-        self.person = PersonFactory(password=PASSWORD, name='Owner Placeholder')
+        """Log in as the synthetic Person before each test."""
         self.client.login(username=self.person.email, password=PASSWORD)
 
     def test_valid_post_creates_membership_and_roles_and_redirects_with_message(self):
@@ -458,13 +474,17 @@ class SelfViewPostTests(TestCase):
 class AdminEditTests(TestCase):
     """Issue #232: the POST guard relaxes to your own pk *or* an admin's, on anyone's page."""
 
+    @classmethod
+    def setUpTestData(cls):
+        """Build an admin viewer and roster a separate teammate on the current Semester."""
+        cls.semester = SemesterFactory()
+        cls.admin = PersonFactory(password=PASSWORD, name='Admin Placeholder', is_admin=True)
+        cls.teammate = PersonFactory(name='Teammate Placeholder')
+        cls.membership = MembershipFactory(person=cls.teammate, semester=cls.semester)
+
     def setUp(self):
-        """Log in an admin viewer and roster a separate teammate on the current Semester."""
-        self.semester = SemesterFactory()
-        self.admin = PersonFactory(password=PASSWORD, name='Admin Placeholder', is_admin=True)
+        """Log in as the admin viewer before each test."""
         self.client.login(username=self.admin.email, password=PASSWORD)
-        self.teammate = PersonFactory(name='Teammate Placeholder')
-        self.membership = MembershipFactory(person=self.teammate, semester=self.semester)
 
     def test_admin_sees_the_roles_form_on_a_teammates_page(self):
         """An admin viewing another Person's page gets the always-inline MembershipRolesForm."""

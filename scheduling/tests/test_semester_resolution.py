@@ -57,9 +57,10 @@ class GetLiveSemesterTests(TestCase):
 
 
 class GetViewingSemesterTests(TestCase):
-    def setUp(self):
+    @classmethod
+    def setUpTestData(cls):
         """Build the RequestFactory the per-request resolution tests drive."""
-        self.factory = RequestFactory()
+        cls.factory = RequestFactory()
 
     def _request(self, user, selected_semester_id=None):
         """Return a GET request carrying `user` and, optionally, a session semester selection."""
@@ -147,9 +148,10 @@ class GetViewingSemesterTests(TestCase):
 
 
 class SetViewingSemesterTests(TestCase):
-    def setUp(self):
+    @classmethod
+    def setUpTestData(cls):
         """Build the RequestFactory the selection-recording tests drive."""
-        self.factory = RequestFactory()
+        cls.factory = RequestFactory()
 
     def _request(self):
         """Return a GET request carrying a real session."""
@@ -204,12 +206,16 @@ class SelectionDiesAtLogoutTests(TestCase):
 class MemberRouteScopingTests(TestCase):
     """Every band-wide route renders the Live Semester's data for a member, and no draft's."""
 
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic non-admin Person, with one live Semester and one newer draft."""
+        cls.person = PersonFactory(password=PASSWORD)
+        cls.live = SemesterFactory(published_at=timezone.now())
+        cls.draft = SemesterFactory(draft=True)
+
     def setUp(self):
-        """Log in a synthetic non-admin Person, with one live Semester and one newer draft."""
-        self.person = PersonFactory(password=PASSWORD)
+        """Log in as the synthetic Person before each test."""
         self.client.login(username=self.person.email, password=PASSWORD)
-        self.live = SemesterFactory(published_at=timezone.now())
-        self.draft = SemesterFactory(draft=True)
 
     def _band_wide_urls(self):
         """Return every band-wide route a member reads the viewing Semester through."""
@@ -261,14 +267,18 @@ class MemberRouteScopingTests(TestCase):
 class UnpublishedSiteTests(TestCase):
     """With nothing published, a member's routes render empty rather than erroring."""
 
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic non-admin Person against a database holding only a populated draft."""
+        cls.person = PersonFactory(password=PASSWORD)
+        cls.draft = SemesterFactory(draft=True)
+        RehearsalFactory(semester=cls.draft)
+        SongFactory(semester=cls.draft, position=1)
+        MembershipFactory(semester=cls.draft, person=cls.person)
+
     def setUp(self):
-        """Log in a synthetic non-admin Person against a database holding only a populated draft."""
-        self.person = PersonFactory(password=PASSWORD)
+        """Log in as the synthetic Person before each test."""
         self.client.login(username=self.person.email, password=PASSWORD)
-        self.draft = SemesterFactory(draft=True)
-        RehearsalFactory(semester=self.draft)
-        SongFactory(semester=self.draft, position=1)
-        MembershipFactory(semester=self.draft, person=self.person)
 
     def test_every_band_wide_route_renders_empty_for_a_member(self):
         """Each band-wide route returns 200 with no Semester in context when nothing is published."""
@@ -306,11 +316,15 @@ class UnpublishedSiteTests(TestCase):
 class PublishVisibilityTests(TestCase):
     """Publishing changes what a member's next request renders, with no re-login."""
 
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic non-admin Person, before anything is published."""
+        cls.person = PersonFactory(password=PASSWORD)
+        cls.draft = SemesterFactory(draft=True)
+
     def setUp(self):
-        """Log in a synthetic non-admin Person mid-session, before anything is published."""
-        self.person = PersonFactory(password=PASSWORD)
+        """Log in as the synthetic Person before each test."""
         self.client.login(username=self.person.email, password=PASSWORD)
-        self.draft = SemesterFactory(draft=True)
 
     def test_a_session_predating_the_publish_sees_the_new_live_semester(self):
         """A member logged in before the publish sees the newly-live Semester on their next request."""
