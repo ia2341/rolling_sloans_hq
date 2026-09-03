@@ -27,6 +27,7 @@
   --rs-muted-color: var(--pico-muted-color);
   --rs-border-color: var(--pico-muted-border-color);
   --rs-danger-color: var(--pico-del-color);
+  --rs-warning-border-color: var(--pico-del-color);
 
   /* Pico theming hooks. */
   --pico-font-size: 100%;
@@ -68,10 +69,62 @@ body > nav [aria-current='page'] {
   overflow-x: auto;
 }
 
+/* The non-live Semester warning. It sits between the nav and the page content
+   on every page, so it has to read as a band across the column rather than as
+   part of whatever surface follows it. */
+.rs-semester-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--rs-space-md);
+  max-width: var(--rs-content-max-width);
+  margin: var(--rs-space-md) auto;
+  padding: var(--rs-space-md) var(--rs-gutter);
+  border: 1px solid var(--rs-warning-border-color);
+  border-radius: var(--pico-border-radius);
+}
+
+.rs-semester-banner form {
+  margin-block-end: 0;
+  margin-inline-start: auto;
+}
+
+/* The Overview's Semester switcher: a label, a select and a button on one row
+   until the viewport is too narrow for it. */
+.rs-semester-panel form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--rs-space-sm);
+  margin-block-end: 0;
+}
+
+.rs-semester-panel select,
+.rs-semester-panel button {
+  width: auto;
+  margin-block-end: 0;
+}
+
 .rs-muted {
   color: var(--rs-muted-color);
 }
 
 .rs-danger {
   color: var(--rs-danger-color);
+}
+
+/* The setlist edit grid's per-row notes expander (issue #178): a chevron in
+   the row reveals a full-width textarea in the row beneath it, rather than
+   a textarea cramped into one narrow cell. No JS: the sibling row's
+   visibility tracks the row's own <details> element via :has(). */
+.setlist-edit-notes-row {
+  display: none;
+}
+
+.setlist-edit-row:has(details[open]) + .setlist-edit-notes-row {
+  display: table-row;
+}
+
+.setlist-edit-notes-row textarea {
+  width: 100%;
 }

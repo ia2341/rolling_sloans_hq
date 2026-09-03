@@ -1,0 +1,16 @@
+<!doctype html>
+<title>Delete {{ semester.name }}</title>
+<h1>Delete {{ semester.name }}?</h1>
+<p>This permanently deletes:</p>
+<ul>
+  <li>{{ summary.member_count }} member{{ summary.member_count|pluralize }}</li>
+  <li>{{ summary.song_count }} song{{ summary.song_count|pluralize }}</li>
+  <li>{{ summary.rehearsal_count }} rehearsal{{ summary.rehearsal_count|pluralize }}</li>
+  <li>{{ summary.recording_count }} recording{{ summary.recording_count|pluralize }} &mdash; members' uploaded audio, gone for good</li>
+</ul>
+<p>Person accounts are not deleted; members simply lose this Semester's roster entry.</p>
+<form method="post">
+  {% csrf_token %}
+  <button type="submit">Delete {{ semester.name }} permanently</button>
+</form>
+<a href="{% url 'scheduling:manage-semesters' %}">Cancel</a>

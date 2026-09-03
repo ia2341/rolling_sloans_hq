@@ -1,6 +1,7 @@
 import unittest
 
 from scheduling.factories import (
+    BackupFactory,
     ConflictFactory,
     ConflictWindowFactory,
     RecordingFactory,
@@ -89,6 +90,17 @@ class SongRoleAssignmentFactoryTests(unittest.TestCase):
         self.assertIsNotNone(assignment.song)
         self.assertIsNotNone(assignment.role)
         self.assertIsNotNone(assignment.person)
+
+
+class BackupFactoryTests(unittest.TestCase):
+    def test_builds_backup_with_synthetic_data(self):
+        """BackupFactory builds a Backup with a RehearsalSong, Role, and Person, and no covering_for by default."""
+        backup = BackupFactory.build()
+
+        self.assertIsNotNone(backup.rehearsal_song)
+        self.assertIsNotNone(backup.role)
+        self.assertIsNotNone(backup.person)
+        self.assertIsNone(backup.covering_for)
 
 
 class RehearsalFactoryTests(unittest.TestCase):

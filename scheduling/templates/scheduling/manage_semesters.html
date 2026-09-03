@@ -1,0 +1,29 @@
+<!doctype html>
+<title>Manage semesters</title>
+<h1>Semesters</h1>
+{% for message in messages %}
+  <p>{{ message }}</p>
+{% endfor %}
+<ul>
+  {% for semester in semesters %}
+    <li>
+      {{ semester.name }} &mdash;
+      {% if semester == live_semester %}
+        Live
+      {% elif semester.published_at %}
+        Previously published
+      {% else %}
+        Draft
+      {% endif %}
+      <form method="post" action="{% url 'scheduling:manage-semesters-publish' semester.pk %}">
+        {% csrf_token %}
+        <button type="submit">Publish</button>
+      </form>
+      {% if semester != live_semester %}
+        <a href="{% url 'scheduling:manage-semesters-delete' semester.pk %}">Delete</a>
+      {% endif %}
+    </li>
+  {% empty %}
+    <li>No semesters exist yet.</li>
+  {% endfor %}
+</ul>

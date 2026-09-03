@@ -7,6 +7,7 @@ from faker import Faker
 
 from identity.factories import PersonFactory
 from scheduling.models import (
+    Backup,
     Conflict,
     ConflictWindow,
     Membership,
@@ -201,6 +202,23 @@ class ConflictWindowFactory(factory.django.DjangoModelFactory):
     conflict = factory.SubFactory(ConflictFactory, type=Conflict.PARTIAL)
     unavailable_start = time(18, 15)
     unavailable_end = time(18, 45)
+
+
+class BackupFactory(factory.django.DjangoModelFactory):
+    """Builds a Person covering a Role at a RehearsalSong's slot, with a fresh RehearsalSong/Role/Person by default.
+
+    covering_for defaults to None (an unattributed stand-in is legal per
+    ADR-0007) and is_role_mismatch is left unset since Backup.save() always
+    recomputes it from the Person's current Membership.
+    """
+
+    class Meta:
+        model = Backup
+
+    rehearsal_song = factory.SubFactory(RehearsalSongFactory)
+    role = factory.SubFactory(RoleFactory)
+    person = factory.SubFactory(PersonFactory)
+    covering_for = None
 
 
 class RecordingFactory(factory.django.DjangoModelFactory):

@@ -7,6 +7,7 @@ from django.core.validators import MinValueValidator
 from django.db import models
 from django.db.models.signals import post_delete, post_save
 from django.dispatch import receiver
+from django.utils import timezone
 
 
 class Semester(models.Model):
@@ -17,10 +18,16 @@ class Semester(models.Model):
     out, and no member sees it — and the **Live Semester** is the one with
     the greatest `published_at`. `created_at` exists so semesters can be
     ordered chronologically without leaning on primary keys.
+
+    `updated_at` is the optimistic-concurrency stamp every bulk edit surface
+    in this map shares (issue #178): a write that touches this Semester's
+    rows sets it explicitly (never `auto_now`, so an unrelated read never
+    bumps it) and rejects a submission carrying an older stamp wholesale.
     """
 
     name = models.CharField(max_length=255)
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(default=timezone.now)
     published_at = models.DateTimeField(null=True, blank=True, db_index=True)
     default_rehearsal_duration_minutes = models.PositiveIntegerField()
     default_setup_grace_minutes = models.PositiveIntegerField()
@@ -175,26 +182,37 @@ class SongRoleAssignment(models.Model):
         return f'{self.person} as {self.role} on {self.song}'
 
 
-def _reevaluate_song_role_assignments_for(membership, role):
-    """Recompute is_role_mismatch on every SongRoleAssignment this MembershipRole change could affect."""
-    affected = SongRoleAssignment.objects.filter(
+def _reevaluate_role_mismatches_for(membership, role):
+    """Recompute is_role_mismatch on every SongRoleAssignment and Backup this MembershipRole change could affect.
+
+    Generalised (issue #174, ADR-0007) to sweep both models in one pass
+    rather than adding a second pair of post_save/post_delete receivers.
+    """
+    affected_assignments = SongRoleAssignment.objects.filter(
         person=membership.person,
         role=role,
         song__semester=membership.semester,
     )
-    for assignment in affected:
+    for assignment in affected_assignments:
         assignment.save()
+    affected_backups = Backup.objects.filter(
+        person=membership.person,
+        role=role,
+        rehearsal_song__rehearsal__semester=membership.semester,
+    )
+    for backup in affected_backups:
+        backup.save()
 
 
 @receiver(post_save, sender=MembershipRole)
 def _membership_role_saved(sender, instance, **kwargs):
-    """Re-evaluate is_role_mismatch on affected SongRoleAssignments when a Role is declared."""
-    _reevaluate_song_role_assignments_for(instance.membership, instance.role)
+    """Re-evaluate is_role_mismatch on affected SongRoleAssignments/Backups when a Role is declared."""
+    _reevaluate_role_mismatches_for(instance.membership, instance.role)
 
 
 @receiver(post_delete, sender=MembershipRole)
 def _membership_role_deleted(sender, instance, **kwargs):
-    """Re-evaluate is_role_mismatch on affected SongRoleAssignments when a declared Role is removed.
+    """Re-evaluate is_role_mismatch on affected SongRoleAssignments/Backups when a declared Role is removed.
 
     Skips re-evaluation if the parent Membership was itself cascade-deleted
     alongside this row (it's no longer fetchable) rather than raising.
@@ -203,7 +221,7 @@ def _membership_role_deleted(sender, instance, **kwargs):
         membership = instance.membership
     except Membership.DoesNotExist:
         return
-    _reevaluate_song_role_assignments_for(membership, instance.role)
+    _reevaluate_role_mismatches_for(membership, instance.role)
 
 
 class RehearsalAttendance(NamedTuple):
@@ -500,28 +518,30 @@ class RehearsalSong(models.Model):
 
 
 def slots_for_person(rehearsal, person):
-    """Return the RehearsalSong rows in `rehearsal`'s Running Order that `person` is on (issue #173).
+    """Return the RehearsalSong rows in `rehearsal`'s Running Order that `person` is on (issues #173, #175).
 
     The single definition of "which slots is this Person on at this
     Rehearsal", shared by Rehearsal.attendance_for() and by
-    services._regular_rehearsal_attendance_suggestion()/breaks_for(), so
-    that widening it later (to count Backups, ADR-0007) is one edit rather
-    than three that could disagree. Membership is derived today from the
-    Person's SongRoleAssignments on the slot's Song, exactly as each of
-    those reads derived it before.
+    services._regular_rehearsal_attendance_suggestion()/breaks_for(). Slot
+    membership is the union of two independent facts: the Person's
+    SongRoleAssignments on the slot's Song, and any Backup recorded for
+    them directly on the slot (ADR-0007) — a Backup "genuinely changes when
+    that person must arrive and leave", exactly like a standing assignment.
 
     Internal to the scheduling app despite the plain name: it lives here
     rather than in services.py only because models.py cannot import
     services.py. The tested surface stays the three public reads. It is
     deliberately not used by services.performers_for(), which is a
-    Song-level Setlist read rather than a rehearsal-slot one (ADR-0007).
+    Song-level Setlist read rather than a rehearsal-slot one (ADR-0007
+    §5) — folding a Backup into it would misreport who performs the Song.
 
     Returned unordered and distinct: a Person holding two Role Assignments
-    on the same Song must not yield that slot twice, since breaks_for()
-    walks the rows pairwise.
+    on the same Song, or both an Assignment and a Backup on the same slot,
+    must not yield that slot twice, since breaks_for() walks the rows
+    pairwise.
     """
-    return RehearsalSong.objects.filter(
-        rehearsal=rehearsal, song__songroleassignment__person=person,
+    return RehearsalSong.objects.filter(rehearsal=rehearsal).filter(
+        models.Q(song__songroleassignment__person=person) | models.Q(backup__person=person),
     ).distinct()
 
 
@@ -698,3 +718,73 @@ class Recording(models.Model):
     def __str__(self):
         """Return the Recording's object key for admin/debug display."""
         return self.file.name
+
+
+class Backup(models.Model):
+    """One Person covering one Role at a Rehearsal's timed slot (ADR-0007, issue #174).
+
+    Anchored on RehearsalSong rather than (Rehearsal, Song) or a nullable
+    `rehearsal` FK on SongRoleAssignment, so a Song's Role Assignments and
+    the covering Person's Membership Roles stay completely untouched —
+    standing in once never tells the system someone plays that instrument
+    all term. `covering_for` is advisory (noting who is covered for is
+    optional and never load-bearing), so it's nullable and SET_NULL rather
+    than CASCADE. Hard deleted: the Role.is_active soft-delete convention
+    deliberately does not apply here (ADR-0007 §4) since nothing else
+    references a Backup and a removed row means the arrangement isn't
+    happening. No created_at and no free-text notes, deliberately, per
+    ADR-0007 §4.
+    """
+
+    rehearsal_song = models.ForeignKey(RehearsalSong, on_delete=models.CASCADE)
+    role = models.ForeignKey(Role, on_delete=models.CASCADE)
+    person = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    covering_for = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='backups_covered_for',
+    )
+    is_role_mismatch = models.BooleanField(default=False)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=['rehearsal_song', 'role', 'person'], name='unique_backup_per_slot_role_person',
+            ),
+            models.CheckConstraint(
+                condition=~models.Q(person=models.F('covering_for')),
+                name='backup_person_is_not_covering_for_self',
+            ),
+        ]
+
+    def _compute_is_role_mismatch(self):
+        """True when the Person has no matching MembershipRole for the Rehearsal's Semester."""
+        return not MembershipRole.objects.filter(
+            membership__person=self.person,
+            membership__semester=self.rehearsal_song.rehearsal.semester,
+            role=self.role,
+        ).exists()
+
+    def save(self, *args, **kwargs):
+        """Recompute is_role_mismatch from the Person's current Membership before saving."""
+        self.is_role_mismatch = self._compute_is_role_mismatch()
+        super().save(*args, **kwargs)
+
+    def is_stale(self):
+        """True when covering_for is set but that Person no longer has a Conflict on this Rehearsal (ADR-0007 §3).
+
+        Computed live, never stored: withdrawing the covered Person's
+        Conflict leaves the Backup standing, since the Backup may already
+        have learned the part. Always False when covering_for is null.
+        """
+        if self.covering_for_id is None:
+            return False
+        return not Conflict.objects.filter(
+            person=self.covering_for, rehearsal=self.rehearsal_song.rehearsal,
+        ).exists()
+
+    def __str__(self):
+        """Return "<person> backing up <role> @ <rehearsal_song>" for admin/debug display."""
+        return f'{self.person} backing up {self.role} @ {self.rehearsal_song}'

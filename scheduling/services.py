@@ -1,19 +1,22 @@
 """Application services for the scheduling domain."""
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 from itertools import pairwise
 from uuid import uuid4
 
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 from django.core.files.storage import storages
 from django.db import IntegrityError, models, transaction
 from django.db.models import Count, Q
 from django.utils import timezone
 
+from identity.models import Person
 from scheduling.models import (
     Conflict,
     ConflictWindow,
+    Membership,
     MembershipRole,
     Recording,
     Rehearsal,
@@ -25,8 +28,13 @@ from scheduling.models import (
     slots_for_person,
 )
 
+logger = logging.getLogger(__name__)
+
 MAX_RECORDING_FILE_SIZE = 50 * 1024 * 1024
 VIEWING_SEMESTER_SESSION_KEY = 'viewing_semester_id'
+SEMESTER_STATUS_LIVE = 'Live'
+SEMESTER_STATUS_DRAFT = 'Draft'
+SEMESTER_STATUS_PREVIOUSLY_PUBLISHED = 'Previously published'
 PRESIGNED_URL_EXPIRY_SECONDS = 900
 SUPPORTED_RECORDING_CONTENT_TYPES = frozenset(
     {
@@ -50,6 +58,23 @@ _FILE_EXTENSIONS_BY_CONTENT_TYPE = {
 
 class RecordingUploadError(ValueError):
     """Raised when a recording object is not a valid private audio upload."""
+
+
+@dataclass(frozen=True)
+class SemesterOption:
+    """One entry in the admin's Semester dropdown: a Semester, its Live/Draft/Previously-published label, and whether it's the one on screen."""
+
+    semester: Semester
+    status: str
+    is_viewing: bool
+
+
+@dataclass(frozen=True)
+class SemesterBanner:
+    """The shell's warning that this request is scoped to a Semester members can't see, plus the Live Semester to return to (None when nothing is published)."""
+
+    semester: Semester
+    live_semester: Semester | None
 
 
 @dataclass(frozen=True)
@@ -213,6 +238,85 @@ def get_live_semester() -> Semester | None:
     return Semester.objects.exclude(published_at=None).order_by('-published_at', '-id').first()
 
 
+def publish_semester(semester: Semester) -> None:
+    """Stamp `semester.published_at` to now — the whole of Publish (issue #170).
+
+    Visibility only: it never gates or locks edits inside the Semester.
+    Bumping `published_at` on an already-live Semester is harmless and is
+    the same code path rollback uses — re-publishing an older Semester
+    simply makes that one's `published_at` the greatest again.
+    """
+    semester.published_at = timezone.now()
+    semester.save(update_fields=['published_at'])
+
+
+class LiveSemesterDeletionError(ValueError):
+    """Raised when a caller attempts to delete the Live Semester (issue #171)."""
+
+
+@dataclass(frozen=True)
+class SemesterDeletionSummary:
+    """Counts of what deleting a Semester would destroy, for the confirmation surface (issue #171)."""
+
+    member_count: int
+    song_count: int
+    rehearsal_count: int
+    recording_count: int
+
+
+def semester_deletion_summary(semester: Semester) -> SemesterDeletionSummary:
+    """Return the counts of Memberships, Songs, Rehearsals and Recordings a delete of `semester` would destroy."""
+    return SemesterDeletionSummary(
+        member_count=Membership.objects.filter(semester=semester).count(),
+        song_count=Song.objects.filter(semester=semester).count(),
+        rehearsal_count=Rehearsal.objects.filter(semester=semester).count(),
+        recording_count=Recording.objects.filter(rehearsal_song__rehearsal__semester=semester).count(),
+    )
+
+
+def delete_semester(semester: Semester) -> None:
+    """Hard-delete `semester` and everything scoped to it, including its Recordings' storage objects (issue #171).
+
+    Refuses the Live Semester so no caller — view or otherwise — can route
+    around that protection (ADR 0011). The cascade (FK `on_delete=CASCADE`)
+    destroys Memberships, MembershipRoles, Songs, SongRoleRequirements,
+    SongRoleAssignments, Rehearsals, RehearsalSongs, Conflicts,
+    ConflictWindows and Recordings; every Person row is untouched.
+
+    Recording object keys are collected before the cascade, since the rows
+    naming them are gone afterwards. Their storage deletion is registered
+    with `transaction.on_commit()` and is best-effort: a storage failure is
+    logged, never raised, and never rolls back or blocks the Semester
+    deletion that already committed.
+    """
+    if semester == get_live_semester():
+        raise LiveSemesterDeletionError('The Live Semester cannot be deleted.')
+    object_keys = list(
+        Recording.objects.filter(rehearsal_song__rehearsal__semester=semester).values_list('file', flat=True)
+    )
+    semester.delete()
+    if object_keys:
+        transaction.on_commit(lambda: _delete_recording_objects(object_keys))
+
+
+def _delete_recording_objects(object_keys: list[str]) -> None:
+    """Best-effort delete each of `object_keys` from private storage, logging rather than raising on failure.
+
+    Runs inside a `transaction.on_commit()` callback, after the Semester row
+    is already gone — any exception here must be swallowed, not just a
+    `ClientError` (a network-level outage raises `BotoCoreError`, not
+    `ClientError`), or it would surface as a 500 on a request that already
+    succeeded.
+    """
+    storage = _recording_storage()
+    client = storage.connection.meta.client
+    for object_key in object_keys:
+        try:
+            client.delete_object(Bucket=storage.bucket_name, Key=object_key)
+        except (ClientError, BotoCoreError):
+            logger.exception('Failed to delete recording object %r from storage after Semester deletion.', object_key)
+
+
 def get_viewing_semester(request) -> Semester | None:
     """Return the Semester `request` is scoped to, for reads and writes alike.
 
@@ -240,6 +344,62 @@ def get_viewing_semester(request) -> Semester | None:
         if selected is not None:
             return selected
     return get_live_semester() or Semester.objects.order_by('-created_at', '-id').first()
+
+
+def semester_options_for(request) -> list['SemesterOption']:
+    """Return every Semester as a switcher option, newest-created first, or nothing for a non-admin (issue #169).
+
+    The label distinguishes the three states an admin has to tell apart at a
+    glance: the Live Semester, a Draft (null `published_at`), and a
+    Previously published one — a term that was live and has since been
+    superseded. Exactly one option carries `is_viewing`, matching whatever
+    `get_viewing_semester()` resolves, so the dropdown preselects the same
+    Semester the page is actually rendering.
+
+    A member gets an empty list rather than a hidden one: there is nothing
+    for them to choose between, so the data never reaches the template.
+    """
+    if not _is_admin(getattr(request, 'user', None)):
+        return []
+    live = get_live_semester()
+    viewing = get_viewing_semester(request)
+    return [
+        SemesterOption(
+            semester=semester,
+            status=_semester_status(semester, live),
+            is_viewing=viewing is not None and semester.pk == viewing.pk,
+        )
+        for semester in Semester.objects.order_by('-created_at', '-id')
+    ]
+
+
+def _semester_status(semester: Semester, live: Semester | None) -> str:
+    """Return `semester`'s switcher label, given the already-resolved Live Semester."""
+    if live is not None and semester.pk == live.pk:
+        return SEMESTER_STATUS_LIVE
+    if semester.published_at is None:
+        return SEMESTER_STATUS_DRAFT
+    return SEMESTER_STATUS_PREVIOUSLY_PUBLISHED
+
+
+def semester_banner_for(request) -> 'SemesterBanner | None':
+    """Return the warning banner for a request resolved to something other than the Live Semester, else None (issue #169).
+
+    Only an admin can ever be looking at a non-live Semester, so a member
+    always gets None. `live_semester` is carried alongside so the banner can
+    offer a way back — and is itself None when nothing is published at all,
+    the bootstrapping case where an admin views the newest draft by fallback
+    and there is nowhere to return to.
+    """
+    if not _is_admin(getattr(request, 'user', None)):
+        return None
+    viewing = get_viewing_semester(request)
+    if viewing is None:
+        return None
+    live = get_live_semester()
+    if live is not None and viewing.pk == live.pk:
+        return None
+    return SemesterBanner(semester=viewing, live_semester=live)
 
 
 def set_viewing_semester(request, semester: Semester | None) -> None:
@@ -807,6 +967,110 @@ def _derive_declaration(conflict) -> tuple[str | None, time | None]:
         if window.unavailable_end == rehearsal.end_time:
             return CONFLICT_EARLY_DEPARTURE, window.unavailable_start
     return None, None
+
+
+@dataclass(frozen=True)
+class RoleCreationResult:
+    """The outcome of `create_or_reactivate_role()` — the Role plus how it was obtained (issue #225)."""
+
+    role: Role
+    created: bool
+    reactivated: bool
+
+
+def create_or_reactivate_role(name: str) -> RoleCreationResult:
+    """Get-or-create a Role by name, case-insensitively, and commit immediately (issue #225).
+
+    Backs the inline "declare Trombone right now" control on the Roster
+    editor. Commits outside any Pending Buffer — discarding a batch of
+    Roster edits must not un-invent a Role a row is already ticking. It
+    writes with no `transaction.atomic()` wrapper and no `on_commit()`
+    deferral, so — as long as no future caller nests this call inside the
+    Roster batch's own `apply_roster_edits()` transaction — it commits in
+    Django's default autocommit mode, independent of that batch's later
+    success or failure.
+
+    A name matching an existing Role case-insensitively returns that Role
+    (`created=False`) rather than creating a near-duplicate that differs
+    only in capitalisation. If that match is retired (`is_active=False`),
+    it is flipped back to active (`reactivated=True`) — the soft-delete
+    convention's whole point (per Role's docstring). There is no retire
+    path here: retiring a Role stays a deliberate act in the Django admin.
+    """
+    name = name.strip()
+    existing = Role.objects.filter(name__iexact=name).first()
+    if existing is not None:
+        reactivated = not existing.is_active
+        if reactivated:
+            existing.is_active = True
+            existing.save(update_fields=['is_active'])
+        return RoleCreationResult(role=existing, created=False, reactivated=reactivated)
+    role = Role.objects.create(name=name)
+    return RoleCreationResult(role=role, created=True, reactivated=False)
+
+
+def _prior_semester(semester: Semester) -> Semester | None:
+    """Return the Semester chronologically immediately before `semester`, or None if it is the first (issue #225).
+
+    Ordered by `created_at` per ADR-0010, with `id` as a deterministic
+    tiebreak for rows created in the same instant.
+    """
+    return Semester.objects.filter(
+        Q(created_at__lt=semester.created_at) | Q(created_at=semester.created_at, id__lt=semester.id)
+    ).order_by('-created_at', '-id').first()
+
+
+@dataclass(frozen=True)
+class RosterImportPerson:
+    """One Person `import_roster_from_semester()` proposes to roster, with the Roles to declare fresh (issue #225)."""
+
+    person: Person
+    roles: list[Role]
+
+
+@dataclass(frozen=True)
+class RosterImportProposal:
+    """The prior Semester's Roster, proposed as fresh declarations for a target Semester (issue #225).
+
+    `source_semester` is None when there is nothing to import from, in
+    which case `people` is empty.
+    """
+
+    source_semester: Semester | None
+    people: list['RosterImportPerson']
+
+
+def import_roster_from_semester(semester: Semester) -> RosterImportProposal:
+    """Propose `semester`'s prior Semester's Roster as fresh declarations for `semester` (issue #225).
+
+    A read, not a write — nothing is saved here, so the same call can
+    serve both the Roster editor's import button and the setup wizard's
+    roster step; the write still goes through the batch save. Deactivated
+    People are excluded silently (a Person who cannot log in cannot act on
+    a Membership), and the Roles returned are values to copy into fresh
+    `MembershipRole` declarations, never references into the prior
+    Semester's rows (ADR 0001) — editing this term can never rewrite last
+    term's history.
+    """
+    source = _prior_semester(semester)
+    if source is None:
+        return RosterImportProposal(source_semester=None, people=[])
+    memberships = Membership.objects.filter(
+        semester=source, person__is_active=True,
+    ).select_related('person').prefetch_related(
+        models.Prefetch(
+            'membershiprole_set',
+            queryset=MembershipRole.objects.select_related('role').order_by('role__name'),
+        ),
+    ).order_by('person__name')
+    people = [
+        RosterImportPerson(
+            person=membership.person,
+            roles=[membership_role.role for membership_role in membership.membershiprole_set.all()],
+        )
+        for membership in memberships
+    ]
+    return RosterImportProposal(source_semester=source, people=people)
 
 
 def conflict_history_for(semester, person) -> list[ConflictHistoryRow]:

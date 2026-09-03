@@ -67,6 +67,9 @@ TEMPLATES = [
                 'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
+                # The non-live Semester banner renders from the shared nav shell
+                # on every page, so it can't be per-view context (issue #169).
+                'scheduling.context_processors.semester_banner',
             ],
         },
     },
@@ -201,6 +204,12 @@ if not DEBUG and not SITE_URL:
         'SITE_URL must be set via the environment when DJANGO_DEBUG is False.'
     )
 SITE_URL = SITE_URL or 'http://localhost:8000'
+
+# Spotify Client Credentials Flow, for the public-playlist import
+# (scheduling.spotify). Optional: absent locally, the import reports itself
+# unavailable instead of raising, so a fresh checkout isn't broken by it.
+SPOTIFY_CLIENT_ID = env('SPOTIFY_CLIENT_ID', default=None)
+SPOTIFY_CLIENT_SECRET = env('SPOTIFY_CLIENT_SECRET', default=None)
 
 
 # Production security settings ("TLS everywhere").
