@@ -1,58 +1,44 @@
-<form method="post" action="{% url 'scheduling:setlist-edit' %}" id="setlist-edit-form">
-  {% csrf_token %}
-  <input type="hidden" name="semester_updated_at" value="{{ stamp }}">
-  {{ formset.management_form }}
-  {% if formset.non_form_errors %}
-    <ul class="errors">
-      {% for error in formset.non_form_errors %}<li>{{ error }}</li>{% endfor %}
-    </ul>
-  {% endif %}
-  {% if formset.forms %}
-    <table id="setlist-edit-table">
-      <thead>
-        <tr>
-          <th>#</th>
-          <th>Title</th>
-          <th>Artist</th>
-          <th>Length</th>
-          <th>Notes</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for form in formset %}
-          <tr class="setlist-edit-row">
-            {{ form.id }}
-            <td>{{ form.instance.position }}</td>
-            <td>
-              {{ form.title }}
-              {{ form.title.errors }}
-            </td>
-            <td>
-              {{ form.artist }}
-              {{ form.artist.errors }}
-            </td>
-            <td>
-              {{ form.length }}
-              {{ form.length.errors }}
-            </td>
-            <td>
-              <details>
-                <summary>Notes</summary>
-              </details>
-            </td>
-          </tr>
-          <tr class="setlist-edit-notes-row">
-            <td colspan="5">
-              {{ form.notes }}
-              {{ form.notes.errors }}
-            </td>
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  {% else %}
-    <p>No songs on the setlist yet.</p>
-  {% endif %}
-  <button type="submit" id="save-setlist-changes">Save Changes</button>
-</form>
-<a href="{% url 'scheduling:setlist' %}" id="cancel-setlist-edit">Cancel</a>
+<div
+  id="setlist-edit-surface"
+  x-data="setlistEdit('{% url 'scheduling:setlist-edit-confirm-delete' %}')"
+  x-init="init()"
+>
+  <form method="post" action="{% url 'scheduling:setlist-edit' %}" id="setlist-edit-form" @submit="onSubmit">
+    {% csrf_token %}
+    <input type="hidden" name="semester_updated_at" value="{{ stamp }}">
+    {{ formset.management_form }}
+    {% if formset.non_form_errors %}
+      <ul class="errors">
+        {% for error in formset.non_form_errors %}<li>{{ error }}</li>{% endfor %}
+      </ul>
+    {% endif %}
+    <div class="setlist-edit-header">
+      <span></span>
+      <span></span>
+      <span></span>
+      <span>Title</span>
+      <span>Artist</span>
+      <span>Length</span>
+      <span></span>
+      <span></span>
+    </div>
+    <div id="setlist-edit-rows">
+      {% for form in formset %}
+        {% include "scheduling/_setlist_edit_row.html" %}
+      {% endfor %}
+    </div>
+    <button type="button" id="add-song-row" @click="addRow">+ Add song</button>
+    <button type="submit" id="save-setlist-changes">Save Changes</button>
+  </form>
+  <a href="{% url 'scheduling:setlist' %}" id="cancel-setlist-edit">Cancel</a>
+
+  <template id="setlist-empty-form-template">
+    {% include "scheduling/_setlist_edit_row.html" with form=formset.empty_form %}
+  </template>
+
+  <dialog id="setlist-delete-confirm-dialog" x-ref="deleteDialog">
+    <div id="setlist-delete-confirm-body" x-html="confirmHtml"></div>
+    <button type="button" id="confirm-delete-songs" @click="confirmDelete">Delete Anyway</button>
+    <button type="button" id="cancel-delete-songs" @click="cancelDelete">Cancel</button>
+  </dialog>
+</div>

@@ -42,7 +42,9 @@ def formset_data(songs, edits=None, stamp=None):
     Every row starts from the Song's current values so a test only has to
     spell out the fields it means to change. `stamp` defaults to each
     Song's Semester's current `updated_at`; pass an explicit value to
-    exercise the optimistic-concurrency check.
+    exercise the optimistic-concurrency check. `song_order` (issue #179)
+    mirrors the grid's JS, which submits it in the buffer's visual order —
+    here that's just the same position order the rows were built in.
     """
     edits = edits or {}
     data = {
@@ -62,6 +64,7 @@ def formset_data(songs, edits=None, stamp=None):
         data[f'song-{index}-id'] = str(song.pk)
         for field, value in row.items():
             data[f'song-{index}-{field}'] = value
+    data['song_order'] = [f'song-{index}' for index in range(len(songs))]
     if stamp is None and songs:
         stamp = songs[0].semester.updated_at.isoformat()
     data['semester_updated_at'] = stamp or ''

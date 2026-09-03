@@ -114,17 +114,56 @@ body > nav [aria-current='page'] {
 }
 
 /* The setlist edit grid's per-row notes expander (issue #178): a chevron in
-   the row reveals a full-width textarea in the row beneath it, rather than
-   a textarea cramped into one narrow cell. No JS: the sibling row's
-   visibility tracks the row's own <details> element via :has(). */
+   the row reveals a full-width textarea beneath it, rather than a textarea
+   cramped into one narrow cell. No JS: the sibling row's visibility tracks
+   the row's own <details> element via :has(). */
 .setlist-edit-notes-row {
   display: none;
 }
 
 .setlist-edit-row:has(details[open]) + .setlist-edit-notes-row {
-  display: table-row;
+  display: block;
 }
 
 .setlist-edit-notes-row textarea {
   width: 100%;
+}
+
+/* The setlist edit grid's row/header layout (issue #179): one CSS grid
+   template shared by the header and every row group, rather than an HTML
+   <table> — SortableJS reorders #setlist-edit-rows' children directly, and
+   a table's tag-hierarchy rules would fight a plain drag-and-drop container. */
+.setlist-edit-header,
+.setlist-edit-row {
+  display: grid;
+  grid-template-columns: 2rem 1.5rem 3.5rem 1fr 1fr 5rem auto auto;
+  align-items: center;
+  gap: var(--rs-space-sm);
+}
+
+.setlist-edit-header {
+  font-weight: bold;
+  padding-block-end: var(--rs-space-xs);
+  border-block-end: 1px solid var(--rs-border-color);
+}
+
+.setlist-edit-row-group {
+  padding-block: var(--rs-space-xs);
+  border-block-end: 1px solid var(--rs-border-color);
+}
+
+.setlist-drag-handle {
+  cursor: grab;
+}
+
+/* A row struck for deletion: undoable up to Save, so it stays visible and
+   readable rather than collapsing away (issue #179). */
+.setlist-row-deleted .setlist-edit-row > .setlist-field,
+.setlist-row-deleted .setlist-row-number {
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+
+#setlist-delete-confirm-dialog {
+  max-width: 32rem;
 }
