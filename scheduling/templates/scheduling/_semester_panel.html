@@ -1,0 +1,23 @@
+{# The Overview's admin Semester panel (issue #169). `semester_options` is empty #}
+{# for a member, so the panel is absent rather than hidden. The semester-setup #}
+{# wizard later adds a "Create Semester" button here and owns the final layout. #}
+{% if semester_options %}
+<article class="rs-semester-panel" data-testid="semester-panel">
+  <h2>Semester</h2>
+  {# A plain POST-and-redirect form: which Semester an admin edits must never #}
+  {# hinge on a script having loaded. #}
+  <form method="post" action="{% url 'scheduling:manage-semester-select' %}">
+    {% csrf_token %}
+    <input type="hidden" name="next" value="{{ request.get_full_path }}">
+    <label for="semester-select">Viewing</label>
+    <select id="semester-select" name="semester">
+      {% for option in semester_options %}
+        <option value="{{ option.semester.pk }}"{% if option.is_viewing %} selected{% endif %}>
+          {{ option.semester.name }} — {{ option.status }}
+        </option>
+      {% endfor %}
+    </select>
+    <button type="submit">Switch semester</button>
+  </form>
+</article>
+{% endif %}

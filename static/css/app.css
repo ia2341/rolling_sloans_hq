@@ -27,6 +27,7 @@
   --rs-muted-color: var(--pico-muted-color);
   --rs-border-color: var(--pico-muted-border-color);
   --rs-danger-color: var(--pico-del-color);
+  --rs-warning-border-color: var(--pico-del-color);
 
   /* Pico theming hooks. */
   --pico-font-size: 100%;
@@ -66,6 +67,42 @@ body > nav [aria-current='page'] {
    scroll inside their own box instead of widening the page. */
 .rs-scroll-x {
   overflow-x: auto;
+}
+
+/* The non-live Semester warning. It sits between the nav and the page content
+   on every page, so it has to read as a band across the column rather than as
+   part of whatever surface follows it. */
+.rs-semester-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--rs-space-md);
+  max-width: var(--rs-content-max-width);
+  margin: var(--rs-space-md) auto;
+  padding: var(--rs-space-md) var(--rs-gutter);
+  border: 1px solid var(--rs-warning-border-color);
+  border-radius: var(--pico-border-radius);
+}
+
+.rs-semester-banner form {
+  margin-block-end: 0;
+  margin-inline-start: auto;
+}
+
+/* The Overview's Semester switcher: a label, a select and a button on one row
+   until the viewport is too narrow for it. */
+.rs-semester-panel form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--rs-space-sm);
+  margin-block-end: 0;
+}
+
+.rs-semester-panel select,
+.rs-semester-panel button {
+  width: auto;
+  margin-block-end: 0;
 }
 
 .rs-muted {
