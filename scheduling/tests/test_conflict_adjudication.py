@@ -23,7 +23,7 @@ from scheduling.models import Conflict
 fake = Faker()
 
 # The migration module's name starts with a digit, so it can't be imported by name.
-_migration = import_module('scheduling.migrations.0016_conflict_adjudication')
+_migration = import_module('scheduling.migrations.0018_conflict_adjudication')
 
 
 class ConflictAdjudicationFieldTests(TestCase):

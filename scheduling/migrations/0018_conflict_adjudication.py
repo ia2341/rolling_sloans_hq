@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('scheduling', '0015_semester_lifecycle'),
+        ('scheduling', '0017_semester_updated_at'),
     ]
 
     operations = [
