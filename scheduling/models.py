@@ -7,6 +7,7 @@ from django.core.validators import MinValueValidator
 from django.db import models
 from django.db.models.signals import post_delete, post_save
 from django.dispatch import receiver
+from django.utils import timezone
 
 
 class Semester(models.Model):
@@ -17,10 +18,16 @@ class Semester(models.Model):
     out, and no member sees it — and the **Live Semester** is the one with
     the greatest `published_at`. `created_at` exists so semesters can be
     ordered chronologically without leaning on primary keys.
+
+    `updated_at` is the optimistic-concurrency stamp every bulk edit surface
+    in this map shares (issue #178): a write that touches this Semester's
+    rows sets it explicitly (never `auto_now`, so an unrelated read never
+    bumps it) and rejects a submission carrying an older stamp wholesale.
     """
 
     name = models.CharField(max_length=255)
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(default=timezone.now)
     published_at = models.DateTimeField(null=True, blank=True, db_index=True)
     default_rehearsal_duration_minutes = models.PositiveIntegerField()
     default_setup_grace_minutes = models.PositiveIntegerField()
