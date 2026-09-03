@@ -78,7 +78,7 @@ def import_playlist(url: str) -> PlaylistImportResult:
     rate-limited response, or a transport error — every case a readable
     message and no rows.
     """
-    playlist_id = _extract_playlist_id(url)
+    playlist_id = extract_playlist_id(url)
     client_id = getattr(settings, 'SPOTIFY_CLIENT_ID', None)
     client_secret = getattr(settings, 'SPOTIFY_CLIENT_SECRET', None)
     if not client_id or not client_secret:
@@ -90,11 +90,14 @@ def import_playlist(url: str) -> PlaylistImportResult:
     return _rows_from_items(items)
 
 
-def _extract_playlist_id(url: str) -> str:
+def extract_playlist_id(url: str) -> str:
     """Return the playlist ID from a Spotify playlist link, before any network call.
 
     Raises `SpotifyImportError` on anything that isn't a well-formed
-    `open.spotify.com/playlist/<id>` link, so a typo never reaches the network.
+    `open.spotify.com/playlist/<id>` link, so a typo never reaches the
+    network. Public so the setlist edit surface (issue #184) can run the
+    identical check as a form field error before this module is asked to
+    do anything else.
     """
     match = _PLAYLIST_URL_PATTERN.match((url or '').strip())
     if not match:

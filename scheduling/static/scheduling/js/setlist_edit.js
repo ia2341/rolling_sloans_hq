@@ -1,12 +1,18 @@
-// The setlist edit grid: drag/keyboard reorder, repeatable add, and undoable strike-through delete (issue #179).
+// The setlist edit grid: drag/keyboard reorder, repeatable add, undoable strike-through delete (issue #179),
+// and a Spotify playlist import that fills rows the same "+ Add song" would have left blank (issue #184).
 // Registered once at page load (this file is loaded outside the htmx-swapped fragment), so Alpine's own
 // mutation observer picks up and initializes the grid whether it arrives as a full page or an htmx swap.
 document.addEventListener('alpine:init', () => {
-  Alpine.data('setlistEdit', (confirmUrl) => ({
+  Alpine.data('setlistEdit', (confirmUrl, importUrl) => ({
     confirmHtml: '',
     confirmUrl,
     deleteError: '',
     sortable: null,
+    importUrl,
+    playlistUrl: '',
+    importing: false,
+    importError: '',
+    importSummary: '',
 
     init() {
       const rows = this.$el.querySelector('#setlist-edit-rows');
@@ -43,6 +49,57 @@ document.addEventListener('alpine:init', () => {
       if (titleInput) {
         titleInput.focus();
       }
+    },
+
+    // Imports a pasted Spotify playlist link as filled rows, landing them in the same buffer "+ Add song"
+    // fills blank -- not a second write path (issue #184). Writes nothing itself: the fetched rows are
+    // unsaved Songs appended to this buffer, and only Save Changes persists anything. A business failure
+    // (bad link, private playlist, rate limit, missing credentials) comes back as a readable fragment
+    // rather than a thrown error, so the buffer -- and any edits already made -- are never touched.
+    async importPlaylist() {
+      this.importError = '';
+      this.importSummary = '';
+      this.importing = true;
+      const rows = this.$el.querySelector('#setlist-edit-rows');
+      const totalForms = this.$el.querySelector('[name$="-TOTAL_FORMS"]');
+      const nextIndex = Number(totalForms.value);
+      const form = document.getElementById('setlist-edit-form');
+      const csrfToken = form.querySelector('[name=csrfmiddlewaretoken]').value;
+      const body = new FormData();
+      body.append('playlist_url', this.playlistUrl);
+      body.append('next_index', String(nextIndex));
+      let response;
+      try {
+        response = await fetch(this.importUrl, {
+          method: 'POST',
+          headers: { 'X-CSRFToken': csrfToken },
+          body,
+        });
+      } catch (error) {
+        this.importError = 'Could not reach the server to import the playlist. Check your connection and try again.';
+        this.importing = false;
+        return;
+      }
+      this.importing = false;
+      if (!response.ok) {
+        this.importError = 'The import failed. Try again.';
+        return;
+      }
+      const wrapper = document.createElement('div');
+      wrapper.innerHTML = await response.text();
+      const errorEl = wrapper.querySelector('#setlist-import-error');
+      if (errorEl) {
+        this.importError = errorEl.textContent;
+        return;
+      }
+      const importedRows = wrapper.querySelector('#setlist-import-rows');
+      const addedCount = Number(importedRows.dataset.addedCount || '0');
+      Array.from(importedRows.children).forEach((row) => rows.appendChild(row));
+      totalForms.value = String(nextIndex + addedCount);
+      this.reindex();
+      const summaryEl = wrapper.querySelector('#setlist-import-summary');
+      this.importSummary = summaryEl ? summaryEl.textContent.trim() : '';
+      this.playlistUrl = '';
     },
 
     moveUp(event) {
