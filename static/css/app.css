@@ -112,3 +112,19 @@ body > nav [aria-current='page'] {
 .rs-danger {
   color: var(--rs-danger-color);
 }
+
+/* The setlist edit grid's per-row notes expander (issue #178): a chevron in
+   the row reveals a full-width textarea in the row beneath it, rather than
+   a textarea cramped into one narrow cell. No JS: the sibling row's
+   visibility tracks the row's own <details> element via :has(). */
+.setlist-edit-notes-row {
+  display: none;
+}
+
+.setlist-edit-row:has(details[open]) + .setlist-edit-notes-row {
+  display: table-row;
+}
+
+.setlist-edit-notes-row textarea {
+  width: 100%;
+}
