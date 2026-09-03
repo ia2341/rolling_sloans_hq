@@ -522,12 +522,9 @@ def _add_initial(semester, imported_roles_by_person_id=None):
 
 def _add_rows(add_formset):
     """Pair each add-list formset row with its Person, so an invalid re-render can still show the row's name."""
-    person_ids = [_parse_int(form['person_id'].value()) for form in add_formset]
-    people_by_id = Person.objects.in_bulk(person_ids)
-    return [
-        {'form': form, 'person': people_by_id.get(_parse_int(form['person_id'].value()))}
-        for form in add_formset
-    ]
+    form_person_ids = [(form, _parse_int(form['person_id'].value())) for form in add_formset]
+    people_by_id = Person.objects.in_bulk([person_id for _, person_id in form_person_ids])
+    return [{'form': form, 'person': people_by_id.get(person_id)} for form, person_id in form_person_ids]
 
 
 class MembersView(BaseView, View):
