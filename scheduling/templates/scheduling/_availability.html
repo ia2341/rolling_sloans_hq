@@ -1,0 +1,41 @@
+{# One Rehearsal's "Your availability" block: the viewer's own declaration, their own #}
+{# adjudication verdict, and — on a future, non-Dress Rehearsal — the declare/edit and #}
+{# delete controls (issue #190). Always request.user's own; nobody else's, an admin #}
+{# viewing this page included (ADR 0005). Expects `availability` and `view_mode`. #}
+<div class="my-availability" data-rehearsal-id="{{ availability.rehearsal.pk }}">
+  {% if availability.conflict %}
+    <p class="conflict-declaration">
+      {{ availability.type_label }}{% if availability.declared_time %} at {{ availability.declared_time }}{% endif %}
+      {% if availability.conflict.reason %}&mdash; {{ availability.conflict.reason }}{% endif %}
+    </p>
+    <p class="conflict-status" data-status="{{ availability.conflict.status }}">
+      {{ availability.status_text }}
+      {% if availability.conflict.adjudication_note %}
+        <span class="conflict-note">{{ availability.conflict.adjudication_note }}</span>
+      {% endif %}
+    </p>
+  {% elif not availability.is_dress %}
+    <p class="conflict-none">No conflict declared.</p>
+  {% endif %}
+
+  {% if availability.is_dress %}
+    <p class="dress-mandatory">Attendance at the Dress Rehearsal is mandatory.</p>
+  {% elif availability.form %}
+    <details class="conflict-declare-details"{% if availability.form.errors %} open{% endif %}>
+      <summary>{% if availability.conflict %}Edit your conflict{% else %}Declare a conflict{% endif %}</summary>
+      <form method="post" action="{% url 'scheduling:conflict-declare' availability.rehearsal.pk %}" class="conflict-declare-form">
+        {% csrf_token %}
+        <input type="hidden" name="view" value="{{ view_mode }}">
+        {% include "scheduling/_conflict_declaration_fields.html" with form=availability.form %}
+        <button type="submit">{% if availability.conflict %}Save{% else %}Submit{% endif %}</button>
+      </form>
+    </details>
+    {% if availability.conflict %}
+      <form method="post" action="{% url 'scheduling:conflict-delete' availability.rehearsal.pk %}" class="conflict-delete-form">
+        {% csrf_token %}
+        <input type="hidden" name="view" value="{{ view_mode }}">
+        <button type="submit">Delete</button>
+      </form>
+    {% endif %}
+  {% endif %}
+</div>

@@ -3,7 +3,7 @@
 import json
 
 from django.contrib import messages
-from django.db import IntegrityError, models, transaction
+from django.db import models, transaction
 from django.http import (
     Http404,
     HttpResponseBadRequest,
@@ -11,6 +11,7 @@ from django.http import (
     JsonResponse,
 )
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.utils.http import url_has_allowed_host_and_scheme
@@ -55,7 +56,7 @@ from scheduling.services import (
     attendance_suggestion_for,
     breaks_for,
     confirm_recording_upload,
-    conflict_history_for,
+    conflict_rows_by_rehearsal,
     create_recording_playback_url,
     declare_conflict,
     declared_roles_for,
@@ -65,6 +66,7 @@ from scheduling.services import (
     future_rehearsals_for,
     get_live_semester,
     get_viewing_semester,
+    landing_rehearsal_for,
     mismatched_person_ids_for,
     next_attended_rehearsal_for,
     performers_for,
@@ -170,62 +172,55 @@ class SemesterSelectView(AdminRequiredMixin, View):
         return 'scheduling:overview'
 
 
+VIEW_ALL = 'all'
+VIEW_NEXT = 'next'
+"""`/schedule/`'s two views, named once for every place that has to agree on them.
+
+Module-level rather than `ScheduleView` attributes because the declare
+and delete endpoints resolve the same values out of the hidden `view`
+field they post back, to re-render or redirect to the view the member
+submitted from (issue #190).
+"""
+
+
 class ScheduleView(BaseView, TemplateView):
-    """`/schedule/`: the shared rehearsal-detail view, plus the All-Rehearsals list (issues #95, #97).
+    """`/schedule/`: the single member-facing page — rehearsal detail, the All-Rehearsals list, and your own availability (issues #95, #97, #190).
 
     Defaults (`?view=next`, or no `?view=` at all) to a Rehearsal's Song x
-    Role x Person assignment matrix — the member's own next Rehearsal
-    unless `?rehearsal=<id>` drills into a specific one. `?view=all` instead
-    lists the viewing Semester's full schedule, split into a collapsed past
-    section and an expanded future section, each row linking to its own
-    `?rehearsal=<id>` detail. Read-only and identical for admins and
-    members — admin write affordances are a future hook point (issue #69).
+    Role x Person assignment matrix — `landing_rehearsal_for()`'s anchor
+    unless `?rehearsal=<id>` drills into a specific one — with a "Your
+    availability" block for that Rehearsal beside the attendance
+    suggestion and breaks. `?view=all` instead lists the viewing
+    Semester's full schedule, split into a collapsed past section and an
+    expanded future section, each row carrying the same availability
+    summary and linking to its own `?rehearsal=<id>` detail.
+
+    Availability folded in here rather than sitting beside the schedule
+    (issue #190): a separate section would have rendered the same
+    Rehearsals twice on one page. The Conflicts page it replaced is gone
+    outright, with no redirect. Everything availability-related on this
+    page is `request.user`'s own — an admin viewing it reads their own
+    declarations and nobody else's, per ADR 0005.
     """
 
     template_name = 'scheduling/schedule.html'
 
-    VIEW_ALL = 'all'
-    VIEW_NEXT = 'next'
-
     def get_context_data(self, **kwargs):
-        """Add either the All-Rehearsals schedule, or the resolved Rehearsal's matrix plus the member's own attendance/breaks (issues #95, #96, #97)."""
+        """Add either the All-Rehearsals schedule or the resolved Rehearsal's matrix, each with the viewer's own availability."""
         context = super().get_context_data(**kwargs)
         semester = get_viewing_semester(self.request)
-        context['semester'] = semester
-        context['view_mode'] = self._resolve_view()
-        context['rehearsal'] = None
-        context['matrix'] = None
-        context['my_song_ids'] = set()
-        context['my_attendance_suggestion'] = None
-        context['my_breaks'] = []
-        context['schedule'] = None
-        if semester is not None:
-            if context['view_mode'] == self.VIEW_ALL:
-                context['schedule'] = rehearsal_schedule_for(semester, self.request.user)
-            else:
-                rehearsal = self._resolve_rehearsal(semester)
-                context['rehearsal'] = rehearsal
-                if rehearsal is not None:
-                    matrix = assignment_matrix_for(rehearsal)
-                    context['matrix'] = matrix
-                    context['my_song_ids'] = set(
-                        SongRoleAssignment.objects.filter(
-                            person=self.request.user, song__in=[row.song for row in matrix.rows],
-                        ).values_list('song_id', flat=True)
-                    )
-                    context['my_attendance_suggestion'] = attendance_suggestion_for(rehearsal, self.request.user)
-                    context['my_breaks'] = breaks_for(rehearsal, self.request.user)
+        view_mode = _resolve_view_mode(self.request.GET.get('view'))
+        rehearsal = self._resolve_rehearsal(semester) if view_mode == VIEW_NEXT else None
+        context.update(_build_schedule_context(self.request, semester, view_mode, rehearsal))
         return context
 
-    def _resolve_view(self):
-        """Return VIEW_ALL for `?view=all`, else VIEW_NEXT (the default rehearsal-detail view)."""
-        return self.VIEW_ALL if self.request.GET.get('view') == self.VIEW_ALL else self.VIEW_NEXT
-
     def _resolve_rehearsal(self, semester):
-        """Return the `?rehearsal=<id>` Rehearsal (404 outside the viewing Semester), or the member's next Rehearsal."""
+        """Return the `?rehearsal=<id>` Rehearsal (404 outside the viewing Semester), or this member's landing Rehearsal."""
+        if semester is None:
+            return None
         raw_id = self.request.GET.get('rehearsal')
         if raw_id is None:
-            return next_attended_rehearsal_for(self.request.user, semester=semester)
+            return landing_rehearsal_for(self.request.user, semester)
         rehearsal_id = self._parse_rehearsal_id(raw_id)
         return get_object_or_404(_scoped_to_viewing_semester(Rehearsal, semester), pk=rehearsal_id)
 
@@ -235,6 +230,77 @@ class ScheduleView(BaseView, TemplateView):
             return int(raw_id)
         except ValueError:
             raise Http404 from None
+
+
+def _resolve_view_mode(raw_value):
+    """Return VIEW_ALL for the literal 'all', else VIEW_NEXT (the default rehearsal-detail view).
+
+    Reads a raw string rather than the request so the `?view=` query
+    parameter and the hidden `view` field a declare/delete form posts back
+    resolve through exactly the same rule — a failed submission must
+    re-render the view the member submitted from.
+    """
+    return VIEW_ALL if raw_value == VIEW_ALL else VIEW_NEXT
+
+
+def _build_schedule_context(request, semester, view_mode, rehearsal, error_rehearsal=None, error_form=None):
+    """Build `/schedule/`'s context for a GET and for every declare/edit failure re-render (issue #190).
+
+    Takes the whole `request` because every availability read on this page
+    is `request.user`'s own — the viewer and the Person the rows are about
+    can never come from different places (ADR 0005).
+
+    `error_rehearsal`/`error_form` inject a just-submitted invalid
+    declaration back into its own rehearsal's availability block, wherever
+    that Rehearsal is rendered in `view_mode`.
+    """
+    context = {
+        'semester': semester,
+        'view_mode': view_mode,
+        'rehearsal': None,
+        'matrix': None,
+        'my_song_ids': set(),
+        'my_attendance_suggestion': None,
+        'my_breaks': [],
+        'my_availability': None,
+        'schedule': None,
+    }
+    if semester is None:
+        return context
+    conflict_rows = conflict_rows_by_rehearsal(semester, request.user)
+    today = timezone.localdate()
+    if view_mode == VIEW_ALL:
+        schedule = rehearsal_schedule_for(semester, request.user)
+        context['schedule'] = {
+            section: [
+                {
+                    'rehearsal': row.rehearsal,
+                    'attendance_suggestion': row.attendance_suggestion,
+                    'availability': _availability_for(
+                        row.rehearsal, conflict_rows.get(row.rehearsal.pk), today, error_rehearsal, error_form,
+                    ),
+                }
+                for row in rows
+            ]
+            for section, rows in (('past', schedule.past), ('future', schedule.future))
+        }
+        return context
+    context['rehearsal'] = rehearsal
+    if rehearsal is None:
+        return context
+    matrix = assignment_matrix_for(rehearsal)
+    context['matrix'] = matrix
+    context['my_song_ids'] = set(
+        SongRoleAssignment.objects.filter(
+            person=request.user, song__in=[row.song for row in matrix.rows],
+        ).values_list('song_id', flat=True)
+    )
+    context['my_attendance_suggestion'] = attendance_suggestion_for(rehearsal, request.user)
+    context['my_breaks'] = breaks_for(rehearsal, request.user)
+    context['my_availability'] = _availability_for(
+        rehearsal, conflict_rows.get(rehearsal.pk), today, error_rehearsal, error_form,
+    )
+    return context
 
 
 class SetlistView(BaseView, TemplateView):
@@ -721,18 +787,34 @@ class SongDetailView(BaseView, DetailView):
         return context
 
 
-def _declare_prefix(rehearsal):
-    """Return the per-row form prefix for `rehearsal`'s Upcoming Rehearsals declare form."""
-    return f'rehearsal-{rehearsal.pk}'
+_CONFLICT_STATUS_TEXT = {
+    Conflict.PENDING: 'Awaiting a decision.',
+    Conflict.APPROVED: 'Approved.',
+    Conflict.REJECTED: 'Rejected.',
+}
+"""What the owner reads as their own adjudication outcome (issues #189, #190).
+
+Spelled out rather than taken from `get_status_display()` so `pending`
+cannot be misread as `rejected`: "Awaiting a decision." says nobody has
+looked yet, where a bare "Pending" beside a bare "Rejected" reads as two
+shades of the same no. Rendered only on the owner's own row — nobody
+else sees any of it, an admin viewing this page included (ADR 0005).
+"""
 
 
-def _history_edit_prefix(rehearsal):
-    """Return the per-row form prefix for `rehearsal`'s History edit form (distinct from its declare prefix)."""
-    return f'history-{rehearsal.pk}'
+def _conflict_prefix(rehearsal):
+    """Return the per-rehearsal form prefix for `rehearsal`'s availability declare/edit form.
+
+    One prefix, not the separate declare/edit pair the Conflicts page
+    needed: a Rehearsal now carries exactly one availability block, whose
+    form declares a first Conflict or edits the existing one through the
+    same endpoint (issue #190).
+    """
+    return f'conflict-{rehearsal.pk}'
 
 
 def _declared_time_initial(row):
-    """Return {'arrival_time': ...} or {'departure_time': ...} to pre-fill a History edit form from `row`, or {}."""
+    """Return {'arrival_time': ...} or {'departure_time': ...} to pre-fill an edit form from `row`, or {}."""
     if row.declaration_type == CONFLICT_LATE_ARRIVAL:
         return {'arrival_time': row.declared_time}
     if row.declaration_type == CONFLICT_EARLY_DEPARTURE:
@@ -740,101 +822,81 @@ def _declared_time_initial(row):
     return {}
 
 
-def _build_conflicts_context(request, error_rehearsal=None, error_form=None, selected_rehearsal_id=None):
-    """Build /me/conflicts/'s shared context for GET and every POST failure re-render (issues #98, #99, #100).
+def _availability_for(rehearsal, conflict_row, today, error_rehearsal=None, error_form=None):
+    """Return one Rehearsal's "Your availability" block for the viewer (issue #190).
 
-    Takes the whole `request` rather than just the Person, since the page is
-    scoped to `get_viewing_semester(request)` and the rows are always
-    `request.user`'s own — the two can't come from different places.
+    `conflict_row` is that Rehearsal's `ConflictHistoryRow` from
+    `conflict_rows_by_rehearsal()`, or None when the viewer has declared
+    nothing against it. The block carries the declaration, the owner's own
+    adjudication verdict and the admin's note, and — on a future,
+    non-Dress Rehearsal only — the form that declares or edits it.
 
-    `error_rehearsal`/`error_form` inject a just-submitted invalid form back
-    into its own row, wherever that Rehearsal's row lives — the Upcoming
-    Rehearsals list (a declare submission) or the History list (an edit
-    submission); a Rehearsal never appears in both, so no row is ambiguous.
-
-    `selected_rehearsal_id` marks the row matching `?rehearsal=<id>` (issue
-    #100) as selected, wherever it lives, the same way error_rehearsal does;
-    it need not match any row (a stale or bogus id), in which case nothing
-    is marked selected.
+    A past Rehearsal keeps its declaration visible but gets no form, and
+    the Dress Rehearsal gets the mandatory-attendance line in place of one
+    (ADR 0006), so a member reads the rule rather than hitting an error.
+    Neither omission is the enforcement: `ConflictDeclareView` and
+    `ConflictDeleteView` re-check server-side.
     """
-    person = request.user
-    semester = get_viewing_semester(request)
-    if semester is None:
-        return {'semester': None}
-    rehearsals = future_rehearsals_for(semester)
-    existing_conflicts = {
-        conflict.rehearsal_id: conflict for conflict in Conflict.objects.filter(person=person, rehearsal__in=rehearsals)
-    }
-    rows = [
-        _build_declare_row(rehearsal, existing_conflicts.get(rehearsal.pk), error_rehearsal, error_form, selected_rehearsal_id)
-        for rehearsal in rehearsals
-    ]
-    history = [
-        _build_history_row(row, error_rehearsal, error_form, selected_rehearsal_id)
-        for row in conflict_history_for(semester, person)
-    ]
-    return {'semester': semester, 'rows': rows, 'history': history}
-
-
-def _build_declare_row(rehearsal, conflict, error_rehearsal, error_form, selected_rehearsal_id=None):
-    """Return one Upcoming Rehearsals row: its Rehearsal, plus either its existing Conflict or its declare form.
-
-    An already-declared Rehearsal is never marked selected here even when it
-    matches `?rehearsal=<id>` — issue #100 directs that case to its History
-    row instead, per the disabled-row rule (issue #98).
-    """
-    if conflict is not None:
-        return {'rehearsal': rehearsal, 'conflict': conflict, 'form': None, 'is_selected': False}
-    is_selected = rehearsal.pk == selected_rehearsal_id
-    if error_rehearsal is not None and error_rehearsal.pk == rehearsal.pk:
-        form = error_form
-    else:
-        form = DeclareConflictForm(rehearsal=rehearsal, prefix=_declare_prefix(rehearsal))
-    return {'rehearsal': rehearsal, 'conflict': None, 'form': form, 'is_selected': is_selected}
-
-
-def _build_history_row(row, error_rehearsal, error_form, selected_rehearsal_id=None):
-    """Return one History row: `row`'s display fields, plus an edit form when its Rehearsal is still future (issue #99)."""
-    context_row = {
-        'rehearsal': row.rehearsal,
-        'conflict': row.conflict,
-        'type_label': row.type_label,
-        'declared_time': row.declared_time,
-        'reason': row.conflict.reason,
-        'is_future': row.is_future,
-        'is_selected': row.rehearsal.pk == selected_rehearsal_id,
+    is_future = rehearsal.date >= today
+    conflict = conflict_row.conflict if conflict_row is not None else None
+    availability = {
+        'rehearsal': rehearsal,
+        'conflict': conflict,
+        'type_label': conflict_row.type_label if conflict_row is not None else None,
+        'declared_time': conflict_row.declared_time if conflict_row is not None else None,
+        'status_text': _CONFLICT_STATUS_TEXT.get(conflict.status) if conflict is not None else None,
+        'is_future': is_future,
+        'is_dress': rehearsal.is_full_setlist,
+        'is_editable': is_future and not rehearsal.is_full_setlist,
         'form': None,
     }
-    if not row.is_future:
-        return context_row
-    if error_rehearsal is not None and error_rehearsal.pk == row.rehearsal.pk:
-        context_row['form'] = error_form
+    if not availability['is_editable']:
+        return availability
+    if error_rehearsal is not None and error_rehearsal.pk == rehearsal.pk:
+        availability['form'] = error_form
     else:
-        context_row['form'] = DeclareConflictForm(
-            rehearsal=row.rehearsal,
-            initial={'declaration_type': row.declaration_type, 'reason': row.conflict.reason, **_declared_time_initial(row)},
-            prefix=_history_edit_prefix(row.rehearsal),
+        availability['form'] = DeclareConflictForm(
+            rehearsal=rehearsal,
+            initial=_declaration_initial(conflict_row),
+            prefix=_conflict_prefix(rehearsal),
         )
-    return context_row
+    return availability
 
 
-def _parse_selected_rehearsal_id(raw_id):
-    """Return `?rehearsal=<id>` (issue #100) parsed as an int, or None for a missing/non-numeric value."""
-    if raw_id is None:
-        return None
-    try:
-        return int(raw_id)
-    except ValueError:
-        return None
+def _declaration_initial(conflict_row):
+    """Return the initial data pre-filling an edit of `conflict_row`'s declaration, or {} for a fresh declare form."""
+    if conflict_row is None:
+        return {}
+    return {
+        'declaration_type': conflict_row.declaration_type,
+        'reason': conflict_row.conflict.reason,
+        **_declared_time_initial(conflict_row),
+    }
+
+
+def _declarable_rehearsal_or_404(request, rehearsal_id):
+    """Return the viewing Semester's Rehearsal that `rehearsal_id` names and may be declared against, or 404.
+
+    `future_rehearsals_for()` is the single definition of "declarable" —
+    dated today or later, and never the Dress Rehearsal (ADR 0006) — so a
+    hand-crafted POST naming a past Rehearsal or the Dress Rehearsal 404s
+    here rather than reaching `declare_conflict()`'s ValueError as a 500.
+    The template omitting the form on those rows is not the enforcement.
+    """
+    rehearsals = {rehearsal.pk: rehearsal for rehearsal in future_rehearsals_for(get_viewing_semester(request))}
+    rehearsal = rehearsals.get(rehearsal_id)
+    if rehearsal is None:
+        raise Http404('No Rehearsal here can be declared against.')
+    return rehearsal
 
 
 def _future_rehearsal_with_conflict_or_404(request, rehearsal_id, action):
     """Return the viewing Semester's future Rehearsal with an existing Conflict for request.user, or 404.
 
-    Shared by ConflictEditView and ConflictDeleteView: the hidden Edit/Delete
-    controls on a past History row are not the actual enforcement, so both
-    views re-check date/ownership server-side regardless of request origin
-    (issue #99). `action` ('edited'/'deleted') only shapes the 404 message.
+    Backs the delete endpoint: the template hiding Delete on a past row is
+    not the actual enforcement, so date and ownership are re-checked here
+    regardless of request origin (issues #99, #190). `action` ('deleted')
+    only shapes the 404 message.
     """
     rehearsal = get_object_or_404(
         _scoped_to_viewing_semester(Rehearsal, get_viewing_semester(request)), pk=rehearsal_id,
@@ -846,83 +908,37 @@ def _future_rehearsal_with_conflict_or_404(request, rehearsal_id, action):
     return rehearsal
 
 
-class ConflictsView(BaseView, View):
-    """`/me/conflicts/`: the unified Conflicts page's Upcoming Rehearsals declare flow (issues #98, #99).
+def _schedule_redirect(request, rehearsal):
+    """Redirect back to whichever `/schedule/` view the submission came from, after a successful write.
 
-    Lists every future Rehearsal (date >= today) in the viewing Semester.
-    A Rehearsal with no existing Conflict for `request.user` gets an inline
-    declare form (full absence / late arrival / early departure); one that
-    already has a Conflict renders as a disabled row pointing to History
-    (built alongside this view's GET context; edited/deleted by
-    ConflictEditView/ConflictDeleteView below).
+    The hidden `view` field decides, run through `_resolve_view_mode()`, so
+    a crafted value can only ever resolve to one of the page's own two
+    views — never an arbitrary URL.
+    """
+    url = reverse('scheduling:schedule')
+    if _resolve_view_mode(request.POST.get('view')) == VIEW_ALL:
+        return redirect(f'{url}?view={VIEW_ALL}')
+    return redirect(f'{url}?rehearsal={rehearsal.pk}')
+
+
+class ConflictDeclareView(BaseView, View):
+    """`/schedule/<rehearsal_id>/conflict/`: declares or edits `request.user`'s Conflict for one Rehearsal (issue #190).
+
+    The write endpoint behind the availability block's inline form,
+    replacing the deleted `/me/conflicts/` POST and its separate edit
+    route. `declare_conflict()` is `update_or_create`-shaped against the
+    `(person, rehearsal)`-unique Conflict, so a first submission and a
+    later correction are the same call and never a second row — which is
+    also why a rejected declaration stays editable rather than having to
+    be re-declared.
     """
 
-    template_name = 'scheduling/conflicts.html'
-
-    def get(self, request):
-        """Render every future Rehearsal, each paired with its declare form or its existing Conflict, plus History.
-
-        `?rehearsal=<id>` (issue #100, matching My Schedule's "Add a
-        conflict" link) marks the matching row selected, wherever it lives,
-        for the page's client-side scroll/expand/highlight.
-        """
-        selected_rehearsal_id = _parse_selected_rehearsal_id(request.GET.get('rehearsal'))
-        context = _build_conflicts_context(request, selected_rehearsal_id=selected_rehearsal_id)
-        return render(request, self.template_name, context)
-
-    def post(self, request):
-        """Declare a Conflict for the Rehearsal named in the POST body, or re-render that row with its errors.
-
-        The Dress Rehearsal is out of the lookup's reach (is_full_setlist=False),
-        so a hand-crafted POST naming it 404s here rather than reaching
-        declare_conflict()'s ValueError as a 500 (ADR-0006).
-        """
-        semester = get_viewing_semester(request)
-        rehearsal = get_object_or_404(
-            _scoped_to_viewing_semester(Rehearsal, semester).filter(
-                date__gte=timezone.localdate(), is_full_setlist=False,
-            ),
-            pk=request.POST.get('rehearsal_id'),
-        )
-        if Conflict.objects.filter(person=request.user, rehearsal=rehearsal).exists():
-            raise Http404('A Conflict already exists for this Rehearsal.')
-        form = DeclareConflictForm(request.POST, rehearsal=rehearsal, prefix=_declare_prefix(rehearsal))
-        if form.is_valid():
-            try:
-                declare_conflict(
-                    person=request.user,
-                    rehearsal=rehearsal,
-                    declaration_type=form.cleaned_data['declaration_type'],
-                    declared_time=form.declared_time,
-                    reason=form.cleaned_data['reason'],
-                    allow_edit=False,
-                )
-            except IntegrityError:
-                # A concurrent request won the race past the exists() check above.
-                raise Http404('A Conflict already exists for this Rehearsal.') from None
-            messages.success(request, 'Conflict declared.')
-            return redirect('scheduling:conflicts')
-        context = _build_conflicts_context(request, error_rehearsal=rehearsal, error_form=form)
-        return render(request, self.template_name, context)
-
-
-class ConflictEditView(BaseView, View):
-    """`/me/conflicts/<rehearsal_id>/edit/`: edits `request.user`'s existing Conflict from History (issue #99).
-
-    Reuses declare_conflict's type-to-model mapping against the Rehearsal's
-    existing (person, rehearsal)-unique Conflict, so this is always an edit
-    in place, never a second row. Future-only, and that's enforced here
-    server-side (a 404), independent of the template hiding History's Edit
-    control for a past Rehearsal — a crafted request must be rejected the
-    same way.
-    """
-
-    template_name = 'scheduling/conflicts.html'
+    template_name = 'scheduling/schedule.html'
 
     def post(self, request, rehearsal_id):
-        """Validate and persist the resubmitted declaration against the existing Conflict, or re-render with errors."""
-        rehearsal = self._get_editable_rehearsal(request, rehearsal_id)
-        form = DeclareConflictForm(request.POST, rehearsal=rehearsal, prefix=_history_edit_prefix(rehearsal))
+        """Persist the submitted declaration against `rehearsal_id`, or re-render the page with the form's errors in place."""
+        rehearsal = _declarable_rehearsal_or_404(request, rehearsal_id)
+        form = DeclareConflictForm(request.POST, rehearsal=rehearsal, prefix=_conflict_prefix(rehearsal))
         if form.is_valid():
             declare_conflict(
                 person=request.user,
@@ -931,22 +947,28 @@ class ConflictEditView(BaseView, View):
                 declared_time=form.declared_time,
                 reason=form.cleaned_data['reason'],
             )
-            messages.success(request, 'Conflict updated.')
-            return redirect('scheduling:conflicts')
-        context = _build_conflicts_context(request, error_rehearsal=rehearsal, error_form=form)
+            messages.success(request, 'Availability updated.')
+            return _schedule_redirect(request, rehearsal)
+        view_mode = _resolve_view_mode(request.POST.get('view'))
+        context = _build_schedule_context(
+            request,
+            get_viewing_semester(request),
+            view_mode,
+            rehearsal if view_mode == VIEW_NEXT else None,
+            error_rehearsal=rehearsal,
+            error_form=form,
+        )
         return render(request, self.template_name, context)
-
-    def _get_editable_rehearsal(self, request, rehearsal_id):
-        """Return the viewing Semester's future Rehearsal with an existing Conflict for request.user, or 404."""
-        return _future_rehearsal_with_conflict_or_404(request, rehearsal_id, action='edited')
 
 
 class ConflictDeleteView(BaseView, View):
-    """`/me/conflicts/<rehearsal_id>/delete/`: removes `request.user`'s Conflict from History (issue #99).
+    """`/schedule/<rehearsal_id>/conflict/delete/`: withdraws `request.user`'s Conflict for one Rehearsal (issue #190).
 
-    Future-only, enforced server-side (a 404) for the same reason as
-    ConflictEditView — the hidden Delete control on a past row is not the
-    actual enforcement.
+    Future-only and enforced server-side, so a plan that fell through
+    leaves no false absence standing while a past declaration stays put as
+    a record. Nothing else deletes a Conflict — an admin's rejection
+    preserves it (issue #189), so this is the owner's own withdrawal and
+    only that.
     """
 
     def post(self, request, rehearsal_id):
@@ -954,7 +976,7 @@ class ConflictDeleteView(BaseView, View):
         rehearsal = _future_rehearsal_with_conflict_or_404(request, rehearsal_id, action='deleted')
         Conflict.objects.filter(person=request.user, rehearsal=rehearsal).delete()
         messages.success(request, 'Conflict removed.')
-        return redirect('scheduling:conflicts')
+        return _schedule_redirect(request, rehearsal)
 
 
 class RehearsalManageView(AdminRequiredMixin, View):
