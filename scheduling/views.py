@@ -37,6 +37,10 @@ from scheduling.forms import (
     SemesterSetupForm,
     SetlistEditEmptyFormSet,
     SetlistEditFormSet,
+    SongRequirementAddFormSet,
+    SongRequirementAddRoleForm,
+    SongRequirementAddRowForm,
+    SongRequirementEditFormSet,
     SongRoleAssignmentForm,
     SpotifyImportForm,
 )
@@ -46,9 +50,11 @@ from scheduling.models import (
     Recording,
     Rehearsal,
     RehearsalSong,
+    Role,
     Semester,
     Song,
     SongRoleAssignment,
+    SongRoleRequirement,
 )
 from scheduling.services import (
     CONFLICT_EARLY_DEPARTURE,
@@ -62,18 +68,23 @@ from scheduling.services import (
     RosterEditBuffer,
     RosterEditEntry,
     SelfRemovalError,
+    SongRoleRequirementBuffer,
+    SongRoleRequirementEntry,
     StaleAdjudicationSemesterError,
     StaleAssignmentSemesterError,
     StaleRosterSemesterError,
+    StaleSongRoleRequirementsError,
     UnknownConflictError,
     WrongAdjudicationSemesterError,
     WrongViewingSemesterError,
     apply_adjudications,
     apply_roster_edits,
     apply_song_role_assignments,
+    apply_song_role_requirements,
     assigned_songs_for,
     assignment_grid_is_editable,
     assignment_matrix_for,
+    assignment_picker_for,
     attendance_suggestion_for,
     breaks_for,
     confirm_recording_upload,
@@ -1227,6 +1238,7 @@ class SongDetailView(BaseView, DetailView):
         """Add the Song's SongRoleAssignments, Role fill status, Recordings grouped by RehearsalSong slot, and rehearsal-count target vs. actual."""
         context = super().get_context_data(**kwargs)
         song = self.object
+        context['semester'] = get_viewing_semester(self.request)
         context['assignments'] = SongRoleAssignment.objects.filter(song=song)
         context['fill_statuses'] = fill_status_for(song)
         context['recording_groups'] = [
@@ -1246,6 +1258,219 @@ class SongDetailView(BaseView, DetailView):
         context['rehearsal_count_target'] = rehearsal_count_target(song)
         context['rehearsal_count_actual'] = song.rehearsalsong_set.count()
         return context
+
+
+class SongRequirementsEditView(AdminRequiredMixin, View):
+    """`/songs/<pk>/requirements/edit/`: an admin's in-place editable Role×count table for a Song's Requirements (issue #209).
+
+    A sibling of `SongDetailView`, mirroring `SetlistEditView`'s shape
+    (issue #178) — a dedicated `AdminRequiredMixin` view, a hidden
+    `Semester.updated_at` stamp, one "Save Changes" boundary — rather than
+    the Roster's Preview/Fallout apparatus (issue #185). Applying ADR
+    0008's own test to this surface — is there fallout only the server can
+    compute? — comes back negative on both counts: deleting a Requirement
+    destroys nothing and cascades nowhere, and unfilled count is target
+    minus actual, which the Song page already renders in read mode. So
+    this surface ships no `preview_` sibling, deliberately (see
+    `apply_song_role_requirements()`'s docstring, and
+    `scheduling/tests/test_song_requirements_edit_view.py`'s negative
+    route-table test for the enforced absence).
+
+    GET renders the table — a bare fragment for the "Edit requirements"
+    button's htmx swap, or a full page for a direct/no-JS request. POST
+    commits the whole buffer — count changes, deletes, and "+ Add
+    requirement" rows — as one atomic write via
+    `apply_song_role_requirements()`, or writes nothing and re-renders
+    with every submitted value preserved.
+    """
+
+    fragment_template_name = 'scheduling/_song_requirements_edit.html'
+    page_template_name = 'scheduling/song_requirements_edit.html'
+    STALE_MESSAGE = 'The Requirements changed while you were editing — reload and reapply.'
+    WRONG_SEMESTER_MESSAGE = 'This Semester changed while you were editing — reload and reapply.'
+    DUPLICATE_MESSAGE = 'Each Role can only have one Requirement per Song.'
+
+    def get(self, request, pk):
+        """Render the edit table: a bare fragment for htmx, a full page otherwise."""
+        semester = get_viewing_semester(request)
+        song = self._song(pk, semester)
+        requirements = self._requirements(song)
+        formset = SongRequirementEditFormSet(
+            initial=[{'role_id': r.role_id, 'count': r.count} for r in requirements], prefix='req',
+        )
+        add_formset = SongRequirementAddFormSet(
+            prefix='add', form_kwargs={'excluded_role_ids': [r.role_id for r in requirements]},
+        )
+        return self._render(request, song, semester, formset, add_formset, requirements)
+
+    def post(self, request, pk):
+        """Validate and apply the whole Requirements Buffer atomically, or re-render with errors."""
+        semester = get_viewing_semester(request)
+        song = self._song(pk, semester)
+        requirements = self._requirements(song)
+        submitted_semester_id = request.POST.get('requirements_semester_id', '')
+        submitted_stamp = request.POST.get('requirements_semester_updated_at', '')
+        formset = SongRequirementEditFormSet(request.POST, prefix='req')
+        add_formset = SongRequirementAddFormSet(
+            request.POST, prefix='add', form_kwargs={'excluded_role_ids': [r.role_id for r in requirements]},
+        )
+        if formset.is_valid() and add_formset.is_valid():
+            entries, duplicate = self._build_entries(formset, add_formset, requirements)
+            if duplicate:
+                messages.error(request, self.DUPLICATE_MESSAGE)
+            else:
+                buffer = SongRoleRequirementBuffer(
+                    song_id=song.pk,
+                    semester_id=_parse_roster_int(submitted_semester_id),
+                    semester_updated_at=parse_datetime(submitted_stamp) or timezone.now(),
+                    entries=entries,
+                )
+                try:
+                    apply_song_role_requirements(buffer, viewing_semester=semester)
+                except WrongViewingSemesterError:
+                    messages.error(request, self.WRONG_SEMESTER_MESSAGE)
+                except StaleSongRoleRequirementsError:
+                    messages.error(request, self.STALE_MESSAGE)
+                else:
+                    messages.success(request, 'Requirements updated.')
+                    return redirect('scheduling:song-detail', pk=song.pk)
+        return self._render(
+            request, song, semester, formset, add_formset, requirements,
+            semester_id=submitted_semester_id, stamp=submitted_stamp, status=200,
+        )
+
+    def _build_entries(self, formset, add_formset, requirements):
+        """Turn the valid edit and add formsets into a list of SongRoleRequirementEntry, flagging any duplicate Role.
+
+        A hand-crafted POST can raise `req-TOTAL_FORMS` past
+        `req-INITIAL_FORMS` (this formset's `extra=0` means the page never
+        submits more forms than it rendered) or carry a `role_id` this Song
+        has no current Requirement for. Django marks any such extra form
+        `empty_permitted`, so its `cleaned_data` is `{}`; skip it rather
+        than KeyError on `row['remove']`. A `role_id` outside
+        `requirements`' own ids is skipped too, so this can never hand
+        `apply_song_role_requirements()` a role the create branch would
+        otherwise insert as a fresh row.
+        """
+        known_role_ids = {r.role_id for r in requirements}
+        entries = []
+        seen_role_ids = set()
+        duplicate = False
+        for row in formset.cleaned_data:
+            if not row or row['remove']:
+                continue
+            role_id = row['role_id']
+            if role_id not in known_role_ids:
+                continue
+            if role_id in seen_role_ids:
+                duplicate = True
+            seen_role_ids.add(role_id)
+            entries.append(SongRoleRequirementEntry(role_id=role_id, count=row['count']))
+        for row in add_formset.cleaned_data:
+            if not row or row.get('DELETE'):
+                continue
+            role = row['role']
+            if role.pk in seen_role_ids:
+                duplicate = True
+            seen_role_ids.add(role.pk)
+            entries.append(SongRoleRequirementEntry(role_id=role.pk, count=row['count']))
+        return entries, duplicate
+
+    def _song(self, pk, semester):
+        """Return the viewing Semester's Song with this id, or 404."""
+        return get_object_or_404(_scoped_to_viewing_semester(Song, semester), pk=pk)
+
+    def _requirements(self, song):
+        """Return `song`'s SongRoleRequirements, ordered by Role name."""
+        return list(SongRoleRequirement.objects.filter(song=song).select_related('role').order_by('role__name'))
+
+    def _render(self, request, song, semester, formset, add_formset, requirements, *, semester_id=None, stamp=None, status=200):
+        """Render the fragment for an htmx request, else the full page; both carry the same buffer."""
+        context = self._build_context(song, semester, formset, add_formset, requirements, semester_id, stamp)
+        template = self.fragment_template_name if _is_htmx(request) else self.page_template_name
+        return render(request, template, context, status=status)
+
+    def _build_context(self, song, semester, formset, add_formset, requirements, semester_id, stamp):
+        """Build the shared context for both the fragment and full-page renders.
+
+        Pairs each edit row with its Role by reading `role_id`'s raw
+        submitted value rather than `cleaned_data`, so this pairing
+        survives an otherwise-invalid formset — the same every-value-
+        preserved re-render `SetlistEditView` gives a rejected buffer.
+        """
+        requirements_by_role_id = {r.role_id: r for r in requirements}
+        rows = []
+        for form in formset:
+            role_id = _parse_roster_int(form['role_id'].value())
+            requirement = requirements_by_role_id.get(role_id)
+            rows.append({
+                'form': form,
+                'role': requirement.role if requirement else None,
+                'is_retired_role': requirement is not None and not requirement.role.is_active,
+            })
+        return {
+            'song': song,
+            'semester': semester,
+            'formset': formset,
+            'rows': rows,
+            'add_formset': add_formset,
+            'requirements_semester_id': semester_id if semester_id is not None else (semester.pk if semester else ''),
+            'requirements_semester_updated_at': (
+                stamp if stamp is not None else (semester.updated_at.isoformat() if semester else '')
+            ),
+        }
+
+
+class SongRequirementAddRoleView(AdminRequiredMixin, View):
+    """`/songs/<pk>/requirements/roles/add/`: the Song requirements editor's inline "Add Role" control (issue #209).
+
+    Calls `create_or_reactivate_role()` (issue #225) unchanged — the same
+    single Role-creation path the Roster editor's "Add Role" control uses
+    (`RosterAddRoleView`) — and commits immediately, outside the Buffer:
+    discarding the pending Requirement edits afterward must not un-invent
+    a Role the triggering row already selected. Rebuilds only the
+    triggering add-row's `role` field, from the same
+    `SongRequirementAddRowForm` the live add formset renders (excluding
+    the Song's other current Requirements from its choices, same as the
+    live render), so field names/ids stay identical after the swap and the
+    new Role is immediately selectable on the row that created it.
+    """
+
+    template_name = 'scheduling/_song_requirement_role_select.html'
+
+    def post(self, request, pk):
+        """Create/reactivate the named Role, select it on the triggering add-row, and re-render that row's Role field."""
+        form = SongRequirementAddRoleForm(request.POST)
+        if not form.is_valid():
+            return HttpResponseBadRequest()
+        semester = get_viewing_semester(request)
+        song = get_object_or_404(_scoped_to_viewing_semester(Song, semester), pk=pk)
+        prefix = form.cleaned_data['prefix']
+        result = create_or_reactivate_role(form.cleaned_data['role_name'])
+        excluded_role_ids = list(SongRoleRequirement.objects.filter(song=song).values_list('role_id', flat=True))
+        # An entered name can resolve to a Role the Song already has a Requirement for. Keeping it in
+        # the exclusion set (rather than special-casing it out, as if it were this row's own pending
+        # value) stops the rebuilt select from ever offering a Role Save Changes would reject anyway.
+        already_required = result.role.pk in excluded_role_ids
+        row_form = SongRequirementAddRowForm(
+            prefix=prefix,
+            initial={} if already_required else {'role': result.role.pk},
+            excluded_role_ids=excluded_role_ids,
+        )
+        return render(request, self.template_name, {
+            'field': row_form['role'],
+            'message': self._message_for(result, already_required=already_required),
+        })
+
+    def _message_for(self, result, *, already_required=False):
+        """Return the admin-facing message naming how create_or_reactivate_role() resolved the Role."""
+        if already_required:
+            return f'"{result.role.name}" already has a Requirement for this Song.'
+        if result.created:
+            return f'Added "{result.role.name}".'
+        if result.reactivated:
+            return f'Reactivated "{result.role.name}".'
+        return f'Matched existing "{result.role.name}".'
 
 
 _CONFLICT_STATUS_TEXT = {
@@ -1457,18 +1682,18 @@ def _editable_assignment_rehearsal_or_404(request, rehearsal_id):
 
 
 class AssignmentEditSaveView(AdminRequiredMixin, View):
-    """`/schedule/<rehearsal_id>/assignments/save/`: applies a buffer of ✕'d SongRoleAssignment removals (issue #210, ADR-0009).
+    """`/schedule/<rehearsal_id>/assignments/save/`: applies a buffer of ✕'d removals and picker adds (issues #210, #211, ADR-0009).
 
-    Removal-only for this slice: adding a person is the picker, landing in
-    a later ticket. The buffer is entirely client-side (Alpine) up to this
-    point — clicking an ✕ never round-trips — so this view is reached only
-    by the one "Save Changes" submission, carrying every removed chip's
-    assignment id plus the hidden Semester id/stamp the grid was rendered
-    against.
+    The buffer is entirely client-side (Alpine) up to this point —
+    clicking an ✕ or picking a person in the "+" popover never
+    round-trips — so this view is reached only by the one "Save Changes"
+    submission, carrying every removed chip's assignment id, every picked
+    (song, role, person) triple, plus the hidden Semester id/stamp the
+    grid was rendered against.
     """
 
     def post(self, request, rehearsal_id):
-        """Apply the submitted removals through `apply_song_role_assignments()`, or report why the save was rejected."""
+        """Apply the submitted removals and adds through `apply_song_role_assignments()`, or report why the save was rejected."""
         rehearsal = _editable_assignment_rehearsal_or_404(request, rehearsal_id)
         semester = get_viewing_semester(request)
         buffer = self._build_buffer(request)
@@ -1481,12 +1706,14 @@ class AssignmentEditSaveView(AdminRequiredMixin, View):
         return _schedule_redirect(request, rehearsal)
 
     def _build_buffer(self, request):
-        """Turn the POST body's hidden Semester stamp and removed-id list into an AssignmentEditBuffer."""
+        """Turn the POST body's hidden Semester stamp, removed-id list, and added-entry list into an AssignmentEditBuffer."""
         removed_ids = frozenset(_parse_assignment_ids(request.POST.getlist('removed_assignment_id')))
+        added_entries = frozenset(_parse_added_entries(request.POST.getlist('added_assignment_entry')))
         return AssignmentEditBuffer(
             semester_id=_parse_roster_int(request.POST.get('assignment_semester_id', '')),
             semester_updated_at=parse_datetime(request.POST.get('assignment_semester_updated_at', '')) or timezone.now(),
             removed_assignment_ids=removed_ids,
+            added_entries=added_entries,
         )
 
 
@@ -1499,6 +1726,40 @@ def _parse_assignment_ids(raw_values):
         except ValueError:
             continue
     return parsed
+
+
+def _parse_added_entries(raw_values):
+    """Return the subset of `raw_values` (each "song_id:role_id:person_id") that parse as three ints, dropping the rest."""
+    parsed = []
+    for raw_value in raw_values:
+        parts = raw_value.split(':')
+        if len(parts) != 3:
+            continue
+        try:
+            parsed.append(tuple(int(part) for part in parts))
+        except ValueError:
+            continue
+    return parsed
+
+
+class AssignmentPickerView(AdminRequiredMixin, View):
+    """`/schedule/<rehearsal_id>/assignments/picker/<song_id>/<role_id>/`: the "+" popover's fetched-on-open contents (issue #211).
+
+    Fetched only when a cell's "+" is clicked, over the existing roster
+    read — an unopened cell issues no request, so a twelve-song six-role
+    grid never renders seventy-two live widgets. Read-only: picking a
+    person only buffers the pick client-side, exactly like a chip's ✕, and
+    both round-trip together on "Save Changes".
+    """
+
+    def get(self, request, rehearsal_id, song_id, role_id):
+        """Render the picker partial for one (Song, Role) cell on an editable grid, or 404."""
+        _editable_assignment_rehearsal_or_404(request, rehearsal_id)
+        semester = get_viewing_semester(request)
+        song = get_object_or_404(_scoped_to_viewing_semester(Song, semester), pk=song_id)
+        role = get_object_or_404(Role, pk=role_id)
+        picker = assignment_picker_for(song, role, semester)
+        return render(request, 'scheduling/_assignment_picker.html', {'picker': picker})
 
 
 class RehearsalManageView(AdminRequiredMixin, View):
@@ -1795,10 +2056,11 @@ class SemesterSetupView(AdminRequiredMixin, View):
     draft immediately via `create_semester()`, switches this admin's
     session selection to it, and redirects into step 3 (the roster
     import). Nothing here is held hostage to finishing the rest of the
-    wizard — steps 3-5 (roster, setlist, rehearsal dates) are separate,
-    independently skippable steps, and `SemesterSetupRosterView` itself
-    bounces straight to finish when there's no prior Semester to import
-    from, so this view never needs to check that itself.
+    wizard — steps 3-4 (roster, setlist) are separate, independently
+    skippable steps, and `SemesterSetupRosterView` itself bounces
+    straight to step 4 (or, with nothing to import, straight past both
+    to finish) when there's no prior Semester to import from, so this
+    view never needs to check that itself.
 
     Reached two ways with the same form and the same code path: a direct
     GET renders the full page (the no-JS fallback, and the bookmarkable
@@ -1833,7 +2095,7 @@ class SemesterSetupView(AdminRequiredMixin, View):
         return self._render(request, form)
 
     def post(self, request):
-        """Validate and create the draft Semester, switch the session's viewing Semester, and redirect to finish."""
+        """Validate and create the draft Semester, switch the session's viewing Semester, and redirect to step 3."""
         form = SemesterSetupForm(request.POST)
         if form.is_valid():
             try:
@@ -1867,17 +2129,19 @@ class SemesterSetupRosterView(AdminRequiredMixin, View):
     step 1's POST, or this view's own GET/POST when there's nothing to
     import), so unlike `SemesterSetupView` it needs no modal-fragment
     variant: a direct hit and the Home panel's post-redirect navigation
-    both land on the plain full page.
+    both land on the plain full page. Both its exits move on to step 4
+    (the setlist import, issue #202), never straight to finish, except
+    when there is no prior Semester to import from at all.
     """
 
     template_name = 'scheduling/semester_setup_roster.html'
 
     def get(self, request, pk):
-        """Render the prior Semester's roster as a checkbox list ticked by default, or skip straight to finish."""
+        """Render the prior Semester's roster as a checkbox list ticked by default, or skip straight to step 4."""
         semester = get_object_or_404(Semester, pk=pk)
         proposal = import_roster_from_semester(semester)
         if proposal.source_semester is None:
-            return redirect('scheduling:manage-semester-setup-finish', pk=semester.pk)
+            return redirect('scheduling:manage-semester-setup-setlist', pk=semester.pk)
         return self._render(request, semester, proposal)
 
     def post(self, request, pk):
@@ -1885,7 +2149,7 @@ class SemesterSetupRosterView(AdminRequiredMixin, View):
         semester = get_object_or_404(Semester, pk=pk)
         proposal = import_roster_from_semester(semester)
         if proposal.source_semester is None:
-            return redirect('scheduling:manage-semester-setup-finish', pk=semester.pk)
+            return redirect('scheduling:manage-semester-setup-setlist', pk=semester.pk)
         checked_ids = {_parse_roster_int(value) for value in request.POST.getlist('person_id')}
         entries = [
             RosterEditEntry(
@@ -1904,7 +2168,7 @@ class SemesterSetupRosterView(AdminRequiredMixin, View):
             messages.error(request, str(error))
             return self._render(request, semester, proposal, checked_ids=checked_ids)
         messages.success(request, f'Imported {len(entries)} member(s) from {proposal.source_semester.name}.')
-        return redirect('scheduling:manage-semester-setup-finish', pk=semester.pk)
+        return redirect('scheduling:manage-semester-setup-setlist', pk=semester.pk)
 
     def _render(self, request, semester, proposal, checked_ids=None):
         """Render the checkbox list, ticked by default unless `checked_ids` carries a rejected submission's ticks."""
@@ -1916,6 +2180,43 @@ class SemesterSetupRosterView(AdminRequiredMixin, View):
         ]
         return render(request, self.template_name, {
             'semester': semester, 'source_semester': proposal.source_semester, 'rows': rows,
+        })
+
+
+class SemesterSetupSetlistView(AdminRequiredMixin, View):
+    """`/manage/semesters/setup/<pk>/setlist/`: Semester setup step 4, importing the setlist (issue #202).
+
+    No import or commit logic of its own — it wraps the same editable
+    setlist grid and Spotify-import controls the Setlist tab's
+    `SetlistEditView`/`SetlistImportView` already provide (issues #178,
+    #179, #184): the paste-a-link box, the unsaved preview rows a
+    playlist fills in before anything is written, and the Save button,
+    all posting to their existing endpoints unchanged. Reusing the
+    fragment verbatim is what keeps "read through #183, write through
+    the existing setlist save path" true with no second implementation
+    and no new preview/apply pair (issue #198 §8).
+
+    Saving lands the admin on the Setlist tab, same as it would from
+    there directly. A Skip link moves straight to the finish screen
+    without writing anything — this step, like every step after 1-2,
+    must never trap the admin: a bad or abandoned import is finished
+    later from the Setlist tab, not from here.
+    """
+
+    template_name = 'scheduling/semester_setup_setlist.html'
+
+    def get(self, request, pk):
+        """Render the wizard's setlist step: the Setlist tab's own edit grid, plus a Skip link to finish."""
+        semester = get_object_or_404(Semester, pk=pk)
+        if get_viewing_semester(request) != semester:
+            set_viewing_semester(request, semester)
+        songs = Song.objects.filter(semester=semester).order_by('position')
+        formset_class = SetlistEditFormSet if songs.exists() else SetlistEditEmptyFormSet
+        formset = formset_class(queryset=songs, prefix='song')
+        return render(request, self.template_name, {
+            'semester': semester,
+            'formset': formset,
+            'stamp': semester.updated_at.isoformat(),
         })
 
 

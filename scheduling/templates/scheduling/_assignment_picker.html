@@ -1,0 +1,37 @@
+<h3>{{ picker.role.name }} on {{ picker.song.title }}</h3>
+<p><strong>Assigned (every rehearsal + concert)</strong></p>
+<p>Lists this Semester's rostered members only — rostering happens on <a href="{% url 'scheduling:members' %}">/members/</a>.</p>
+
+{% if picker.declared %}
+  <ul class="assignment-picker-list">
+    {% for option in picker.declared %}
+      <li>
+        <button type="button" data-picker-person-id="{{ option.person.pk }}" data-picker-person-name="{{ option.person.name }}">
+          {{ option.person.name }}
+        </button>
+      </li>
+    {% endfor %}
+  </ul>
+{% else %}
+  <p>No rostered member has declared {{ picker.role.name }} yet.</p>
+{% endif %}
+
+{% if picker.others %}
+  <details>
+    <summary>Show all members</summary>
+    <ul class="assignment-picker-list">
+      {% for option in picker.others %}
+        <li>
+          <button type="button" data-picker-person-id="{{ option.person.pk }}" data-picker-person-name="{{ option.person.name }}">
+            {{ option.person.name }}
+          </button>
+          <span class="role-mismatch">Has not declared {{ picker.role.name }}</span>
+        </li>
+      {% endfor %}
+    </ul>
+  </details>
+{% endif %}
+
+{% if not picker.declared and not picker.others %}
+  <p>No rostered members are available to add here.</p>
+{% endif %}

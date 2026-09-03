@@ -13,6 +13,10 @@ urlpatterns = [
         'schedule/<int:rehearsal_id>/assignments/save/',
         views.AssignmentEditSaveView.as_view(), name='schedule-assignments-save',
     ),
+    path(
+        'schedule/<int:rehearsal_id>/assignments/picker/<int:song_id>/<int:role_id>/',
+        views.AssignmentPickerView.as_view(), name='schedule-assignments-picker',
+    ),
     path('setlist/', views.SetlistView.as_view(), name='setlist'),
     path('setlist/edit/', views.SetlistEditView.as_view(), name='setlist-edit'),
     path(
@@ -24,6 +28,14 @@ urlpatterns = [
         views.SetlistImportView.as_view(), name='setlist-edit-import',
     ),
     path('songs/<int:pk>/', views.SongDetailView.as_view(), name='song-detail'),
+    path(
+        'songs/<int:pk>/requirements/edit/',
+        views.SongRequirementsEditView.as_view(), name='song-requirements-edit',
+    ),
+    path(
+        'songs/<int:pk>/requirements/roles/add/',
+        views.SongRequirementAddRoleView.as_view(), name='song-requirements-add-role',
+    ),
     path('members/', views.MembersView.as_view(), name='members'),
     path('members/import/', views.RosterImportView.as_view(), name='members-roster-import'),
     path('members/invite/', views.RosterInviteView.as_view(), name='members-roster-invite'),
@@ -42,6 +54,10 @@ urlpatterns = [
     path(
         'manage/semesters/setup/<int:pk>/roster/',
         views.SemesterSetupRosterView.as_view(), name='manage-semester-setup-roster',
+    ),
+    path(
+        'manage/semesters/setup/<int:pk>/setlist/',
+        views.SemesterSetupSetlistView.as_view(), name='manage-semester-setup-setlist',
     ),
     path(
         'manage/semesters/setup/<int:pk>/finish/',

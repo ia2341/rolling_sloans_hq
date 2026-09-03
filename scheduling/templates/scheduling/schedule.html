@@ -64,7 +64,7 @@
     {% include "scheduling/_availability.html" with availability=my_availability %}
   </div>
 
-  <div x-data="{ editing: false, removed: [] }">
+  <div x-data="assignmentGrid()">
     {% if can_edit_assignments %}
       <p>
         <button type="button" id="edit-assignments-button" x-show="!editing" @click="editing = true">Edit assignments</button>
@@ -86,6 +86,9 @@
         <input type="hidden" name="assignment_semester_updated_at" value="{{ semester.updated_at.isoformat }}">
         <template x-for="id in removed" :key="id">
           <input type="hidden" name="removed_assignment_id" :value="id">
+        </template>
+        <template x-for="item in added" :key="item.key">
+          <input type="hidden" name="added_assignment_entry" :value="item.songId + ':' + item.roleId + ':' + item.personId">
         </template>
     {% endif %}
 
@@ -111,6 +114,30 @@
                   {% empty %}
                     &mdash;
                   {% endfor %}
+                  {% if can_edit_assignments %}
+                    <template x-for="item in addedFor({{ row.song.pk }}, {{ cell.role.pk }})" :key="item.key">
+                      <span class="assignment-chip">
+                        <span x-text="item.personName"></span>
+                        <button
+                          type="button"
+                          class="assignment-chip-remove"
+                          x-show="editing"
+                          @click="removeAdded(item.key)"
+                          :aria-label="'Remove ' + item.personName"
+                        >&times;</button>
+                      </span>
+                    </template>
+                    <button
+                      type="button"
+                      class="assignment-cell-add"
+                      x-show="editing"
+                      data-song-id="{{ row.song.pk }}"
+                      data-role-id="{{ cell.role.pk }}"
+                      data-picker-url="{% url 'scheduling:schedule-assignments-picker' rehearsal.pk row.song.pk cell.role.pk %}"
+                      @click="openPicker($event)"
+                      aria-label="Add to {{ cell.role.name }} on {{ row.song.title }}"
+                    >+</button>
+                  {% endif %}
                 </td>
               {% endfor %}
             </tr>
@@ -130,12 +157,19 @@
     {% if can_edit_assignments %}
         <p x-show="editing">
           <button type="submit" id="save-assignment-changes">Save Changes</button>
-          <button type="button" @click="editing = false; removed = []">Cancel</button>
+          <button type="button" @click="cancelEditing()">Cancel</button>
         </p>
       </form>
+
+      <dialog id="assignment-picker-dialog" x-ref="assignmentPickerDialog" @click="onPickerDialogClick($event)">
+        <p id="assignment-picker-error" x-show="pickerError" x-text="pickerError" role="alert"></p>
+        <div id="assignment-picker-body" x-html="pickerHtml"></div>
+        <button type="button" id="close-assignment-picker" @click="closePicker()">Cancel</button>
+      </dialog>
     {% endif %}
   </div>
 {% endif %}
 
+<script src="{% static 'scheduling/js/assignment_picker.js' %}"></script>
 <script src="{% static 'scheduling/js/schedule.js' %}"></script>
 {% endblock %}
