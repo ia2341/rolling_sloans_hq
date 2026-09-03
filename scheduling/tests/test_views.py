@@ -55,9 +55,13 @@ class AnonymousAccessTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class ScheduleViewTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic Person to log in as before each test."""
+        cls.person = PersonFactory(password=PASSWORD)
+
     def setUp(self):
-        """Log in a synthetic Person before each test."""
-        self.person = PersonFactory(password=PASSWORD)
+        """Log in as the synthetic Person before each test."""
         self.client.login(username=self.person.email, password=PASSWORD)
 
     def _needed_rehearsal(self, semester, date):
@@ -313,9 +317,13 @@ class ScheduleViewTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class SetlistViewTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic Person to log in as before each test."""
+        cls.person = PersonFactory(password=PASSWORD)
+
     def setUp(self):
-        """Log in a synthetic Person before each test."""
-        self.person = PersonFactory(password=PASSWORD)
+        """Log in as the synthetic Person before each test."""
         self.client.login(username=self.person.email, password=PASSWORD)
 
     def test_renders_current_semesters_songs_in_position_order(self):
@@ -418,9 +426,13 @@ class SetlistViewTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class SongDetailViewTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic Person to log in as before each test."""
+        cls.person = PersonFactory(password=PASSWORD)
+
     def setUp(self):
-        """Log in a synthetic Person before each test."""
-        self.person = PersonFactory(password=PASSWORD)
+        """Log in as the synthetic Person before each test."""
         self.client.login(username=self.person.email, password=PASSWORD)
 
     def test_renders_assignments_and_recordings_grouped_by_rehearsal_song_slot(self):
@@ -610,20 +622,24 @@ class MemberFacingEmailPrivacyTests(TestCase):
     page below therefore renders `.name` explicitly.
     """
 
-    def setUp(self):
-        """Log in a viewer, and build a current-Semester Song a separate teammate performs on and recorded."""
-        self.viewer = PersonFactory(password=PASSWORD)
-        self.client.login(username=self.viewer.email, password=PASSWORD)
-        self.semester = SemesterFactory()
-        self.teammate = PersonFactory(name='Teammate Placeholder')
-        self.song = SongFactory(semester=self.semester)
-        self.rehearsal = RehearsalFactory(semester=self.semester)
-        self.rehearsal_song = RehearsalSongFactory(song=self.song, rehearsal=self.rehearsal, order=1)
-        self.role = RoleFactory()
+    @classmethod
+    def setUpTestData(cls):
+        """Build a viewer, and a current-Semester Song a separate teammate performs on and recorded."""
+        cls.viewer = PersonFactory(password=PASSWORD)
+        cls.semester = SemesterFactory()
+        cls.teammate = PersonFactory(name='Teammate Placeholder')
+        cls.song = SongFactory(semester=cls.semester)
+        cls.rehearsal = RehearsalFactory(semester=cls.semester)
+        cls.rehearsal_song = RehearsalSongFactory(song=cls.song, rehearsal=cls.rehearsal, order=1)
+        cls.role = RoleFactory()
         # The matrix's columns are the Roles carrying a requirement on the Song, so the
         # assignment only reaches a cell once that requirement exists.
-        SongRoleRequirementFactory(song=self.song, role=self.role)
-        SongRoleAssignmentFactory(song=self.song, person=self.teammate, role=self.role)
+        SongRoleRequirementFactory(song=cls.song, role=cls.role)
+        SongRoleAssignmentFactory(song=cls.song, person=cls.teammate, role=cls.role)
+
+    def setUp(self):
+        """Log in as the viewer before each test."""
+        self.client.login(username=self.viewer.email, password=PASSWORD)
 
     def test_song_page_identifies_an_uploader_by_name_not_email(self):
         """The Recordings list on /songs/<id>/ shows the uploader's name, never their email address."""
@@ -663,9 +679,13 @@ class MemberFacingEmailPrivacyTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class OverviewViewTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic Person to log in as before each test."""
+        cls.person = PersonFactory(password=PASSWORD)
+
     def setUp(self):
-        """Log in a synthetic Person before each test."""
-        self.person = PersonFactory(password=PASSWORD)
+        """Log in as the synthetic Person before each test."""
         self.client.login(username=self.person.email, password=PASSWORD)
 
     def test_next_rehearsal_card_skips_a_rehearsal_the_person_is_not_needed_at(self):

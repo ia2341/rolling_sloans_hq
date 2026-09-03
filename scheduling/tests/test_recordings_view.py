@@ -50,9 +50,13 @@ class AnonymousAccessTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class RecordingUploadViewGetTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic Person to log in as before each test."""
+        cls.person = PersonFactory(password=PASSWORD)
+
     def setUp(self):
-        """Log in a synthetic Person before each test."""
-        self.person = PersonFactory(password=PASSWORD)
+        """Log in as the synthetic Person before each test."""
         self.client.login(username=self.person.email, password=PASSWORD)
 
     def test_shows_no_active_semester_message_when_none_exists(self):
@@ -183,12 +187,16 @@ class RecordingUploadViewGetTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class RecordingUploadViewPostTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic Person and a current-Semester RehearsalSong."""
+        cls.person = PersonFactory(password=PASSWORD)
+        cls.semester = SemesterFactory()
+        cls.rehearsal_song = RehearsalSongFactory(rehearsal__semester=cls.semester, song__semester=cls.semester)
+
     def setUp(self):
-        """Log in a synthetic Person and create a current-Semester RehearsalSong before each test."""
-        self.person = PersonFactory(password=PASSWORD)
+        """Log in as the synthetic Person before each test."""
         self.client.login(username=self.person.email, password=PASSWORD)
-        self.semester = SemesterFactory()
-        self.rehearsal_song = RehearsalSongFactory(rehearsal__semester=self.semester, song__semester=self.semester)
 
     @patch('scheduling.services._recording_storage')
     def test_confirm_creates_a_recording_owned_by_the_requesting_user(self, recording_storage):
@@ -250,9 +258,13 @@ class RecordingUploadViewPostTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class RecordingPresignViewTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic Person to log in as before each test."""
+        cls.person = PersonFactory(password=PASSWORD)
+
     def setUp(self):
-        """Log in a synthetic Person before each test."""
-        self.person = PersonFactory(password=PASSWORD)
+        """Log in as the synthetic Person before each test."""
         self.client.login(username=self.person.email, password=PASSWORD)
 
     @patch('scheduling.services._recording_storage')
@@ -315,9 +327,13 @@ class RecordingPresignViewTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class RecordingDeleteViewTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic Person to log in as before each test."""
+        cls.person = PersonFactory(password=PASSWORD)
+
     def setUp(self):
-        """Log in a synthetic Person before each test."""
-        self.person = PersonFactory(password=PASSWORD)
+        """Log in as the synthetic Person before each test."""
         self.client.login(username=self.person.email, password=PASSWORD)
 
     def test_deletes_the_requesting_users_own_recording_and_redirects_to_the_song_detail_page(self):

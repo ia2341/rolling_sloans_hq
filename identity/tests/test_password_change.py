@@ -12,9 +12,13 @@ NEW_PASSWORD = 'a-strong-new-password-456'
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class PasswordChangeViewTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic Person to log in as before each test."""
+        cls.person = PersonFactory(password=OLD_PASSWORD)
+
     def setUp(self):
-        """Log in a synthetic Person before each test."""
-        self.person = PersonFactory(password=OLD_PASSWORD)
+        """Log in as the synthetic Person before each test."""
         self.client.login(username=self.person.email, password=OLD_PASSWORD)
 
     def test_anonymous_request_redirects_to_login(self):

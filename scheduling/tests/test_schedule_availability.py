@@ -92,9 +92,13 @@ class AnonymousAccessTests(TestCase):
 class OldConflictsPageRemovalTests(TestCase):
     """The old page goes outright, with no redirect — the treatment #172 gave /manage/setlist/*."""
 
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic Person to log in as before each test."""
+        cls.person = PersonFactory(password=PASSWORD)
+
     def setUp(self):
-        """Log in a synthetic Person before each test."""
-        self.person = PersonFactory(password=PASSWORD)
+        """Log in as the synthetic Person before each test."""
         self.client.login(username=self.person.email, password=PASSWORD)
 
     def test_the_conflicts_page_is_gone(self):
@@ -149,12 +153,16 @@ class OldConflictsPageRemovalTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class RehearsalDetailAvailabilityTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic Person against a published Semester holding one future Rehearsal."""
+        cls.person = PersonFactory(password=PASSWORD)
+        cls.semester = SemesterFactory()
+        cls.rehearsal = future_rehearsal(cls.semester)
+
     def setUp(self):
-        """Log in a synthetic Person against a published Semester holding one future Rehearsal."""
-        self.person = PersonFactory(password=PASSWORD)
+        """Log in as the synthetic Person before each test."""
         self.client.login(username=self.person.email, password=PASSWORD)
-        self.semester = SemesterFactory()
-        self.rehearsal = future_rehearsal(self.semester)
 
     def _detail(self, rehearsal=None):
         """GET the `?view=next` detail for `rehearsal` (defaulting to this test's own)."""
@@ -230,13 +238,17 @@ class RehearsalDetailAvailabilityTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class ViewAllAvailabilityTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic Person against a published Semester holding one past and one future Rehearsal."""
+        cls.person = PersonFactory(password=PASSWORD)
+        cls.semester = SemesterFactory()
+        cls.past = past_rehearsal(cls.semester)
+        cls.future = future_rehearsal(cls.semester)
+
     def setUp(self):
-        """Log in a synthetic Person against a published Semester holding one past and one future Rehearsal."""
-        self.person = PersonFactory(password=PASSWORD)
+        """Log in as the synthetic Person before each test."""
         self.client.login(username=self.person.email, password=PASSWORD)
-        self.semester = SemesterFactory()
-        self.past = past_rehearsal(self.semester)
-        self.future = future_rehearsal(self.semester)
 
     def _all(self):
         """GET the `?view=all` list."""
@@ -310,12 +322,16 @@ class ViewAllAvailabilityTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class DeclareViewTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic Person against a published Semester holding one future Rehearsal."""
+        cls.person = PersonFactory(password=PASSWORD)
+        cls.semester = SemesterFactory()
+        cls.rehearsal = future_rehearsal(cls.semester)
+
     def setUp(self):
-        """Log in a synthetic Person against a published Semester holding one future Rehearsal."""
-        self.person = PersonFactory(password=PASSWORD)
+        """Log in as the synthetic Person before each test."""
         self.client.login(username=self.person.email, password=PASSWORD)
-        self.semester = SemesterFactory()
-        self.rehearsal = future_rehearsal(self.semester)
 
     def test_full_absence_creates_a_full_conflict_and_redirects_to_the_rehearsal(self):
         """A first declaration writes a FULL_CONFLICT with no window and lands back on the rehearsal it concerns."""
@@ -430,15 +446,19 @@ class DeclareViewTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class DeleteViewTests(TestCase):
-    def setUp(self):
-        """Log in a synthetic Person holding one declared future Conflict."""
-        self.person = PersonFactory(password=PASSWORD)
-        self.client.login(username=self.person.email, password=PASSWORD)
-        self.semester = SemesterFactory()
-        self.rehearsal = future_rehearsal(self.semester)
-        self.conflict = ConflictFactory(
-            person=self.person, rehearsal=self.rehearsal, type=Conflict.FULL_CONFLICT,
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic Person holding one declared future Conflict."""
+        cls.person = PersonFactory(password=PASSWORD)
+        cls.semester = SemesterFactory()
+        cls.rehearsal = future_rehearsal(cls.semester)
+        cls.conflict = ConflictFactory(
+            person=cls.person, rehearsal=cls.rehearsal, type=Conflict.FULL_CONFLICT,
         )
+
+    def setUp(self):
+        """Log in as the synthetic Person before each test."""
+        self.client.login(username=self.person.email, password=PASSWORD)
 
     def test_delete_removes_the_declaration_and_redirects(self):
         """Withdrawing a declaration removes the Conflict and lands back on the rehearsal."""
@@ -491,12 +511,16 @@ class DeleteViewTests(TestCase):
 class OwnAdjudicationReadTests(TestCase):
     """The owner reads their own verdict here, and nobody else does (ADR 0005 bounds the surface, not the viewer)."""
 
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic Person holding one declared future Conflict."""
+        cls.person = PersonFactory(password=PASSWORD)
+        cls.semester = SemesterFactory()
+        cls.rehearsal = future_rehearsal(cls.semester)
+
     def setUp(self):
-        """Log in a synthetic Person holding one declared future Conflict."""
-        self.person = PersonFactory(password=PASSWORD)
+        """Log in as the synthetic Person before each test."""
         self.client.login(username=self.person.email, password=PASSWORD)
-        self.semester = SemesterFactory()
-        self.rehearsal = future_rehearsal(self.semester)
 
     def _declare(self, **kwargs):
         """Build this person's Conflict for the test Rehearsal with the given verdict fields."""
@@ -600,13 +624,17 @@ class OwnAdjudicationReadTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class LandingAnchorTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic Person against a published Semester with two upcoming Rehearsals."""
+        cls.person = PersonFactory(password=PASSWORD)
+        cls.semester = SemesterFactory()
+        cls.first = future_rehearsal(cls.semester, days=1)
+        cls.second = future_rehearsal(cls.semester, days=8)
+
     def setUp(self):
-        """Log in a synthetic Person against a published Semester with two upcoming Rehearsals."""
-        self.person = PersonFactory(password=PASSWORD)
+        """Log in as the synthetic Person before each test."""
         self.client.login(username=self.person.email, password=PASSWORD)
-        self.semester = SemesterFactory()
-        self.first = future_rehearsal(self.semester, days=1)
-        self.second = future_rehearsal(self.semester, days=8)
 
     def test_a_member_with_no_assignments_lands_on_the_bands_literal_next_rehearsal(self):
         """The dead-end "No upcoming rehearsal to show" would have hidden the declare path."""
@@ -640,12 +668,16 @@ class LandingAnchorTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class SemesterScopingTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic Person against a published Semester and an older one."""
+        cls.person = PersonFactory(password=PASSWORD)
+        cls.older = SemesterFactory()
+        cls.live = SemesterFactory()
+
     def setUp(self):
-        """Log in a synthetic Person against a published Semester and an older one."""
-        self.person = PersonFactory(password=PASSWORD)
+        """Log in as the synthetic Person before each test."""
         self.client.login(username=self.person.email, password=PASSWORD)
-        self.older = SemesterFactory()
-        self.live = SemesterFactory()
 
     def test_the_page_renders_against_the_semester_the_request_is_viewing(self):
         """Only the viewing Semester's Rehearsals — and only its declarations — reach the page."""

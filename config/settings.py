@@ -6,6 +6,7 @@ file via django-environ in development; injected directly by the host in
 production). No setting here is ever a literal secret.
 """
 
+import sys
 from pathlib import Path
 
 import environ
@@ -114,6 +115,14 @@ AUTH_PASSWORD_VALIDATORS = [
         'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
     },
 ]
+
+# Under `manage.py test`, swap in a much cheaper hasher: the default PBKDF2
+# hasher is deliberately slow (that's the point in production), but the test
+# suite creates and logs in hundreds of Persons, so its iteration count adds
+# real minutes to the run. MD5 is unusable for production but fine for
+# throwaway test-database rows.
+if 'test' in sys.argv:
+    PASSWORD_HASHERS = ['django.contrib.auth.hashers.MD5PasswordHasher']
 
 
 # Sessions: a 30-day sliding expiry, so members aren't forced to re-login

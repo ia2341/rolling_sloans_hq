@@ -33,7 +33,7 @@ ruff check .
 python manage.py check --deploy
 ```
 
-CI (`.github/workflows/ci.yml`) runs `ruff check .`, `manage.py test` against a real Postgres service, `manage.py check --deploy` under production-like env vars, and a grep-based scan that fails the build on any committed `.env`/`.pem`/`.key`/`id_rsa`/`id_ed25519` file.
+CI (`.github/workflows/ci.yml`) runs `ruff check .`, `manage.py test --parallel` against a real Postgres service, `manage.py check --deploy` under production-like env vars, and a grep-based scan that fails the build on any committed `.env`/`.pem`/`.key`/`id_rsa`/`id_ed25519` file.
 
 ## Architecture
 

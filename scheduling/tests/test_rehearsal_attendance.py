@@ -18,17 +18,18 @@ from scheduling.factories import (
 
 
 class RehearsalAttendanceForTests(TestCase):
-    def setUp(self):
+    @classmethod
+    def setUpTestData(cls):
         """Build a Rehearsal with three ordered RehearsalSong rows and an unassigned Person."""
-        self.rehearsal = RehearsalFactory()
-        self.role = RoleFactory()
-        self.first_song = SongFactory(semester=self.rehearsal.semester)
-        self.middle_song = SongFactory(semester=self.rehearsal.semester)
-        self.last_song = SongFactory(semester=self.rehearsal.semester)
-        self.first_slot = RehearsalSongFactory(rehearsal=self.rehearsal, song=self.first_song, order=1)
-        self.middle_slot = RehearsalSongFactory(rehearsal=self.rehearsal, song=self.middle_song, order=2)
-        self.last_slot = RehearsalSongFactory(rehearsal=self.rehearsal, song=self.last_song, order=3)
-        self.person = PersonFactory()
+        cls.rehearsal = RehearsalFactory()
+        cls.role = RoleFactory()
+        cls.first_song = SongFactory(semester=cls.rehearsal.semester)
+        cls.middle_song = SongFactory(semester=cls.rehearsal.semester)
+        cls.last_song = SongFactory(semester=cls.rehearsal.semester)
+        cls.first_slot = RehearsalSongFactory(rehearsal=cls.rehearsal, song=cls.first_song, order=1)
+        cls.middle_slot = RehearsalSongFactory(rehearsal=cls.rehearsal, song=cls.middle_song, order=2)
+        cls.last_slot = RehearsalSongFactory(rehearsal=cls.rehearsal, song=cls.last_song, order=3)
+        cls.person = PersonFactory()
 
     def test_assigned_only_to_first_song_is_needed_from_start_only(self):
         """A Person assigned only to the first RehearsalSong is needed from the start, not until the end."""
@@ -78,15 +79,16 @@ class RehearsalAttendanceForTests(TestCase):
 
 
 class DressRehearsalAttendanceForTests(TestCase):
-    def setUp(self):
+    @classmethod
+    def setUpTestData(cls):
         """Build a Dress Rehearsal (is_full_setlist=True) whose songs come live from the setlist."""
-        self.semester = SemesterFactory()
-        self.rehearsal = RehearsalFactory(semester=self.semester, is_full_setlist=True)
-        self.role = RoleFactory()
-        self.first_song = SongFactory(semester=self.semester, position=1)
-        self.middle_song = SongFactory(semester=self.semester, position=2)
-        self.last_song = SongFactory(semester=self.semester, position=3)
-        self.person = PersonFactory()
+        cls.semester = SemesterFactory()
+        cls.rehearsal = RehearsalFactory(semester=cls.semester, is_full_setlist=True)
+        cls.role = RoleFactory()
+        cls.first_song = SongFactory(semester=cls.semester, position=1)
+        cls.middle_song = SongFactory(semester=cls.semester, position=2)
+        cls.last_song = SongFactory(semester=cls.semester, position=3)
+        cls.person = PersonFactory()
 
     def test_assigned_only_to_first_setlist_song_is_needed_from_start_only(self):
         """A Person assigned only to the setlist's first Song is needed from the start, not until the end."""
@@ -129,14 +131,15 @@ class DressRehearsalAttendanceForTests(TestCase):
 class DressRehearsalAttendanceSuggestionTests(TestCase):
     """attendance_suggestion_for on the Dress Rehearsal: mandatory for everyone (ADR-0006, issue #149)."""
 
-    def setUp(self):
+    @classmethod
+    def setUpTestData(cls):
         """Build a Dress Rehearsal over a two-Song setlist, plus an unassigned Person."""
-        self.semester = SemesterFactory()
-        self.rehearsal = RehearsalFactory(semester=self.semester, is_full_setlist=True)
-        self.role = RoleFactory()
-        self.first_song = SongFactory(semester=self.semester, position=1)
-        self.last_song = SongFactory(semester=self.semester, position=2)
-        self.person = PersonFactory()
+        cls.semester = SemesterFactory()
+        cls.rehearsal = RehearsalFactory(semester=cls.semester, is_full_setlist=True)
+        cls.role = RoleFactory()
+        cls.first_song = SongFactory(semester=cls.semester, position=1)
+        cls.last_song = SongFactory(semester=cls.semester, position=2)
+        cls.person = PersonFactory()
 
     def test_person_with_no_assignments_gets_the_full_rehearsal_window(self):
         """A Person holding no Role Assignment on any setlist Song is still expected for the whole window."""
@@ -175,17 +178,18 @@ def _shifted(date, time_value, minutes):
 class BackupWidensSlotMembershipTests(TestCase):
     """Slot membership is the union of assignment- and Backup-derived slots, across all three reads (issue #175)."""
 
-    def setUp(self):
+    @classmethod
+    def setUpTestData(cls):
         """Build the same three-slot Rehearsal fixture as RehearsalAttendanceForTests, plus an uninvolved Person."""
-        self.rehearsal = RehearsalFactory(is_full_setlist=False)
-        self.role = RoleFactory()
-        self.first_song = SongFactory(semester=self.rehearsal.semester, position=2)
-        self.middle_song = SongFactory(semester=self.rehearsal.semester, position=3)
-        self.last_song = SongFactory(semester=self.rehearsal.semester, position=4)
-        self.first_slot = RehearsalSongFactory(rehearsal=self.rehearsal, song=self.first_song, order=1)
-        self.middle_slot = RehearsalSongFactory(rehearsal=self.rehearsal, song=self.middle_song, order=2)
-        self.last_slot = RehearsalSongFactory(rehearsal=self.rehearsal, song=self.last_song, order=3)
-        self.person = PersonFactory()
+        cls.rehearsal = RehearsalFactory(is_full_setlist=False)
+        cls.role = RoleFactory()
+        cls.first_song = SongFactory(semester=cls.rehearsal.semester, position=2)
+        cls.middle_song = SongFactory(semester=cls.rehearsal.semester, position=3)
+        cls.last_song = SongFactory(semester=cls.rehearsal.semester, position=4)
+        cls.first_slot = RehearsalSongFactory(rehearsal=cls.rehearsal, song=cls.first_song, order=1)
+        cls.middle_slot = RehearsalSongFactory(rehearsal=cls.rehearsal, song=cls.middle_song, order=2)
+        cls.last_slot = RehearsalSongFactory(rehearsal=cls.rehearsal, song=cls.last_song, order=3)
+        cls.person = PersonFactory()
 
     def test_backup_on_first_slot_only_is_needed_from_start_only(self):
         """A Person who is only a Backup on the first slot is needed from the start, not until the end."""

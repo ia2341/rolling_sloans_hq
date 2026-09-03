@@ -63,8 +63,11 @@ def run_settings():
 
 
 class StorageBackendTests(unittest.TestCase):
-    def setUp(self):
-        self.values = run_settings()
+    @classmethod
+    def setUpClass(cls):
+        """Shell out once for the settings this whole class's tests read from."""
+        super().setUpClass()
+        cls.values = run_settings()
 
     def test_storages_and_anymail_apps_installed(self):
         self.assertIn('storages', self.values['INSTALLED_APPS'])
@@ -94,8 +97,11 @@ class StorageBackendTests(unittest.TestCase):
 
 
 class EmailBackendTests(unittest.TestCase):
-    def setUp(self):
-        self.values = run_settings()
+    @classmethod
+    def setUpClass(cls):
+        """Shell out once for the settings this whole class's tests read from."""
+        super().setUpClass()
+        cls.values = run_settings()
 
     def test_email_backend_is_anymail(self):
         self.assertEqual(

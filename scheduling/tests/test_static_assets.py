@@ -44,9 +44,13 @@ class VendoredAssetResolutionTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class NavShellAssetTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic Person to log in as, since every portal page is auth-gated."""
+        cls.person = PersonFactory(password=PASSWORD)
+
     def setUp(self):
-        """Log in a synthetic Person, since every portal page is auth-gated."""
-        self.person = PersonFactory(password=PASSWORD)
+        """Log in as the synthetic Person before each test."""
         self.client.login(username=self.person.email, password=PASSWORD)
 
     def test_shell_references_every_asset_it_loads(self):
