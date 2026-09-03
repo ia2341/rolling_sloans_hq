@@ -36,6 +36,9 @@
   --rs-chip-padding-inline: var(--rs-space-sm);
   --rs-chip-gap: var(--rs-space-xs);
 
+  /* Assignment-grid cell "+" picker trigger (issue #211) */
+  --rs-cell-add-size: 1.5rem;
+
   /* Pico theming hooks. */
   --pico-font-size: 100%;
 }
@@ -343,4 +346,25 @@ body > nav [aria-current='page'] {
   color: var(--rs-danger-color);
   cursor: pointer;
   line-height: 1;
+}
+
+/* Cell "+" popover picker trigger (issue #211): a small round button beside a
+   cell's chips, so opening the picker never shifts the row's layout. */
+.assignment-cell-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--rs-cell-add-size);
+  height: var(--rs-cell-add-size);
+  padding: 0;
+  border: 1px solid var(--rs-chip-border-color);
+  border-radius: 999px;
+  background: none;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.assignment-picker-list {
+  list-style: none;
+  padding-inline-start: 0;
 }

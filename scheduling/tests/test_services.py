@@ -26,6 +26,7 @@ from scheduling.services import (
     AssignmentMatrixEntryKind,
     assignment_grid_is_editable,
     assignment_matrix_for,
+    assignment_picker_for,
     breaks_for,
     conflict_history_for,
     declare_conflict,
@@ -494,6 +495,93 @@ class AssignmentGridIsEditableTests(TestCase):
         rehearsal = RehearsalFactory(is_full_setlist=True, date=timezone.localdate() - timedelta(days=30))
 
         self.assertTrue(assignment_grid_is_editable(rehearsal))
+
+
+class AssignmentPickerForTests(TestCase):
+    def test_declared_members_listed_before_others(self):
+        """A rostered Member who declared the Role lands in `declared`; every other rostered Member lands in `others` (issue #211)."""
+        semester = SemesterFactory()
+        song = SongFactory(semester=semester)
+        role = RoleFactory()
+        declarer = PersonFactory(name='Ada')
+        declarer_membership = MembershipFactory(person=declarer, semester=semester)
+        MembershipRoleFactory(membership=declarer_membership, role=role)
+        non_declarer = PersonFactory(name='Bea')
+        MembershipFactory(person=non_declarer, semester=semester)
+
+        result = assignment_picker_for(song, role, semester)
+
+        self.assertEqual([option.person for option in result.declared], [declarer])
+        self.assertTrue(result.declared[0].has_declared_role)
+        self.assertEqual([option.person for option in result.others], [non_declarer])
+        self.assertFalse(result.others[0].has_declared_role)
+
+    def test_options_ordered_by_person_name_within_each_group(self):
+        """Within `declared` and within `others`, options are ordered by Person.name."""
+        semester = SemesterFactory()
+        song = SongFactory(semester=semester)
+        role = RoleFactory()
+        zed = PersonFactory(name='Zed')
+        anna = PersonFactory(name='Anna')
+        MembershipFactory(person=zed, semester=semester)
+        MembershipFactory(person=anna, semester=semester)
+
+        result = assignment_picker_for(song, role, semester)
+
+        self.assertEqual([option.person for option in result.others], [anna, zed])
+
+    def test_non_rostered_person_is_never_offered(self):
+        """A Person with no Membership in the Semester is offered nowhere in the picker."""
+        semester = SemesterFactory()
+        song = SongFactory(semester=semester)
+        role = RoleFactory()
+        PersonFactory(name='Outsider')  # no Membership in `semester`
+
+        result = assignment_picker_for(song, role, semester)
+
+        self.assertEqual(result.declared, [])
+        self.assertEqual(result.others, [])
+
+    def test_a_rostered_person_from_a_different_semester_is_not_offered(self):
+        """A Membership in a different Semester doesn't make a Person eligible for this one."""
+        semester = SemesterFactory()
+        other_semester = SemesterFactory()
+        song = SongFactory(semester=semester)
+        role = RoleFactory()
+        MembershipFactory(semester=other_semester)
+
+        result = assignment_picker_for(song, role, semester)
+
+        self.assertEqual(result.declared, [])
+        self.assertEqual(result.others, [])
+
+    def test_already_assigned_person_is_excluded(self):
+        """A Person already holding this exact (Song, Role) assignment is not re-offered — re-adding them would only invite a duplicate."""
+        semester = SemesterFactory()
+        song = SongFactory(semester=semester)
+        role = RoleFactory()
+        person = PersonFactory()
+        MembershipFactory(person=person, semester=semester)
+        SongRoleAssignmentFactory(song=song, role=role, person=person)
+
+        result = assignment_picker_for(song, role, semester)
+
+        self.assertEqual(result.declared, [])
+        self.assertEqual(result.others, [])
+
+    def test_assignment_on_a_different_role_does_not_exclude_the_person(self):
+        """A Person already assigned to this Song under a different Role is still offered for this cell's Role."""
+        semester = SemesterFactory()
+        song = SongFactory(semester=semester)
+        role = RoleFactory()
+        other_role = RoleFactory()
+        person = PersonFactory()
+        MembershipFactory(person=person, semester=semester)
+        SongRoleAssignmentFactory(song=song, role=other_role, person=person)
+
+        result = assignment_picker_for(song, role, semester)
+
+        self.assertEqual([option.person for option in result.others], [person])
 
 
 class FutureRehearsalsForTests(TestCase):

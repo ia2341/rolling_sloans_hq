@@ -1,10 +1,12 @@
-"""apply_song_role_assignments(): the semester-wide removal write and the two staleness checks (issue #210)."""
+"""apply_song_role_assignments(): the semester-wide removal/add write and the two staleness checks (issues #210, #211)."""
 
 from datetime import timedelta
 
 from django.test import TestCase
 
+from identity.factories import PersonFactory
 from scheduling.factories import (
+    MembershipFactory,
     RehearsalFactory,
     RoleFactory,
     SemesterFactory,
@@ -29,13 +31,14 @@ class ApplySongRoleAssignmentsTests(TestCase):
         cls.song = SongFactory(semester=cls.semester)
         cls.assignment = SongRoleAssignmentFactory(song=cls.song, role=cls.role)
 
-    def _buffer(self, removed_assignment_ids=(), semester=None, updated_at=None):
+    def _buffer(self, removed_assignment_ids=(), added_entries=(), semester=None, updated_at=None):
         """Build an AssignmentEditBuffer against self.semester unless overridden."""
         semester = semester or self.semester
         return AssignmentEditBuffer(
             semester_id=semester.pk,
             semester_updated_at=updated_at if updated_at is not None else semester.updated_at,
             removed_assignment_ids=frozenset(removed_assignment_ids),
+            added_entries=frozenset(added_entries),
         )
 
     def test_removes_the_buffered_assignment(self):
@@ -134,3 +137,102 @@ class ApplySongRoleAssignmentsTests(TestCase):
 
         with self.assertRaises(WrongViewingSemesterError):
             apply_song_role_assignments(buffer, viewing_semester=None)
+
+    def test_added_entry_creates_a_new_assignment_for_a_rostered_person(self):
+        """An added (song, role, person) triple for a rostered Person creates a new SongRoleAssignment (issue #211)."""
+        membership = MembershipFactory(semester=self.semester)
+        buffer = self._buffer(added_entries=[(self.song.pk, self.role.pk, membership.person.pk)])
+
+        apply_song_role_assignments(buffer, viewing_semester=self.semester)
+
+        self.assertTrue(
+            SongRoleAssignment.objects.filter(song=self.song, role=self.role, person=membership.person).exists()
+        )
+
+    def test_added_entry_is_semester_wide_across_every_rehearsal_and_the_concert(self):
+        """A picked person appears on the Song for every Rehearsal's grid, since SongRoleAssignment carries no rehearsal FK."""
+        RehearsalFactory(semester=self.semester)  # a second Rehearsal, to prove the created row isn't scoped to one
+        membership = MembershipFactory(semester=self.semester)
+        buffer = self._buffer(added_entries=[(self.song.pk, self.role.pk, membership.person.pk)])
+
+        apply_song_role_assignments(buffer, viewing_semester=self.semester)
+
+        self.assertEqual(
+            SongRoleAssignment.objects.filter(
+                song=self.song, role=self.role, person=membership.person,
+            ).count(),
+            1,
+        )
+
+    def test_added_entry_for_a_person_who_has_not_declared_the_role_is_flagged_not_blocked(self):
+        """Picking a mismatched Person is allowed with no block; the saved row carries the mismatch flag (ADR-0002)."""
+        membership = MembershipFactory(semester=self.semester)  # no MembershipRole for self.role
+        buffer = self._buffer(added_entries=[(self.song.pk, self.role.pk, membership.person.pk)])
+
+        apply_song_role_assignments(buffer, viewing_semester=self.semester)
+
+        created = SongRoleAssignment.objects.get(song=self.song, role=self.role, person=membership.person)
+        self.assertTrue(created.is_role_mismatch)
+
+    def test_added_entry_for_a_non_rostered_person_is_silently_skipped(self):
+        """A tampered add naming a Person with no Membership in the Semester is skipped, not created (issue #211)."""
+        outsider = PersonFactory()
+        buffer = self._buffer(added_entries=[(self.song.pk, self.role.pk, outsider.pk)])
+
+        apply_song_role_assignments(buffer, viewing_semester=self.semester)
+
+        self.assertFalse(SongRoleAssignment.objects.filter(song=self.song, role=self.role, person=outsider).exists())
+
+    def test_added_entry_for_a_foreign_semesters_song_is_silently_skipped(self):
+        """A tampered add naming another Semester's Song is skipped, not created."""
+        other_semester = SemesterFactory()
+        other_song = SongFactory(semester=other_semester)
+        membership = MembershipFactory(semester=self.semester)
+        buffer = self._buffer(added_entries=[(other_song.pk, self.role.pk, membership.person.pk)])
+
+        apply_song_role_assignments(buffer, viewing_semester=self.semester)
+
+        self.assertFalse(
+            SongRoleAssignment.objects.filter(song=other_song, role=self.role, person=membership.person).exists()
+        )
+
+    def test_added_entry_duplicating_an_existing_assignment_is_a_no_op(self):
+        """Re-adding an already-assigned (song, role, person) triple is a no-op, not an IntegrityError."""
+        buffer = self._buffer(added_entries=[(self.song.pk, self.role.pk, self.assignment.person.pk)])
+
+        apply_song_role_assignments(buffer, viewing_semester=self.semester)
+
+        self.assertEqual(
+            SongRoleAssignment.objects.filter(song=self.song, role=self.role, person=self.assignment.person).count(),
+            1,
+        )
+
+    def test_mixed_removal_and_add_buffer_produces_exactly_the_intended_rows_in_one_save(self):
+        """A Buffer mixing a removal and an add commits both atomically (issue #211 acceptance)."""
+        membership = MembershipFactory(semester=self.semester)
+        buffer = self._buffer(
+            removed_assignment_ids=[self.assignment.pk],
+            added_entries=[(self.song.pk, self.role.pk, membership.person.pk)],
+        )
+
+        apply_song_role_assignments(buffer, viewing_semester=self.semester)
+
+        self.assertFalse(SongRoleAssignment.objects.filter(pk=self.assignment.pk).exists())
+        self.assertTrue(
+            SongRoleAssignment.objects.filter(song=self.song, role=self.role, person=membership.person).exists()
+        )
+
+    def test_add_rejected_when_semester_stamp_is_stale(self):
+        """An add is rejected, writing nothing, when the Semester's stamp has moved since the grid was rendered."""
+        membership = MembershipFactory(semester=self.semester)
+        stale_stamp = self.semester.updated_at - timedelta(days=1)
+        buffer = self._buffer(
+            added_entries=[(self.song.pk, self.role.pk, membership.person.pk)], updated_at=stale_stamp,
+        )
+
+        with self.assertRaises(StaleAssignmentSemesterError):
+            apply_song_role_assignments(buffer, viewing_semester=self.semester)
+
+        self.assertFalse(
+            SongRoleAssignment.objects.filter(song=self.song, role=self.role, person=membership.person).exists()
+        )
