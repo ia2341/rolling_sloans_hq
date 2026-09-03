@@ -41,7 +41,6 @@ from scheduling.forms import (
     SongRequirementAddRoleForm,
     SongRequirementAddRowForm,
     SongRequirementEditFormSet,
-    SongRoleAssignmentForm,
     SpotifyImportForm,
 )
 from scheduling.models import (
@@ -77,6 +76,7 @@ from scheduling.services import (
     UnknownConflictError,
     WrongAdjudicationSemesterError,
     WrongViewingSemesterError,
+    addable_roles_for,
     apply_adjudications,
     apply_roster_edits,
     apply_song_role_assignments,
@@ -319,6 +319,7 @@ def _build_schedule_context(request, semester, view_mode, rehearsal, error_rehea
         'my_breaks': [],
         'my_availability': None,
         'schedule': None,
+        'addable_roles': [],
     }
     if semester is None:
         return context
@@ -346,6 +347,10 @@ def _build_schedule_context(request, semester, view_mode, rehearsal, error_rehea
     matrix = assignment_matrix_for(rehearsal)
     context['matrix'] = matrix
     context['can_edit_assignments'] = request.user.is_admin and assignment_grid_is_editable(rehearsal)
+    if context['can_edit_assignments']:
+        context['addable_roles'] = [
+            {'id': role.pk, 'name': role.name} for role in addable_roles_for(matrix)
+        ]
     context['my_song_ids'] = set(
         SongRoleAssignment.objects.filter(
             person=request.user, song__in=[row.song for row in matrix.rows],
@@ -1826,51 +1831,6 @@ class RehearsalEditView(AdminRequiredMixin, View):
         return get_object_or_404(_scoped_to_viewing_semester(Rehearsal, get_viewing_semester(self.request)), pk=pk)
 
 
-class SongRoleAssignmentManageView(AdminRequiredMixin, View):
-    """`/manage/assignments/`: an admin lists and creates SongRoleAssignments, surfacing mismatches (issue #60, #17 story 12)."""
-
-    template_name = 'scheduling/manage_assignments.html'
-
-    def get(self, request):
-        """Render the viewing Semester's SongRoleAssignments alongside an empty create form."""
-        return render(request, self.template_name, self._build_context())
-
-    def post(self, request):
-        """Validate the create form and save a new SongRoleAssignment, or re-render with errors."""
-        semester = get_viewing_semester(request)
-        if semester is None:
-            messages.error(request, 'Create a Semester with Songs before assigning Roles.')
-            return redirect('scheduling:manage-assignments')
-        songs = _scoped_to_viewing_semester(Song, semester)
-        form = SongRoleAssignmentForm(request.POST, songs=songs)
-        if form.is_valid():
-            form.save()
-            messages.success(request, 'Assignment created.')
-            return redirect('scheduling:manage-assignments')
-        return render(request, self.template_name, self._build_context(form))
-
-    def _build_context(self, form=None):
-        """Build context: the viewing Semester's SongRoleAssignments plus the create form (fresh if none is given)."""
-        semester = get_viewing_semester(self.request)
-        songs = _scoped_to_viewing_semester(Song, semester)
-        assignments = SongRoleAssignment.objects.filter(song__in=songs).select_related('song', 'role', 'person')
-        return {
-            'semester': semester,
-            'assignments': assignments,
-            'form': form or SongRoleAssignmentForm(songs=songs),
-        }
-
-
-class SongRoleAssignmentDeleteView(AdminRequiredMixin, View):
-    """`/manage/assignments/<pk>/delete/`: an admin removes a SongRoleAssignment (issue #60, #17 story 12)."""
-
-    def post(self, request, pk):
-        """Delete the viewing Semester's target SongRoleAssignment and redirect with a success message."""
-        songs = _scoped_to_viewing_semester(Song, get_viewing_semester(request))
-        assignment = get_object_or_404(SongRoleAssignment, pk=pk, song__in=songs)
-        assignment.delete()
-        messages.success(request, 'Assignment removed.')
-        return redirect('scheduling:manage-assignments')
 
 
 class RecordingUploadView(BaseView, View):

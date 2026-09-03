@@ -7,7 +7,7 @@
 // event delegation on the static <dialog> wrapper instead (a plain DOM click bubbles through
 // injected content exactly like any other node).
 document.addEventListener('alpine:init', () => {
-  Alpine.data('assignmentGrid', () => ({
+  Alpine.data('assignmentGrid', (pickerUrlTemplate) => ({
     editing: false,
     removed: [],
     added: [],
@@ -15,11 +15,51 @@ document.addEventListener('alpine:init', () => {
     pickerRoleId: null,
     pickerHtml: '',
     pickerError: '',
+    pickerUrlTemplate: pickerUrlTemplate || '',
+    extraRoles: [],
+    selectedRoleToAdd: '',
+    addableRoles: [],
+
+    // "+ Add role" (issue #213): every addable Role (active, not already a column),
+    // read once from the json_script the server rendered -- a plain data island, not
+    // an Alpine.data() init arg, since a Role name could contain a quote or apostrophe.
+    init() {
+      const dataEl = document.getElementById('addable-roles-data');
+      this.addableRoles = dataEl ? JSON.parse(dataEl.textContent) : [];
+    },
 
     cancelEditing() {
       this.editing = false;
       this.removed = [];
       this.added = [];
+      this.extraRoles = [];
+      this.selectedRoleToAdd = '';
+    },
+
+    // Roles offered in the "+ Add role" <select>: every addable Role not already
+    // added as an extra column this view (a Role becomes a real column, sourced
+    // from the server, only after Save Changes re-renders the grid).
+    rolesAvailableToAdd() {
+      const addedIds = new Set(this.extraRoles.map((role) => role.id));
+      return this.addableRoles.filter((role) => !addedIds.has(role.id));
+    },
+
+    // Adds a client-side-only column for this view -- writes no SongRoleRequirement,
+    // and is gone on reload or Cancel (ADR-0009's grid assigns people; #151 owns targets).
+    addRole() {
+      const roleId = Number(this.selectedRoleToAdd);
+      const role = this.addableRoles.find((candidate) => candidate.id === roleId);
+      if (!role) {
+        return;
+      }
+      this.extraRoles.push(role);
+      this.selectedRoleToAdd = '';
+    },
+
+    // Builds the "+" picker's fetch URL for an extra (client-only) column, whose
+    // (song, role) pair the server never rendered a data-picker-url for.
+    pickerUrlFor(songId, roleId) {
+      return this.pickerUrlTemplate.replace(/\/0\/0\/$/, `/${songId}/${roleId}/`);
     },
 
     // Fetched only when a cell's "+" is opened -- an unopened cell issues no request.
