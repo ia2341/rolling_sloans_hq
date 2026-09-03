@@ -193,6 +193,14 @@ SetlistEditFormSet = forms.modelformset_factory(
     Song, form=SongEditForm, extra=0, can_delete=True,
 )
 
+# Same buffer, `extra=1`: the empty-setlist GET (issue #180) needs one blank row already present so an
+# admin can start typing immediately, rather than having to click "+ Add song" on a setlist with nothing
+# in it yet. Only ever bound to an empty queryset — with `INITIAL_FORMS=0`, that one row lands past the
+# initial/extra boundary exactly like a JS-added row, so `_save_buffer` treats an untouched one as a no-op.
+SetlistEditEmptyFormSet = forms.modelformset_factory(
+    Song, form=SongEditForm, extra=1, can_delete=True,
+)
+
 
 class SongRoleAssignmentForm(forms.ModelForm):
     """Assigns a Person to a Role on a Song, restricted to the viewing Semester's Songs (issue #60).
