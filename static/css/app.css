@@ -167,3 +167,83 @@ body > nav [aria-current='page'] {
 #setlist-delete-confirm-dialog {
   max-width: 32rem;
 }
+
+/* Per-field labels for the mobile card layout below (issue #181). The desktop
+   grid's header row already labels each column, so these stay hidden until
+   the header itself is hidden. */
+.setlist-field-label {
+  display: none;
+}
+
+/* Below this breakpoint the edit grid becomes stacked cards, one per Song,
+   because the 8-column desktop grid has no room to compress into on a phone
+   (issue #181). Each row keeps the same DOM and Alpine/SortableJS wiring —
+   only the grid's areas move elements onto labelled lines. The drag handle
+   and the move-up/move-down buttons stay their own grid areas so they read
+   as distinct tap targets rather than part of the card body. */
+@media (max-width: 48rem) {
+  .setlist-edit-header {
+    display: none;
+  }
+
+  .setlist-edit-row-group {
+    padding: var(--rs-space-sm);
+    border: 1px solid var(--rs-border-color);
+    border-radius: var(--pico-border-radius);
+    margin-block-end: var(--rs-space-sm);
+  }
+
+  .setlist-edit-row {
+    grid-template-columns: auto auto 1fr auto;
+    grid-template-areas:
+      "number handle move delete"
+      "title title title title"
+      "artist artist artist artist"
+      "length length length length"
+      "notes notes notes notes";
+    row-gap: var(--rs-space-sm);
+  }
+
+  .setlist-row-number {
+    grid-area: number;
+  }
+
+  .setlist-drag-handle {
+    grid-area: handle;
+    padding: var(--rs-space-sm);
+    font-size: 1.25rem;
+  }
+
+  .setlist-move-buttons {
+    grid-area: move;
+  }
+
+  .setlist-delete-toggle {
+    grid-area: delete;
+  }
+
+  .setlist-field-title {
+    grid-area: title;
+  }
+
+  .setlist-field-artist {
+    grid-area: artist;
+  }
+
+  .setlist-field-length {
+    grid-area: length;
+  }
+
+  .setlist-notes-expander {
+    grid-area: notes;
+  }
+
+  .setlist-field-label {
+    display: block;
+    font-weight: bold;
+  }
+
+  .setlist-field input {
+    width: 100%;
+  }
+}
