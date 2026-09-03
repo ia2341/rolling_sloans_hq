@@ -1,10 +1,12 @@
 """Member-facing (issues #57, #58, #61) and admin-facing (issue #60) forms."""
 
+from datetime import datetime, timedelta
 from typing import ClassVar
 
 from django import forms
 from django.db import transaction
 from django.urls import reverse_lazy
+from django.utils import timezone
 
 from identity.models import Person
 from scheduling.fields import SongLengthField
@@ -152,6 +154,129 @@ class RehearsalForm(forms.ModelForm):
         fields: ClassVar[list[str]] = [
             'date', 'start_time', 'end_time', 'setup_grace_minutes', 'teardown_grace_minutes', 'is_full_setlist',
         ]
+
+
+class RehearsalEditRowForm(forms.ModelForm):
+    """One row of `/schedule/edit/`'s grid: date, times, the Dress toggle, and the four grace/buffer overrides (issue #219).
+
+    `semester` is excluded from `Meta.fields` for the same reason
+    `RehearsalForm` excludes it — it travels as a constructor kwarg instead,
+    used here for the override placeholders and the derived-end-time check,
+    and applied to new instances by the view before `save()`. `end_time`
+    and the four overrides are all optional: a blank override means
+    "inherit the Semester default" (rendered as placeholder text by
+    `__init__`, never a filled-in value); `apply_rehearsal_edits()` is
+    where blank overrides actually resolve to a concrete value, since only
+    it can tell a new row from an existing one across every one of this
+    surface's callers.
+    """
+
+    class Meta:
+        model = Rehearsal
+        fields: ClassVar[list[str]] = [
+            'date', 'start_time', 'end_time', 'is_full_setlist',
+            'setup_grace_minutes', 'teardown_grace_minutes',
+            'arrival_buffer_minutes', 'departure_buffer_minutes',
+        ]
+
+    _OVERRIDE_DEFAULT_FIELDS: ClassVar[list[tuple[str, str]]] = [
+        ('setup_grace_minutes', 'default_setup_grace_minutes'),
+        ('teardown_grace_minutes', 'default_teardown_grace_minutes'),
+        ('arrival_buffer_minutes', 'default_arrival_buffer_minutes'),
+        ('departure_buffer_minutes', 'default_departure_buffer_minutes'),
+    ]
+
+    def __init__(self, *args, semester=None, **kwargs):
+        """Stash `semester`, make end_time/the overrides optional, and placeholder each override with the Semester's default."""
+        super().__init__(*args, **kwargs)
+        self.semester = semester
+        self.fields['end_time'].required = False
+        for field_name, default_field_name in self._OVERRIDE_DEFAULT_FIELDS:
+            self.fields[field_name].required = False
+            if semester is not None:
+                self.fields[field_name].widget.attrs['placeholder'] = str(getattr(semester, default_field_name))
+
+    def clean_date(self):
+        """Reject a date before today: the past is edited in the Django admin, not this grid (issue #219)."""
+        date_value = self.cleaned_data['date']
+        if date_value < timezone.localdate():
+            raise forms.ValidationError(
+                'Rehearsals dated in the past are managed from the Django admin, not this grid.'
+            )
+        return date_value
+
+    def clean(self):
+        """Reject an end time at or before start time, a missing one on an existing row, or one whose derivation would cross midnight."""
+        cleaned_data = super().clean()
+        start_time = cleaned_data.get('start_time')
+        end_time = cleaned_data.get('end_time')
+        date_value = cleaned_data.get('date')
+        if end_time is not None:
+            if start_time is not None and end_time <= start_time:
+                self.add_error('end_time', 'End time must be after start time.')
+        elif self.instance.pk:
+            self.add_error('end_time', 'End time is required.')
+        elif (
+            start_time is not None and date_value is not None and self.semester is not None
+            and self._derived_end_time(date_value, start_time) is None
+        ):
+            self.add_error(
+                'end_time',
+                "Left blank, this row's end time would be derived past midnight from the Semester's "
+                'default duration; set it explicitly instead.',
+            )
+        return cleaned_data
+
+    def _derived_end_time(self, date_value, start_time):
+        """Return the end time the Semester's default duration would derive for `date_value`/`start_time`, or None if it crosses midnight."""
+        start_dt = datetime.combine(date_value, start_time)
+        end_dt = start_dt + timedelta(minutes=self.semester.default_rehearsal_duration_minutes)
+        return end_dt.time() if end_dt.date() == start_dt.date() else None
+
+
+class RehearsalEditFormSetBase(forms.BaseModelFormSet):
+    """Adds the one cross-row check no single `RehearsalEditRowForm` can make: no two pending rows share a date (issue #219).
+
+    `semester` is excluded from the form, so Django's own formset
+    `validate_unique()` skips `unique_rehearsal_date_per_semester`
+    entirely (any unique check naming an excluded field is dropped) —
+    every row here shares the same Semester regardless, so the check
+    collapses to "no two pending dates are equal", checked by hand.
+    """
+
+    def clean(self):
+        """Flag every row past the first one that shares an already-seen date with a non-field-specific form error."""
+        super().clean()
+        if any(self.errors):
+            return
+        seen_dates = {}
+        for form in self.forms:
+            if form in self.deleted_forms:
+                continue
+            date_value = form.cleaned_data.get('date') if form.cleaned_data else None
+            if date_value is None:
+                continue
+            if date_value in seen_dates:
+                message = 'Another pending row is already dated here; each Rehearsal needs a distinct date.'
+                form.add_error('date', message)
+                seen_dates[date_value].add_error('date', message)
+            else:
+                seen_dates[date_value] = form
+
+
+# `/schedule/edit/`'s buffer: every future-or-today Rehearsal on the viewing Semester, one row each, plus
+# whatever the grid's own "+ Add rehearsal" appends past TOTAL_FORMS later (issue #221). `extra=0`: mirrors
+# `SetlistEditFormSet` — added rows arrive by the client bumping TOTAL_FORMS, not by this factory's `extra`.
+RehearsalEditFormSet = forms.modelformset_factory(
+    Rehearsal, form=RehearsalEditRowForm, formset=RehearsalEditFormSetBase, extra=0,
+)
+
+# Same buffer, `extra=1`: a Semester with zero future Rehearsals still needs one blank row present, so
+# "Edit rehearsals" isn't a dead end on a brand-new Semester (issue #219) — the same reasoning as
+# `SetlistEditEmptyFormSet`.
+RehearsalEditEmptyFormSet = forms.modelformset_factory(
+    Rehearsal, form=RehearsalEditRowForm, formset=RehearsalEditFormSetBase, extra=1,
+)
 
 
 class SongEditForm(forms.ModelForm):

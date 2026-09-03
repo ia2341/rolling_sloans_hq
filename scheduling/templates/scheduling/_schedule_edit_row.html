@@ -1,0 +1,46 @@
+<div class="schedule-edit-row" data-rehearsal-id="{{ form.instance.pk|default:'' }}" data-form-prefix="{{ form.prefix }}">
+  {{ form.id }}
+  <span class="schedule-edit-field">
+    <label for="{{ form.date.id_for_label }}">Date</label>
+    {{ form.date }}
+    {{ form.date.errors }}
+  </span>
+  <span class="schedule-edit-field">
+    <label for="{{ form.start_time.id_for_label }}">Start</label>
+    {{ form.start_time }}
+    {{ form.start_time.errors }}
+  </span>
+  <span class="schedule-edit-field">
+    <label for="{{ form.end_time.id_for_label }}">End</label>
+    {{ form.end_time }}
+    {{ form.end_time.errors }}
+  </span>
+  <span class="schedule-edit-field schedule-edit-field-dress">
+    <label for="{{ form.is_full_setlist.id_for_label }}">Dress Rehearsal</label>
+    {{ form.is_full_setlist }}
+    {{ form.is_full_setlist.errors }}
+  </span>
+  <details class="schedule-edit-overrides-expander">
+    <summary>Advanced timing</summary>
+    <span class="schedule-edit-field">
+      <label for="{{ form.setup_grace_minutes.id_for_label }}">Setup grace (minutes)</label>
+      {{ form.setup_grace_minutes }}
+      {{ form.setup_grace_minutes.errors }}
+    </span>
+    <span class="schedule-edit-field">
+      <label for="{{ form.teardown_grace_minutes.id_for_label }}">Teardown grace (minutes)</label>
+      {{ form.teardown_grace_minutes }}
+      {{ form.teardown_grace_minutes.errors }}
+    </span>
+    <span class="schedule-edit-field">
+      <label for="{{ form.arrival_buffer_minutes.id_for_label }}">Arrival buffer (minutes)</label>
+      {{ form.arrival_buffer_minutes }}
+      {{ form.arrival_buffer_minutes.errors }}
+    </span>
+    <span class="schedule-edit-field">
+      <label for="{{ form.departure_buffer_minutes.id_for_label }}">Departure buffer (minutes)</label>
+      {{ form.departure_buffer_minutes }}
+      {{ form.departure_buffer_minutes.errors }}
+    </span>
+  </details>
+</div>

@@ -1,0 +1,34 @@
+<div id="schedule-edit-grid">
+  <form method="post" action="{% url 'scheduling:schedule-edit' %}" id="schedule-edit-form">
+    {% csrf_token %}
+    <input type="hidden" name="schedule_semester_id" value="{{ schedule_semester_id }}">
+    <input type="hidden" name="schedule_semester_updated_at" value="{{ schedule_semester_updated_at }}">
+    {{ formset.management_form }}
+    {% if formset.non_form_errors %}
+      <ul class="errors">
+        {% for error in formset.non_form_errors %}<li>{{ error }}</li>{% endfor %}
+      </ul>
+    {% endif %}
+    <div id="schedule-edit-rows">
+      {% for form in formset %}
+        {% include "scheduling/_schedule_edit_row.html" %}
+      {% endfor %}
+    </div>
+    <button type="submit" id="save-rehearsal-changes">Save Changes</button>
+    <a href="{% url 'scheduling:schedule' %}?view=all" id="cancel-schedule-edit">Cancel</a>
+  </form>
+
+  {% if past_rehearsals %}
+    <details id="schedule-edit-past">
+      <summary>Show past rehearsals</summary>
+      <ul>
+        {% for rehearsal in past_rehearsals %}
+          <li>
+            {{ rehearsal.date }} {{ rehearsal.start_time }}&ndash;{{ rehearsal.end_time }}
+            {% if rehearsal.is_full_setlist %}(Dress Rehearsal){% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    </details>
+  {% endif %}
+</div>
