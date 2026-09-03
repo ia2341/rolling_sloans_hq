@@ -3,7 +3,7 @@
 import logging
 from collections import defaultdict
 from dataclasses import dataclass, replace
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from itertools import pairwise, permutations
 from uuid import uuid4
 
@@ -2592,9 +2592,9 @@ class RehearsalEditRow:
     """
 
     rehearsal_id: int | None
-    date: object
-    start_time: object
-    end_time: object
+    date: date
+    start_time: time
+    end_time: time | None
     is_full_setlist: bool
     setup_grace_minutes: int | None
     teardown_grace_minutes: int | None
@@ -2618,7 +2618,10 @@ class RehearsalEditBuffer:
     rows: list[RehearsalEditRow]
 
 
-_REHEARSAL_OVERRIDE_FIELDS = (
+# Rehearsal override field name -> Semester default field name. Shared by RehearsalEditRowForm's
+# placeholders (forms.py) and _apply_rehearsal_edit_row()'s blank-resolution below, so the two lists
+# of four fields can't drift apart (issue #219).
+REHEARSAL_OVERRIDE_FIELDS = (
     ('setup_grace_minutes', 'default_setup_grace_minutes'),
     ('teardown_grace_minutes', 'default_teardown_grace_minutes'),
     ('arrival_buffer_minutes', 'default_arrival_buffer_minutes'),
@@ -2684,7 +2687,7 @@ def _apply_rehearsal_edit_row(row: RehearsalEditRow, semester: Semester) -> None
     rehearsal.start_time = row.start_time
     rehearsal.end_time = row.end_time
     rehearsal.is_full_setlist = row.is_full_setlist
-    for field_name, default_field_name in _REHEARSAL_OVERRIDE_FIELDS:
+    for field_name, default_field_name in REHEARSAL_OVERRIDE_FIELDS:
         value = getattr(row, field_name)
         setattr(rehearsal, field_name, value if value is not None else getattr(semester, default_field_name))
     rehearsal.save()

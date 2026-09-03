@@ -24,6 +24,7 @@ from scheduling.services import (
     CONFLICT_DECLARATION_CHOICES,
     CONFLICT_EARLY_DEPARTURE,
     CONFLICT_LATE_ARRIVAL,
+    REHEARSAL_OVERRIDE_FIELDS,
 )
 from scheduling.spotify import SpotifyImportError, extract_playlist_id
 
@@ -179,19 +180,12 @@ class RehearsalEditRowForm(forms.ModelForm):
             'arrival_buffer_minutes', 'departure_buffer_minutes',
         ]
 
-    _OVERRIDE_DEFAULT_FIELDS: ClassVar[list[tuple[str, str]]] = [
-        ('setup_grace_minutes', 'default_setup_grace_minutes'),
-        ('teardown_grace_minutes', 'default_teardown_grace_minutes'),
-        ('arrival_buffer_minutes', 'default_arrival_buffer_minutes'),
-        ('departure_buffer_minutes', 'default_departure_buffer_minutes'),
-    ]
-
     def __init__(self, *args, semester=None, **kwargs):
         """Stash `semester`, make end_time/the overrides optional, and placeholder each override with the Semester's default."""
         super().__init__(*args, **kwargs)
         self.semester = semester
         self.fields['end_time'].required = False
-        for field_name, default_field_name in self._OVERRIDE_DEFAULT_FIELDS:
+        for field_name, default_field_name in REHEARSAL_OVERRIDE_FIELDS:
             self.fields[field_name].required = False
             if semester is not None:
                 self.fields[field_name].widget.attrs['placeholder'] = str(getattr(semester, default_field_name))
