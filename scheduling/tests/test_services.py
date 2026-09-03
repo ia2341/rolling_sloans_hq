@@ -23,6 +23,7 @@ from scheduling.factories import (
 )
 from scheduling.models import Conflict, ConflictWindow
 from scheduling.services import (
+    AssignmentMatrixEntryKind,
     assignment_matrix_for,
     breaks_for,
     conflict_history_for,
@@ -412,8 +413,8 @@ class AssignmentMatrixForTests(TestCase):
 
         self.assertEqual(matrix.roles, [guitarist, singer])
 
-    def test_cell_lists_assignments_with_role_mismatch_flag(self):
-        """A cell lists every SongRoleAssignment for its (Song, Role) pair, carrying is_role_mismatch."""
+    def test_cell_lists_entries_with_role_mismatch_flag(self):
+        """A cell lists an entry per SongRoleAssignment for its (Song, Role) pair, carrying is_role_mismatch."""
         rehearsal = RehearsalFactory(is_full_setlist=False)
         song = SongFactory(semester=rehearsal.semester, position=1)
         RehearsalSongFactory(song=song, rehearsal=rehearsal, order=1)
@@ -430,10 +431,29 @@ class AssignmentMatrixForTests(TestCase):
         matrix = assignment_matrix_for(rehearsal)
 
         [cell] = matrix.rows[0].cells
-        self.assertCountEqual(cell.assignments, [matched, mismatched])
-        by_person = {assignment.person: assignment.is_role_mismatch for assignment in cell.assignments}
+        self.assertCountEqual([entry.person for entry in cell.entries], [person, mismatched_person])
+        self.assertCountEqual([entry.id for entry in cell.entries], [matched.pk, mismatched.pk])
+        self.assertTrue(all(entry.kind == AssignmentMatrixEntryKind.ASSIGNMENT for entry in cell.entries))
+        by_person = {entry.person: entry.is_role_mismatch for entry in cell.entries}
         self.assertFalse(by_person[person])
         self.assertTrue(by_person[mismatched_person])
+
+    def test_entries_ordered_by_person_name(self):
+        """A cell's entries are ordered by Person.name, matching the grid's display order (issue #208)."""
+        rehearsal = RehearsalFactory(is_full_setlist=False)
+        song = SongFactory(semester=rehearsal.semester, position=1)
+        RehearsalSongFactory(song=song, rehearsal=rehearsal, order=1)
+        role = RoleFactory()
+        SongRoleRequirementFactory(song=song, role=role, count=2)
+        zed = PersonFactory(name='Zed')
+        anna = PersonFactory(name='Anna')
+        SongRoleAssignmentFactory(song=song, role=role, person=zed)
+        SongRoleAssignmentFactory(song=song, role=role, person=anna)
+
+        matrix = assignment_matrix_for(rehearsal)
+
+        [cell] = matrix.rows[0].cells
+        self.assertEqual([entry.person for entry in cell.entries], [anna, zed])
 
     def test_empty_cell_for_song_role_pair_with_no_assignment(self):
         """A (Song, Role) column pair with no SongRoleAssignment yields an empty cell, not a missing one."""
@@ -446,7 +466,7 @@ class AssignmentMatrixForTests(TestCase):
         matrix = assignment_matrix_for(rehearsal)
 
         [cell] = matrix.rows[0].cells
-        self.assertEqual(cell.assignments, [])
+        self.assertEqual(cell.entries, [])
 
 
 class FutureRehearsalsForTests(TestCase):

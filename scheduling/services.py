@@ -738,12 +738,37 @@ def next_attended_rehearsal_for(person, semester):
     return None
 
 
+class AssignmentMatrixEntryKind:
+    """The kinds of thing an AssignmentMatrixEntry can wrap (issue #208).
+
+    Only ASSIGNMENT exists today; a later ticket (ADR-0007's Backup) adds a
+    second kind to the same shape rather than a parallel list on the cell.
+    """
+
+    ASSIGNMENT = 'assignment'
+
+
+@dataclass(frozen=True)
+class AssignmentMatrixEntry:
+    """One chip in an assignment matrix cell: a Person plus what kind of thing put them there (issue #208).
+
+    `id` is a stable identity for the underlying row (e.g. a
+    SongRoleAssignment's pk) that an edit-mode chip can buffer removals
+    against; it is not necessarily unique across kinds.
+    """
+
+    id: int
+    kind: str
+    person: Person
+    is_role_mismatch: bool
+
+
 @dataclass(frozen=True)
 class AssignmentMatrixCell:
-    """One (Song, Role) cell in an assignment matrix: every SongRoleAssignment for that pair (issue #95)."""
+    """One (Song, Role) cell in an assignment matrix: its ordered chip entries (issue #95, #208)."""
 
     role: Role
-    assignments: list[SongRoleAssignment]
+    entries: list[AssignmentMatrixEntry]
 
 
 @dataclass(frozen=True)
@@ -771,18 +796,19 @@ def assignment_matrix_for(rehearsal) -> AssignmentMatrix:
     (Rehearsal.dress_rehearsal_songs, ADR-0003) for the Dress Rehearsal,
     which carries no RehearsalSong rows and so no per-row start_time.
     Columns are every Role carrying a SongRoleRequirement on any of those
-    Songs, ordered by name. Each cell lists every SongRoleAssignment for
-    that (Song, Role) pair, each already carrying is_role_mismatch.
+    Songs, ordered by name. Each cell lists an AssignmentMatrixEntry per
+    SongRoleAssignment for that (Song, Role) pair, ordered by person name,
+    each carrying is_role_mismatch (issue #208).
     """
     songs, start_times = _matrix_songs(rehearsal)
     roles = list(Role.objects.filter(songrolerequirement__song__in=songs).distinct().order_by('name'))
-    assignments_by_song_role = _assignments_by_song_role(songs, roles)
+    entries_by_song_role = _matrix_entries_by_song_role(songs, roles)
     rows = [
         AssignmentMatrixRow(
             song=song,
             start_time=start_times.get(song.id),
             cells=[
-                AssignmentMatrixCell(role=role, assignments=assignments_by_song_role.get((song.id, role.id), []))
+                AssignmentMatrixCell(role=role, entries=entries_by_song_role.get((song.id, role.id), []))
                 for role in roles
             ],
         )
@@ -806,14 +832,23 @@ def _matrix_songs(rehearsal):
     return songs, start_times
 
 
-def _assignments_by_song_role(songs, roles):
-    """Return {(song_id, role_id): [SongRoleAssignment, ...]} for every assignment among `songs`/`roles`."""
+def _matrix_entries_by_song_role(songs, roles):
+    """Return {(song_id, role_id): [AssignmentMatrixEntry, ...]} for every assignment among `songs`/`roles` (issue #208).
+
+    Ordered by person name, matching the prior raw-assignment ordering.
+    """
     assignments = SongRoleAssignment.objects.filter(
         song__in=songs, role__in=roles,
     ).select_related('person', 'role').order_by('person__name')
     result = {}
     for assignment in assignments:
-        result.setdefault((assignment.song_id, assignment.role_id), []).append(assignment)
+        entry = AssignmentMatrixEntry(
+            id=assignment.pk,
+            kind=AssignmentMatrixEntryKind.ASSIGNMENT,
+            person=assignment.person,
+            is_role_mismatch=assignment.is_role_mismatch,
+        )
+        result.setdefault((assignment.song_id, assignment.role_id), []).append(entry)
     return result
 
 
