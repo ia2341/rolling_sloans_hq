@@ -26,6 +26,7 @@ from scheduling.forms import (
     RecordingUploadForm,
     RehearsalForm,
     RosterEditFormSet,
+    SetlistEditEmptyFormSet,
     SetlistEditFormSet,
     SongForm,
     SongRoleAssignmentForm,
@@ -344,10 +345,16 @@ class SetlistEditView(AdminRequiredMixin, View):
     MALFORMED_ORDER_MESSAGE = 'The setlist could not be saved — reload and reapply.'
 
     def get(self, request):
-        """Render the edit grid: a bare fragment for htmx, a full page otherwise."""
+        """Render the edit grid: a bare fragment for htmx, a full page otherwise.
+
+        An empty setlist opens with one blank row already present (issue
+        #180), so a brand-new Semester isn't a dead end — otherwise there
+        would be nothing for the grid's own "+ Add song" to add to.
+        """
         semester = get_viewing_semester(request)
         songs = _scoped_to_viewing_semester(Song, semester).order_by('position')
-        formset = SetlistEditFormSet(queryset=songs, prefix='song')
+        formset_class = SetlistEditFormSet if songs.exists() else SetlistEditEmptyFormSet
+        formset = formset_class(queryset=songs, prefix='song')
         return self._render(request, semester, formset)
 
     def post(self, request):
