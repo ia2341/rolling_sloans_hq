@@ -1,5 +1,6 @@
 """SongRoleRequirement: target Role headcounts per Song (issue #33)."""
 
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.test import TestCase
 
@@ -53,6 +54,32 @@ class SongRoleRequirementCountIsATargetTests(TestCase):
         requirement.save()
         reloaded = SongRoleRequirement.objects.get(pk=requirement.pk)
         self.assertEqual(reloaded.count, 100)
+
+
+class SongRoleRequirementCountAtLeastOneTests(TestCase):
+    """A count of zero asserts nothing (issue #206) and is unrepresentable, not merely form-invalid."""
+
+    def test_zero_count_is_rejected_by_the_database_constraint(self):
+        """Saving a zero-count requirement raises IntegrityError from the DB check constraint."""
+        song = SongFactory()
+        role = RoleFactory()
+
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            SongRoleRequirementFactory(song=song, role=role, count=0)
+
+    def test_zero_count_fails_model_validation(self):
+        """full_clean() rejects a zero count at the model layer, independent of any form."""
+        requirement = SongRoleRequirementFactory.build(song=SongFactory(), role=RoleFactory(), count=0)
+
+        with self.assertRaises(ValidationError):
+            requirement.full_clean()
+
+    def test_count_of_one_saves_normally(self):
+        """A count of exactly one, the floor, saves without error."""
+        requirement = SongRoleRequirementFactory(song=SongFactory(), role=RoleFactory(), count=1)
+
+        reloaded = SongRoleRequirement.objects.get(pk=requirement.pk)
+        self.assertEqual(reloaded.count, 1)
 
 
 class SongRoleRequirementFieldTests(TestCase):

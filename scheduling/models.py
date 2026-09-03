@@ -133,11 +133,15 @@ class SongRoleRequirement(models.Model):
 
     song = models.ForeignKey(Song, on_delete=models.CASCADE)
     role = models.ForeignKey(Role, on_delete=models.CASCADE)
-    count = models.PositiveIntegerField()
+    count = models.PositiveIntegerField(validators=[MinValueValidator(1)])
 
     class Meta:
         constraints: ClassVar[list[models.BaseConstraint]] = [
             models.UniqueConstraint(fields=['song', 'role'], name='unique_role_requirement_per_song'),
+            models.CheckConstraint(
+                condition=models.Q(count__gte=1),
+                name='role_requirement_count_at_least_one',
+            ),
         ]
 
     def __str__(self):
@@ -552,7 +556,24 @@ class Conflict(models.Model):
     lock. A (person, rehearsal) pair with no Conflict row means implicit
     full availability; that's the absence of a row, not an explicit status
     value, so it stays distinguishable from a future "confirmed available"
-    status without conflating the two.
+    state without conflating the two — `status` is the *admin's verdict* on
+    a declaration that exists, never the member's own availability.
+
+    `status` and the optional admin-authored `adjudication_note` record
+    that verdict and nothing more (issue #189). There is deliberately no
+    provenance — no adjudicator, no timestamp, no prior-verdict history —
+    so a re-decided Conflict keeps only its latest verdict and reads
+    exactly like one never adjudicated. `declare_conflict()` resets both
+    fields on every member edit, so a verdict can never outlive the
+    declaration it was passed on.
+
+    The verdict governs the owner's own row on their schedule and
+    membership of the joint feasibility set, and nothing else. It must not
+    reach `attendance_for()`, `attendance_suggestion_for()`,
+    `next_attended_rehearsal_for()`, `breaks_for()` or `performers_for()`:
+    those answer "are you needed", which is an assignment question. An
+    approved absence un-assigns nobody, a rejected one constrains nothing,
+    and a pending one is not a silent approval.
     """
 
     FULL_CONFLICT = 'full_conflict'
@@ -562,10 +583,21 @@ class Conflict(models.Model):
         (PARTIAL, 'Partial'),
     )
 
+    PENDING = 'pending'
+    APPROVED = 'approved'
+    REJECTED = 'rejected'
+    STATUS_CHOICES = (
+        (PENDING, 'Pending'),
+        (APPROVED, 'Approved'),
+        (REJECTED, 'Rejected'),
+    )
+
     person = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     rehearsal = models.ForeignKey(Rehearsal, on_delete=models.CASCADE)
     type = models.CharField(max_length=20, choices=TYPE_CHOICES)
     reason = models.CharField(max_length=255, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=PENDING)
+    adjudication_note = models.CharField(max_length=255, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

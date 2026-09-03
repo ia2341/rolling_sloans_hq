@@ -908,6 +908,18 @@ def future_rehearsals_for(semester) -> list[Rehearsal]:
     )
 
 
+_CLEARED_ADJUDICATION = {'status': Conflict.PENDING, 'adjudication_note': ''}
+"""The undecided verdict every declaration is written with (issue #189).
+
+Applied on create *and* on edit, so an admin's approval never appears to
+bless a window the member has since moved, and a note reasoning about a
+declaration that no longer says that never survives to be read. It lives
+in `declare_conflict()` rather than in a view because that service is
+already the only mapping from a declaration to Conflict/ConflictWindow
+rows, so every caller gets the reset without opting in.
+"""
+
+
 def declare_conflict(person, rehearsal, declaration_type, declared_time=None, reason='', allow_edit=True) -> Conflict:
     """Create or edit-in-place `person`'s Conflict for `rehearsal` from an inline declaration (issues #98, #99).
 
@@ -931,6 +943,9 @@ def declare_conflict(person, rehearsal, declaration_type, declared_time=None, re
 
     A Dress Rehearsal is rejected outright before any DB write: attendance
     there is mandatory (ADR-0006).
+
+    Every write path here also resets the row's adjudication to pending
+    with an empty note (issue #189) — see _CLEARED_ADJUDICATION.
     """
     if rehearsal.is_full_setlist:
         raise ValueError(
@@ -940,11 +955,13 @@ def declare_conflict(person, rehearsal, declaration_type, declared_time=None, re
     with transaction.atomic():
         if declaration_type == CONFLICT_FULL_ABSENCE:
             conflict, created = Conflict.objects.update_or_create(
-                person=person, rehearsal=rehearsal, defaults={'type': Conflict.FULL_CONFLICT, 'reason': reason},
+                person=person, rehearsal=rehearsal,
+                defaults={'type': Conflict.FULL_CONFLICT, 'reason': reason, **_CLEARED_ADJUDICATION},
             )
         elif declaration_type in (CONFLICT_LATE_ARRIVAL, CONFLICT_EARLY_DEPARTURE):
             conflict, created = Conflict.objects.update_or_create(
-                person=person, rehearsal=rehearsal, defaults={'type': Conflict.PARTIAL, 'reason': reason},
+                person=person, rehearsal=rehearsal,
+                defaults={'type': Conflict.PARTIAL, 'reason': reason, **_CLEARED_ADJUDICATION},
             )
             conflict.conflictwindow_set.all().delete()
             if declaration_type == CONFLICT_LATE_ARRIVAL:
@@ -1125,3 +1142,124 @@ def conflict_history_for(semester, person) -> list[ConflictHistoryRow]:
             is_future=conflict.rehearsal.date >= today,
         ))
     return rows
+
+
+class WrongViewingSemesterError(ValueError):
+    """Raised when a Roster edit Buffer's Semester id doesn't match the session-scoped viewing Semester (issue #226)."""
+
+
+class StaleRosterSemesterError(ValueError):
+    """Raised when a Roster edit Buffer's Semester changed since the Buffer was loaded (issue #226)."""
+
+
+class SelfRemovalError(ValueError):
+    """Raised when a Roster edit Buffer would remove the requesting admin's own Person (issue #226)."""
+
+
+@dataclass(frozen=True)
+class RosterEditEntry:
+    """One Person's target Roster state in a Buffer: the name to save and the Role set to declare (issue #226)."""
+
+    person: Person
+    name: str
+    role_ids: frozenset[int]
+
+
+@dataclass(frozen=True)
+class RosterEditBuffer:
+    """The whole diff `apply_roster_edits()` commits in one transaction (issue #226).
+
+    `semester_id` and `semester_updated_at` back the two staleness checks:
+    `semester_id` is cross-checked against the caller's session-scoped
+    viewing Semester (two open tabs editing different terms), and
+    `semester_updated_at` against the Semester row's current stamp (another
+    admin's save landed first). `entries` carries every Person the Buffer
+    wants rostered afterward — existing or newly added — with the name and
+    Role set to save; `removed_person_ids` names every Person to purge from
+    the Roster. A Person id appearing in neither is left untouched.
+    """
+
+    semester_id: int
+    semester_updated_at: datetime
+    entries: list[RosterEditEntry]
+    removed_person_ids: frozenset[int]
+
+
+def apply_roster_edits(buffer: RosterEditBuffer, *, viewing_semester: Semester, requesting_admin: Person) -> None:
+    """Apply a whole Roster Pending Buffer — adds, removals, Role sets and name edits — in one transaction (issue #226).
+
+    The single write the Roster edit surface and its Preview both run
+    (ADR-0008, issue #185): a failure anywhere leaves nothing applied.
+    Takes no Semester row lock — nothing here renumbers positions, and the
+    Membership/MembershipRole uniqueness constraints plus get-or-create
+    absorb the concurrent-admin case, the same reasoning the existing
+    `_membership_for_writing()` write helper documents.
+
+    Removing a Person is a Semester-scoped purge, not a bare Membership
+    delete: it also deletes that Semester's `SongRoleAssignment` rows and
+    `Conflict` rows for them, since both point at `Person` rather than at
+    `Membership` and would otherwise survive un-rostered. A prior Semester's
+    rows for the same Person are untouched. Role-set changes go through
+    ordinary `MembershipRole` creates/deletes so the model's own
+    `post_save`/`post_delete` signals re-evaluate `is_role_mismatch` on
+    every affected `SongRoleAssignment`/`Backup` — this function never
+    recomputes that flag by hand.
+
+    Raises `WrongViewingSemesterError` if `buffer.semester_id` doesn't match
+    `viewing_semester`, or `SelfRemovalError` if the Buffer would remove
+    `requesting_admin`'s own Person — both checked, and both writing
+    nothing, before any transaction opens. Raises `StaleRosterSemesterError`
+    inside the transaction if the Semester's `updated_at` no longer matches
+    `buffer.semester_updated_at`, rolling back whatever this call had
+    already applied. Makes no external call (no mail, no object storage),
+    so nothing here needs `transaction.on_commit()`.
+    """
+    if viewing_semester is None or buffer.semester_id != viewing_semester.pk:
+        raise WrongViewingSemesterError(
+            "This Roster edit Buffer's Semester doesn't match the Semester you're currently viewing."
+        )
+    if requesting_admin.pk in buffer.removed_person_ids:
+        raise SelfRemovalError('An admin cannot remove their own Person from the Roster.')
+
+    with transaction.atomic():
+        semester = Semester.objects.get(pk=buffer.semester_id)
+        if semester.updated_at != buffer.semester_updated_at:
+            raise StaleRosterSemesterError('The Roster changed while you were editing — reload and reapply.')
+
+        for person_id in buffer.removed_person_ids:
+            _purge_person_from_semester(person_id, semester)
+        for entry in buffer.entries:
+            _apply_roster_edit_entry(entry, semester)
+
+        semester.updated_at = timezone.now()
+        semester.save(update_fields=['updated_at'])
+
+
+def _purge_person_from_semester(person_id: int, semester: Semester) -> None:
+    """Delete `person_id`'s Role Assignments and Conflicts scoped to `semester`, then their Membership.
+
+    The Membership delete cascades onto its MembershipRoles (FK
+    `on_delete=CASCADE`), the same mechanism `delete_semester()` relies on
+    — declared Roles have no existence independent of their Membership, so
+    there is nothing here that needs deleting explicitly.
+    """
+    SongRoleAssignment.objects.filter(person_id=person_id, song__semester=semester).delete()
+    Conflict.objects.filter(person_id=person_id, rehearsal__semester=semester).delete()
+    Membership.objects.filter(person_id=person_id, semester=semester).delete()
+
+
+def _apply_roster_edit_entry(entry: RosterEditEntry, semester: Semester) -> None:
+    """Save `entry.name` onto its Person, then get-or-create their Membership and reconcile its declared Roles."""
+    if entry.person.name != entry.name:
+        entry.person.name = entry.name
+        entry.person.save(update_fields=['name'])
+    membership, _ = Membership.objects.get_or_create(person=entry.person, semester=semester)
+    current_role_ids = frozenset(
+        MembershipRole.objects.filter(membership=membership).values_list('role_id', flat=True)
+    )
+    for role_id in entry.role_ids - current_role_ids:
+        MembershipRole.objects.create(membership=membership, role_id=role_id)
+    if current_role_ids - entry.role_ids:
+        MembershipRole.objects.filter(
+            membership=membership, role_id__in=current_role_ids - entry.role_ids,
+        ).delete()
