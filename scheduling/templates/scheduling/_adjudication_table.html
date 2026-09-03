@@ -1,0 +1,82 @@
+<div id="adjudication-preview">
+  {% if formset_errors %}
+    <div class="rs-fallout-blocked" role="alert" id="adjudication-preview-validation-error">
+      <p>This edit couldn't be validated:</p>
+      <ul>
+        {% for error in formset_errors %}<li>{{ error }}</li>{% endfor %}
+      </ul>
+    </div>
+  {% elif fallout.is_blocked %}
+    <div class="rs-fallout-blocked" role="alert" id="adjudication-preview-validation-error">
+      <p>{{ fallout.block_message }}</p>
+    </div>
+  {% elif fallout.is_stale %}
+    <div class="rs-fallout-stale" role="alert" id="adjudication-preview-stale-banner">
+      <p>The schedule changed while you were deciding — this Preview may not reflect the latest state. You can still Save; it will be checked again.</p>
+    </div>
+  {% endif %}
+
+  {% if triples %}
+    <table id="adjudication-table">
+      <thead>
+        <tr>
+          <th>Person</th>
+          <th>Declaration</th>
+          <th>Declared time</th>
+          <th>Reason</th>
+          <th>Verdict</th>
+          <th>Note</th>
+          <th>Feasibility</th>
+          <th>Advisory</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row, form, feasibility in triples %}
+          <tr data-testid="adjudication-row" data-conflict-id="{{ row.conflict.pk }}">
+            <td>{{ row.person.name }}</td>
+            <td>{{ row.type_label }}</td>
+            <td>{% if row.declared_time %}{{ row.declared_time }}{% else %}&mdash;{% endif %}</td>
+            <td>{{ row.reason }}</td>
+            <td>
+              {{ form.conflict_id }}
+              {{ form.status }}
+              {% for error in form.status.errors %}<p class="errors">{{ error }}</p>{% endfor %}
+            </td>
+            <td>
+              {{ form.note }}
+              {% for error in form.note.errors %}<p class="errors">{{ error }}</p>{% endfor %}
+            </td>
+            <td data-testid="feasibility-verdict">
+              {% if not feasibility.checked %}Not checked
+              {% elif feasibility.verdict == 'not_applicable' %}Not applicable
+              {% elif feasibility.verdict == 'infeasible' %}Infeasible
+              {% elif feasibility.verdict == 'feasible' %}Feasible
+              {% endif %}
+            </td>
+            <td data-testid="standing-overlap-advisory">
+              {% if feasibility.has_standing_overlap %}Still assigned during this window, with no Backup{% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+
+  {% if fallout.loud %}
+    <div class="rs-fallout-loud" role="alert" id="adjudication-fallout-loud">
+      <h3>This will:</h3>
+      <ul>
+        {% for line in fallout.loud %}<li>{{ line }}</li>{% endfor %}
+      </ul>
+    </div>
+  {% endif %}
+
+  {% if fallout.quiet %}
+    <div class="rs-fallout-quiet" id="adjudication-fallout-quiet">
+      <h3>Worth noting</h3>
+      <ul>
+        {% for line in fallout.quiet %}<li>{{ line }}</li>{% endfor %}
+      </ul>
+    </div>
+  {% endif %}
+</div>
