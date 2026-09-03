@@ -12,12 +12,13 @@ from scheduling.factories import (
     MembershipFactory,
     MembershipRoleFactory,
     RehearsalFactory,
+    RehearsalSongFactory,
     RoleFactory,
     SemesterFactory,
     SongFactory,
     SongRoleAssignmentFactory,
 )
-from scheduling.models import Rehearsal, SongRoleAssignment
+from scheduling.models import Rehearsal, RehearsalSong, SongRoleAssignment
 
 fake = Faker()
 PASSWORD = 'a-strong-test-password-123'
@@ -208,6 +209,56 @@ class RehearsalManageViewTests(TestCase):
         response = self.client.get(reverse('scheduling:manage-schedule-edit', args=[stale_rehearsal.pk]))
 
         self.assertEqual(response.status_code, 404)
+
+    def test_edit_post_moving_the_window_re_derives_scheduled_song_times(self):
+        """Moving a Rehearsal's start_time leaves no RehearsalSong claiming the old hours (issue #215)."""
+        rehearsal = RehearsalFactory(semester=self.semester, start_time=time(18, 0), is_full_setlist=False)
+        first_song = SongFactory(semester=self.semester, position=1)
+        second_song = SongFactory(semester=self.semester, position=2)
+        first = RehearsalSongFactory(rehearsal=rehearsal, song=first_song, order=1, slot_count=1)
+        second = RehearsalSongFactory(rehearsal=rehearsal, song=second_song, order=2, slot_count=1)
+        stale_start, stale_end = first.start_time, first.end_time
+
+        self.client.post(
+            reverse('scheduling:manage-schedule-edit', args=[rehearsal.pk]),
+            {
+                'date': rehearsal.date, 'start_time': time(19, 0), 'end_time': rehearsal.end_time,
+                'setup_grace_minutes': rehearsal.setup_grace_minutes,
+                'teardown_grace_minutes': rehearsal.teardown_grace_minutes,
+                'is_full_setlist': False,
+            },
+        )
+
+        first.refresh_from_db()
+        second.refresh_from_db()
+        self.assertEqual(first.start_time, time(19, 0))
+        self.assertNotEqual(first.start_time, stale_start)
+        self.assertNotEqual(first.end_time, stale_end)
+        self.assertEqual(first.order, 1)
+        self.assertEqual(second.order, 2)
+
+    def test_edit_post_moving_the_window_leaves_order_untouched(self):
+        """Re-deriving RehearsalSong times on a window move never changes their order values (issue #215)."""
+        rehearsal = RehearsalFactory(semester=self.semester, start_time=time(18, 0), is_full_setlist=False)
+        songs = [
+            RehearsalSongFactory(rehearsal=rehearsal, song=SongFactory(semester=self.semester, position=n), order=n)
+            for n in range(1, 4)
+        ]
+
+        self.client.post(
+            reverse('scheduling:manage-schedule-edit', args=[rehearsal.pk]),
+            {
+                'date': rehearsal.date, 'start_time': time(19, 0), 'end_time': rehearsal.end_time,
+                'setup_grace_minutes': rehearsal.setup_grace_minutes,
+                'teardown_grace_minutes': rehearsal.teardown_grace_minutes,
+                'is_full_setlist': False,
+            },
+        )
+
+        orders = list(
+            RehearsalSong.objects.filter(rehearsal=rehearsal).order_by('order').values_list('order', flat=True)
+        )
+        self.assertEqual(orders, [song.order for song in songs])
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)

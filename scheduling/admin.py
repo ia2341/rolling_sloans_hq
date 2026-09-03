@@ -7,9 +7,12 @@ from .models import (
     Membership,
     MembershipRole,
     Rehearsal,
+    RehearsalPattern,
     RehearsalSong,
+    RehearsalTime,
     Role,
     Semester,
+    SkipDate,
     Song,
     SongRoleAssignment,
     SongRoleRequirement,
@@ -30,6 +33,7 @@ class SemesterAdmin(admin.ModelAdmin):
         'default_song_slot_count',
         'default_arrival_buffer_minutes',
         'default_departure_buffer_minutes',
+        'default_dress_rehearsal_count',
     )
     search_fields = ('name',)
     readonly_fields = ('created_at',)
@@ -107,6 +111,45 @@ class SongRoleAssignmentAdmin(admin.ModelAdmin):
     list_filter = ('is_role_mismatch', 'role')
     search_fields = ('person__name', 'person__email', 'song__title')
     readonly_fields = ('is_role_mismatch',)
+
+
+class RehearsalTimeInline(admin.TabularInline):
+    """Edit a Rehearsal Pattern's recurring day/times inline on the Pattern admin page (issue #214)."""
+
+    model = RehearsalTime
+    extra = 1
+
+
+class SkipDateInline(admin.TabularInline):
+    """Edit a Rehearsal Pattern's Skip Dates inline on the Pattern admin page (issue #214)."""
+
+    model = SkipDate
+    extra = 1
+
+
+@admin.register(RehearsalPattern)
+class RehearsalPatternAdmin(admin.ModelAdmin):
+    """Admin for a Semester's persisted rehearsal-week shape, with Rehearsal Times and Skip Dates inline (issue #214)."""
+
+    list_display = ('semester', 'start_date', 'end_date')
+    list_filter = ('semester',)
+    inlines = (RehearsalTimeInline, SkipDateInline)
+
+
+@admin.register(RehearsalTime)
+class RehearsalTimeAdmin(admin.ModelAdmin):
+    """Admin for a single recurring day/time within a Rehearsal Pattern, for direct lookup/filtering (issue #214)."""
+
+    list_display = ('pattern', 'day_of_week', 'start_time', 'end_time')
+    list_filter = ('day_of_week', 'pattern__semester')
+
+
+@admin.register(SkipDate)
+class SkipDateAdmin(admin.ModelAdmin):
+    """Admin for a single Skip Date within a Rehearsal Pattern, for direct lookup/filtering (issue #214)."""
+
+    list_display = ('pattern', 'start_date', 'end_date')
+    list_filter = ('pattern__semester',)
 
 
 class RehearsalSongInline(admin.TabularInline):

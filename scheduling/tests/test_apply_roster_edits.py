@@ -1,5 +1,7 @@
 """apply_roster_edits(): the batch write, the semester-scoped purge, and the two staleness checks (issue #226)."""
 
+from datetime import date
+
 from django.test import TestCase
 
 from identity.factories import PersonFactory
@@ -110,8 +112,8 @@ class ApplyRosterEditsTests(TestCase):
         song_b = SongFactory(semester=self.semester)
         SongRoleAssignmentFactory(song=song_a, person=person)
         SongRoleAssignmentFactory(song=song_b, person=person)
-        rehearsal_a = RehearsalFactory(semester=self.semester)
-        rehearsal_b = RehearsalFactory(semester=self.semester)
+        rehearsal_a = RehearsalFactory(semester=self.semester, date=date(2026, 9, 16))
+        rehearsal_b = RehearsalFactory(semester=self.semester, date=date(2026, 9, 23))
         ConflictFactory(person=person, rehearsal=rehearsal_a)
         ConflictFactory(person=person, rehearsal=rehearsal_b)
         buffer = self._buffer(removed_person_ids=[person.pk])

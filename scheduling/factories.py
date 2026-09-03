@@ -14,9 +14,12 @@ from scheduling.models import (
     MembershipRole,
     Recording,
     Rehearsal,
+    RehearsalPattern,
     RehearsalSong,
+    RehearsalTime,
     Role,
     Semester,
+    SkipDate,
     Song,
     SongRoleAssignment,
     SongRoleRequirement,
@@ -151,6 +154,40 @@ class RehearsalFactory(factory.django.DjangoModelFactory):
     arrival_buffer_minutes = None
     departure_buffer_minutes = None
     is_full_setlist = False
+
+
+class RehearsalPatternFactory(factory.django.DjangoModelFactory):
+    """Builds a Semester's Rehearsal Pattern, with a fresh Semester and a ~90-day generation range by default."""
+
+    class Meta:
+        model = RehearsalPattern
+
+    semester = factory.SubFactory(SemesterFactory)
+    start_date = factory.LazyFunction(lambda: fake.date_between(start_date='+1d', end_date='+14d'))
+    end_date = factory.LazyAttribute(lambda o: o.start_date + timedelta(days=90))
+
+
+class RehearsalTimeFactory(factory.django.DjangoModelFactory):
+    """Builds a recurring day/time within a Rehearsal Pattern, defaulting to Wednesdays 7-11pm."""
+
+    class Meta:
+        model = RehearsalTime
+
+    pattern = factory.SubFactory(RehearsalPatternFactory)
+    day_of_week = RehearsalTime.WEDNESDAY
+    start_time = time(19, 0)
+    end_time = time(23, 0)
+
+
+class SkipDateFactory(factory.django.DjangoModelFactory):
+    """Builds a Skip Date within a Rehearsal Pattern, defaulting to a single date (end_date left blank)."""
+
+    class Meta:
+        model = SkipDate
+
+    pattern = factory.SubFactory(RehearsalPatternFactory)
+    start_date = factory.LazyFunction(lambda: fake.date_between(start_date='+1d', end_date='+30d'))
+    end_date = None
 
 
 class RehearsalSongFactory(factory.django.DjangoModelFactory):

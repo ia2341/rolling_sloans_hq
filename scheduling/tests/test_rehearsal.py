@@ -1,8 +1,9 @@
 """Rehearsal: dated/timed events defaulted from their Semester's timing fields (issue #36)."""
 
-from datetime import time
+from datetime import date, time
 
 from django.core.exceptions import ValidationError
+from django.db import IntegrityError
 from django.test import TestCase
 
 from scheduling.factories import ConflictFactory, RehearsalFactory, SemesterFactory
@@ -262,3 +263,34 @@ class RehearsalFieldTests(TestCase):
         self.assertEqual(reloaded.arrival_buffer_minutes, 10)
         self.assertEqual(reloaded.departure_buffer_minutes, 10)
         self.assertTrue(reloaded.is_full_setlist)
+
+
+class RehearsalUniqueDatePerSemesterTests(TestCase):
+    """One Rehearsal per evening per Semester (issue #214): the constraint rehearsal generation depends on."""
+
+    def test_a_second_rehearsal_on_the_same_date_in_the_same_semester_raises(self):
+        """Saving a second Rehearsal on a date a Semester already has one raises IntegrityError."""
+        semester = SemesterFactory()
+        RehearsalFactory(semester=semester, date=date(2026, 9, 16))
+
+        with self.assertRaises(IntegrityError):
+            RehearsalFactory(semester=semester, date=date(2026, 9, 16))
+
+    def test_the_same_date_in_a_different_semester_is_allowed(self):
+        """The same calendar date is fine across two different Semesters."""
+        first_semester = SemesterFactory()
+        second_semester = SemesterFactory()
+
+        RehearsalFactory(semester=first_semester, date=date(2026, 9, 16))
+        RehearsalFactory(semester=second_semester, date=date(2026, 9, 16))
+
+        self.assertEqual(Rehearsal.objects.filter(date=date(2026, 9, 16)).count(), 2)
+
+    def test_a_different_date_in_the_same_semester_is_allowed(self):
+        """A Semester can hold several Rehearsals as long as each falls on its own date."""
+        semester = SemesterFactory()
+
+        RehearsalFactory(semester=semester, date=date(2026, 9, 16))
+        RehearsalFactory(semester=semester, date=date(2026, 9, 20))
+
+        self.assertEqual(Rehearsal.objects.filter(semester=semester).count(), 2)
