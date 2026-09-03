@@ -5,6 +5,7 @@ from typing import ClassVar
 from django import forms
 from django.db import transaction
 
+from scheduling.fields import SongLengthField
 from scheduling.models import (
     Membership,
     MembershipRole,
@@ -156,7 +157,13 @@ class SongForm(forms.ModelForm):
     `semester` on the instance before binding, and `position` is only ever
     changed through the dedicated reorder endpoints, never through this
     form.
+
+    `length` overrides the model field's default widget with
+    `SongLengthField`, which reads and renders `M:SS` — Django's default
+    would take `3:45` as three hours forty-five minutes (issue #177).
     """
+
+    length = SongLengthField(label='Length')
 
     class Meta:
         model = Song

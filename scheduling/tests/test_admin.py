@@ -5,8 +5,15 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from identity.factories import PersonFactory
-from scheduling.factories import RoleFactory, SemesterFactory
+from scheduling.factories import (
+    BackupFactory,
+    ConflictFactory,
+    RehearsalSongFactory,
+    RoleFactory,
+    SemesterFactory,
+)
 from scheduling.models import (
+    Backup,
     Conflict,
     ConflictWindow,
     Rehearsal,
@@ -130,3 +137,56 @@ class RehearsalAdminCreateTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn('end_time', response.context['adminform'].form.errors)
         self.assertFalse(Rehearsal.objects.filter(semester=semester).exists())
+
+
+class BackupAdminTests(TestCase):
+    def test_backup_is_registered_with_list_display_filters_search_and_readonly_fields(self):
+        """Backup is registered with the slot/Role/Person columns, filters, search and readonly fields (issue #176)."""
+        self.assertIn(Backup, admin.site._registry)
+        backup_admin = admin.site._registry[Backup]
+
+        self.assertIn('rehearsal_song', backup_admin.list_display)
+        self.assertIn('role', backup_admin.list_display)
+        self.assertIn('person', backup_admin.list_display)
+        self.assertIn('covering_for', backup_admin.list_display)
+        self.assertIn('is_role_mismatch', backup_admin.list_display)
+
+        self.assertIn('is_role_mismatch', backup_admin.list_filter)
+        self.assertIn('rehearsal_song__rehearsal__semester', backup_admin.list_filter)
+
+        self.assertIn('person__name', backup_admin.search_fields)
+        self.assertIn('person__email', backup_admin.search_fields)
+        self.assertIn('rehearsal_song__song__title', backup_admin.search_fields)
+
+        self.assertIn('is_role_mismatch', backup_admin.readonly_fields)
+
+    def test_stale_advisory_is_a_readonly_display_and_never_stored(self):
+        """The stale advisory renders as a readonly display and reflects Backup.is_stale() without persisting it."""
+        backup_admin = admin.site._registry[Backup]
+        self.assertIn('stale_advisory', backup_admin.readonly_fields)
+
+        rehearsal_song = RehearsalSongFactory()
+        covered_person = PersonFactory()
+        conflict = ConflictFactory(person=covered_person, rehearsal=rehearsal_song.rehearsal)
+        backup = BackupFactory(rehearsal_song=rehearsal_song, covering_for=covered_person)
+
+        self.assertFalse(backup_admin.stale_advisory(backup))
+
+        conflict.delete()
+
+        self.assertTrue(backup_admin.stale_advisory(backup))
+        self.assertFalse(hasattr(Backup, 'stale_advisory'))
+
+    @override_settings(SECURE_SSL_REDIRECT=False)
+    def test_backup_can_be_deleted_from_the_admin(self):
+        """Deleting a Backup via the real admin delete view succeeds, since the Role.is_active convention doesn't apply here."""
+        admin_person = PersonFactory(is_admin=True)
+        self.client.force_login(admin_person)
+        backup = BackupFactory()
+
+        response = self.client.post(
+            reverse('admin:scheduling_backup_delete', args=[backup.pk]), {'post': 'yes'},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(Backup.objects.filter(pk=backup.pk).exists())
