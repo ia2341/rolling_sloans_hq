@@ -484,7 +484,9 @@ class SetlistImportView(AdminRequiredMixin, View):
                 'title': imported_song.title,
                 'artist': imported_song.artist,
                 'length': imported_song.length,
-                'notes': imported_song.notes,
+                # Always blank, never `imported_song.notes` — notes have no Spotify
+                # equivalent, and the column must plainly read as the admin's (issue #184).
+                'notes': '',
             },
         )
         blank_formset.add_fields(form, None)

@@ -16,6 +16,7 @@ from scheduling.spotify import (
     SpotifyImportError,
     SpotifyImportUnavailable,
 )
+from scheduling.tests.test_setlist_reorder_add_delete import build_post_data
 
 PASSWORD = 'a-strong-test-password-123'
 VALID_URL = 'https://open.spotify.com/playlist/37i9dQZF1E8KcRnHXtvNli'
@@ -114,10 +115,19 @@ class SetlistImportViewTests(TestCase):
         self.assertNotContains(response, 'song-0-title')
 
     @patch('scheduling.views.import_playlist')
-    def test_imported_rows_carry_blank_notes(self, mock_import):
-        """An imported row's notes field is always blank, distinguishing it from an admin-typed row."""
+    def test_imported_rows_carry_blank_notes_even_if_the_import_result_did_not(self, mock_import):
+        """An imported row's notes field renders blank, distinguishing it from an admin-typed row.
+
+        Deliberately feeds a non-blank `notes` on the `ImportedSong` (which
+        the service never actually produces) to prove the view itself
+        forces the field blank, rather than merely passing through
+        whatever happened to already be empty.
+        """
         mock_import.return_value = import_result(songs=[
-            ImportedSong(title='Track', artist='Artist', length=timedelta(minutes=2), position=1, notes='should stay blank on the model default'),
+            ImportedSong(
+                title='Track', artist='Artist', length=timedelta(minutes=2), position=1,
+                notes='should never reach the rendered field',
+            ),
         ])
         semester = SemesterFactory()
         admin_client(self)
@@ -128,7 +138,8 @@ class SetlistImportViewTests(TestCase):
             {'playlist_url': VALID_URL, 'next_index': '0'},
         )
 
-        self.assertContains(response, 'name="song-0-notes"')
+        self.assertContains(response, '<textarea name="song-0-notes" cols="40" rows="10" id="id_song-0-notes">\n</textarea>', html=True)
+        self.assertNotContains(response, 'should never reach the rendered field')
 
     @patch('scheduling.views.import_playlist')
     def test_a_successful_import_writes_no_songs(self, mock_import):
@@ -227,3 +238,46 @@ class SetlistImportViewTests(TestCase):
         self.assertContains(response, 'rate-limiting')
         self.assertEqual(Song.objects.count(), 1)
         self.assertEqual(Song.objects.get().title, 'Already Typed')
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class SetlistImportedRowsSaveTests(TestCase):
+    """Once appended, imported rows are ordinary buffer rows: Save Changes governs them exactly like a typed one."""
+
+    def test_saving_a_buffer_of_an_existing_song_plus_imported_rows_renumbers_contiguously(self):
+        """A pre-existing Song plus two never-before-saved imported-style rows save as a contiguous 1..3."""
+        semester = SemesterFactory()
+        existing = SongFactory(semester=semester, position=1, title='Already Typed')
+        admin_client(self)
+        data = build_post_data(semester, [
+            {'song': existing},
+            {'title': 'Synth Serenade', 'artist': 'Faux Static', 'length': '3:45'},
+            {'title': 'Borrowed Chorus', 'artist': 'Nomad Echo', 'length': '4:05'},
+        ])
+
+        response = self.client.post(reverse('scheduling:setlist-edit'), data)
+
+        self.assertRedirects(response, reverse('scheduling:setlist'))
+        songs = list(Song.objects.filter(semester=semester).order_by('position'))
+        self.assertEqual([song.position for song in songs], [1, 2, 3])
+        self.assertEqual([song.title for song in songs], ['Already Typed', 'Synth Serenade', 'Borrowed Chorus'])
+
+    def test_importing_into_a_non_empty_setlist_appends_and_never_replaces_existing_rows(self):
+        """Existing rows and their positions survive a save that also carries newly-imported rows."""
+        semester = SemesterFactory()
+        first = SongFactory(semester=semester, position=1, title='First')
+        second = SongFactory(semester=semester, position=2, title='Second')
+        admin_client(self)
+        data = build_post_data(semester, [
+            {'song': first},
+            {'song': second},
+            {'title': 'Imported Track', 'artist': 'Imported Artist', 'length': '2:30'},
+        ])
+
+        self.client.post(reverse('scheduling:setlist-edit'), data)
+
+        first.refresh_from_db()
+        second.refresh_from_db()
+        self.assertEqual(first.position, 1)
+        self.assertEqual(second.position, 2)
+        self.assertEqual(Song.objects.get(title='Imported Track').position, 3)
