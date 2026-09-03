@@ -92,7 +92,7 @@
         </template>
     {% endif %}
 
-      <table id="assignment-matrix">
+      <table id="assignment-matrix" class="rs-stack-table">
         <thead>
           <tr>
             <th>Song</th>
@@ -105,10 +105,10 @@
         <tbody>
           {% for row in matrix.rows %}
             <tr data-song-id="{{ row.song.pk }}" data-mine="{% if row.song.pk in my_song_ids %}true{% else %}false{% endif %}">
-              <td>{{ row.song.title }}</td>
-              <td>{% if row.start_time %}{{ row.start_time }}{% else %}&mdash;{% endif %}</td>
+              <td data-label="Song">{{ row.song.title }}</td>
+              <td data-label="Start Time">{% if row.start_time %}{{ row.start_time }}{% else %}&mdash;{% endif %}</td>
               {% for cell in row.cells %}
-                <td>
+                <td data-label="{{ cell.role.name }}">
                   {% for entry in cell.entries %}
                     {% include "scheduling/_assignment_chip.html" %}{% if not forloop.last %} {% endif %}
                   {% empty %}
