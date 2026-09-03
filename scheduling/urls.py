@@ -43,4 +43,9 @@ urlpatterns = [
         'manage/assignments/<int:pk>/delete/',
         views.SongRoleAssignmentDeleteView.as_view(), name='manage-assignments-delete',
     ),
+    path('manage/conflicts/', views.ConflictAdjudicationIndexView.as_view(), name='manage-conflicts'),
+    path(
+        'manage/conflicts/<int:rehearsal_id>/',
+        views.ConflictAdjudicationDetailView.as_view(), name='manage-conflicts-detail',
+    ),
 ]
