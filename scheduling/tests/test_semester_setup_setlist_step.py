@@ -10,7 +10,7 @@ from identity.factories import PersonFactory
 from scheduling.factories import SemesterFactory, SongFactory
 from scheduling.models import Song
 from scheduling.services import VIEWING_SEMESTER_SESSION_KEY
-from scheduling.spotify import ImportedSong, PlaylistImportResult
+from scheduling.spotify import ImportedSong, PlaylistImportResult, SpotifyImportError
 from scheduling.tests.test_setlist_reorder_add_delete import build_post_data
 
 PASSWORD = 'a-strong-test-password-123'
@@ -124,6 +124,61 @@ class SetlistStepImportAndSaveTests(TestCase):
         self.assertContains(response, 'Synth Wave')
         self.assertContains(response, 'Fictional Artist')
         self.assertEqual(Song.objects.count(), 0)
+
+    def test_a_malformed_link_is_rejected_before_any_network_call(self):
+        """A malformed link surfaces a readable error and never reaches `import_playlist()`, even from this step."""
+        semester = SemesterFactory(draft=True)
+        admin_client(self)
+        self.client.get(reverse('scheduling:manage-semester-setup-setlist', args=[semester.pk]))
+
+        with patch('scheduling.views.import_playlist') as mock_import:
+            response = self.client.post(reverse('scheduling:setlist-edit-import'), {
+                'playlist_url': 'not-a-spotify-link',
+                'next_index': '0',
+            })
+
+        mock_import.assert_not_called()
+        self.assertContains(response, 'id="setlist-import-error"')
+        self.assertEqual(Song.objects.count(), 0)
+
+    def test_a_private_or_missing_playlist_names_the_likely_cause_and_writes_nothing(self):
+        """A private/deleted/nonexistent playlist renders `import_playlist()`'s readable message and writes no Songs."""
+        semester = SemesterFactory(draft=True)
+        admin_client(self)
+        self.client.get(reverse('scheduling:manage-semester-setup-setlist', args=[semester.pk]))
+
+        with patch('scheduling.views.import_playlist', side_effect=SpotifyImportError('playlist not found')):
+            response = self.client.post(reverse('scheduling:setlist-edit-import'), {
+                'playlist_url': 'https://open.spotify.com/playlist/37i9dQZF1E8KcRnHXtvNli',
+                'next_index': '0',
+            })
+
+        self.assertContains(response, 'playlist not found')
+        self.assertEqual(Song.objects.count(), 0)
+
+    def test_skipped_items_are_reported_with_a_count_and_reason(self):
+        """A partial import reports the skip count and reasons alongside the imported rows."""
+        semester = SemesterFactory(draft=True)
+        admin_client(self)
+        self.client.get(reverse('scheduling:manage-semester-setup-setlist', args=[semester.pk]))
+        result = PlaylistImportResult(
+            songs=[ImportedSong(
+                title='Synth Wave', artist='Fictional Artist',
+                length=timedelta(minutes=3, seconds=30), position=1,
+            )],
+            skipped_count=3,
+            skipped_reasons={'local file': 2, 'podcast episode': 1},
+        )
+
+        with patch('scheduling.views.import_playlist', return_value=result):
+            response = self.client.post(reverse('scheduling:setlist-edit-import'), {
+                'playlist_url': 'https://open.spotify.com/playlist/37i9dQZF1E8KcRnHXtvNli',
+                'next_index': '0',
+            })
+
+        self.assertContains(response, 'Skipped 3 items')
+        self.assertContains(response, '2 local file')
+        self.assertContains(response, '1 podcast episode')
 
     def test_saving_the_grid_writes_songs_for_this_draft_and_redirects_to_the_setlist_tab(self):
         """Saving the wizard step's grid uses the real `setlist-edit` save path — no second implementation."""
