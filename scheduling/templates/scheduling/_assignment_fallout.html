@@ -1,0 +1,32 @@
+<div id="assignment-fallout">
+  {% if fallout.is_blocked %}
+    <div class="rs-fallout-blocked" role="alert" id="assignment-fallout-validation-error">
+      <p>This edit couldn't be validated:</p>
+      <p>{{ fallout.block_message }}</p>
+    </div>
+  {% else %}
+    {% if fallout.is_stale %}
+      <div class="rs-fallout-stale" role="alert" id="assignment-fallout-stale-banner">
+        <p>The assignments changed while you were editing — this Preview may not reflect the latest state. You can still Save; it will be checked again.</p>
+      </div>
+    {% endif %}
+
+    {% if fallout.loud %}
+      <div class="rs-fallout-loud" role="alert" id="assignment-fallout-loud">
+        <h3>This will:</h3>
+        <ul>
+          {% for line in fallout.loud %}<li>{{ line }}</li>{% endfor %}
+        </ul>
+      </div>
+    {% endif %}
+
+    {% if fallout.quiet %}
+      <div class="rs-fallout-quiet" id="assignment-fallout-quiet">
+        <h3>Worth noting</h3>
+        <ul>
+          {% for line in fallout.quiet %}<li>{{ line }}</li>{% endfor %}
+        </ul>
+      </div>
+    {% endif %}
+  {% endif %}
+</div>
