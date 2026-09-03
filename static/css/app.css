@@ -113,6 +113,33 @@ body > nav [aria-current='page'] {
   color: var(--rs-danger-color);
 }
 
+/* The Roster Preview's Fallout regions (issue #228, ADR 0008): a Validation Error and the two
+   Fallout tiers are deliberately separate boxes, never blended into one "warnings" list, so an
+   admin can't learn to treat a blocking error as skippable the way loud/quiet Fallout is. */
+.rs-fallout-blocked,
+.rs-fallout-stale,
+.rs-fallout-loud,
+.rs-fallout-quiet,
+.rs-fallout-pending {
+  margin-block: var(--rs-space-sm);
+  padding: var(--rs-space-sm) var(--rs-gutter);
+  border-radius: var(--pico-border-radius);
+}
+
+.rs-fallout-blocked,
+.rs-fallout-loud {
+  border: 1px solid var(--rs-danger-color);
+}
+
+.rs-fallout-stale {
+  border: 1px solid var(--rs-warning-border-color);
+}
+
+.rs-fallout-quiet,
+.rs-fallout-pending {
+  border: 1px solid var(--rs-border-color);
+}
+
 /* The setlist edit grid's per-row notes expander (issue #178): a chevron in
    the row reveals a full-width textarea beneath it, rather than a textarea
    cramped into one narrow cell. No JS: the sibling row's visibility tracks

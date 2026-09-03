@@ -4,6 +4,7 @@ from typing import ClassVar
 
 from django import forms
 from django.db import transaction
+from django.urls import reverse_lazy
 
 from scheduling.fields import SongLengthField
 from scheduling.models import (
@@ -224,14 +225,30 @@ class RosterEditRowForm(forms.Form):
     `SelfRemovalError` as the backstop against a hand-crafted POST.
     """
 
+    # `PREVIEW_TRIGGER_ATTRS` is applied to both `roles` and `remove`'s widgets: htmx POSTs the whole
+    # form to the Roster Preview endpoint on change, syncing against any in-flight request from another
+    # row's toggle so a fast sequence discards a superseded response rather than applying it late
+    # (issue #228). `name` deliberately carries none of this — typing must never trigger a Preview.
+    PREVIEW_TRIGGER_ATTRS: ClassVar[dict] = {
+        'hx-post': reverse_lazy('scheduling:members-preview'),
+        'hx-trigger': 'change',
+        'hx-target': '#roster-fallout',
+        'hx-swap': 'outerHTML',
+        'hx-sync': 'closest form:replace',
+        'hx-include': 'closest form',
+    }
+
     person_id = forms.IntegerField(widget=forms.HiddenInput)
     name = forms.CharField(max_length=255)
     roles = forms.ModelMultipleChoiceField(
         queryset=Role.objects.filter(is_active=True),
         required=False,
-        widget=forms.CheckboxSelectMultiple,
+        widget=forms.CheckboxSelectMultiple(attrs=PREVIEW_TRIGGER_ATTRS),
     )
-    remove = forms.BooleanField(required=False)
+    remove = forms.BooleanField(
+        required=False,
+        widget=forms.CheckboxInput(attrs={**PREVIEW_TRIGGER_ATTRS, 'class': 'roster-remove-checkbox'}),
+    )
 
 
 # The Roster edit table's buffer: one `RosterEditRowForm` per existing Membership, with no add-row this
