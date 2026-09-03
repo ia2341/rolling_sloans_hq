@@ -248,7 +248,6 @@ class BannerTests(TestCase):
         'scheduling:schedule',
         'scheduling:setlist',
         'scheduling:members',
-        'scheduling:conflicts',
     )
 
     def test_the_banner_renders_on_every_page_while_a_draft_is_selected(self):

@@ -16,7 +16,6 @@
 <nav>
   <a href="{% url 'scheduling:overview' %}"{% if request.resolver_match.view_name == 'scheduling:overview' %} aria-current="page"{% endif %}>Overview</a>
   <a href="{% url 'scheduling:schedule' %}"{% if request.resolver_match.view_name == 'scheduling:schedule' %} aria-current="page"{% endif %}>My Schedule</a>
-  <a href="{% url 'scheduling:conflicts' %}"{% if request.resolver_match.view_name == 'scheduling:conflicts' %} aria-current="page"{% endif %}>Conflicts</a>
   <a href="{% url 'scheduling:setlist' %}"{% if request.resolver_match.view_name == 'scheduling:setlist' %} aria-current="page"{% endif %}>Songs</a>
   <a href="{% url 'scheduling:members' %}"{% if request.resolver_match.view_name == 'scheduling:members' %} aria-current="page"{% endif %}>Band Members</a>
   {# Profile is your own /members/<pk>/ page (issue #139); a teammate's page shares the route but is not this tab. #}
