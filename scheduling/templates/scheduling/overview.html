@@ -6,6 +6,10 @@
 
 {% include "scheduling/_semester_panel.html" %}
 
+{% if request.user.is_admin %}
+<p><a href="{% url 'scheduling:manage-conflicts' %}">Manage conflicts</a></p>
+{% endif %}
+
 {% if not semester %}
 <p>There is no active semester yet.</p>
 {% endif %}
