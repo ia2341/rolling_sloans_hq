@@ -56,6 +56,7 @@ from scheduling.services import (
     attendance_suggestion_for,
     breaks_for,
     confirm_recording_upload,
+    conflict_adjudication_index_for,
     conflict_rows_by_rehearsal,
     create_recording_playback_url,
     declare_conflict,
@@ -1387,3 +1388,42 @@ class SemesterDeleteView(AdminRequiredMixin, View):
             return HttpResponseBadRequest(str(error))
         messages.success(request, f'{semester} deleted.')
         return redirect('scheduling:manage-semesters')
+
+
+class ConflictAdjudicationIndexView(AdminRequiredMixin, TemplateView):
+    """`/manage/conflicts/`: an admin's starting point for adjudicating Conflicts (issue #191, ADR 0005).
+
+    Lists the viewing Semester's future, non-Dress Rehearsals — the same
+    "declarable" set `future_rehearsals_for()` computes — each carrying its
+    own pending-Conflict count so an admin can see where the work is
+    without opening every date. A Rehearsal with zero Conflicts still
+    appears: absence isn't how "nothing to do" gets communicated here.
+    """
+
+    template_name = 'scheduling/manage_conflicts.html'
+
+    def get_context_data(self, **kwargs):
+        """Add the viewing Semester and its adjudication-index rows."""
+        context = super().get_context_data(**kwargs)
+        semester = get_viewing_semester(self.request)
+        context['semester'] = semester
+        context['rows'] = conflict_adjudication_index_for(semester) if semester else []
+        return context
+
+
+class ConflictAdjudicationDetailView(AdminRequiredMixin, TemplateView):
+    """`/manage/conflicts/<rehearsal_id>/`: one Rehearsal's adjudication table (issue #191, table itself is issue #192).
+
+    Reachable from the index and from an unconditional link on
+    `/schedule/`; this ticket only establishes the route, its Semester
+    scoping and its admin gating. The table that decides each Conflict is
+    #192's.
+    """
+
+    template_name = 'scheduling/manage_conflicts_detail.html'
+
+    def get(self, request, rehearsal_id):
+        """Render the target Rehearsal, scoped to the viewing Semester (404 outside it)."""
+        semester = get_viewing_semester(request)
+        rehearsal = get_object_or_404(_scoped_to_viewing_semester(Rehearsal, semester), pk=rehearsal_id)
+        return render(request, self.template_name, {'semester': semester, 'rehearsal': rehearsal})
