@@ -9,6 +9,10 @@ urlpatterns = [
     path('schedule/', views.ScheduleView.as_view(), name='schedule'),
     path('schedule/<int:rehearsal_id>/conflict/', views.ConflictDeclareView.as_view(), name='conflict-declare'),
     path('schedule/<int:rehearsal_id>/conflict/delete/', views.ConflictDeleteView.as_view(), name='conflict-delete'),
+    path(
+        'schedule/<int:rehearsal_id>/assignments/save/',
+        views.AssignmentEditSaveView.as_view(), name='schedule-assignments-save',
+    ),
     path('setlist/', views.SetlistView.as_view(), name='setlist'),
     path('setlist/edit/', views.SetlistEditView.as_view(), name='setlist-edit'),
     path(

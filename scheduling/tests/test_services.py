@@ -24,6 +24,7 @@ from scheduling.factories import (
 from scheduling.models import Conflict, ConflictWindow
 from scheduling.services import (
     AssignmentMatrixEntryKind,
+    assignment_grid_is_editable,
     assignment_matrix_for,
     breaks_for,
     conflict_history_for,
@@ -467,6 +468,32 @@ class AssignmentMatrixForTests(TestCase):
 
         [cell] = matrix.rows[0].cells
         self.assertEqual(cell.entries, [])
+
+
+class AssignmentGridIsEditableTests(TestCase):
+    def test_future_rehearsal_is_editable(self):
+        """A Rehearsal dated after today offers edit mode."""
+        rehearsal = RehearsalFactory(is_full_setlist=False, date=timezone.localdate() + timedelta(days=1))
+
+        self.assertTrue(assignment_grid_is_editable(rehearsal))
+
+    def test_todays_rehearsal_is_editable(self):
+        """A Rehearsal dated today stays editable all day (whole days, not instants)."""
+        rehearsal = RehearsalFactory(is_full_setlist=False, date=timezone.localdate())
+
+        self.assertTrue(assignment_grid_is_editable(rehearsal))
+
+    def test_past_rehearsal_is_not_editable(self):
+        """A Rehearsal dated before today offers no edit mode — a usability rule, not a data-integrity one."""
+        rehearsal = RehearsalFactory(is_full_setlist=False, date=timezone.localdate() - timedelta(days=1))
+
+        self.assertFalse(assignment_grid_is_editable(rehearsal))
+
+    def test_dress_rehearsal_is_always_editable_even_when_dated_in_the_past(self):
+        """The Dress Rehearsal is the backstop: editable regardless of date, since it's the Semester's last-dated Rehearsal."""
+        rehearsal = RehearsalFactory(is_full_setlist=True, date=timezone.localdate() - timedelta(days=30))
+
+        self.assertTrue(assignment_grid_is_editable(rehearsal))
 
 
 class FutureRehearsalsForTests(TestCase):
