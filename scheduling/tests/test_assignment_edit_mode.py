@@ -1,4 +1,4 @@
-"""Assignment edit mode on /schedule/: the admin toggle, ✕ chips, and Save Changes (issue #210)."""
+"""Assignment edit mode on /schedule/: the admin toggle, ✕ chips, + picker, and Save Changes (issues #210, #211)."""
 
 from datetime import timedelta
 
@@ -8,6 +8,8 @@ from django.utils import timezone
 
 from identity.factories import PersonFactory
 from scheduling.factories import (
+    MembershipFactory,
+    MembershipRoleFactory,
     RehearsalFactory,
     RehearsalSongFactory,
     RoleFactory,
@@ -32,8 +34,13 @@ def _save_url(rehearsal):
     return reverse('scheduling:schedule-assignments-save', args=[rehearsal.pk])
 
 
-def _save_payload(rehearsal, removed_ids=()):
-    """Build a Save Changes POST body against `rehearsal`'s Semester, naming `removed_ids` for deletion."""
+def _picker_url(rehearsal, song, role):
+    """Return the "+" picker's fetch endpoint for one (Song, Role) cell on `rehearsal`'s grid."""
+    return reverse('scheduling:schedule-assignments-picker', args=[rehearsal.pk, song.pk, role.pk])
+
+
+def _save_payload(rehearsal, removed_ids=(), added_entries=()):
+    """Build a Save Changes POST body against `rehearsal`'s Semester, naming `removed_ids`/`added_entries` to apply."""
     semester = rehearsal.semester
     payload = {
         'assignment_semester_id': str(semester.pk),
@@ -41,6 +48,8 @@ def _save_payload(rehearsal, removed_ids=()):
     }
     if removed_ids:
         payload['removed_assignment_id'] = [str(pk) for pk in removed_ids]
+    if added_entries:
+        payload['added_assignment_entry'] = [f'{song_id}:{role_id}:{person_id}' for song_id, role_id, person_id in added_entries]
     return payload
 
 
@@ -88,6 +97,22 @@ class AnonymousAndNonAdminAccessTests(TestCase):
 
         self.assertEqual(response.status_code, 403)
         self.assertTrue(SongRoleAssignment.objects.filter(pk=self.assignment.pk).exists())
+
+    def test_anonymous_picker_get_redirects_to_login(self):
+        """An anonymous GET at the picker fetch endpoint redirects to login (issue #211)."""
+        url = _picker_url(self.rehearsal, self.song, self.role)
+
+        response = self.client.get(url)
+
+        self.assertRedirects(response, f"{reverse('identity:login')}?next={url}")
+
+    def test_non_admin_picker_get_is_forbidden(self):
+        """A logged-in non-admin's picker fetch is rejected with 403."""
+        self.client.login(username=self.person.email, password=PASSWORD)
+
+        response = self.client.get(_picker_url(self.rehearsal, self.song, self.role))
+
+        self.assertEqual(response.status_code, 403)
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)
@@ -263,3 +288,116 @@ class SaveAssignmentEditsViewTests(TestCase):
 
         self.assertRedirects(response, _schedule_url(self.rehearsal))
         self.assertTrue(SongRoleAssignment.objects.filter(pk=self.assignment.pk).exists())
+
+    def test_saving_a_picked_person_creates_the_assignment(self):
+        """A Save Changes POST naming an added (song, role, person) entry creates that SongRoleAssignment (issue #211)."""
+        membership = MembershipFactory(semester=self.semester)
+
+        response = self.client.post(
+            _save_url(self.rehearsal),
+            _save_payload(self.rehearsal, added_entries=[(self.song.pk, self.role.pk, membership.person.pk)]),
+        )
+
+        self.assertRedirects(response, _schedule_url(self.rehearsal))
+        self.assertTrue(
+            SongRoleAssignment.objects.filter(song=self.song, role=self.role, person=membership.person).exists()
+        )
+
+    def test_a_buffer_mixing_a_pick_and_a_removal_produces_exactly_the_intended_rows(self):
+        """One Save Changes POST applies a removal and a pick together, atomically (issue #211 acceptance)."""
+        membership = MembershipFactory(semester=self.semester)
+
+        response = self.client.post(
+            _save_url(self.rehearsal),
+            _save_payload(
+                self.rehearsal,
+                removed_ids=[self.assignment.pk],
+                added_entries=[(self.song.pk, self.role.pk, membership.person.pk)],
+            ),
+        )
+
+        self.assertRedirects(response, _schedule_url(self.rehearsal))
+        self.assertFalse(SongRoleAssignment.objects.filter(pk=self.assignment.pk).exists())
+        self.assertTrue(
+            SongRoleAssignment.objects.filter(song=self.song, role=self.role, person=membership.person).exists()
+        )
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class AssignmentPickerViewTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        """Build an admin Person, a future Rehearsal with one Song/Role column, and one rostered Member each in and out of the declared Role."""
+        cls.admin = PersonFactory(password=PASSWORD, is_admin=True)
+        cls.semester = SemesterFactory()
+        cls.rehearsal = RehearsalFactory(semester=cls.semester, is_full_setlist=False)
+        cls.song = SongFactory(semester=cls.semester, position=1)
+        cls.role = RoleFactory(name='Singer')
+        SongRoleRequirementFactory(song=cls.song, role=cls.role, count=1)
+        RehearsalSongFactory(song=cls.song, rehearsal=cls.rehearsal, order=1)
+
+    def setUp(self):
+        """Log in as the synthetic admin Person before each test."""
+        self.client.login(username=self.admin.email, password=PASSWORD)
+
+    def test_labels_the_assigned_section_with_its_scope(self):
+        """The picker's assignment section is labelled with its every-rehearsal-and-concert scope (issue #211 acceptance)."""
+        response = self.client.get(_picker_url(self.rehearsal, self.song, self.role))
+
+        self.assertContains(response, 'Assigned (every rehearsal + concert)')
+
+    def test_names_where_rostering_happens(self):
+        """The picker says it lists rostered members only, naming /members/ as where rostering happens."""
+        response = self.client.get(_picker_url(self.rehearsal, self.song, self.role))
+
+        self.assertContains(response, reverse('scheduling:members'))
+        self.assertContains(response, 'rostered members only')
+
+    def test_declared_member_listed_outside_the_show_all_disclosure(self):
+        """A Member who declared the cell's Role is offered outside the 'Show all members' disclosure."""
+        declarer = PersonFactory(name='Declared Dana')
+        membership = MembershipFactory(person=declarer, semester=self.semester)
+        MembershipRoleFactory(membership=membership, role=self.role)
+
+        response = self.client.get(_picker_url(self.rehearsal, self.song, self.role))
+
+        self.assertContains(response, 'Declared Dana')
+        self.assertContains(response, f'data-picker-person-id="{declarer.pk}"')
+
+    def test_non_declaring_member_sits_behind_show_all_members_and_is_marked(self):
+        """A Member who hasn't declared the Role is offered behind 'Show all members' and marked as such."""
+        non_declarer = PersonFactory(name='Undeclared Uma')
+        MembershipFactory(person=non_declarer, semester=self.semester)
+
+        response = self.client.get(_picker_url(self.rehearsal, self.song, self.role))
+
+        self.assertContains(response, 'Show all members')
+        self.assertContains(response, 'Undeclared Uma')
+        self.assertContains(response, 'Has not declared Singer')
+
+    def test_a_non_rostered_person_is_not_offered_at_all(self):
+        """A Person with no Membership in the viewed Semester never appears in the picker."""
+        PersonFactory(name='Outsider Olga')
+
+        response = self.client.get(_picker_url(self.rehearsal, self.song, self.role))
+
+        self.assertNotContains(response, 'Outsider Olga')
+
+    def test_an_already_assigned_person_is_not_reoffered(self):
+        """A Person already assigned to this exact (Song, Role) cell isn't offered again."""
+        already = SongRoleAssignmentFactory(song=self.song, role=self.role)
+        MembershipFactory(person=already.person, semester=self.semester)
+
+        response = self.client.get(_picker_url(self.rehearsal, self.song, self.role))
+
+        self.assertNotContains(response, already.person.name)
+
+    def test_picker_get_on_a_past_rehearsal_404s(self):
+        """A hand-crafted picker fetch against a non-editable (past-dated) Rehearsal's grid 404s."""
+        past_rehearsal = RehearsalFactory(
+            semester=self.semester, is_full_setlist=False, date=timezone.localdate() - timedelta(days=1),
+        )
+
+        response = self.client.get(_picker_url(past_rehearsal, self.song, self.role))
+
+        self.assertEqual(response.status_code, 404)

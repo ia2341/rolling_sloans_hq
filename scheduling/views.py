@@ -50,6 +50,7 @@ from scheduling.models import (
     Recording,
     Rehearsal,
     RehearsalSong,
+    Role,
     Semester,
     Song,
     SongRoleAssignment,
@@ -83,6 +84,7 @@ from scheduling.services import (
     assigned_songs_for,
     assignment_grid_is_editable,
     assignment_matrix_for,
+    assignment_picker_for,
     attendance_suggestion_for,
     breaks_for,
     confirm_recording_upload,
@@ -112,6 +114,7 @@ from scheduling.services import (
     recording_groups_for,
     rehearsal_count_target,
     rehearsal_schedule_for,
+    reorder_rehearsal_songs,
     reorder_songs,
     reserve_recording_upload,
     roster_for,
@@ -147,6 +150,17 @@ def _lock_semester(semester):
     `unique_song_position_per_semester`.
     """
     return Semester.objects.select_for_update().get(pk=semester.pk)
+
+
+def _lock_rehearsal(rehearsal):
+    """Row-lock `rehearsal` for the duration of the enclosing transaction.
+
+    Must be called inside `transaction.atomic()`. Mirrors `_lock_semester()`:
+    serializes concurrent Running Order renumbers against the same
+    Rehearsal so two overlapping edits can't compute/apply stale `order`
+    values and collide on `unique_order_per_rehearsal`.
+    """
+    return Rehearsal.objects.select_for_update().get(pk=rehearsal.pk)
 
 
 class OverviewView(BaseView, TemplateView):
@@ -1668,18 +1682,18 @@ def _editable_assignment_rehearsal_or_404(request, rehearsal_id):
 
 
 class AssignmentEditSaveView(AdminRequiredMixin, View):
-    """`/schedule/<rehearsal_id>/assignments/save/`: applies a buffer of ✕'d SongRoleAssignment removals (issue #210, ADR-0009).
+    """`/schedule/<rehearsal_id>/assignments/save/`: applies a buffer of ✕'d removals and picker adds (issues #210, #211, ADR-0009).
 
-    Removal-only for this slice: adding a person is the picker, landing in
-    a later ticket. The buffer is entirely client-side (Alpine) up to this
-    point — clicking an ✕ never round-trips — so this view is reached only
-    by the one "Save Changes" submission, carrying every removed chip's
-    assignment id plus the hidden Semester id/stamp the grid was rendered
-    against.
+    The buffer is entirely client-side (Alpine) up to this point —
+    clicking an ✕ or picking a person in the "+" popover never
+    round-trips — so this view is reached only by the one "Save Changes"
+    submission, carrying every removed chip's assignment id, every picked
+    (song, role, person) triple, plus the hidden Semester id/stamp the
+    grid was rendered against.
     """
 
     def post(self, request, rehearsal_id):
-        """Apply the submitted removals through `apply_song_role_assignments()`, or report why the save was rejected."""
+        """Apply the submitted removals and adds through `apply_song_role_assignments()`, or report why the save was rejected."""
         rehearsal = _editable_assignment_rehearsal_or_404(request, rehearsal_id)
         semester = get_viewing_semester(request)
         buffer = self._build_buffer(request)
@@ -1692,12 +1706,14 @@ class AssignmentEditSaveView(AdminRequiredMixin, View):
         return _schedule_redirect(request, rehearsal)
 
     def _build_buffer(self, request):
-        """Turn the POST body's hidden Semester stamp and removed-id list into an AssignmentEditBuffer."""
+        """Turn the POST body's hidden Semester stamp, removed-id list, and added-entry list into an AssignmentEditBuffer."""
         removed_ids = frozenset(_parse_assignment_ids(request.POST.getlist('removed_assignment_id')))
+        added_entries = frozenset(_parse_added_entries(request.POST.getlist('added_assignment_entry')))
         return AssignmentEditBuffer(
             semester_id=_parse_roster_int(request.POST.get('assignment_semester_id', '')),
             semester_updated_at=parse_datetime(request.POST.get('assignment_semester_updated_at', '')) or timezone.now(),
             removed_assignment_ids=removed_ids,
+            added_entries=added_entries,
         )
 
 
@@ -1710,6 +1726,40 @@ def _parse_assignment_ids(raw_values):
         except ValueError:
             continue
     return parsed
+
+
+def _parse_added_entries(raw_values):
+    """Return the subset of `raw_values` (each "song_id:role_id:person_id") that parse as three ints, dropping the rest."""
+    parsed = []
+    for raw_value in raw_values:
+        parts = raw_value.split(':')
+        if len(parts) != 3:
+            continue
+        try:
+            parsed.append(tuple(int(part) for part in parts))
+        except ValueError:
+            continue
+    return parsed
+
+
+class AssignmentPickerView(AdminRequiredMixin, View):
+    """`/schedule/<rehearsal_id>/assignments/picker/<song_id>/<role_id>/`: the "+" popover's fetched-on-open contents (issue #211).
+
+    Fetched only when a cell's "+" is clicked, over the existing roster
+    read — an unopened cell issues no request, so a twelve-song six-role
+    grid never renders seventy-two live widgets. Read-only: picking a
+    person only buffers the pick client-side, exactly like a chip's ✕, and
+    both round-trip together on "Save Changes".
+    """
+
+    def get(self, request, rehearsal_id, song_id, role_id):
+        """Render the picker partial for one (Song, Role) cell on an editable grid, or 404."""
+        _editable_assignment_rehearsal_or_404(request, rehearsal_id)
+        semester = get_viewing_semester(request)
+        song = get_object_or_404(_scoped_to_viewing_semester(Song, semester), pk=song_id)
+        role = get_object_or_404(Role, pk=role_id)
+        picker = assignment_picker_for(song, role, semester)
+        return render(request, 'scheduling/_assignment_picker.html', {'picker': picker})
 
 
 class RehearsalManageView(AdminRequiredMixin, View):
@@ -1755,11 +1805,18 @@ class RehearsalEditView(AdminRequiredMixin, View):
         return render(request, self.template_name, {'rehearsal': rehearsal, 'form': RehearsalForm(instance=rehearsal)})
 
     def post(self, request, pk):
-        """Validate and save the edit, or re-render with errors."""
+        """Validate and save the edit, re-deriving its RehearsalSongs' persisted times, or re-render with errors."""
         rehearsal = self._get_rehearsal(pk)
         form = RehearsalForm(request.POST, instance=rehearsal)
         if form.is_valid():
-            form.save()
+            with transaction.atomic():
+                _lock_rehearsal(rehearsal)
+                form.save()
+                existing_order = list(
+                    RehearsalSong.objects.filter(rehearsal=rehearsal).order_by('order').values_list('pk', flat=True)
+                )
+                if existing_order:
+                    reorder_rehearsal_songs(rehearsal, existing_order)
             messages.success(request, 'Rehearsal updated.')
             return redirect('scheduling:manage-schedule')
         return render(request, self.template_name, {'rehearsal': rehearsal, 'form': form})

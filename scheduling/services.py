@@ -361,6 +361,54 @@ def reorder_songs(semester: Semester, ordered_song_ids: list[int]) -> None:
         song.save(update_fields=['position'])
 
 
+def reorder_rehearsal_songs(rehearsal: Rehearsal, ordered_rehearsal_song_ids: list[int]) -> None:
+    """Renumber a Rehearsal's Running Order to a contiguous 1..N and re-derive persisted times (issue #215).
+
+    Mirrors `reorder_songs()`'s shape, but `unique_order_per_rehearsal`
+    isn't `Deferrable.DEFERRED` (unlike `unique_song_position_per_semester`),
+    so a permutation of the existing order can't be written in one pass —
+    two rows could momentarily want each other's `order` value. A first
+    pass moves every row to a placeholder `order` strictly above the final
+    `1..N` range (and mutually distinct), clear of both the final range and
+    each other; the second pass then assigns the final contiguous order in
+    `ordered_rehearsal_song_ids`' sequence, saving each row in that order.
+    Placeholders must land *above* N, not merely outside `1..N` (e.g. not
+    negative): `RehearsalSong._prior_slots()` sums the `slot_count` of rows
+    with a lower `order`, so a not-yet-finalized sibling must compare as
+    "later" during the second pass, or its slot_count would be wrongly
+    counted as prior and skew every row's re-derived `start_time`/`end_time`.
+    They must also clear each *surviving* row's current `order`, not just
+    `N` — a prior deletion elsewhere can leave survivors with non-contiguous
+    order values above `N` (e.g. 1 and 3 surviving out of a deleted 2), and
+    a placeholder landing on one of those would collide with it before it's
+    had its own turn to move. Saving in `ordered_rehearsal_song_ids`'
+    sequence during the second pass is what makes `RehearsalSong.save()`
+    re-derive correct times: each row's lower-order siblings are already
+    saved with their final order by the time it's this row's turn. This
+    is also the fix for the stale times
+    a Rehearsal window edit used to leave behind: the caller passes the
+    *current* order unchanged (an identity permutation) just to force every
+    row's times to be recomputed against the Rehearsal's new window.
+
+    Must run inside the caller's `transaction.atomic()`, same as
+    `reorder_songs()`.
+    """
+    rehearsal_songs_by_id = {
+        rehearsal_song.pk: rehearsal_song
+        for rehearsal_song in RehearsalSong.objects.filter(rehearsal=rehearsal, pk__in=ordered_rehearsal_song_ids)
+    }
+    song_count = len(ordered_rehearsal_song_ids)
+    placeholder_base = max([song_count, *(rs.order for rs in rehearsal_songs_by_id.values())])
+    for offset, rehearsal_song_id in enumerate(ordered_rehearsal_song_ids, start=1):
+        rehearsal_song = rehearsal_songs_by_id[rehearsal_song_id]
+        rehearsal_song.order = placeholder_base + offset
+        rehearsal_song.save()
+    for position, rehearsal_song_id in enumerate(ordered_rehearsal_song_ids, start=1):
+        rehearsal_song = rehearsal_songs_by_id[rehearsal_song_id]
+        rehearsal_song.order = position
+        rehearsal_song.save()
+
+
 @dataclass(frozen=True)
 class SongDeletionSummary:
     """One doomed Song's recording/uploader counts, for the setlist edit grid's delete confirmation (issue #179)."""
@@ -877,6 +925,63 @@ def _matrix_entries_by_song_role(songs, roles):
     return result
 
 
+@dataclass(frozen=True)
+class AssignmentPickerOption:
+    """One selectable row in the cell picker (issue #211): a rostered Person plus whether they declared the cell's Role."""
+
+    person: Person
+    has_declared_role: bool
+
+
+@dataclass(frozen=True)
+class AssignmentPickerResult:
+    """The picker's contents for one (Song, Role) cell (issue #211): who can be picked, split by declared-Role order.
+
+    `declared` lists Role-declaring Members first (ADR-0009's picker
+    plan); `others` holds every other rostered Member, meant to sit
+    behind a "Show all members" disclosure per ADR-0002 — picking one is
+    allowed with no confirmation, since the resulting mismatch flag is
+    the existing soft signal, not a block. Both exclude anyone already
+    assigned to this exact (Song, Role): re-offering them would only
+    invite a duplicate the unique constraint would reject.
+    """
+
+    song: Song
+    role: Role
+    declared: list[AssignmentPickerOption]
+    others: list[AssignmentPickerOption]
+
+
+def assignment_picker_for(song, role, semester) -> AssignmentPickerResult:
+    """Build the "+" picker's contents for `song`/`role`, scoped to `semester`'s roster (issue #211).
+
+    Population is deliberately narrow: only People with a Membership in
+    `semester` are offered, because an assignment presupposes membership
+    (rostering rules purge a removed Member's assignments) — a
+    non-rostered Person would create a row that would then be deleted.
+    Ordering is Person name within each of the two declared/others
+    groups.
+    """
+    already_assigned_ids = frozenset(
+        SongRoleAssignment.objects.filter(song=song, role=role).values_list('person_id', flat=True)
+    )
+    declared_person_ids = frozenset(
+        MembershipRole.objects.filter(
+            membership__semester=semester, role=role,
+        ).values_list('membership__person_id', flat=True)
+    )
+    people = Person.objects.filter(
+        membership__semester=semester,
+    ).exclude(pk__in=already_assigned_ids).order_by('name')
+
+    declared, others = [], []
+    for person in people:
+        option = AssignmentPickerOption(person=person, has_declared_role=person.pk in declared_person_ids)
+        (declared if option.has_declared_role else others).append(option)
+
+    return AssignmentPickerResult(song=song, role=role, declared=declared, others=others)
+
+
 def assignment_grid_is_editable(rehearsal) -> bool:
     """Return whether an admin gets an "Edit assignments" control on `rehearsal`'s assignment grid (issue #210).
 
@@ -903,32 +1008,45 @@ class StaleAssignmentSemesterError(ValueError):
 
 @dataclass(frozen=True)
 class AssignmentEditBuffer:
-    """The Pending Buffer `apply_song_role_assignments()` commits in one transaction (issue #210).
+    """The Pending Buffer `apply_song_role_assignments()` commits in one transaction (issues #210, #211).
 
-    Removal-only for this slice (ADR-0009): `removed_assignment_ids` names
-    every SongRoleAssignment row to delete, wherever on the grid its chip's
-    ✕ was clicked. `semester_id` and `semester_updated_at` back the same
-    two staleness checks `RosterEditBuffer` uses — `semester_id` against
-    the caller's session-scoped viewing Semester, `semester_updated_at`
-    against the Semester row's current stamp.
+    `removed_assignment_ids` names every SongRoleAssignment row to delete,
+    wherever on the grid its chip's ✕ was clicked. `added_entries` names
+    every (song_id, role_id, person_id) a "+" picker pick added, wherever
+    on the grid it was picked from. `semester_id` and `semester_updated_at`
+    back the same two staleness checks `RosterEditBuffer` uses —
+    `semester_id` against the caller's session-scoped viewing Semester,
+    `semester_updated_at` against the Semester row's current stamp.
     """
 
     semester_id: int
     semester_updated_at: datetime
     removed_assignment_ids: frozenset[int]
+    added_entries: frozenset[tuple[int, int, int]] = frozenset()
 
 
 def apply_song_role_assignments(buffer: AssignmentEditBuffer, *, viewing_semester: Semester) -> None:
-    """Apply a Buffer of SongRoleAssignment removals in one transaction (issue #210, ADR-0009).
+    """Apply a Buffer of SongRoleAssignment removals and adds in one transaction (issues #210, #211, ADR-0009).
 
-    Removal is semester-wide: SongRoleAssignment is (song, role, person)
-    with no rehearsal FK, so deleting a row here removes that Person from
-    that Song at every Rehearsal and at the concert, not only the Rehearsal
-    whose grid the admin was viewing. Takes no Semester row lock — nothing
-    here renumbers Song positions or RehearsalSong order, so there is no
-    ordering constraint to serialize against. Registers no
-    `transaction.on_commit()` call — nothing here reaches outside the
-    Semester (no mail, no object storage).
+    Both are semester-wide: SongRoleAssignment is (song, role, person)
+    with no rehearsal FK, so a removal or an add here changes that
+    Person's assignment to that Song at every Rehearsal and at the
+    concert, not only the Rehearsal whose grid the admin was viewing.
+    Takes no Semester row lock — nothing here renumbers Song positions or
+    RehearsalSong order, so there is no ordering constraint to serialize
+    against. Registers no `transaction.on_commit()` call — nothing here
+    reaches outside the Semester (no mail, no object storage).
+
+    An added entry is silently skipped if its Song isn't one of
+    `viewing_semester`'s (a hand-crafted POST naming another Semester's
+    Song), or if its Person holds no Membership in `viewing_semester` (the
+    picker never offers a non-rostered Person, per issue #211, but a
+    tampered POST could still try). `get_or_create` makes a duplicate add
+    a no-op rather than an IntegrityError against `unique_song_role_person`
+    — the picker already excludes anyone already assigned to the cell, but
+    two concurrent saves could still race here. `SongRoleAssignment.save()`
+    recomputes `is_role_mismatch` on create (ADR-0002): picking a Person
+    who hasn't declared the Role is allowed, not blocked.
 
     Raises `WrongViewingSemesterError` if `buffer.semester_id` doesn't
     match `viewing_semester`, checked before any transaction opens. Raises
@@ -949,6 +1067,20 @@ def apply_song_role_assignments(buffer: AssignmentEditBuffer, *, viewing_semeste
         SongRoleAssignment.objects.filter(
             pk__in=buffer.removed_assignment_ids, song__semester=semester,
         ).delete()
+
+        if buffer.added_entries:
+            valid_song_ids = frozenset(
+                Song.objects.filter(
+                    semester=semester, pk__in={song_id for song_id, _, _ in buffer.added_entries},
+                ).values_list('pk', flat=True)
+            )
+            rostered_person_ids = frozenset(
+                Membership.objects.filter(semester=semester).values_list('person_id', flat=True)
+            )
+            for song_id, role_id, person_id in buffer.added_entries:
+                if song_id not in valid_song_ids or person_id not in rostered_person_ids:
+                    continue
+                SongRoleAssignment.objects.get_or_create(song_id=song_id, role_id=role_id, person_id=person_id)
 
         semester.updated_at = timezone.now()
         semester.save(update_fields=['updated_at'])
