@@ -50,13 +50,17 @@ class AnonymousAccessTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class TeammateViewTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        """Build a viewer and roster a separate teammate on the current Semester."""
+        cls.semester = SemesterFactory()
+        cls.viewer = PersonFactory(password=PASSWORD, name='Viewer Placeholder')
+        cls.teammate = PersonFactory(name='Teammate Placeholder')
+        cls.membership = MembershipFactory(person=cls.teammate, semester=cls.semester)
+
     def setUp(self):
-        """Log in a viewer and roster a separate teammate on the current Semester."""
-        self.semester = SemesterFactory()
-        self.viewer = PersonFactory(password=PASSWORD, name='Viewer Placeholder')
+        """Log in as the viewer before each test."""
         self.client.login(username=self.viewer.email, password=PASSWORD)
-        self.teammate = PersonFactory(name='Teammate Placeholder')
-        self.membership = MembershipFactory(person=self.teammate, semester=self.semester)
 
     def test_renders_the_teammates_name_and_the_current_semester(self):
         """A teammate's page renders their name and the current Semester's name."""
@@ -173,14 +177,18 @@ class TeammateViewTests(TestCase):
 class NeverRenderedFieldTests(TestCase):
     """The `never` verdicts, asserted against both a teammate's page and the owner's own."""
 
+    @classmethod
+    def setUpTestData(cls):
+        """Build a viewer and roster a teammate, both on the current Semester."""
+        cls.semester = SemesterFactory()
+        cls.viewer = PersonFactory(password=PASSWORD, name='Viewer Placeholder')
+        cls.own_membership = MembershipFactory(person=cls.viewer, semester=cls.semester)
+        cls.teammate = PersonFactory(name='Teammate Placeholder', is_admin=True)
+        cls.teammate_membership = MembershipFactory(person=cls.teammate, semester=cls.semester)
+
     def setUp(self):
-        """Log in a viewer and roster a teammate, both on the current Semester."""
-        self.semester = SemesterFactory()
-        self.viewer = PersonFactory(password=PASSWORD, name='Viewer Placeholder')
+        """Log in as the viewer before each test."""
         self.client.login(username=self.viewer.email, password=PASSWORD)
-        self.own_membership = MembershipFactory(person=self.viewer, semester=self.semester)
-        self.teammate = PersonFactory(name='Teammate Placeholder', is_admin=True)
-        self.teammate_membership = MembershipFactory(person=self.teammate, semester=self.semester)
 
     def _assign_mismatched_song(self, person):
         """Assign `person` to a fresh current-Semester Song under an undeclared Role, so is_role_mismatch is True."""
@@ -308,10 +316,14 @@ class NeverRenderedFieldTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class SelfViewGetTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic Person and the current Semester."""
+        cls.semester = SemesterFactory()
+        cls.person = PersonFactory(password=PASSWORD, name='Owner Placeholder')
+
     def setUp(self):
-        """Log in a synthetic Person and create the current Semester before each test."""
-        self.semester = SemesterFactory()
-        self.person = PersonFactory(password=PASSWORD, name='Owner Placeholder')
+        """Log in as the synthetic Person before each test."""
         self.client.login(username=self.person.email, password=PASSWORD)
 
     def test_renders_own_name_email_and_change_password_link(self):
@@ -384,10 +396,14 @@ class SelfViewGetTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class SelfViewPostTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic Person and the current Semester."""
+        cls.semester = SemesterFactory()
+        cls.person = PersonFactory(password=PASSWORD, name='Owner Placeholder')
+
     def setUp(self):
-        """Log in a synthetic Person and create the current Semester before each test."""
-        self.semester = SemesterFactory()
-        self.person = PersonFactory(password=PASSWORD, name='Owner Placeholder')
+        """Log in as the synthetic Person before each test."""
         self.client.login(username=self.person.email, password=PASSWORD)
 
     def test_valid_post_creates_membership_and_roles_and_redirects_with_message(self):
@@ -452,3 +468,131 @@ class SelfViewPostTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'There is no active semester yet.')
         self.assertFalse(Membership.objects.exists())
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class AdminEditTests(TestCase):
+    """Issue #232: the POST guard relaxes to your own pk *or* an admin's, on anyone's page."""
+
+    @classmethod
+    def setUpTestData(cls):
+        """Build an admin viewer and roster a separate teammate on the current Semester."""
+        cls.semester = SemesterFactory()
+        cls.admin = PersonFactory(password=PASSWORD, name='Admin Placeholder', is_admin=True)
+        cls.teammate = PersonFactory(name='Teammate Placeholder')
+        cls.membership = MembershipFactory(person=cls.teammate, semester=cls.semester)
+
+    def setUp(self):
+        """Log in as the admin viewer before each test."""
+        self.client.login(username=self.admin.email, password=PASSWORD)
+
+    def test_admin_sees_the_roles_form_on_a_teammates_page(self):
+        """An admin viewing another Person's page gets the always-inline MembershipRolesForm."""
+        RoleFactory()
+
+        response = self.client.get(member_detail_url(self.teammate))
+
+        self.assertEqual(response.context['form'].instance, self.membership)
+        self.assertContains(response, 'name="roles"')
+        self.assertContains(response, 'Save')
+
+    def test_admin_can_save_a_teammates_declared_roles(self):
+        """A valid admin POST writes the teammate's Roles through the existing form and redirects to their page."""
+        role = RoleFactory(name='Bassist')
+
+        response = self.client.post(member_detail_url(self.teammate), {'roles': [role.pk]}, follow=True)
+
+        self.assertRedirects(response, member_detail_url(self.teammate))
+        self.assertEqual(
+            list(MembershipRole.objects.filter(membership=self.membership).values_list('role', flat=True)),
+            [role.pk],
+        )
+
+    def test_admin_post_replaces_previously_declared_roles(self):
+        """An admin POST removes previously declared Roles that weren't resubmitted, same as a self edit."""
+        new_role = RoleFactory()
+        MembershipRoleFactory(membership=self.membership, role=RoleFactory())
+
+        self.client.post(member_detail_url(self.teammate), {'roles': [new_role.pk]})
+
+        declared_role_ids = set(
+            MembershipRole.objects.filter(membership=self.membership).values_list('role_id', flat=True),
+        )
+        self.assertEqual(declared_role_ids, {new_role.pk})
+
+    def test_admin_post_re_evaluates_mismatch_through_the_model(self):
+        """After an admin's save, is_role_mismatch on an existing assignment is re-derived from the new Roles."""
+        song = SongFactory(semester=self.semester, title='Song A')
+        role = RoleFactory(name='Drummer')
+        assignment = SongRoleAssignmentFactory(song=song, person=self.teammate, role=role)
+        self.assertTrue(assignment.is_role_mismatch)
+
+        self.client.post(member_detail_url(self.teammate), {'roles': [role.pk]})
+
+        assignment.refresh_from_db()
+        self.assertFalse(assignment.is_role_mismatch)
+
+    def test_admin_invalid_post_rerenders_the_form_with_errors(self):
+        """An admin POST referencing a nonexistent Role id re-renders the form with a field error, not a 500."""
+        response = self.client.post(member_detail_url(self.teammate), {'roles': [999999]})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'is not one of the available choices')
+
+    def test_admin_first_time_post_that_loses_the_creation_race_still_saves_its_roles(self):
+        """A concurrent first submission whose Membership was created under it writes its Roles to that row.
+
+        Mirrors the self-edit race test: patching the lookup to return a
+        stale unsaved instance stands in for the loser of a concurrent
+        first submission, which must not 500 on
+        `unique_membership_per_person_per_semester`.
+        """
+        never_rostered = PersonFactory(name='Fresh Invite Placeholder')
+        role = RoleFactory()
+        winner = Membership.objects.create(person=never_rostered, semester=self.semester)
+        stale = Membership(person=never_rostered, semester=self.semester)
+
+        with patch.object(MemberDetailView, '_get_or_build_membership', return_value=stale):
+            response = self.client.post(member_detail_url(never_rostered), {'roles': [role.pk]})
+
+        self.assertRedirects(response, member_detail_url(never_rostered))
+        self.assertEqual(Membership.objects.filter(person=never_rostered, semester=self.semester).count(), 1)
+        self.assertEqual(
+            list(MembershipRole.objects.filter(membership=winner).values_list('role', flat=True)), [role.pk],
+        )
+
+    def test_no_remove_control_on_an_admins_view_of_a_teammates_page(self):
+        """Removal stays list-only (`/members/`); this page has no remove control at any cardinality."""
+        response = self.client.get(member_detail_url(self.teammate))
+
+        self.assertNotContains(response, 'Remove')
+
+    def test_no_conflict_field_renders_for_an_admin_viewer(self):
+        """Per ADR 0005, no Conflict field — reason included — appears on this page for an admin viewer either."""
+        conflict = ConflictFactory(
+            person=self.teammate,
+            rehearsal=RehearsalFactory(semester=self.semester),
+            type=Conflict.PARTIAL,
+            reason='A distinctive placeholder reason',
+        )
+
+        response = self.client.get(member_detail_url(self.teammate))
+
+        self.assertNotContains(response, 'A distinctive placeholder reason')
+        self.assertNotContains(response, str(conflict.rehearsal.date))
+
+    def test_admins_own_page_is_byte_identical_to_a_non_admins_own_page(self):
+        """An admin's own GET/POST flow is unaffected — is_self alone already granted the form."""
+        response = self.client.get(member_detail_url(self.admin))
+
+        self.assertTrue(response.context['is_self'])
+        self.assertIn('form', response.context)
+
+        role = RoleFactory()
+        post_response = self.client.post(member_detail_url(self.admin), {'roles': [role.pk]}, follow=True)
+
+        self.assertRedirects(post_response, member_detail_url(self.admin))
+        membership = Membership.objects.get(person=self.admin, semester=self.semester)
+        self.assertEqual(
+            list(MembershipRole.objects.filter(membership=membership).values_list('role', flat=True)), [role.pk],
+        )

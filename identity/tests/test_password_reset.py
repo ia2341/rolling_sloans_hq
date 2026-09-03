@@ -51,10 +51,12 @@ class PasswordResetRequestTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class PasswordResetConfirmFlowTests(TestCase):
-    def setUp(self):
-        self.person = PersonFactory(password=OLD_PASSWORD)
-        self.client.post(reverse('identity:password-reset'), {'email': self.person.email})
-        self.reset_path = extract_reset_path(mail.outbox[0].body)
+    @classmethod
+    def setUpTestData(cls):
+        """Request a reset once and extract the reset link every test in this class reuses."""
+        cls.person = PersonFactory(password=OLD_PASSWORD)
+        cls.client_class().post(reverse('identity:password-reset'), {'email': cls.person.email})
+        cls.reset_path = extract_reset_path(mail.outbox[0].body)
 
     def test_link_leads_to_working_reset_form(self):
         response = self.client.get(self.reset_path, follow=True)

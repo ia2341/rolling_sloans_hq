@@ -1,11 +1,14 @@
 """The Overview semester switcher and the non-live Semester banner (issue #169)."""
 
+from datetime import time, timedelta
+
 from django.test import TestCase, override_settings
 from django.urls import reverse
+from django.utils import timezone
 
 from identity.factories import PersonFactory
 from scheduling.factories import SemesterFactory, SongFactory
-from scheduling.models import Song
+from scheduling.models import Rehearsal
 from scheduling.services import (
     SEMESTER_STATUS_DRAFT,
     SEMESTER_STATUS_LIVE,
@@ -226,19 +229,19 @@ class SwitcherPostTests(TestCase):
 @override_settings(SECURE_SSL_REDIRECT=False)
 class SelectionGovernsWritesTests(TestCase):
     def test_a_manage_write_lands_on_the_selected_draft(self):
-        """An admin viewing a draft who creates a Song writes it to the draft, leaving the Live Semester untouched."""
+        """An admin viewing a draft who creates a Rehearsal writes it to the draft, leaving the Live Semester untouched."""
         live = SemesterFactory()
         draft = SemesterFactory(draft=True)
         admin_client(self)
         select(self, draft)
 
         self.client.post(
-            reverse('scheduling:manage-setlist'),
-            {'title': 'Draft Song', 'artist': 'Some Artist', 'length': '00:03:30', 'notes': ''},
+            reverse('scheduling:manage-schedule'),
+            {'date': timezone.now().date() + timedelta(days=1), 'start_time': time(18, 0)},
         )
 
-        self.assertTrue(Song.objects.filter(semester=draft, title='Draft Song').exists())
-        self.assertFalse(Song.objects.filter(semester=live).exists())
+        self.assertTrue(Rehearsal.objects.filter(semester=draft).exists())
+        self.assertFalse(Rehearsal.objects.filter(semester=live).exists())
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)
@@ -248,7 +251,6 @@ class BannerTests(TestCase):
         'scheduling:schedule',
         'scheduling:setlist',
         'scheduling:members',
-        'scheduling:conflicts',
     )
 
     def test_the_banner_renders_on_every_page_while_a_draft_is_selected(self):

@@ -3,6 +3,9 @@
 {% block title %}My Schedule{% endblock %}
 {% block content %}
 <h1>My Schedule</h1>
+{% for message in messages %}
+  <p>{{ message }}</p>
+{% endfor %}
 
 {% if not semester %}
   <p>There is no active semester yet.</p>
@@ -35,13 +38,11 @@
   <h2>{{ rehearsal.date }} {{ rehearsal.start_time }}&ndash;{{ rehearsal.end_time }}</h2>
 
   <p><a href="{% url 'scheduling:schedule' %}?view=all">View all rehearsals</a></p>
-
-  <p><a href="{% url 'scheduling:conflicts' %}?rehearsal={{ rehearsal.pk }}">Add a conflict</a></p>
+  {% if request.user.is_admin %}
+    <p><a href="{% url 'scheduling:manage-conflicts-detail' rehearsal.pk %}">Manage conflicts for this rehearsal</a></p>
+  {% endif %}
 
   <div id="my-rehearsal-info">
-    {% if rehearsal.is_full_setlist %}
-      <p>Attendance at the Dress Rehearsal is mandatory.</p>
-    {% endif %}
     {% if my_attendance_suggestion %}
       <p>
         Arrive around {{ my_attendance_suggestion.arrival_time }},
@@ -58,6 +59,9 @@
     {% else %}
       <p>You're not needed at this rehearsal.</p>
     {% endif %}
+
+    <h3>Your availability</h3>
+    {% include "scheduling/_availability.html" with availability=my_availability %}
   </div>
 
   <p>

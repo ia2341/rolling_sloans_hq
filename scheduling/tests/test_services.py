@@ -38,12 +38,13 @@ from scheduling.services import (
 
 
 class SongRehearsalProgressTests(TestCase):
-    def setUp(self):
+    @classmethod
+    def setUpTestData(cls):
         """Build a Song and a past/future date to attach RehearsalSong rows to."""
-        self.song = SongFactory()
+        cls.song = SongFactory()
         today = timezone.localdate()
-        self.past_date = today - timedelta(days=1)
-        self.future_date = today + timedelta(days=1)
+        cls.past_date = today - timedelta(days=1)
+        cls.future_date = today + timedelta(days=1)
 
     def _rehearsal_song(self, date):
         """Build a RehearsalSong for self.song on a Rehearsal dated `date`."""
@@ -267,11 +268,12 @@ class RecordingCountForTests(TestCase):
 
 
 class SongsWithProgressForTests(TestCase):
-    def setUp(self):
+    @classmethod
+    def setUpTestData(cls):
         """Build a Semester and a Person to query songs_with_progress_for with."""
-        self.semester = SemesterFactory()
-        self.person = PersonFactory()
-        self.role = RoleFactory()
+        cls.semester = SemesterFactory()
+        cls.person = PersonFactory()
+        cls.role = RoleFactory()
 
     def test_returns_songs_in_position_order_scoped_to_the_semester(self):
         """Only the given Semester's Songs are returned, in position order."""
@@ -309,11 +311,12 @@ class SongsWithProgressForTests(TestCase):
 
 
 class BreaksForTests(TestCase):
-    def setUp(self):
+    @classmethod
+    def setUpTestData(cls):
         """Build a Person and a 5-slot Rehearsal (18:00 start, 18-minute slots) to attach RehearsalSong rows to."""
-        self.person = PersonFactory()
-        self.role = RoleFactory()
-        self.rehearsal = RehearsalFactory(is_full_setlist=False)
+        cls.person = PersonFactory()
+        cls.role = RoleFactory()
+        cls.rehearsal = RehearsalFactory(is_full_setlist=False)
 
     def _assigned_slot(self, order):
         """Build a RehearsalSong at `order` in self.rehearsal, with self.person assigned to its Song."""
@@ -483,10 +486,11 @@ class FutureRehearsalsForTests(TestCase):
 
 
 class DeclareConflictTests(TestCase):
-    def setUp(self):
+    @classmethod
+    def setUpTestData(cls):
         """Build a Person and a Rehearsal with a known time span for every test."""
-        self.person = PersonFactory()
-        self.rehearsal = RehearsalFactory(start_time=time(18, 0), end_time=time(19, 30))
+        cls.person = PersonFactory()
+        cls.rehearsal = RehearsalFactory(start_time=time(18, 0), end_time=time(19, 30))
 
     def test_full_absence_creates_full_conflict_with_no_window(self):
         """full_absence creates a FULL_CONFLICT Conflict and no ConflictWindow."""
@@ -580,10 +584,11 @@ class DeclareConflictTests(TestCase):
 
 
 class ConflictHistoryForTests(TestCase):
-    def setUp(self):
+    @classmethod
+    def setUpTestData(cls):
         """Build a Semester and a Person to view History for."""
-        self.semester = SemesterFactory()
-        self.person = PersonFactory()
+        cls.semester = SemesterFactory()
+        cls.person = PersonFactory()
 
     def test_only_includes_rehearsals_with_a_submitted_conflict(self):
         """A Rehearsal with no Conflict for this Person is not in History; one with a Conflict is."""
@@ -699,10 +704,11 @@ class ConflictHistoryForTests(TestCase):
 
 
 class RehearsalScheduleForTests(TestCase):
-    def setUp(self):
+    @classmethod
+    def setUpTestData(cls):
         """Build a Semester and a Person to view its schedule."""
-        self.semester = SemesterFactory()
-        self.person = PersonFactory()
+        cls.semester = SemesterFactory()
+        cls.person = PersonFactory()
 
     def test_splits_past_and_future_rehearsals_by_date(self):
         """A Rehearsal dated before today is past; one dated today or later is future."""

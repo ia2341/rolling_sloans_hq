@@ -1,7 +1,6 @@
 """Semester lifecycle resolution: the Live Semester and the per-request viewing Semester (issue #167)."""
 
 from datetime import timedelta
-from typing import ClassVar
 
 from django.contrib.auth.models import AnonymousUser
 from django.test import RequestFactory, TestCase, override_settings
@@ -15,7 +14,6 @@ from scheduling.factories import (
     SemesterFactory,
     SongFactory,
 )
-from scheduling.models import Song
 from scheduling.services import (
     VIEWING_SEMESTER_SESSION_KEY,
     get_live_semester,
@@ -59,9 +57,10 @@ class GetLiveSemesterTests(TestCase):
 
 
 class GetViewingSemesterTests(TestCase):
-    def setUp(self):
+    @classmethod
+    def setUpTestData(cls):
         """Build the RequestFactory the per-request resolution tests drive."""
-        self.factory = RequestFactory()
+        cls.factory = RequestFactory()
 
     def _request(self, user, selected_semester_id=None):
         """Return a GET request carrying `user` and, optionally, a session semester selection."""
@@ -149,9 +148,10 @@ class GetViewingSemesterTests(TestCase):
 
 
 class SetViewingSemesterTests(TestCase):
-    def setUp(self):
+    @classmethod
+    def setUpTestData(cls):
         """Build the RequestFactory the selection-recording tests drive."""
-        self.factory = RequestFactory()
+        cls.factory = RequestFactory()
 
     def _request(self):
         """Return a GET request carrying a real session."""
@@ -206,12 +206,16 @@ class SelectionDiesAtLogoutTests(TestCase):
 class MemberRouteScopingTests(TestCase):
     """Every band-wide route renders the Live Semester's data for a member, and no draft's."""
 
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic non-admin Person, with one live Semester and one newer draft."""
+        cls.person = PersonFactory(password=PASSWORD)
+        cls.live = SemesterFactory(published_at=timezone.now())
+        cls.draft = SemesterFactory(draft=True)
+
     def setUp(self):
-        """Log in a synthetic non-admin Person, with one live Semester and one newer draft."""
-        self.person = PersonFactory(password=PASSWORD)
+        """Log in as the synthetic Person before each test."""
         self.client.login(username=self.person.email, password=PASSWORD)
-        self.live = SemesterFactory(published_at=timezone.now())
-        self.draft = SemesterFactory(draft=True)
 
     def _band_wide_urls(self):
         """Return every band-wide route a member reads the viewing Semester through."""
@@ -263,14 +267,18 @@ class MemberRouteScopingTests(TestCase):
 class UnpublishedSiteTests(TestCase):
     """With nothing published, a member's routes render empty rather than erroring."""
 
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic non-admin Person against a database holding only a populated draft."""
+        cls.person = PersonFactory(password=PASSWORD)
+        cls.draft = SemesterFactory(draft=True)
+        RehearsalFactory(semester=cls.draft)
+        SongFactory(semester=cls.draft, position=1)
+        MembershipFactory(semester=cls.draft, person=cls.person)
+
     def setUp(self):
-        """Log in a synthetic non-admin Person against a database holding only a populated draft."""
-        self.person = PersonFactory(password=PASSWORD)
+        """Log in as the synthetic Person before each test."""
         self.client.login(username=self.person.email, password=PASSWORD)
-        self.draft = SemesterFactory(draft=True)
-        RehearsalFactory(semester=self.draft)
-        SongFactory(semester=self.draft, position=1)
-        MembershipFactory(semester=self.draft, person=self.person)
 
     def test_every_band_wide_route_renders_empty_for_a_member(self):
         """Each band-wide route returns 200 with no Semester in context when nothing is published."""
@@ -280,7 +288,6 @@ class UnpublishedSiteTests(TestCase):
             reverse('scheduling:setlist'),
             reverse('scheduling:members'),
             reverse('scheduling:member-detail', args=[self.person.pk]),
-            reverse('scheduling:conflicts'),
         ]
         for url in urls:
             with self.subTest(url=url):
@@ -306,71 +313,18 @@ class UnpublishedSiteTests(TestCase):
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)
-class AdminSelectionGovernsWritesTests(TestCase):
-    """An admin viewing a draft writes to the draft, and the live Semester is unchanged."""
-
-    SONG_PAYLOAD: ClassVar[dict[str, str]] = {
-        'title': 'Song A', 'artist': 'Some Artist', 'length': '00:03:30', 'notes': '',
-    }
-
-    def setUp(self):
-        """Log in a synthetic admin against one live Semester and one draft."""
-        self.admin = PersonFactory(password=PASSWORD, is_admin=True)
-        self.client.login(username=self.admin.email, password=PASSWORD)
-        self.live = SemesterFactory(published_at=timezone.now())
-        self.draft = SemesterFactory(draft=True)
-
-    def _select(self, semester):
-        """Point the logged-in admin's session at `semester`."""
-        session = self.client.session
-        session[VIEWING_SEMESTER_SESSION_KEY] = semester.pk
-        session.save()
-
-    def test_creating_a_song_writes_to_the_selected_draft(self):
-        """A Song added through /manage/setlist/ while a draft is selected belongs to the draft."""
-        self._select(self.draft)
-
-        self.client.post(reverse('scheduling:manage-setlist'), self.SONG_PAYLOAD)
-
-        self.assertEqual(Song.objects.filter(semester=self.draft).count(), 1)
-        self.assertEqual(Song.objects.filter(semester=self.live).count(), 0)
-
-    def test_editing_a_live_songs_page_404s_while_a_draft_is_selected(self):
-        """The live Semester's Song is out of scope for an admin viewing the draft."""
-        self._select(self.draft)
-        live_song = SongFactory(semester=self.live, position=1)
-
-        response = self.client.get(reverse('scheduling:manage-setlist-edit', args=[live_song.pk]))
-
-        self.assertEqual(response.status_code, 404)
-
-    def test_the_manage_setlist_listing_shows_the_selected_draft(self):
-        """/manage/setlist/ lists the selected draft's Songs, not the live Semester's."""
-        self._select(self.draft)
-        draft_song = SongFactory(semester=self.draft, position=1)
-        SongFactory(semester=self.live, position=1)
-
-        response = self.client.get(reverse('scheduling:manage-setlist'))
-
-        self.assertEqual([song.pk for song in response.context['songs']], [draft_song.pk])
-
-    def test_without_a_selection_an_admin_writes_to_the_live_semester(self):
-        """With no session selection, an admin's writes land on the Live Semester."""
-        self.client.post(reverse('scheduling:manage-setlist'), self.SONG_PAYLOAD)
-
-        self.assertEqual(Song.objects.filter(semester=self.live).count(), 1)
-        self.assertEqual(Song.objects.filter(semester=self.draft).count(), 0)
-
-
-@override_settings(SECURE_SSL_REDIRECT=False)
 class PublishVisibilityTests(TestCase):
     """Publishing changes what a member's next request renders, with no re-login."""
 
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic non-admin Person, before anything is published."""
+        cls.person = PersonFactory(password=PASSWORD)
+        cls.draft = SemesterFactory(draft=True)
+
     def setUp(self):
-        """Log in a synthetic non-admin Person mid-session, before anything is published."""
-        self.person = PersonFactory(password=PASSWORD)
+        """Log in as the synthetic Person before each test."""
         self.client.login(username=self.person.email, password=PASSWORD)
-        self.draft = SemesterFactory(draft=True)
 
     def test_a_session_predating_the_publish_sees_the_new_live_semester(self):
         """A member logged in before the publish sees the newly-live Semester on their next request."""

@@ -7,18 +7,26 @@ app_name = 'scheduling'
 urlpatterns = [
     path('', views.OverviewView.as_view(), name='overview'),
     path('schedule/', views.ScheduleView.as_view(), name='schedule'),
+    path('schedule/<int:rehearsal_id>/conflict/', views.ConflictDeclareView.as_view(), name='conflict-declare'),
+    path('schedule/<int:rehearsal_id>/conflict/delete/', views.ConflictDeleteView.as_view(), name='conflict-delete'),
     path('setlist/', views.SetlistView.as_view(), name='setlist'),
     path('setlist/edit/', views.SetlistEditView.as_view(), name='setlist-edit'),
     path(
         'setlist/edit/confirm-delete/',
         views.SetlistDeleteConfirmView.as_view(), name='setlist-edit-confirm-delete',
     ),
+    path(
+        'setlist/edit/import/',
+        views.SetlistImportView.as_view(), name='setlist-edit-import',
+    ),
     path('songs/<int:pk>/', views.SongDetailView.as_view(), name='song-detail'),
     path('members/', views.MembersView.as_view(), name='members'),
+    path('members/preview/', views.RosterPreviewView.as_view(), name='members-preview'),
+    path(
+        'members/preview/confirm-removal/',
+        views.RosterRemovalConfirmView.as_view(), name='members-preview-confirm-removal',
+    ),
     path('members/<int:pk>/', views.MemberDetailView.as_view(), name='member-detail'),
-    path('me/conflicts/', views.ConflictsView.as_view(), name='conflicts'),
-    path('me/conflicts/<int:rehearsal_id>/edit/', views.ConflictEditView.as_view(), name='conflict-edit'),
-    path('me/conflicts/<int:rehearsal_id>/delete/', views.ConflictDeleteView.as_view(), name='conflict-delete'),
     path('me/recordings/', views.RecordingUploadView.as_view(), name='recordings'),
     path('me/recordings/presign/', views.RecordingPresignView.as_view(), name='recordings-presign'),
     path('me/recordings/<int:pk>/delete/', views.RecordingDeleteView.as_view(), name='recordings-delete'),
@@ -28,20 +36,14 @@ urlpatterns = [
     path('manage/semesters/<int:pk>/delete/', views.SemesterDeleteView.as_view(), name='manage-semesters-delete'),
     path('manage/schedule/', views.RehearsalManageView.as_view(), name='manage-schedule'),
     path('manage/schedule/<int:pk>/edit/', views.RehearsalEditView.as_view(), name='manage-schedule-edit'),
-    path('manage/setlist/', views.SongManageView.as_view(), name='manage-setlist'),
-    path('manage/setlist/<int:pk>/edit/', views.SongEditView.as_view(), name='manage-setlist-edit'),
-    path('manage/setlist/<int:pk>/delete/', views.SongDeleteView.as_view(), name='manage-setlist-delete'),
-    path(
-        'manage/setlist/<int:pk>/move-up/',
-        views.SongMoveView.as_view(), {'direction': views.SongMoveView.UP}, name='manage-setlist-move-up',
-    ),
-    path(
-        'manage/setlist/<int:pk>/move-down/',
-        views.SongMoveView.as_view(), {'direction': views.SongMoveView.DOWN}, name='manage-setlist-move-down',
-    ),
     path('manage/assignments/', views.SongRoleAssignmentManageView.as_view(), name='manage-assignments'),
     path(
         'manage/assignments/<int:pk>/delete/',
         views.SongRoleAssignmentDeleteView.as_view(), name='manage-assignments-delete',
+    ),
+    path('manage/conflicts/', views.ConflictAdjudicationIndexView.as_view(), name='manage-conflicts'),
+    path(
+        'manage/conflicts/<int:rehearsal_id>/',
+        views.ConflictAdjudicationDetailView.as_view(), name='manage-conflicts-detail',
     ),
 ]

@@ -25,11 +25,12 @@ from scheduling.services import (
 
 
 class ApplyRosterEditsTests(TestCase):
-    def setUp(self):
+    @classmethod
+    def setUpTestData(cls):
         """Build a Semester with one Role and one admin Person to submit Buffers as."""
-        self.semester = SemesterFactory()
-        self.role = RoleFactory()
-        self.admin = PersonFactory(is_admin=True)
+        cls.semester = SemesterFactory()
+        cls.role = RoleFactory()
+        cls.admin = PersonFactory(is_admin=True)
 
     def _buffer(self, entries=(), removed_person_ids=(), semester=None, updated_at=None):
         """Build a RosterEditBuffer against self.semester unless overridden."""

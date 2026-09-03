@@ -18,9 +18,13 @@ PASSWORD = 'a-strong-test-password-123'
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class ProfileRouteRetiredTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic Person to log in as before each test."""
+        cls.person = PersonFactory(password=PASSWORD)
+
     def setUp(self):
-        """Log in a synthetic Person before each test."""
-        self.person = PersonFactory(password=PASSWORD)
+        """Log in as the synthetic Person before each test."""
         self.client.login(username=self.person.email, password=PASSWORD)
 
     def test_profile_route_name_no_longer_reverses(self):
@@ -48,9 +52,13 @@ class ProfileRouteRetiredTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class ProfileNavItemTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic Person to log in as before each test."""
+        cls.person = PersonFactory(password=PASSWORD)
+
     def setUp(self):
-        """Log in a synthetic Person before each test."""
-        self.person = PersonFactory(password=PASSWORD)
+        """Log in as the synthetic Person before each test."""
         self.client.login(username=self.person.email, password=PASSWORD)
 
     def test_nav_profile_item_points_at_your_own_member_page(self):

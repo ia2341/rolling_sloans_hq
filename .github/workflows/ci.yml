@@ -59,7 +59,7 @@ jobs:
       - name: Run tests
         env:
           DATABASE_URL: postgres://user:password@localhost:5432/rolling_sloans?sslmode=disable
-        run: python manage.py test
+        run: python manage.py test --parallel
 
   build:
     name: Build
