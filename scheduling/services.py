@@ -361,6 +361,54 @@ def reorder_songs(semester: Semester, ordered_song_ids: list[int]) -> None:
         song.save(update_fields=['position'])
 
 
+def reorder_rehearsal_songs(rehearsal: Rehearsal, ordered_rehearsal_song_ids: list[int]) -> None:
+    """Renumber a Rehearsal's Running Order to a contiguous 1..N and re-derive persisted times (issue #215).
+
+    Mirrors `reorder_songs()`'s shape, but `unique_order_per_rehearsal`
+    isn't `Deferrable.DEFERRED` (unlike `unique_song_position_per_semester`),
+    so a permutation of the existing order can't be written in one pass —
+    two rows could momentarily want each other's `order` value. A first
+    pass moves every row to a placeholder `order` strictly above the final
+    `1..N` range (and mutually distinct), clear of both the final range and
+    each other; the second pass then assigns the final contiguous order in
+    `ordered_rehearsal_song_ids`' sequence, saving each row in that order.
+    Placeholders must land *above* N, not merely outside `1..N` (e.g. not
+    negative): `RehearsalSong._prior_slots()` sums the `slot_count` of rows
+    with a lower `order`, so a not-yet-finalized sibling must compare as
+    "later" during the second pass, or its slot_count would be wrongly
+    counted as prior and skew every row's re-derived `start_time`/`end_time`.
+    They must also clear each *surviving* row's current `order`, not just
+    `N` — a prior deletion elsewhere can leave survivors with non-contiguous
+    order values above `N` (e.g. 1 and 3 surviving out of a deleted 2), and
+    a placeholder landing on one of those would collide with it before it's
+    had its own turn to move. Saving in `ordered_rehearsal_song_ids`'
+    sequence during the second pass is what makes `RehearsalSong.save()`
+    re-derive correct times: each row's lower-order siblings are already
+    saved with their final order by the time it's this row's turn. This
+    is also the fix for the stale times
+    a Rehearsal window edit used to leave behind: the caller passes the
+    *current* order unchanged (an identity permutation) just to force every
+    row's times to be recomputed against the Rehearsal's new window.
+
+    Must run inside the caller's `transaction.atomic()`, same as
+    `reorder_songs()`.
+    """
+    rehearsal_songs_by_id = {
+        rehearsal_song.pk: rehearsal_song
+        for rehearsal_song in RehearsalSong.objects.filter(rehearsal=rehearsal, pk__in=ordered_rehearsal_song_ids)
+    }
+    song_count = len(ordered_rehearsal_song_ids)
+    placeholder_base = max([song_count, *(rs.order for rs in rehearsal_songs_by_id.values())])
+    for offset, rehearsal_song_id in enumerate(ordered_rehearsal_song_ids, start=1):
+        rehearsal_song = rehearsal_songs_by_id[rehearsal_song_id]
+        rehearsal_song.order = placeholder_base + offset
+        rehearsal_song.save()
+    for position, rehearsal_song_id in enumerate(ordered_rehearsal_song_ids, start=1):
+        rehearsal_song = rehearsal_songs_by_id[rehearsal_song_id]
+        rehearsal_song.order = position
+        rehearsal_song.save()
+
+
 @dataclass(frozen=True)
 class SongDeletionSummary:
     """One doomed Song's recording/uploader counts, for the setlist edit grid's delete confirmation (issue #179)."""
