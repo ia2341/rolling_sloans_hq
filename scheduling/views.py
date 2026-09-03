@@ -27,6 +27,7 @@ from scheduling.forms import (
     RehearsalForm,
     RosterAddFormSet,
     RosterEditFormSet,
+    SetlistEditEmptyFormSet,
     SetlistEditFormSet,
     SongForm,
     SongRoleAssignmentForm,
@@ -57,6 +58,7 @@ from scheduling.services import (
     attendance_suggestion_for,
     breaks_for,
     confirm_recording_upload,
+    conflict_adjudication_index_for,
     conflict_rows_by_rehearsal,
     create_recording_playback_url,
     declare_conflict,
@@ -346,10 +348,16 @@ class SetlistEditView(AdminRequiredMixin, View):
     MALFORMED_ORDER_MESSAGE = 'The setlist could not be saved — reload and reapply.'
 
     def get(self, request):
-        """Render the edit grid: a bare fragment for htmx, a full page otherwise."""
+        """Render the edit grid: a bare fragment for htmx, a full page otherwise.
+
+        An empty setlist opens with one blank row already present (issue
+        #180), so a brand-new Semester isn't a dead end — otherwise there
+        would be nothing for the grid's own "+ Add song" to add to.
+        """
         semester = get_viewing_semester(request)
         songs = _scoped_to_viewing_semester(Song, semester).order_by('position')
-        formset = SetlistEditFormSet(queryset=songs, prefix='song')
+        formset_class = SetlistEditFormSet if songs.exists() else SetlistEditEmptyFormSet
+        formset = formset_class(queryset=songs, prefix='song')
         return self._render(request, semester, formset)
 
     def post(self, request):
@@ -1478,3 +1486,42 @@ class SemesterDeleteView(AdminRequiredMixin, View):
             return HttpResponseBadRequest(str(error))
         messages.success(request, f'{semester} deleted.')
         return redirect('scheduling:manage-semesters')
+
+
+class ConflictAdjudicationIndexView(AdminRequiredMixin, TemplateView):
+    """`/manage/conflicts/`: an admin's starting point for adjudicating Conflicts (issue #191, ADR 0005).
+
+    Lists the viewing Semester's future, non-Dress Rehearsals — the same
+    "declarable" set `future_rehearsals_for()` computes — each carrying its
+    own pending-Conflict count so an admin can see where the work is
+    without opening every date. A Rehearsal with zero Conflicts still
+    appears: absence isn't how "nothing to do" gets communicated here.
+    """
+
+    template_name = 'scheduling/manage_conflicts.html'
+
+    def get_context_data(self, **kwargs):
+        """Add the viewing Semester and its adjudication-index rows."""
+        context = super().get_context_data(**kwargs)
+        semester = get_viewing_semester(self.request)
+        context['semester'] = semester
+        context['rows'] = conflict_adjudication_index_for(semester) if semester else []
+        return context
+
+
+class ConflictAdjudicationDetailView(AdminRequiredMixin, TemplateView):
+    """`/manage/conflicts/<rehearsal_id>/`: one Rehearsal's adjudication table (issue #191, table itself is issue #192).
+
+    Reachable from the index and from an unconditional link on
+    `/schedule/`; this ticket only establishes the route, its Semester
+    scoping and its admin gating. The table that decides each Conflict is
+    #192's.
+    """
+
+    template_name = 'scheduling/manage_conflicts_detail.html'
+
+    def get(self, request, rehearsal_id):
+        """Render the target Rehearsal, scoped to the viewing Semester (404 outside it)."""
+        semester = get_viewing_semester(request)
+        rehearsal = get_object_or_404(_scoped_to_viewing_semester(Rehearsal, semester), pk=rehearsal_id)
+        return render(request, self.template_name, {'semester': semester, 'rehearsal': rehearsal})
