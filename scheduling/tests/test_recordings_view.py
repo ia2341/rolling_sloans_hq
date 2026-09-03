@@ -115,7 +115,7 @@ class RecordingUploadViewGetTests(TestCase):
         self.assertNotContains(response, 'No songs have been scheduled into a rehearsal yet')
 
     def test_offers_only_the_current_semesters_rehearsal_songs(self):
-        """The RehearsalSong picker is scoped to the current Semester, per get_current_semester()."""
+        """The RehearsalSong picker is scoped to the viewing Semester, per get_viewing_semester()."""
         older_semester = SemesterFactory()
         current_semester = SemesterFactory()
         older_rehearsal_song = RehearsalSongFactory(rehearsal__semester=older_semester, song__semester=older_semester)

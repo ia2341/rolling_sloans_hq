@@ -43,7 +43,7 @@ from scheduling.services import (
     declare_conflict,
     declared_roles_for,
     future_rehearsals_for,
-    get_current_semester,
+    get_viewing_semester,
     next_attended_rehearsal_for,
     performers_for,
     recording_count_for,
@@ -58,8 +58,14 @@ from scheduling.services import (
 )
 
 
-def _scoped_to_current_semester(model, semester):
-    """Return `model`'s current-Semester queryset, or an empty one if there's no current Semester yet."""
+def _scoped_to_viewing_semester(model, semester):
+    """Return `model`'s queryset scoped to the viewing Semester, or an empty one when there is no Semester to view.
+
+    `semester` is always `services.get_viewing_semester(request)`'s answer,
+    so an admin viewing a draft reads and writes the draft's rows and a
+    member only ever reaches the Live Semester's (ADR-0010). The `None` case
+    is the pre-publish empty state, which every caller renders as zero rows.
+    """
     return model.objects.filter(semester=semester) if semester else model.objects.none()
 
 
@@ -82,7 +88,7 @@ class OverviewView(BaseView, TemplateView):
     def get_context_data(self, **kwargs):
         """Add the Next Rehearsal card (issue #94) and semester-wide song-progress table (issue #93)."""
         context = super().get_context_data(**kwargs)
-        semester = get_current_semester()
+        semester = get_viewing_semester(self.request)
         context['semester'] = semester
         context['next_rehearsal'] = None
         context['next_rehearsal_suggestion'] = None
@@ -107,7 +113,7 @@ class ScheduleView(BaseView, TemplateView):
     Defaults (`?view=next`, or no `?view=` at all) to a Rehearsal's Song x
     Role x Person assignment matrix — the member's own next Rehearsal
     unless `?rehearsal=<id>` drills into a specific one. `?view=all` instead
-    lists the current Semester's full schedule, split into a collapsed past
+    lists the viewing Semester's full schedule, split into a collapsed past
     section and an expanded future section, each row linking to its own
     `?rehearsal=<id>` detail. Read-only and identical for admins and
     members — admin write affordances are a future hook point (issue #69).
@@ -121,7 +127,7 @@ class ScheduleView(BaseView, TemplateView):
     def get_context_data(self, **kwargs):
         """Add either the All-Rehearsals schedule, or the resolved Rehearsal's matrix plus the member's own attendance/breaks (issues #95, #96, #97)."""
         context = super().get_context_data(**kwargs)
-        semester = get_current_semester()
+        semester = get_viewing_semester(self.request)
         context['semester'] = semester
         context['view_mode'] = self._resolve_view()
         context['rehearsal'] = None
@@ -153,12 +159,12 @@ class ScheduleView(BaseView, TemplateView):
         return self.VIEW_ALL if self.request.GET.get('view') == self.VIEW_ALL else self.VIEW_NEXT
 
     def _resolve_rehearsal(self, semester):
-        """Return the `?rehearsal=<id>` Rehearsal (404 outside the current Semester), or the member's next Rehearsal."""
+        """Return the `?rehearsal=<id>` Rehearsal (404 outside the viewing Semester), or the member's next Rehearsal."""
         raw_id = self.request.GET.get('rehearsal')
         if raw_id is None:
             return next_attended_rehearsal_for(self.request.user, semester=semester)
         rehearsal_id = self._parse_rehearsal_id(raw_id)
-        return get_object_or_404(_scoped_to_current_semester(Rehearsal, semester), pk=rehearsal_id)
+        return get_object_or_404(_scoped_to_viewing_semester(Rehearsal, semester), pk=rehearsal_id)
 
     def _parse_rehearsal_id(self, raw_id):
         """Return `raw_id` as an int, or raise Http404 for a non-numeric value."""
@@ -174,11 +180,11 @@ class SetlistView(BaseView, TemplateView):
     template_name = 'scheduling/setlist.html'
 
     def get_context_data(self, **kwargs):
-        """Add the current Semester's Songs, each annotated with performers, rehearsal progress, and recording count."""
+        """Add the viewing Semester's Songs, each annotated with performers, rehearsal progress, and recording count."""
         context = super().get_context_data(**kwargs)
-        semester = get_current_semester()
+        semester = get_viewing_semester(self.request)
         context['semester'] = semester
-        songs = list(_scoped_to_current_semester(Song, semester).order_by('position'))
+        songs = list(_scoped_to_viewing_semester(Song, semester).order_by('position'))
         for song in songs:
             song.performers = performers_for(song)
             song.progress = song_rehearsal_progress(song)
@@ -188,7 +194,7 @@ class SetlistView(BaseView, TemplateView):
 
 
 class MembersView(BaseView, TemplateView):
-    """`/members/`: the Band Members roster for the current Semester — name, declared Roles, Song count (issue #137).
+    """`/members/`: the Band Members roster for the viewing Semester — name, declared Roles, Song count (issue #137).
 
     Read-only and identical for admins and members: no email column and no
     admin badge, both of which stay confined to the admin-only people
@@ -199,16 +205,16 @@ class MembersView(BaseView, TemplateView):
     template_name = 'scheduling/members.html'
 
     def get_context_data(self, **kwargs):
-        """Add the current Semester and its roster, or an empty roster when there's no current Semester yet."""
+        """Add the viewing Semester and its roster, or an empty roster when there's no viewing Semester yet."""
         context = super().get_context_data(**kwargs)
-        semester = get_current_semester()
+        semester = get_viewing_semester(self.request)
         context['semester'] = semester
-        context['members'] = roster_for(_scoped_to_current_semester(Membership, semester))
+        context['members'] = roster_for(_scoped_to_viewing_semester(Membership, semester))
         return context
 
 
 class MemberDetailView(BaseView, View):
-    """`/members/<int:pk>/`: one Person's page for the current Semester (issue #138).
+    """`/members/<int:pk>/`: one Person's page for the viewing Semester (issue #138).
 
     Two rendering modes, and no third: read-only for a teammate's pk,
     editable in place for `request.user.pk`. The editable mode carries the
@@ -222,7 +228,7 @@ class MemberDetailView(BaseView, View):
     attendance data off the page for everyone, its owner included, because
     the boundary is drawn around the surface rather than the viewer.
 
-    A Person with no current-Semester `Membership` 404s — except your own
+    A Person with no viewing-Semester `Membership` 404s — except your own
     pk, which builds an unsaved `Membership` instead, so a newly-invited
     member can declare Roles before an admin rosters them. With no current
     Semester at all nobody holds such a Membership, so a teammate's pk
@@ -233,7 +239,7 @@ class MemberDetailView(BaseView, View):
 
     def get(self, request, pk):
         """Render `pk`'s page: read-only for a teammate, or your own with the inline Roles form."""
-        semester = get_current_semester()
+        semester = get_viewing_semester(self.request)
         person = self._get_person_or_404(request, pk, semester)
         return render(request, self.template_name, self._build_context(request, person, semester))
 
@@ -241,7 +247,7 @@ class MemberDetailView(BaseView, View):
         """Persist your own declared Roles, or 404 — a teammate's page has no mutation surface."""
         if pk != request.user.pk:
             raise Http404('A member can only edit their own declared Roles.')
-        semester = get_current_semester()
+        semester = get_viewing_semester(request)
         if semester is None:
             return render(request, self.template_name, self._build_context(request, request.user, semester))
         membership = self._get_or_build_membership(request.user, semester)
@@ -256,11 +262,11 @@ class MemberDetailView(BaseView, View):
         return render(request, self.template_name, context)
 
     def _get_person_or_404(self, request, pk, semester):
-        """Return your own Person unchecked, or a teammate holding a current-Semester Membership, else 404."""
+        """Return your own Person unchecked, or a teammate holding a viewing-Semester Membership, else 404."""
         if pk == request.user.pk:
             return request.user
         membership = get_object_or_404(
-            _scoped_to_current_semester(Membership, semester).select_related('person'), person_id=pk,
+            _scoped_to_viewing_semester(Membership, semester).select_related('person'), person_id=pk,
         )
         return membership.person
 
@@ -307,8 +313,8 @@ class SongDetailView(BaseView, DetailView):
     context_object_name = 'song'
 
     def get_queryset(self):
-        """Restrict lookups to the current Semester's Songs, so an older Song 404s."""
-        return _scoped_to_current_semester(Song, get_current_semester())
+        """Restrict lookups to the viewing Semester's Songs, so an older Song 404s."""
+        return _scoped_to_viewing_semester(Song, get_viewing_semester(self.request))
 
     def get_context_data(self, **kwargs):
         """Add the Song's SongRoleAssignments, Recordings grouped by RehearsalSong slot, and rehearsal-count target vs. actual."""
@@ -353,8 +359,12 @@ def _declared_time_initial(row):
     return {}
 
 
-def _build_conflicts_context(person, error_rehearsal=None, error_form=None, selected_rehearsal_id=None):
+def _build_conflicts_context(request, error_rehearsal=None, error_form=None, selected_rehearsal_id=None):
     """Build /me/conflicts/'s shared context for GET and every POST failure re-render (issues #98, #99, #100).
+
+    Takes the whole `request` rather than just the Person, since the page is
+    scoped to `get_viewing_semester(request)` and the rows are always
+    `request.user`'s own — the two can't come from different places.
 
     `error_rehearsal`/`error_form` inject a just-submitted invalid form back
     into its own row, wherever that Rehearsal's row lives — the Upcoming
@@ -366,7 +376,8 @@ def _build_conflicts_context(person, error_rehearsal=None, error_form=None, sele
     it need not match any row (a stale or bogus id), in which case nothing
     is marked selected.
     """
-    semester = get_current_semester()
+    person = request.user
+    semester = get_viewing_semester(request)
     if semester is None:
         return {'semester': None}
     rehearsals = future_rehearsals_for(semester)
@@ -437,7 +448,7 @@ def _parse_selected_rehearsal_id(raw_id):
 
 
 def _future_rehearsal_with_conflict_or_404(request, rehearsal_id, action):
-    """Return the current Semester's future Rehearsal with an existing Conflict for request.user, or 404.
+    """Return the viewing Semester's future Rehearsal with an existing Conflict for request.user, or 404.
 
     Shared by ConflictEditView and ConflictDeleteView: the hidden Edit/Delete
     controls on a past History row are not the actual enforcement, so both
@@ -445,7 +456,7 @@ def _future_rehearsal_with_conflict_or_404(request, rehearsal_id, action):
     (issue #99). `action` ('edited'/'deleted') only shapes the 404 message.
     """
     rehearsal = get_object_or_404(
-        _scoped_to_current_semester(Rehearsal, get_current_semester()), pk=rehearsal_id,
+        _scoped_to_viewing_semester(Rehearsal, get_viewing_semester(request)), pk=rehearsal_id,
     )
     if not Conflict.objects.filter(person=request.user, rehearsal=rehearsal).exists():
         raise Http404('No existing Conflict for this Rehearsal.')
@@ -457,7 +468,7 @@ def _future_rehearsal_with_conflict_or_404(request, rehearsal_id, action):
 class ConflictsView(BaseView, View):
     """`/me/conflicts/`: the unified Conflicts page's Upcoming Rehearsals declare flow (issues #98, #99).
 
-    Lists every future Rehearsal (date >= today) in the current Semester.
+    Lists every future Rehearsal (date >= today) in the viewing Semester.
     A Rehearsal with no existing Conflict for `request.user` gets an inline
     declare form (full absence / late arrival / early departure); one that
     already has a Conflict renders as a disabled row pointing to History
@@ -475,7 +486,7 @@ class ConflictsView(BaseView, View):
         for the page's client-side scroll/expand/highlight.
         """
         selected_rehearsal_id = _parse_selected_rehearsal_id(request.GET.get('rehearsal'))
-        context = _build_conflicts_context(request.user, selected_rehearsal_id=selected_rehearsal_id)
+        context = _build_conflicts_context(request, selected_rehearsal_id=selected_rehearsal_id)
         return render(request, self.template_name, context)
 
     def post(self, request):
@@ -485,9 +496,9 @@ class ConflictsView(BaseView, View):
         so a hand-crafted POST naming it 404s here rather than reaching
         declare_conflict()'s ValueError as a 500 (ADR-0006).
         """
-        semester = get_current_semester()
+        semester = get_viewing_semester(request)
         rehearsal = get_object_or_404(
-            _scoped_to_current_semester(Rehearsal, semester).filter(
+            _scoped_to_viewing_semester(Rehearsal, semester).filter(
                 date__gte=timezone.localdate(), is_full_setlist=False,
             ),
             pk=request.POST.get('rehearsal_id'),
@@ -510,7 +521,7 @@ class ConflictsView(BaseView, View):
                 raise Http404('A Conflict already exists for this Rehearsal.') from None
             messages.success(request, 'Conflict declared.')
             return redirect('scheduling:conflicts')
-        context = _build_conflicts_context(request.user, error_rehearsal=rehearsal, error_form=form)
+        context = _build_conflicts_context(request, error_rehearsal=rehearsal, error_form=form)
         return render(request, self.template_name, context)
 
 
@@ -541,11 +552,11 @@ class ConflictEditView(BaseView, View):
             )
             messages.success(request, 'Conflict updated.')
             return redirect('scheduling:conflicts')
-        context = _build_conflicts_context(request.user, error_rehearsal=rehearsal, error_form=form)
+        context = _build_conflicts_context(request, error_rehearsal=rehearsal, error_form=form)
         return render(request, self.template_name, context)
 
     def _get_editable_rehearsal(self, request, rehearsal_id):
-        """Return the current Semester's future Rehearsal with an existing Conflict for request.user, or 404."""
+        """Return the viewing Semester's future Rehearsal with an existing Conflict for request.user, or 404."""
         return _future_rehearsal_with_conflict_or_404(request, rehearsal_id, action='edited')
 
 
@@ -566,17 +577,17 @@ class ConflictDeleteView(BaseView, View):
 
 
 class RehearsalManageView(AdminRequiredMixin, View):
-    """`/manage/schedule/`: an admin lists and creates the current Semester's Rehearsals (issue #60, #17 story 10)."""
+    """`/manage/schedule/`: an admin lists and creates the viewing Semester's Rehearsals (issue #60, #17 story 10)."""
 
     template_name = 'scheduling/manage_schedule.html'
 
     def get(self, request):
-        """Render the current Semester's Rehearsals alongside an empty create form."""
+        """Render the viewing Semester's Rehearsals alongside an empty create form."""
         return render(request, self.template_name, self._build_context())
 
     def post(self, request):
-        """Validate the create form and save a new Rehearsal in the current Semester, or re-render with errors."""
-        semester = get_current_semester()
+        """Validate the create form and save a new Rehearsal in the viewing Semester, or re-render with errors."""
+        semester = get_viewing_semester(request)
         if semester is None:
             messages.error(request, 'Create a Semester before scheduling Rehearsals.')
             return redirect('scheduling:manage-schedule')
@@ -588,11 +599,11 @@ class RehearsalManageView(AdminRequiredMixin, View):
         return render(request, self.template_name, self._build_context(form))
 
     def _build_context(self, form=None):
-        """Build context: the current Semester's Rehearsals plus the create form (fresh if none is given)."""
-        semester = get_current_semester()
+        """Build context: the viewing Semester's Rehearsals plus the create form (fresh if none is given)."""
+        semester = get_viewing_semester(self.request)
         return {
             'semester': semester,
-            'rehearsals': _scoped_to_current_semester(Rehearsal, semester),
+            'rehearsals': _scoped_to_viewing_semester(Rehearsal, semester),
             'form': form or RehearsalForm(),
         }
 
@@ -618,22 +629,22 @@ class RehearsalEditView(AdminRequiredMixin, View):
         return render(request, self.template_name, {'rehearsal': rehearsal, 'form': form})
 
     def _get_rehearsal(self, pk):
-        """Return the current Semester's Rehearsal with this id, or 404 (mirrors SongDetailView's scoping)."""
-        return get_object_or_404(_scoped_to_current_semester(Rehearsal, get_current_semester()), pk=pk)
+        """Return the viewing Semester's Rehearsal with this id, or 404 (mirrors SongDetailView's scoping)."""
+        return get_object_or_404(_scoped_to_viewing_semester(Rehearsal, get_viewing_semester(self.request)), pk=pk)
 
 
 class SongManageView(AdminRequiredMixin, View):
-    """`/manage/setlist/`: an admin lists and adds the current Semester's Songs (issue #60, #17 story 11)."""
+    """`/manage/setlist/`: an admin lists and adds the viewing Semester's Songs (issue #60, #17 story 11)."""
 
     template_name = 'scheduling/manage_setlist.html'
 
     def get(self, request):
-        """Render the current Semester's Songs in position order alongside an empty create form."""
+        """Render the viewing Semester's Songs in position order alongside an empty create form."""
         return render(request, self.template_name, self._build_context())
 
     def post(self, request):
-        """Validate the create form and append a new Song at the end of the current Semester's setlist."""
-        semester = get_current_semester()
+        """Validate the create form and append a new Song at the end of the viewing Semester's setlist."""
+        semester = get_viewing_semester(request)
         if semester is None:
             messages.error(request, 'Create a Semester before adding Songs.')
             return redirect('scheduling:manage-setlist')
@@ -648,16 +659,16 @@ class SongManageView(AdminRequiredMixin, View):
         return render(request, self.template_name, self._build_context(form))
 
     def _next_position(self, semester):
-        """Return one past the current Semester's highest Song position (1 if it has no Songs yet)."""
+        """Return one past the viewing Semester's highest Song position (1 if it has no Songs yet)."""
         highest = Song.objects.filter(semester=semester).aggregate(highest=models.Max('position'))['highest']
         return (highest or 0) + 1
 
     def _build_context(self, form=None):
-        """Build context: the current Semester's Songs plus the create form (fresh if none is given)."""
-        semester = get_current_semester()
+        """Build context: the viewing Semester's Songs plus the create form (fresh if none is given)."""
+        semester = get_viewing_semester(self.request)
         return {
             'semester': semester,
-            'songs': _scoped_to_current_semester(Song, semester),
+            'songs': _scoped_to_viewing_semester(Song, semester),
             'form': form or SongForm(),
         }
 
@@ -683,16 +694,16 @@ class SongEditView(AdminRequiredMixin, View):
         return render(request, self.template_name, {'song': song, 'form': form})
 
     def _get_song(self, pk):
-        """Return the current Semester's Song with this id, or 404 (mirrors SongDetailView's scoping)."""
-        return get_object_or_404(_scoped_to_current_semester(Song, get_current_semester()), pk=pk)
+        """Return the viewing Semester's Song with this id, or 404 (mirrors SongDetailView's scoping)."""
+        return get_object_or_404(_scoped_to_viewing_semester(Song, get_viewing_semester(self.request)), pk=pk)
 
 
 class SongDeleteView(AdminRequiredMixin, View):
     """`/manage/setlist/<pk>/delete/`: an admin removes a Song from the setlist (issue #60, #17 story 11)."""
 
     def post(self, request, pk):
-        """Delete the current Semester's target Song and redirect back to the setlist with a success message."""
-        song = get_object_or_404(_scoped_to_current_semester(Song, get_current_semester()), pk=pk)
+        """Delete the viewing Semester's target Song and redirect back to the setlist with a success message."""
+        song = get_object_or_404(_scoped_to_viewing_semester(Song, get_viewing_semester(request)), pk=pk)
         song.delete()
         messages.success(request, 'Song removed.')
         return redirect('scheduling:manage-setlist')
@@ -711,8 +722,8 @@ class SongMoveView(AdminRequiredMixin, View):
     DOWN = 'down'
 
     def post(self, request, pk, direction):
-        """Swap the current Semester's target Song's position with its previous/next neighbor, if one exists."""
-        song = get_object_or_404(_scoped_to_current_semester(Song, get_current_semester()), pk=pk)
+        """Swap the viewing Semester's target Song's position with its previous/next neighbor, if one exists."""
+        song = get_object_or_404(_scoped_to_viewing_semester(Song, get_viewing_semester(request)), pk=pk)
         with transaction.atomic():
             _lock_semester(song.semester)
             song.refresh_from_db()
@@ -745,16 +756,16 @@ class SongRoleAssignmentManageView(AdminRequiredMixin, View):
     template_name = 'scheduling/manage_assignments.html'
 
     def get(self, request):
-        """Render the current Semester's SongRoleAssignments alongside an empty create form."""
+        """Render the viewing Semester's SongRoleAssignments alongside an empty create form."""
         return render(request, self.template_name, self._build_context())
 
     def post(self, request):
         """Validate the create form and save a new SongRoleAssignment, or re-render with errors."""
-        semester = get_current_semester()
+        semester = get_viewing_semester(request)
         if semester is None:
             messages.error(request, 'Create a Semester with Songs before assigning Roles.')
             return redirect('scheduling:manage-assignments')
-        songs = _scoped_to_current_semester(Song, semester)
+        songs = _scoped_to_viewing_semester(Song, semester)
         form = SongRoleAssignmentForm(request.POST, songs=songs)
         if form.is_valid():
             form.save()
@@ -763,9 +774,9 @@ class SongRoleAssignmentManageView(AdminRequiredMixin, View):
         return render(request, self.template_name, self._build_context(form))
 
     def _build_context(self, form=None):
-        """Build context: the current Semester's SongRoleAssignments plus the create form (fresh if none is given)."""
-        semester = get_current_semester()
-        songs = _scoped_to_current_semester(Song, semester)
+        """Build context: the viewing Semester's SongRoleAssignments plus the create form (fresh if none is given)."""
+        semester = get_viewing_semester(self.request)
+        songs = _scoped_to_viewing_semester(Song, semester)
         assignments = SongRoleAssignment.objects.filter(song__in=songs).select_related('song', 'role', 'person')
         return {
             'semester': semester,
@@ -778,8 +789,8 @@ class SongRoleAssignmentDeleteView(AdminRequiredMixin, View):
     """`/manage/assignments/<pk>/delete/`: an admin removes a SongRoleAssignment (issue #60, #17 story 12)."""
 
     def post(self, request, pk):
-        """Delete the current Semester's target SongRoleAssignment and redirect with a success message."""
-        songs = _scoped_to_current_semester(Song, get_current_semester())
+        """Delete the viewing Semester's target SongRoleAssignment and redirect with a success message."""
+        songs = _scoped_to_viewing_semester(Song, get_viewing_semester(request))
         assignment = get_object_or_404(SongRoleAssignment, pk=pk, song__in=songs)
         assignment.delete()
         messages.success(request, 'Assignment removed.')
@@ -795,7 +806,7 @@ class RecordingUploadView(BaseView, View):
     object_key to create the Recording row.
 
     An optional `?song=<id>` param (issue #102) restricts the RehearsalSong
-    dropdown to that Song's own slots within the current Semester; omitting
+    dropdown to that Song's own slots within the viewing Semester; omitting
     it keeps the original flat, semester-wide dropdown. The picker form has
     no `action` attribute, so the confirm POST resubmits to the same URL and
     the param survives into `post()` without needing a hidden field.
@@ -842,24 +853,24 @@ class RecordingUploadView(BaseView, View):
         })
 
     def _requested_song(self, raw_song_id):
-        """Return the current Semester's `?song=<id>` Song, or None when unscoped or no such Song exists.
+        """Return the viewing Semester's `?song=<id>` Song, or None when unscoped or no such Song exists.
 
-        Short-circuits before parsing when there's no current Semester, mirroring
+        Short-circuits before parsing when there's no viewing Semester, mirroring
         `_rehearsal_songs()` — otherwise a malformed `?song=` would start 404ing on
         a Semester-less database, where it used to render normally.
         """
-        semester = get_current_semester()
+        semester = get_viewing_semester(self.request)
         if raw_song_id is None or semester is None:
             return None
         return Song.objects.filter(pk=self._parse_song_id(raw_song_id), semester=semester).first()
 
     def _rehearsal_songs(self, request):
-        """Return the current Semester's RehearsalSongs, filtered to `?song=<id>` when given.
+        """Return the viewing Semester's RehearsalSongs, filtered to `?song=<id>` when given.
 
-        Empty queryset if there's no current Semester, or if `?song=<id>` matches no
+        Empty queryset if there's no viewing Semester, or if `?song=<id>` matches no
         RehearsalSong (e.g. a Song with no scheduled slots yet) — never an error.
         """
-        semester = get_current_semester()
+        semester = get_viewing_semester(self.request)
         if semester is None:
             return RehearsalSong.objects.none()
         rehearsal_songs = RehearsalSong.objects.filter(rehearsal__semester=semester)

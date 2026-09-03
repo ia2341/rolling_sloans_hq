@@ -2,6 +2,7 @@ import string
 from datetime import time, timedelta
 
 import factory
+from django.utils import timezone
 from faker import Faker
 
 from identity.factories import PersonFactory
@@ -36,10 +37,22 @@ def fake_song_title(n):
 
 
 class SemesterFactory(factory.django.DjangoModelFactory):
+    """A Semester, **published** by default — the only state a member can see, so the state most tests want.
+
+    Pass `draft=True` for an unpublished Semester (a null `published_at`),
+    or an explicit `published_at` to place a Semester in the publish order.
+    Each published Semester's default `published_at` strictly increases, so
+    the most recently built one is unambiguously the Live Semester.
+    """
+
     class Meta:
         model = Semester
 
+    class Params:
+        draft = factory.Trait(published_at=None)
+
     name = factory.LazyFunction(fake_semester_name)
+    published_at = factory.Sequence(lambda n: timezone.now() + timedelta(microseconds=n))
     default_rehearsal_duration_minutes = 90
     default_setup_grace_minutes = 15
     default_teardown_grace_minutes = 15

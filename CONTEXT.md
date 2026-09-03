@@ -9,8 +9,16 @@ A band member's persistent identity (name, login), independent of any one semest
 _Avoid_: Member, User
 
 **Semester**:
-One term (e.g. "Fall 2026") that gets its own fresh roster, setlist, and rehearsal schedule — the unit at which the band "refreshes."
+One term (e.g. "Fall 2026") that gets its own fresh roster, setlist, and rehearsal schedule — the unit at which the band "refreshes." A Semester nobody has Published is a **draft**: it exists, an admin can build it out, and no member sees it.
 _Avoid_: Term, Season
+
+**Live Semester**:
+The one Semester non-admin members see — its roster, setlist and schedule are what the site shows them. At most one is live, and there may be none, before the first Publish. Distinct from the Semester an admin is *viewing*, which may be a draft they are preparing.
+_Avoid_: Current semester, Active semester *("current" was the old incidental heuristic — the most recently created row — that the lifecycle exists to remove; `Semester` carries no dates, so the app genuinely cannot know which term is happening in real time)*
+
+**Publish**:
+The act of making a Semester the Live Semester. Operates only on a whole Semester: edits *within* a semester are never published, they take effect when saved. There is no unpublish — rolling back is Publishing an older Semester, which simply makes that one live again.
+_Avoid_: Go live, Release, Activate
 
 **Membership**:
 A Person's participation in one Semester. Carries the roles that person has declared they can play *that* semester — declarations can change semester to semester as people pick up or drop instruments.

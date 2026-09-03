@@ -17,8 +17,12 @@ from .models import (
 
 @admin.register(Semester)
 class SemesterAdmin(admin.ModelAdmin):
+    """Admin for a Semester, surfacing the lifecycle so a new one is visibly a draft until it is published (ADR-0010)."""
+
     list_display = (
         'name',
+        'published_at',
+        'created_at',
         'default_rehearsal_duration_minutes',
         'default_setup_grace_minutes',
         'default_teardown_grace_minutes',
@@ -27,6 +31,7 @@ class SemesterAdmin(admin.ModelAdmin):
         'default_departure_buffer_minutes',
     )
     search_fields = ('name',)
+    readonly_fields = ('created_at',)
 
 
 @admin.register(Role)

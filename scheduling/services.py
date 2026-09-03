@@ -25,6 +25,7 @@ from scheduling.models import (
 )
 
 MAX_RECORDING_FILE_SIZE = 50 * 1024 * 1024
+VIEWING_SEMESTER_SESSION_KEY = 'viewing_semester_id'
 PRESIGNED_URL_EXPIRY_SECONDS = 900
 SUPPORTED_RECORDING_CONTENT_TYPES = frozenset(
     {
@@ -198,23 +199,74 @@ def _validate_recording_metadata(content_type: str | None, file_size: int | None
         raise RecordingUploadError('Recording uploads may not exceed 50 MB.')
 
 
-def get_current_semester() -> Semester | None:
-    """Return the most-recently-created Semester, or None if none exist yet.
+def get_live_semester() -> Semester | None:
+    """Return the Live Semester — the greatest `published_at`, nulls excluded — or None if nothing is published.
 
-    "Current semester" isn't specified anywhere else in the domain map
-    (issue #56); this is the single place that decides it, so every read
-    route that needs "the current semester" reuses this instead of
-    re-deriving its own notion of recency.
+    This is the answer to "what do members see", and it takes no request:
+    every non-admin sees the same Semester, always. A Semester with a null
+    `published_at` is a draft and can never be live (ADR-0010).
+
+    Ties on `published_at` fall back to the greater id, so the result is
+    deterministic even when two rows are published in the same instant.
     """
-    return Semester.objects.order_by('-id').first()
+    return Semester.objects.exclude(published_at=None).order_by('-published_at', '-id').first()
+
+
+def get_viewing_semester(request) -> Semester | None:
+    """Return the Semester `request` is scoped to, for reads and writes alike.
+
+    The single place that answers "which Semester am I looking at", so no
+    view re-derives its own notion and they cannot drift apart:
+
+    - a non-admin gets the Live Semester, or None. A session selection on a
+      non-admin account is ignored, never honoured, so an account that has
+      lost `is_admin` immediately sees exactly what a member sees.
+    - an admin with a session selection gets that Semester — including a
+      draft, which is what makes an admin's writes land on the draft.
+    - an admin with no selection gets the Live Semester; and with nothing
+      published at all, the most recently *created* Semester, so a solo
+      admin bootstrapping the first term isn't trapped in empty states.
+      Members never get that fallback.
+
+    A selection pointing at a since-deleted Semester falls back silently to
+    the Live Semester rather than raising.
+    """
+    if not _is_admin(getattr(request, 'user', None)):
+        return get_live_semester()
+    selected_id = request.session.get(VIEWING_SEMESTER_SESSION_KEY)
+    if selected_id is not None:
+        selected = Semester.objects.filter(pk=selected_id).first()
+        if selected is not None:
+            return selected
+    return get_live_semester() or Semester.objects.order_by('-created_at', '-id').first()
+
+
+def set_viewing_semester(request, semester: Semester | None) -> None:
+    """Record `semester` as this request's session selection, or clear the selection when given None.
+
+    The selection lives in `request.session` and therefore dies at logout —
+    chosen over a `?semester=` param or an `/s/<id>/` URL prefix because the
+    admin controls that read it are inlined onto the existing member-facing
+    pages, where a URL-borne selection would have to be threaded through
+    every link and form.
+    """
+    if semester is None:
+        request.session.pop(VIEWING_SEMESTER_SESSION_KEY, None)
+        return
+    request.session[VIEWING_SEMESTER_SESSION_KEY] = semester.pk
+
+
+def _is_admin(user) -> bool:
+    """Return whether `user` is a logged-in admin — False for anonymous or missing users."""
+    return bool(user is not None and getattr(user, 'is_authenticated', False) and getattr(user, 'is_admin', False))
 
 
 def roster_for(memberships):
     """Return `memberships` as the Band Members roster: ordered by Person name, carrying Roles and a Song count (issue #137).
 
     Takes a Membership queryset rather than a Semester so the caller keeps
-    the no-current-Semester empty state in one place (the
-    `_scoped_to_current_semester` idiom in `views.py`).
+    the no-viewing-Semester empty state in one place (the
+    `_scoped_to_viewing_semester` idiom in `views.py`).
 
     Each row is annotated with `songs_count` — the number of distinct Songs
     in that Membership's own Semester the Person holds any
