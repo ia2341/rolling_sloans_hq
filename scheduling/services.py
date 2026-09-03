@@ -862,6 +862,18 @@ def future_rehearsals_for(semester) -> list[Rehearsal]:
     )
 
 
+_CLEARED_ADJUDICATION = {'status': Conflict.PENDING, 'adjudication_note': ''}
+"""The undecided verdict every declaration is written with (issue #189).
+
+Applied on create *and* on edit, so an admin's approval never appears to
+bless a window the member has since moved, and a note reasoning about a
+declaration that no longer says that never survives to be read. It lives
+in `declare_conflict()` rather than in a view because that service is
+already the only mapping from a declaration to Conflict/ConflictWindow
+rows, so every caller gets the reset without opting in.
+"""
+
+
 def declare_conflict(person, rehearsal, declaration_type, declared_time=None, reason='', allow_edit=True) -> Conflict:
     """Create or edit-in-place `person`'s Conflict for `rehearsal` from an inline declaration (issues #98, #99).
 
@@ -885,6 +897,9 @@ def declare_conflict(person, rehearsal, declaration_type, declared_time=None, re
 
     A Dress Rehearsal is rejected outright before any DB write: attendance
     there is mandatory (ADR-0006).
+
+    Every write path here also resets the row's adjudication to pending
+    with an empty note (issue #189) — see _CLEARED_ADJUDICATION.
     """
     if rehearsal.is_full_setlist:
         raise ValueError(
@@ -894,11 +909,13 @@ def declare_conflict(person, rehearsal, declaration_type, declared_time=None, re
     with transaction.atomic():
         if declaration_type == CONFLICT_FULL_ABSENCE:
             conflict, created = Conflict.objects.update_or_create(
-                person=person, rehearsal=rehearsal, defaults={'type': Conflict.FULL_CONFLICT, 'reason': reason},
+                person=person, rehearsal=rehearsal,
+                defaults={'type': Conflict.FULL_CONFLICT, 'reason': reason, **_CLEARED_ADJUDICATION},
             )
         elif declaration_type in (CONFLICT_LATE_ARRIVAL, CONFLICT_EARLY_DEPARTURE):
             conflict, created = Conflict.objects.update_or_create(
-                person=person, rehearsal=rehearsal, defaults={'type': Conflict.PARTIAL, 'reason': reason},
+                person=person, rehearsal=rehearsal,
+                defaults={'type': Conflict.PARTIAL, 'reason': reason, **_CLEARED_ADJUDICATION},
             )
             conflict.conflictwindow_set.all().delete()
             if declaration_type == CONFLICT_LATE_ARRIVAL:

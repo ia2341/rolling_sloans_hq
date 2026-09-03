@@ -145,10 +145,15 @@ class ConflictWindowInline(admin.TabularInline):
 
 @admin.register(Conflict)
 class ConflictAdmin(admin.ModelAdmin):
-    """Admin for a Person's declared unavailability on a Rehearsal, editable in place (issue #48)."""
+    """Admin for a Person's declared unavailability on a Rehearsal, editable in place (issue #48).
 
-    list_display = ('person', 'rehearsal', 'type', 'updated_at')
-    list_filter = ('type', 'rehearsal__semester')
+    Also where an admin adjudicates: `status` and `adjudication_note` are
+    plain editable fields on the change form, and `status` is listed and
+    filterable so a pending queue can be worked through (issue #189).
+    """
+
+    list_display = ('person', 'rehearsal', 'type', 'status', 'updated_at')
+    list_filter = ('type', 'status', 'rehearsal__semester')
     search_fields = ('person__name', 'person__email')
     readonly_fields = ('created_at', 'updated_at')
     inlines = (ConflictWindowInline,)
