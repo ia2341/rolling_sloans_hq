@@ -5,6 +5,11 @@ from django.urls import reverse
 
 from identity.factories import PersonFactory
 from scheduling.factories import SemesterFactory
+from scheduling.services import (
+    SEMESTER_STATUS_DRAFT,
+    SEMESTER_STATUS_LIVE,
+    SEMESTER_STATUS_PREVIOUSLY_PUBLISHED,
+)
 
 PASSWORD = 'a-strong-test-password-123'
 PANEL_MARKER = 'data-testid="semester-panel"'
@@ -57,6 +62,19 @@ class PanelContentTests(TestCase):
         response = self.client.get(reverse('scheduling:overview'))
 
         self.assertNotContains(response, reverse('scheduling:manage-semesters-delete', args=[live.pk]))
+
+    def test_the_panel_labels_each_semester_by_its_lifecycle_state(self):
+        """The dropdown labels each Semester Live, Draft or Previously published, per issue #167."""
+        older = SemesterFactory()
+        live = SemesterFactory()
+        draft = SemesterFactory(draft=True)
+        admin_client(self)
+
+        response = self.client.get(reverse('scheduling:overview'))
+
+        self.assertContains(response, f'{live.name} — {SEMESTER_STATUS_LIVE}')
+        self.assertContains(response, f'{draft.name} — {SEMESTER_STATUS_DRAFT}')
+        self.assertContains(response, f'{older.name} — {SEMESTER_STATUS_PREVIOUSLY_PUBLISHED}')
 
     def test_the_panel_links_to_the_surviving_manage_surfaces(self):
         """The panel links to the conflict adjudication index and the people list."""
