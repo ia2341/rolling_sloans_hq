@@ -88,8 +88,8 @@
           <td>{% if row.start_time %}{{ row.start_time }}{% else %}&mdash;{% endif %}</td>
           {% for cell in row.cells %}
             <td>
-              {% for assignment in cell.assignments %}
-                <span{% if assignment.is_role_mismatch %} class="role-mismatch"{% endif %}>{{ assignment.person.name }}</span>{% if not forloop.last %}, {% endif %}
+              {% for entry in cell.entries %}
+                {% include "scheduling/_assignment_chip.html" %}{% if not forloop.last %}, {% endif %}
               {% empty %}
                 &mdash;
               {% endfor %}
