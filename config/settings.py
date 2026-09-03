@@ -205,6 +205,12 @@ if not DEBUG and not SITE_URL:
     )
 SITE_URL = SITE_URL or 'http://localhost:8000'
 
+# Spotify Client Credentials Flow, for the public-playlist import
+# (scheduling.spotify). Optional: absent locally, the import reports itself
+# unavailable instead of raising, so a fresh checkout isn't broken by it.
+SPOTIFY_CLIENT_ID = env('SPOTIFY_CLIENT_ID', default=None)
+SPOTIFY_CLIENT_SECRET = env('SPOTIFY_CLIENT_SECRET', default=None)
+
 
 # Production security settings ("TLS everywhere").
 #
