@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{# Extends base.html (unlike its manage/* siblings) so the non-live Semester banner renders here, #}
+{# per issue #191: an admin must be able to adjudicate a draft term's rehearsals before publishing it. #}
+{% block title %}Manage conflicts{% endblock %}
+{% block content %}
+<h1>Manage conflicts</h1>
+{% if not semester %}
+  <p>No Semester exists yet.</p>
+{% else %}
+  <ul>
+    {% for row in rows %}
+      <li>
+        <a href="{% url 'scheduling:manage-conflicts-detail' row.rehearsal.pk %}">
+          {{ row.rehearsal.date }} {{ row.rehearsal.start_time }}&ndash;{{ row.rehearsal.end_time }}
+        </a>
+        &mdash; {{ row.pending_count }} pending
+      </li>
+    {% empty %}
+      <li>No future rehearsals to adjudicate.</li>
+    {% endfor %}
+  </ul>
+{% endif %}
+{% endblock %}

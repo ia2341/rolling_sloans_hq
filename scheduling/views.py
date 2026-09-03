@@ -3,7 +3,7 @@
 import json
 
 from django.contrib import messages
-from django.db import models, transaction
+from django.db import transaction
 from django.http import (
     Http404,
     HttpResponseBadRequest,
@@ -26,8 +26,8 @@ from scheduling.forms import (
     RecordingUploadForm,
     RehearsalForm,
     RosterEditFormSet,
+    SetlistEditEmptyFormSet,
     SetlistEditFormSet,
-    SongForm,
     SongRoleAssignmentForm,
     SpotifyImportForm,
 )
@@ -57,6 +57,7 @@ from scheduling.services import (
     attendance_suggestion_for,
     breaks_for,
     confirm_recording_upload,
+    conflict_adjudication_index_for,
     conflict_rows_by_rehearsal,
     create_recording_playback_url,
     declare_conflict,
@@ -345,10 +346,16 @@ class SetlistEditView(AdminRequiredMixin, View):
     MALFORMED_ORDER_MESSAGE = 'The setlist could not be saved — reload and reapply.'
 
     def get(self, request):
-        """Render the edit grid: a bare fragment for htmx, a full page otherwise."""
+        """Render the edit grid: a bare fragment for htmx, a full page otherwise.
+
+        An empty setlist opens with one blank row already present (issue
+        #180), so a brand-new Semester isn't a dead end — otherwise there
+        would be nothing for the grid's own "+ Add song" to add to.
+        """
         semester = get_viewing_semester(request)
         songs = _scoped_to_viewing_semester(Song, semester).order_by('position')
-        formset = SetlistEditFormSet(queryset=songs, prefix='song')
+        formset_class = SetlistEditFormSet if songs.exists() else SetlistEditEmptyFormSet
+        formset = formset_class(queryset=songs, prefix='song')
         return self._render(request, semester, formset)
 
     def post(self, request):
@@ -1117,123 +1124,6 @@ class RehearsalEditView(AdminRequiredMixin, View):
         return get_object_or_404(_scoped_to_viewing_semester(Rehearsal, get_viewing_semester(self.request)), pk=pk)
 
 
-class SongManageView(AdminRequiredMixin, View):
-    """`/manage/setlist/`: an admin lists and adds the viewing Semester's Songs (issue #60, #17 story 11)."""
-
-    template_name = 'scheduling/manage_setlist.html'
-
-    def get(self, request):
-        """Render the viewing Semester's Songs in position order alongside an empty create form."""
-        return render(request, self.template_name, self._build_context())
-
-    def post(self, request):
-        """Validate the create form and append a new Song at the end of the viewing Semester's setlist."""
-        semester = get_viewing_semester(request)
-        if semester is None:
-            messages.error(request, 'Create a Semester before adding Songs.')
-            return redirect('scheduling:manage-setlist')
-        with transaction.atomic():
-            semester = _lock_semester(semester)
-            instance = Song(semester=semester, position=self._next_position(semester))
-            form = SongForm(request.POST, instance=instance)
-            if form.is_valid():
-                form.save()
-                messages.success(request, 'Song added.')
-                return redirect('scheduling:manage-setlist')
-        return render(request, self.template_name, self._build_context(form))
-
-    def _next_position(self, semester):
-        """Return one past the viewing Semester's highest Song position (1 if it has no Songs yet)."""
-        highest = Song.objects.filter(semester=semester).aggregate(highest=models.Max('position'))['highest']
-        return (highest or 0) + 1
-
-    def _build_context(self, form=None):
-        """Build context: the viewing Semester's Songs plus the create form (fresh if none is given)."""
-        semester = get_viewing_semester(self.request)
-        return {
-            'semester': semester,
-            'songs': _scoped_to_viewing_semester(Song, semester),
-            'form': form or SongForm(),
-        }
-
-
-class SongEditView(AdminRequiredMixin, View):
-    """`/manage/setlist/<pk>/edit/`: an admin edits an existing Song's title/artist/length/notes (issue #60, #17 story 11)."""
-
-    template_name = 'scheduling/manage_setlist_edit.html'
-
-    def get(self, request, pk):
-        """Render the edit form pre-filled with the target Song's current values."""
-        song = self._get_song(pk)
-        return render(request, self.template_name, {'song': song, 'form': SongForm(instance=song)})
-
-    def post(self, request, pk):
-        """Validate and save the edit, or re-render with errors."""
-        song = self._get_song(pk)
-        form = SongForm(request.POST, instance=song)
-        if form.is_valid():
-            form.save()
-            messages.success(request, 'Song updated.')
-            return redirect('scheduling:manage-setlist')
-        return render(request, self.template_name, {'song': song, 'form': form})
-
-    def _get_song(self, pk):
-        """Return the viewing Semester's Song with this id, or 404 (mirrors SongDetailView's scoping)."""
-        return get_object_or_404(_scoped_to_viewing_semester(Song, get_viewing_semester(self.request)), pk=pk)
-
-
-class SongDeleteView(AdminRequiredMixin, View):
-    """`/manage/setlist/<pk>/delete/`: an admin removes a Song from the setlist (issue #60, #17 story 11)."""
-
-    def post(self, request, pk):
-        """Delete the viewing Semester's target Song and redirect back to the setlist with a success message."""
-        song = get_object_or_404(_scoped_to_viewing_semester(Song, get_viewing_semester(request)), pk=pk)
-        song.delete()
-        messages.success(request, 'Song removed.')
-        return redirect('scheduling:manage-setlist')
-
-
-class SongMoveView(AdminRequiredMixin, View):
-    """`/manage/setlist/<pk>/move-up|down/`: an admin swaps a Song's position with its neighbor (issue #60, #17 story 11).
-
-    Reuses the deferred `unique_song_position_per_semester` constraint the
-    same way `Song.Meta` already relies on: both rows' positions are
-    swapped inside one atomic transaction, so the transient collision
-    between them is never checked mid-transaction.
-    """
-
-    UP = 'up'
-    DOWN = 'down'
-
-    def post(self, request, pk, direction):
-        """Swap the viewing Semester's target Song's position with its previous/next neighbor, if one exists."""
-        song = get_object_or_404(_scoped_to_viewing_semester(Song, get_viewing_semester(request)), pk=pk)
-        with transaction.atomic():
-            _lock_semester(song.semester)
-            song.refresh_from_db()
-            neighbor = self._neighbor(song, direction)
-            if neighbor is not None:
-                self._swap_positions(song, neighbor)
-                messages.success(request, 'Setlist reordered.')
-        return redirect('scheduling:manage-setlist')
-
-    def _neighbor(self, song, direction):
-        """Return the Song immediately before/after `song` in its Semester's position order, or None at either end."""
-        songs = list(Song.objects.filter(semester=song.semester).order_by('position'))
-        index = songs.index(song)
-        if direction == self.UP and index > 0:
-            return songs[index - 1]
-        if direction == self.DOWN and index < len(songs) - 1:
-            return songs[index + 1]
-        return None
-
-    def _swap_positions(self, song_a, song_b):
-        """Swap two Songs' positions. Must be called within a transaction holding the Semester's row lock."""
-        song_a.position, song_b.position = song_b.position, song_a.position
-        song_a.save(update_fields=['position'])
-        song_b.save(update_fields=['position'])
-
-
 class SongRoleAssignmentManageView(AdminRequiredMixin, View):
     """`/manage/assignments/`: an admin lists and creates SongRoleAssignments, surfacing mismatches (issue #60, #17 story 12)."""
 
@@ -1477,3 +1367,42 @@ class SemesterDeleteView(AdminRequiredMixin, View):
             return HttpResponseBadRequest(str(error))
         messages.success(request, f'{semester} deleted.')
         return redirect('scheduling:manage-semesters')
+
+
+class ConflictAdjudicationIndexView(AdminRequiredMixin, TemplateView):
+    """`/manage/conflicts/`: an admin's starting point for adjudicating Conflicts (issue #191, ADR 0005).
+
+    Lists the viewing Semester's future, non-Dress Rehearsals — the same
+    "declarable" set `future_rehearsals_for()` computes — each carrying its
+    own pending-Conflict count so an admin can see where the work is
+    without opening every date. A Rehearsal with zero Conflicts still
+    appears: absence isn't how "nothing to do" gets communicated here.
+    """
+
+    template_name = 'scheduling/manage_conflicts.html'
+
+    def get_context_data(self, **kwargs):
+        """Add the viewing Semester and its adjudication-index rows."""
+        context = super().get_context_data(**kwargs)
+        semester = get_viewing_semester(self.request)
+        context['semester'] = semester
+        context['rows'] = conflict_adjudication_index_for(semester) if semester else []
+        return context
+
+
+class ConflictAdjudicationDetailView(AdminRequiredMixin, TemplateView):
+    """`/manage/conflicts/<rehearsal_id>/`: one Rehearsal's adjudication table (issue #191, table itself is issue #192).
+
+    Reachable from the index and from an unconditional link on
+    `/schedule/`; this ticket only establishes the route, its Semester
+    scoping and its admin gating. The table that decides each Conflict is
+    #192's.
+    """
+
+    template_name = 'scheduling/manage_conflicts_detail.html'
+
+    def get(self, request, rehearsal_id):
+        """Render the target Rehearsal, scoped to the viewing Semester (404 outside it)."""
+        semester = get_viewing_semester(request)
+        rehearsal = get_object_or_404(_scoped_to_viewing_semester(Rehearsal, semester), pk=rehearsal_id)
+        return render(request, self.template_name, {'semester': semester, 'rehearsal': rehearsal})

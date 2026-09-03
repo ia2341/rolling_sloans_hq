@@ -31,20 +31,14 @@ urlpatterns = [
     path('manage/semesters/<int:pk>/delete/', views.SemesterDeleteView.as_view(), name='manage-semesters-delete'),
     path('manage/schedule/', views.RehearsalManageView.as_view(), name='manage-schedule'),
     path('manage/schedule/<int:pk>/edit/', views.RehearsalEditView.as_view(), name='manage-schedule-edit'),
-    path('manage/setlist/', views.SongManageView.as_view(), name='manage-setlist'),
-    path('manage/setlist/<int:pk>/edit/', views.SongEditView.as_view(), name='manage-setlist-edit'),
-    path('manage/setlist/<int:pk>/delete/', views.SongDeleteView.as_view(), name='manage-setlist-delete'),
-    path(
-        'manage/setlist/<int:pk>/move-up/',
-        views.SongMoveView.as_view(), {'direction': views.SongMoveView.UP}, name='manage-setlist-move-up',
-    ),
-    path(
-        'manage/setlist/<int:pk>/move-down/',
-        views.SongMoveView.as_view(), {'direction': views.SongMoveView.DOWN}, name='manage-setlist-move-down',
-    ),
     path('manage/assignments/', views.SongRoleAssignmentManageView.as_view(), name='manage-assignments'),
     path(
         'manage/assignments/<int:pk>/delete/',
         views.SongRoleAssignmentDeleteView.as_view(), name='manage-assignments-delete',
+    ),
+    path('manage/conflicts/', views.ConflictAdjudicationIndexView.as_view(), name='manage-conflicts'),
+    path(
+        'manage/conflicts/<int:rehearsal_id>/',
+        views.ConflictAdjudicationDetailView.as_view(), name='manage-conflicts-detail',
     ),
 ]

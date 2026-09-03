@@ -151,32 +151,17 @@ class RehearsalForm(forms.ModelForm):
         ]
 
 
-class SongForm(forms.ModelForm):
-    """Creates/edits a Song's title/artist/length/notes within its (already-set) Semester (issue #60).
+class SongEditForm(forms.ModelForm):
+    """One row of the setlist edit grid: title/artist/length/notes on an existing Song (issue #178).
 
     `semester` and `position` are deliberately excluded: the view sets
-    `semester` on the instance before binding, and `position` is only ever
-    changed through the dedicated reorder endpoints, never through this
-    form.
+    `semester` on new rows before binding, and `position` is derived from
+    the buffer's row order and written by `reorder_songs()`, never through
+    this form.
 
     `length` overrides the model field's default widget with
     `SongLengthField`, which reads and renders `M:SS` — Django's default
     would take `3:45` as three hours forty-five minutes (issue #177).
-    """
-
-    length = SongLengthField(label='Length')
-
-    class Meta:
-        model = Song
-        fields: ClassVar[list[str]] = ['title', 'artist', 'length', 'notes']
-
-
-class SongEditForm(forms.ModelForm):
-    """One row of the setlist edit grid: title/artist/length/notes on an existing Song (issue #178).
-
-    Shares `SongForm`'s field set and `M:SS` length widget; kept as a
-    separate class because it is always used inside `SetlistEditFormSet`
-    (extra=0, no add/delete this ticket) rather than standalone.
     """
 
     length = SongLengthField(label='Length')
@@ -192,6 +177,14 @@ class SongEditForm(forms.ModelForm):
 # mechanism Django's own admin inlines use for a dynamic "add another" row.
 SetlistEditFormSet = forms.modelformset_factory(
     Song, form=SongEditForm, extra=0, can_delete=True,
+)
+
+# Same buffer, `extra=1`: the empty-setlist GET (issue #180) needs one blank row already present so an
+# admin can start typing immediately, rather than having to click "+ Add song" on a setlist with nothing
+# in it yet. Only ever bound to an empty queryset — with `INITIAL_FORMS=0`, that one row lands past the
+# initial/extra boundary exactly like a JS-added row, so `_save_buffer` treats an untouched one as a no-op.
+SetlistEditEmptyFormSet = forms.modelformset_factory(
+    Song, form=SongEditForm, extra=1, can_delete=True,
 )
 
 

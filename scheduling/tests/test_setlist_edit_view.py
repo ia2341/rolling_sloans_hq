@@ -398,3 +398,74 @@ class SetlistEditSaveTests(TestCase):
         response = self.client.get(reverse('scheduling:setlist-edit'))
 
         self.assertContains(response, f'href="{reverse("scheduling:setlist")}"')
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class EmptySetlistTests(TestCase):
+    """The empty setlist as a way in, not a dead end (issue #180)."""
+
+    def test_edit_button_renders_for_an_admin_with_zero_songs(self):
+        """The 'Edit setlist' button renders for an admin even when the setlist has no Songs."""
+        SemesterFactory()
+        admin_client(self)
+
+        response = self.client.get(reverse('scheduling:setlist'))
+
+        self.assertContains(response, 'id="edit-setlist-button"')
+
+    def test_an_admins_empty_setlist_shows_a_call_to_action_wired_to_edit_mode(self):
+        """An admin's empty setlist offers a call to action that opens the same edit mode as the button."""
+        SemesterFactory()
+        admin_client(self)
+
+        response = self.client.get(reverse('scheduling:setlist'))
+
+        self.assertContains(response, 'id="add-first-song-button"')
+        self.assertContains(response, f'hx-get="{reverse("scheduling:setlist-edit")}"')
+
+    def test_a_members_empty_setlist_is_the_unchanged_flat_sentence(self):
+        """A member's empty setlist stays the plain sentence, with no button and no call to action."""
+        SemesterFactory()
+        member_client(self)
+
+        response = self.client.get(reverse('scheduling:setlist'))
+
+        self.assertContains(response, 'No songs on the setlist yet.')
+        self.assertNotContains(response, 'id="edit-setlist-button"')
+        self.assertNotContains(response, 'id="add-first-song-button"')
+
+    def test_edit_mode_on_an_empty_setlist_opens_with_one_blank_row(self):
+        """Edit mode on an empty setlist renders exactly one blank row, not zero, so typing can start immediately."""
+        SemesterFactory()
+        admin_client(self)
+
+        response = self.client.get(reverse('scheduling:setlist-edit'))
+
+        self.assertContains(response, 'name="song-TOTAL_FORMS" value="1"')
+        rows_html = response.content.decode().split('id="setlist-empty-form-template"')[0]
+        self.assertEqual(rows_html.count('class="setlist-edit-row-group"'), 1)
+
+    def test_saving_from_an_empty_setlist_creates_the_typed_song_at_position_one(self):
+        """Saving the one blank row typed into an empty setlist creates that Song at position 1."""
+        semester = SemesterFactory()
+        admin_client(self)
+        data = {
+            'song-TOTAL_FORMS': '1',
+            'song-INITIAL_FORMS': '0',
+            'song-MIN_NUM_FORMS': '0',
+            'song-MAX_NUM_FORMS': '1000',
+            'song-0-id': '',
+            'song-0-title': 'Brand New Song',
+            'song-0-artist': 'Brand New Artist',
+            'song-0-length': '3:45',
+            'song-0-notes': '',
+            'song_order': ['song-0'],
+            'semester_updated_at': semester.updated_at.isoformat(),
+        }
+
+        response = self.client.post(reverse('scheduling:setlist-edit'), data)
+
+        self.assertRedirects(response, reverse('scheduling:setlist'))
+        [song] = Song.objects.filter(semester=semester)
+        self.assertEqual(song.title, 'Brand New Song')
+        self.assertEqual(song.position, 1)
