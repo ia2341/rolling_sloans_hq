@@ -48,6 +48,10 @@ urlpatterns = [
     path('manage/semester/', views.SemesterSelectView.as_view(), name='manage-semester-select'),
     path('manage/semesters/setup/', views.SemesterSetupView.as_view(), name='manage-semester-setup'),
     path(
+        'manage/semesters/setup/<int:pk>/roster/',
+        views.SemesterSetupRosterView.as_view(), name='manage-semester-setup-roster',
+    ),
+    path(
         'manage/semesters/setup/<int:pk>/finish/',
         views.SemesterSetupFinishView.as_view(), name='manage-semester-setup-finish',
     ),
@@ -65,5 +69,9 @@ urlpatterns = [
     path(
         'manage/conflicts/<int:rehearsal_id>/',
         views.ConflictAdjudicationDetailView.as_view(), name='manage-conflicts-detail',
+    ),
+    path(
+        'manage/conflicts/<int:rehearsal_id>/preview/',
+        views.AdjudicationPreviewView.as_view(), name='manage-conflicts-preview',
     ),
 ]
