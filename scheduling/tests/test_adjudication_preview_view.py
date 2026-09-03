@@ -112,6 +112,17 @@ class PreviewRenderingTests(TestCase):
         self.assertContains(response, 'Conflicted Person')
         self.assertContains(response, 'Infeasible')
 
+    def test_preview_response_re_wires_status_widgets_for_a_second_toggle(self):
+        """The re-rendered status <select> still carries hx-post, so a second toggle keeps firing Previews."""
+        payload = _formset_payload([(self.conflict, Conflict.APPROVED, '')], self.semester)
+
+        response = assert_preview_writes_nothing(
+            self, _preview_url(self.rehearsal), payload,
+            models_to_check=[(Conflict, {'status': Conflict.APPROVED})], semester=self.semester,
+        )
+
+        self.assertContains(response, f'hx-post="{_preview_url(self.rehearsal)}"')
+
     def test_pending_conflict_renders_no_fallout_region(self):
         """Leaving the Conflict pending renders the table with no loud/quiet Fallout region."""
         payload = _formset_payload([(self.conflict, Conflict.PENDING, '')], self.semester)

@@ -1868,6 +1868,17 @@ class ConflictAdjudicationIndexView(AdminRequiredMixin, TemplateView):
         return context
 
 
+def _adjudication_preview_url(rehearsal):
+    """Return the Feasibility Preview endpoint's URL for `rehearsal`, wired onto every row's status widget.
+
+    Shared by the Save endpoint and the Preview endpoint itself (issue
+    #194) — a Preview response re-renders the same formset, so its rows
+    need the same live-toggle wiring as the initial page for a second
+    toggle to keep firing.
+    """
+    return reverse('scheduling:manage-conflicts-preview', args=[rehearsal.pk])
+
+
 def _adjudication_initial(rows):
     """Build the adjudication formset's initial data: one row per Conflict, at its current status with an empty note."""
     return [
@@ -1955,7 +1966,7 @@ class ConflictAdjudicationDetailView(AdminRequiredMixin, View):
         rows = conflict_adjudication_rows_for(rehearsal)
         formset = AdjudicationFormSet(
             initial=_adjudication_initial(rows), prefix='adjudication',
-            form_kwargs={'preview_url': self._preview_url(rehearsal)},
+            form_kwargs={'preview_url': _adjudication_preview_url(rehearsal)},
         )
         fallout = _current_adjudication_fallout(rehearsal, rows, semester)
         return self._render(request, semester, rehearsal, rows, formset, fallout)
@@ -1966,7 +1977,7 @@ class ConflictAdjudicationDetailView(AdminRequiredMixin, View):
         rehearsal = get_object_or_404(_scoped_to_viewing_semester(Rehearsal, semester), pk=rehearsal_id)
         rows = conflict_adjudication_rows_for(rehearsal)
         formset = AdjudicationFormSet(
-            request.POST, prefix='adjudication', form_kwargs={'preview_url': self._preview_url(rehearsal)},
+            request.POST, prefix='adjudication', form_kwargs={'preview_url': _adjudication_preview_url(rehearsal)},
         )
         submitted_semester_id = request.POST.get('semester_id', '')
         submitted_stamp = request.POST.get('semester_updated_at', '')
@@ -1989,9 +2000,6 @@ class ConflictAdjudicationDetailView(AdminRequiredMixin, View):
             semester_id=submitted_semester_id, stamp=submitted_stamp, status=200,
         )
 
-    def _preview_url(self, rehearsal):
-        """Return the Feasibility Preview endpoint's URL for `rehearsal`, wired onto every row's status widget."""
-        return reverse('scheduling:manage-conflicts-preview', args=[rehearsal.pk])
 
     def _render(self, request, semester, rehearsal, rows, formset, fallout, semester_id=None, stamp=None, status=200):
         """Render the table, pairing each row with its formset form and feasibility verdict."""
@@ -2031,7 +2039,9 @@ class AdjudicationPreviewView(PreviewMixin, AdminRequiredMixin, View):
             })
         rehearsal = get_object_or_404(_scoped_to_viewing_semester(Rehearsal, semester), pk=rehearsal_id)
         rows = conflict_adjudication_rows_for(rehearsal)
-        formset = AdjudicationFormSet(request.POST, prefix='adjudication')
+        formset = AdjudicationFormSet(
+            request.POST, prefix='adjudication', form_kwargs={'preview_url': _adjudication_preview_url(rehearsal)},
+        )
         if not formset.is_valid():
             return render(request, self.template_name, {
                 'formset_errors': self._formset_errors(formset), 'fallout': None,
