@@ -1,4 +1,4 @@
-"""Admin schedule, setlist & assignment management: /manage/schedule/, /manage/setlist/, /manage/assignments/ (issue #60)."""
+"""Admin schedule & assignment management: /manage/schedule/, /manage/assignments/ (issue #60)."""
 
 from datetime import time
 
@@ -17,7 +17,7 @@ from scheduling.factories import (
     SongFactory,
     SongRoleAssignmentFactory,
 )
-from scheduling.models import Rehearsal, Song, SongRoleAssignment
+from scheduling.models import Rehearsal, SongRoleAssignment
 
 fake = Faker()
 PASSWORD = 'a-strong-test-password-123'
@@ -28,14 +28,6 @@ class AnonymousAccessTests(TestCase):
     def test_manage_schedule_redirects_anonymous_users_to_login(self):
         """An anonymous request to /manage/schedule/ redirects to the login page."""
         url = reverse('scheduling:manage-schedule')
-
-        response = self.client.get(url)
-
-        self.assertRedirects(response, f"{reverse('identity:login')}?next={url}")
-
-    def test_manage_setlist_redirects_anonymous_users_to_login(self):
-        """An anonymous request to /manage/setlist/ redirects to the login page."""
-        url = reverse('scheduling:manage-setlist')
 
         response = self.client.get(url)
 
@@ -63,23 +55,9 @@ class NonAdminAccessTests(TestCase):
 
         self.assertEqual(response.status_code, 403)
 
-    def test_manage_setlist_is_forbidden_for_non_admin(self):
-        """A logged-in non-admin's GET to /manage/setlist/ returns 403."""
-        response = self.client.get(reverse('scheduling:manage-setlist'))
-
-        self.assertEqual(response.status_code, 403)
-
     def test_manage_assignments_is_forbidden_for_non_admin(self):
         """A logged-in non-admin's GET to /manage/assignments/ returns 403."""
         response = self.client.get(reverse('scheduling:manage-assignments'))
-
-        self.assertEqual(response.status_code, 403)
-
-    def test_song_move_is_forbidden_for_non_admin(self):
-        """A logged-in non-admin's POST to the reorder endpoint returns 403 and changes nothing."""
-        song = SongFactory(position=1)
-
-        response = self.client.post(reverse('scheduling:manage-setlist-move-down', args=[song.pk]))
 
         self.assertEqual(response.status_code, 403)
 
@@ -91,24 +69,6 @@ class NonAdminAccessTests(TestCase):
         self.assertEqual(self.client.get(url).status_code, 403)
         self.assertEqual(self.client.post(url, {'is_full_setlist': True}).status_code, 403)
         self.assertFalse(Rehearsal.objects.get(pk=rehearsal.pk).is_full_setlist)
-
-    def test_manage_setlist_edit_is_forbidden_for_non_admin(self):
-        """A logged-in non-admin's GET/POST to the Song edit endpoint returns 403 and changes nothing."""
-        song = SongFactory(position=1, title='Original Title')
-        url = reverse('scheduling:manage-setlist-edit', args=[song.pk])
-
-        self.assertEqual(self.client.get(url).status_code, 403)
-        self.assertEqual(self.client.post(url, {'title': 'New Title'}).status_code, 403)
-        self.assertEqual(Song.objects.get(pk=song.pk).title, 'Original Title')
-
-    def test_manage_setlist_delete_is_forbidden_for_non_admin(self):
-        """A logged-in non-admin's POST to the Song delete endpoint returns 403 and deletes nothing."""
-        song = SongFactory(position=1)
-
-        response = self.client.post(reverse('scheduling:manage-setlist-delete', args=[song.pk]))
-
-        self.assertEqual(response.status_code, 403)
-        self.assertTrue(Song.objects.filter(pk=song.pk).exists())
 
     def test_manage_assignments_delete_is_forbidden_for_non_admin(self):
         """A logged-in non-admin's POST to the assignment delete endpoint returns 403 and deletes nothing."""
@@ -240,139 +200,6 @@ class RehearsalManageViewTests(TestCase):
         response = self.client.get(reverse('scheduling:manage-schedule-edit', args=[stale_rehearsal.pk]))
 
         self.assertEqual(response.status_code, 404)
-
-
-@override_settings(SECURE_SSL_REDIRECT=False)
-class SongManageViewTests(TestCase):
-    def setUp(self):
-        """Log in a synthetic admin Person, with a current Semester, before each test."""
-        self.admin = PersonFactory(password=PASSWORD, is_admin=True)
-        self.client.login(username=self.admin.email, password=PASSWORD)
-        self.semester = SemesterFactory()
-
-    def test_lists_current_semester_songs(self):
-        """The setlist page lists the current Semester's Songs."""
-        song = SongFactory(semester=self.semester, position=1)
-
-        response = self.client.get(reverse('scheduling:manage-setlist'))
-
-        self.assertEqual(response.status_code, 200)
-        self.assertIn(song, response.context['songs'])
-
-    def test_valid_post_appends_song_at_end_of_setlist(self):
-        """A valid POST creates a Song positioned after the current Semester's existing Songs."""
-        SongFactory(semester=self.semester, position=1)
-        SongFactory(semester=self.semester, position=2)
-        args = {'title': 'Song Z', 'artist': 'Some Artist', 'length': '00:03:30', 'notes': ''}
-
-        response = self.client.post(reverse('scheduling:manage-setlist'), args, follow=True)
-
-        self.assertRedirects(response, reverse('scheduling:manage-setlist'))
-        created = Song.objects.get(title='Song Z')
-        self.assertEqual(created.semester, self.semester)
-        self.assertEqual(created.position, 3)
-
-    def test_invalid_post_rerenders_form_with_errors(self):
-        """A POST missing required fields re-renders the form with errors, creating nothing."""
-        response = self.client.post(reverse('scheduling:manage-setlist'), {})
-
-        self.assertEqual(response.status_code, 200)
-        self.assertTrue(response.context['form'].errors)
-        self.assertEqual(Song.objects.count(), 0)
-
-    def test_valid_edit_post_updates_song_and_redirects(self):
-        """A valid edit POST updates the Song's fields and redirects to the setlist with a success message."""
-        song = SongFactory(semester=self.semester, position=1, title='Old Title')
-
-        response = self.client.post(
-            reverse('scheduling:manage-setlist-edit', args=[song.pk]),
-            {'title': 'New Title', 'artist': song.artist, 'length': '00:03:30', 'notes': ''},
-            follow=True,
-        )
-
-        self.assertRedirects(response, reverse('scheduling:manage-setlist'))
-        self.assertEqual(Song.objects.get(pk=song.pk).title, 'New Title')
-
-    def test_delete_removes_song_and_redirects(self):
-        """A POST to the delete endpoint removes the Song and redirects with a success message."""
-        song = SongFactory(semester=self.semester, position=1)
-
-        response = self.client.post(reverse('scheduling:manage-setlist-delete', args=[song.pk]), follow=True)
-
-        self.assertRedirects(response, reverse('scheduling:manage-setlist'))
-        self.assertFalse(Song.objects.filter(pk=song.pk).exists())
-
-    def test_edit_404s_for_a_song_outside_the_current_semester(self):
-        """A stale Semester's Song isn't editable through the current-Semester edit route."""
-        stale_song = SongFactory(semester=self.semester, position=1)
-        SemesterFactory()  # supersedes self.semester as "current" (most-recently-created)
-
-        response = self.client.get(reverse('scheduling:manage-setlist-edit', args=[stale_song.pk]))
-
-        self.assertEqual(response.status_code, 404)
-
-    def test_delete_404s_for_a_song_outside_the_current_semester(self):
-        """A stale Semester's Song isn't removable through the current-Semester delete route."""
-        stale_song = SongFactory(semester=self.semester, position=1)
-        SemesterFactory()  # supersedes self.semester as "current" (most-recently-created)
-
-        response = self.client.post(reverse('scheduling:manage-setlist-delete', args=[stale_song.pk]))
-
-        self.assertEqual(response.status_code, 404)
-        self.assertTrue(Song.objects.filter(pk=stale_song.pk).exists())
-
-    def test_move_404s_for_a_song_outside_the_current_semester(self):
-        """A stale Semester's Song isn't reorderable through the current-Semester move route."""
-        stale_song = SongFactory(semester=self.semester, position=1)
-        SemesterFactory()  # supersedes self.semester as "current" (most-recently-created)
-
-        response = self.client.post(reverse('scheduling:manage-setlist-move-down', args=[stale_song.pk]))
-
-        self.assertEqual(response.status_code, 404)
-
-    def test_move_down_swaps_position_with_next_song(self):
-        """Moving a Song down swaps its position with the next Song in position order."""
-        first = SongFactory(semester=self.semester, position=1)
-        second = SongFactory(semester=self.semester, position=2)
-
-        response = self.client.post(reverse('scheduling:manage-setlist-move-down', args=[first.pk]), follow=True)
-
-        self.assertRedirects(response, reverse('scheduling:manage-setlist'))
-        first.refresh_from_db()
-        second.refresh_from_db()
-        self.assertEqual(first.position, 2)
-        self.assertEqual(second.position, 1)
-
-    def test_move_up_swaps_position_with_previous_song(self):
-        """Moving a Song up swaps its position with the previous Song in position order."""
-        first = SongFactory(semester=self.semester, position=1)
-        second = SongFactory(semester=self.semester, position=2)
-
-        response = self.client.post(reverse('scheduling:manage-setlist-move-up', args=[second.pk]), follow=True)
-
-        self.assertRedirects(response, reverse('scheduling:manage-setlist'))
-        first.refresh_from_db()
-        second.refresh_from_db()
-        self.assertEqual(first.position, 2)
-        self.assertEqual(second.position, 1)
-
-    def test_move_up_at_start_of_setlist_is_a_noop(self):
-        """Moving the first Song up leaves its position unchanged and still redirects."""
-        first = SongFactory(semester=self.semester, position=1)
-
-        response = self.client.post(reverse('scheduling:manage-setlist-move-up', args=[first.pk]), follow=True)
-
-        self.assertRedirects(response, reverse('scheduling:manage-setlist'))
-        self.assertEqual(Song.objects.get(pk=first.pk).position, 1)
-
-    def test_move_down_at_end_of_setlist_is_a_noop(self):
-        """Moving the last Song down leaves its position unchanged and still redirects."""
-        last = SongFactory(semester=self.semester, position=1)
-
-        response = self.client.post(reverse('scheduling:manage-setlist-move-down', args=[last.pk]), follow=True)
-
-        self.assertRedirects(response, reverse('scheduling:manage-setlist'))
-        self.assertEqual(Song.objects.get(pk=last.pk).position, 1)
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)

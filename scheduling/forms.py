@@ -4,6 +4,7 @@ from typing import ClassVar
 
 from django import forms
 from django.db import transaction
+from django.urls import reverse_lazy
 
 from scheduling.fields import SongLengthField
 from scheduling.models import (
@@ -20,6 +21,7 @@ from scheduling.services import (
     CONFLICT_EARLY_DEPARTURE,
     CONFLICT_LATE_ARRIVAL,
 )
+from scheduling.spotify import SpotifyImportError, extract_playlist_id
 
 
 class MembershipRolesForm(forms.ModelForm):
@@ -150,32 +152,17 @@ class RehearsalForm(forms.ModelForm):
         ]
 
 
-class SongForm(forms.ModelForm):
-    """Creates/edits a Song's title/artist/length/notes within its (already-set) Semester (issue #60).
+class SongEditForm(forms.ModelForm):
+    """One row of the setlist edit grid: title/artist/length/notes on an existing Song (issue #178).
 
     `semester` and `position` are deliberately excluded: the view sets
-    `semester` on the instance before binding, and `position` is only ever
-    changed through the dedicated reorder endpoints, never through this
-    form.
+    `semester` on new rows before binding, and `position` is derived from
+    the buffer's row order and written by `reorder_songs()`, never through
+    this form.
 
     `length` overrides the model field's default widget with
     `SongLengthField`, which reads and renders `M:SS` — Django's default
     would take `3:45` as three hours forty-five minutes (issue #177).
-    """
-
-    length = SongLengthField(label='Length')
-
-    class Meta:
-        model = Song
-        fields: ClassVar[list[str]] = ['title', 'artist', 'length', 'notes']
-
-
-class SongEditForm(forms.ModelForm):
-    """One row of the setlist edit grid: title/artist/length/notes on an existing Song (issue #178).
-
-    Shares `SongForm`'s field set and `M:SS` length widget; kept as a
-    separate class because it is always used inside `SetlistEditFormSet`
-    (extra=0, no add/delete this ticket) rather than standalone.
     """
 
     length = SongLengthField(label='Length')
@@ -202,6 +189,27 @@ SetlistEditEmptyFormSet = forms.modelformset_factory(
 )
 
 
+class SpotifyImportForm(forms.Form):
+    """Validates a pasted Spotify playlist link before any network call (issue #184).
+
+    `clean_playlist_url` runs the same well-formedness check
+    `spotify.import_playlist()` runs first regardless, exposed here so a
+    malformed or non-Spotify link lands as a field error on this form
+    rather than only surfacing after a fetch to the import endpoint.
+    """
+
+    playlist_url = forms.CharField(label='Spotify playlist link')
+
+    def clean_playlist_url(self):
+        """Return the submitted URL unchanged, or raise a field error for anything that isn't a playlist link."""
+        url = self.cleaned_data['playlist_url']
+        try:
+            extract_playlist_id(url)
+        except SpotifyImportError as error:
+            raise forms.ValidationError(str(error)) from error
+        return url
+
+
 class RosterEditRowForm(forms.Form):
     """One row of the Roster edit table: an existing Membership's Person, editable name and declared Roles (issue #227).
 
@@ -217,14 +225,30 @@ class RosterEditRowForm(forms.Form):
     `SelfRemovalError` as the backstop against a hand-crafted POST.
     """
 
+    # `PREVIEW_TRIGGER_ATTRS` is applied to both `roles` and `remove`'s widgets: htmx POSTs the whole
+    # form to the Roster Preview endpoint on change, syncing against any in-flight request from another
+    # row's toggle so a fast sequence discards a superseded response rather than applying it late
+    # (issue #228). `name` deliberately carries none of this — typing must never trigger a Preview.
+    PREVIEW_TRIGGER_ATTRS: ClassVar[dict] = {
+        'hx-post': reverse_lazy('scheduling:members-preview'),
+        'hx-trigger': 'change',
+        'hx-target': '#roster-fallout',
+        'hx-swap': 'outerHTML',
+        'hx-sync': 'closest form:replace',
+        'hx-include': 'closest form',
+    }
+
     person_id = forms.IntegerField(widget=forms.HiddenInput)
     name = forms.CharField(max_length=255)
     roles = forms.ModelMultipleChoiceField(
         queryset=Role.objects.filter(is_active=True),
         required=False,
-        widget=forms.CheckboxSelectMultiple,
+        widget=forms.CheckboxSelectMultiple(attrs=PREVIEW_TRIGGER_ATTRS),
     )
-    remove = forms.BooleanField(required=False)
+    remove = forms.BooleanField(
+        required=False,
+        widget=forms.CheckboxInput(attrs={**PREVIEW_TRIGGER_ATTRS, 'class': 'roster-remove-checkbox'}),
+    )
 
 
 # The Roster edit table's buffer: one `RosterEditRowForm` per existing Membership, with no add-row this

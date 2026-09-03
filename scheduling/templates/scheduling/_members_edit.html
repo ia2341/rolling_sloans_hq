@@ -1,6 +1,13 @@
+<div
+  id="roster-edit-surface"
+  x-data="rosterEdit('{% url 'scheduling:members-preview-confirm-removal' %}')"
+  @htmx:response-error.window="onPreviewError()"
+  @htmx:send-error.window="onPreviewError()"
+  @htmx:after-swap.window="onPreviewSettled()"
+>
 <h1>{% if semester %}{{ semester }} Band Members{% else %}Band Members{% endif %}</h1>
 
-<form method="post" action="{% url 'scheduling:members' %}" id="roster-edit-form">
+<form method="post" action="{% url 'scheduling:members' %}" id="roster-edit-form" @submit="onSubmit">
   {% csrf_token %}
   <input type="hidden" name="roster_semester_id" value="{{ roster_semester_id }}">
   <input type="hidden" name="roster_semester_updated_at" value="{{ roster_semester_updated_at }}">
@@ -54,4 +61,16 @@
 
   <button type="submit" id="save-roster-changes">Save Changes</button>
 </form>
+
+<div id="roster-fallout"></div>
+<p id="roster-preview-error" x-show="previewError" x-text="previewError" role="alert"></p>
+<p id="roster-removal-confirm-error" x-show="confirmError" x-text="confirmError" role="alert"></p>
+
 <a href="{% url 'scheduling:members' %}" id="cancel-roster-edit">Cancel</a>
+
+<dialog id="roster-removal-confirm-dialog" x-ref="removalDialog">
+  <div id="roster-removal-confirm-body" x-html="confirmHtml"></div>
+  <button type="button" id="confirm-remove-roster-people" @click="confirmRemoval">Remove Anyway</button>
+  <button type="button" id="cancel-remove-roster-people" @click="cancelRemoval">Cancel</button>
+</dialog>
+</div>

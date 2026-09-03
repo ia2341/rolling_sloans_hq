@@ -1,0 +1,52 @@
+<div id="roster-fallout" class="rs-roster-fallout">
+  {% if formset_errors %}
+    <div class="rs-fallout-blocked" role="alert" id="roster-fallout-validation-error">
+      <p>This edit couldn't be validated:</p>
+      <ul>
+        {% for error in formset_errors %}<li>{{ error }}</li>{% endfor %}
+      </ul>
+    </div>
+  {% elif fallout.is_blocked %}
+    <div class="rs-fallout-blocked" role="alert" id="roster-fallout-validation-error">
+      <p>{{ fallout.block_message }}</p>
+    </div>
+  {% elif fallout %}
+    {% if fallout.is_stale %}
+      <div class="rs-fallout-stale" role="alert" id="roster-fallout-stale-banner">
+        <p>The Roster changed while you were editing — this Preview may not reflect the latest state. You can still Save; it will be checked again.</p>
+      </div>
+    {% endif %}
+
+    <div class="rs-fallout-pending" id="roster-fallout-pending">
+      <h3>Pending changes</h3>
+      {% if fallout.pending_adds or fallout.pending_removals or fallout.pending_role_changes or fallout.pending_name_edits %}
+        <ul>
+          {% for name in fallout.pending_adds %}<li>Add {{ name }}</li>{% endfor %}
+          {% for removal in fallout.pending_removals %}<li>Remove {{ removal.name }} ({{ removal.email }})</li>{% endfor %}
+          {% for name in fallout.pending_role_changes %}<li>Change {{ name }}'s Roles</li>{% endfor %}
+          {% for line in fallout.pending_name_edits %}<li>Rename {{ line }}</li>{% endfor %}
+        </ul>
+      {% else %}
+        <p>No pending changes.</p>
+      {% endif %}
+    </div>
+
+    {% if fallout.loud %}
+      <div class="rs-fallout-loud" role="alert" id="roster-fallout-loud">
+        <h3>This will:</h3>
+        <ul>
+          {% for line in fallout.loud %}<li>{{ line }}</li>{% endfor %}
+        </ul>
+      </div>
+    {% endif %}
+
+    {% if fallout.quiet %}
+      <div class="rs-fallout-quiet" id="roster-fallout-quiet">
+        <h3>Worth noting</h3>
+        <ul>
+          {% for line in fallout.quiet %}<li>{{ line }}</li>{% endfor %}
+        </ul>
+      </div>
+    {% endif %}
+  {% endif %}
+</div>

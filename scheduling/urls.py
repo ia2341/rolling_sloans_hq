@@ -15,9 +15,18 @@ urlpatterns = [
         'setlist/edit/confirm-delete/',
         views.SetlistDeleteConfirmView.as_view(), name='setlist-edit-confirm-delete',
     ),
+    path(
+        'setlist/edit/import/',
+        views.SetlistImportView.as_view(), name='setlist-edit-import',
+    ),
     path('songs/<int:pk>/', views.SongDetailView.as_view(), name='song-detail'),
     path('members/', views.MembersView.as_view(), name='members'),
     path('members/import/', views.RosterImportView.as_view(), name='members-roster-import'),
+    path('members/preview/', views.RosterPreviewView.as_view(), name='members-preview'),
+    path(
+        'members/preview/confirm-removal/',
+        views.RosterRemovalConfirmView.as_view(), name='members-preview-confirm-removal',
+    ),
     path('members/<int:pk>/', views.MemberDetailView.as_view(), name='member-detail'),
     path('me/recordings/', views.RecordingUploadView.as_view(), name='recordings'),
     path('me/recordings/presign/', views.RecordingPresignView.as_view(), name='recordings-presign'),
@@ -28,17 +37,6 @@ urlpatterns = [
     path('manage/semesters/<int:pk>/delete/', views.SemesterDeleteView.as_view(), name='manage-semesters-delete'),
     path('manage/schedule/', views.RehearsalManageView.as_view(), name='manage-schedule'),
     path('manage/schedule/<int:pk>/edit/', views.RehearsalEditView.as_view(), name='manage-schedule-edit'),
-    path('manage/setlist/', views.SongManageView.as_view(), name='manage-setlist'),
-    path('manage/setlist/<int:pk>/edit/', views.SongEditView.as_view(), name='manage-setlist-edit'),
-    path('manage/setlist/<int:pk>/delete/', views.SongDeleteView.as_view(), name='manage-setlist-delete'),
-    path(
-        'manage/setlist/<int:pk>/move-up/',
-        views.SongMoveView.as_view(), {'direction': views.SongMoveView.UP}, name='manage-setlist-move-up',
-    ),
-    path(
-        'manage/setlist/<int:pk>/move-down/',
-        views.SongMoveView.as_view(), {'direction': views.SongMoveView.DOWN}, name='manage-setlist-move-down',
-    ),
     path('manage/assignments/', views.SongRoleAssignmentManageView.as_view(), name='manage-assignments'),
     path(
         'manage/assignments/<int:pk>/delete/',

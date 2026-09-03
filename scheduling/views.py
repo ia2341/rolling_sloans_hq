@@ -3,7 +3,7 @@
 import json
 
 from django.contrib import messages
-from django.db import models, transaction
+from django.db import transaction
 from django.http import (
     Http404,
     HttpResponseBadRequest,
@@ -18,7 +18,7 @@ from django.utils.http import url_has_allowed_host_and_scheme
 from django.views import View
 from django.views.generic import DetailView, TemplateView
 
-from config.views import AdminRequiredMixin, BaseView
+from config.views import AdminRequiredMixin, BaseView, PreviewMixin
 from identity.models import Person
 from scheduling.forms import (
     DeclareConflictForm,
@@ -29,8 +29,8 @@ from scheduling.forms import (
     RosterEditFormSet,
     SetlistEditEmptyFormSet,
     SetlistEditFormSet,
-    SongForm,
     SongRoleAssignmentForm,
+    SpotifyImportForm,
 )
 from scheduling.models import (
     Conflict,
@@ -74,6 +74,7 @@ from scheduling.services import (
     mismatched_person_ids_for,
     next_attended_rehearsal_for,
     performers_for,
+    preview_roster_edits,
     publish_semester,
     recording_count_for,
     recording_groups_for,
@@ -91,6 +92,7 @@ from scheduling.services import (
     unrostered_people_for,
     upcoming_rehearsals_for,
 )
+from scheduling.spotify import SpotifyImportError, import_playlist
 
 
 def _scoped_to_viewing_semester(model, semester):
@@ -503,8 +505,13 @@ class SetlistDeleteConfirmView(AdminRequiredMixin, View):
         return render(request, self.template_name, {'summaries': summaries})
 
 
-def _parse_int(raw_value):
-    """Return `raw_value` as an int, or -1 (matching no real row/Semester) when it isn't one."""
+def _parse_roster_int(raw_value):
+    """Return `raw_value` as an int, or -1 (matching no real row/Semester) when it isn't one.
+
+    Shared by `MembersView`, the Roster add list (issue #229) and the
+    Roster Preview surface (issue #228) so the three never drift on how a
+    malformed hidden field is coerced.
+    """
     try:
         return int(raw_value)
     except (TypeError, ValueError):
@@ -553,7 +560,7 @@ def _submitted_add_state_by_person_id(request):
     formset = RosterAddFormSet(request.GET, prefix=prefix)
     state = {}
     for form in formset:
-        person_id = _parse_int(form['person_id'].value())
+        person_id = _parse_roster_int(form['person_id'].value())
         if person_id == -1:
             continue
         state[person_id] = {
@@ -565,9 +572,121 @@ def _submitted_add_state_by_person_id(request):
 
 def _add_rows(add_formset):
     """Pair each add-list formset row with its Person, so an invalid re-render can still show the row's name."""
-    form_person_ids = [(form, _parse_int(form['person_id'].value())) for form in add_formset]
+    form_person_ids = [(form, _parse_roster_int(form['person_id'].value())) for form in add_formset]
     people_by_id = Person.objects.in_bulk([person_id for _, person_id in form_person_ids])
     return [{'form': form, 'person': people_by_id.get(person_id)} for form, person_id in form_person_ids]
+
+
+def _build_roster_buffer(formset, submitted_semester_id, submitted_stamp):
+    """Turn a valid RosterEditFormSet into a RosterEditBuffer, carrying the Semester state it was rendered against.
+
+    Shared by `MembersView.post()` and `RosterPreviewView.run_preview()`
+    (issue #228) — the Preview and Save endpoints must parse the exact
+    same POST body into the exact same Buffer shape, per ADR 0008.
+    `submitted_semester_id`/`submitted_stamp` are the hidden fields
+    stamped at render time, not the live session's viewing Semester —
+    `apply_roster_edits()`/`preview_roster_edits()` are where those are
+    compared against current state.
+    """
+    person_ids = {row['person_id'] for row in formset.cleaned_data}
+    people_by_id = Person.objects.in_bulk(person_ids)
+    entries = []
+    removed_person_ids = set()
+    for row in formset.cleaned_data:
+        person = people_by_id.get(row['person_id'])
+        if person is None:
+            continue
+        if row['remove']:
+            removed_person_ids.add(person.pk)
+            continue
+        entries.append(RosterEditEntry(
+            person=person, name=row['name'], role_ids=frozenset(role.pk for role in row['roles']),
+        ))
+    return RosterEditBuffer(
+        semester_id=_parse_roster_int(submitted_semester_id),
+        semester_updated_at=parse_datetime(submitted_stamp) or timezone.now(),
+        entries=entries,
+        removed_person_ids=frozenset(removed_person_ids),
+    )
+
+
+class SetlistImportView(AdminRequiredMixin, View):
+    """`/setlist/edit/import/`: turns a pasted Spotify playlist link into filled buffer rows (issue #184).
+
+    A fetch-and-inject helper for the edit grid already open, the same
+    shape as `SetlistDeleteConfirmView` — not a second write path. It
+    writes nothing: `import_playlist()` only reads from Spotify, and the
+    rows this renders are unsaved `Song` instances the client appends to
+    its own buffer; only `SetlistEditView`'s Save persists anything, so a
+    bad import costs a Cancel rather than a cleanup. A malformed link
+    (caught by `SpotifyImportForm` before any request), an unconfigured
+    import, or any other `SpotifyImportError` (private/missing playlist,
+    auth failure, rate limit, transport error) all render the same
+    fragment with a readable `error` instead of raising, leaving the
+    admin's buffer untouched.
+    """
+
+    template_name = 'scheduling/_setlist_edit_import_result.html'
+
+    def post(self, request):
+        """Validate the playlist link, import it, and render new buffer rows or a readable error."""
+        semester = get_viewing_semester(request)
+        if semester is None:
+            return HttpResponseBadRequest()
+        form = SpotifyImportForm(request.POST)
+        if not form.is_valid():
+            return render(request, self.template_name, {'error': form.errors['playlist_url'][0]})
+        try:
+            result = import_playlist(form.cleaned_data['playlist_url'])
+        except SpotifyImportError as error:
+            return render(request, self.template_name, {'error': str(error)})
+
+        next_index = self._parse_next_index(request.POST.get('next_index', ''))
+        row_forms = [
+            self._row_form(imported_song, next_index + offset)
+            for offset, imported_song in enumerate(result.songs)
+        ]
+        return render(request, self.template_name, {
+            'forms': row_forms,
+            'added_count': len(row_forms),
+            'skipped_count': result.skipped_count,
+            'skipped_reasons': result.skipped_reasons,
+        })
+
+    def _parse_next_index(self, raw_value):
+        """Return `raw_value` as a non-negative int, or 0 for a missing/malformed value."""
+        try:
+            value = int(raw_value)
+        except ValueError:
+            return 0
+        return max(value, 0)
+
+    def _row_form(self, imported_song, index):
+        """Build one unbound `SetlistEditFormSet`-shaped row at slot `song-{index}`, filled from `imported_song`.
+
+        Mirrors `SetlistEditFormSet.empty_form`'s own construction (same
+        `add_fields()` call, so the `id`/`DELETE` fields the grid's row
+        partial expects are present) but at a real slot index with the
+        imported track's values as initial data, rather than a blank
+        `__prefix__` row for the client to fill in by hand.
+        """
+        blank_formset = SetlistEditFormSet(queryset=Song.objects.none(), prefix='song')
+        form = blank_formset.form(
+            auto_id=blank_formset.auto_id,
+            prefix=blank_formset.add_prefix(index),
+            empty_permitted=True,
+            use_required_attribute=False,
+            initial={
+                'title': imported_song.title,
+                'artist': imported_song.artist,
+                'length': imported_song.length,
+                # Always blank, never `imported_song.notes` — notes have no Spotify
+                # equivalent, and the column must plainly read as the admin's (issue #184).
+                'notes': '',
+            },
+        )
+        blank_formset.add_fields(form, None)
+        return form
 
 
 class MembersView(BaseView, View):
@@ -662,7 +781,10 @@ class MembersView(BaseView, View):
         add-list row becomes an ordinary `RosterEditEntry` alongside the
         edit table's rows: `apply_roster_edits()` get-or-creates the
         Membership either way, so an add is indistinguishable from an edit
-        of an existing row by the time it reaches the service layer.
+        of an existing row by the time it reaches the service layer. Not
+        `_build_roster_buffer()` (issue #228): that shared function only
+        covers the edit table, which is all Preview fires against — Save
+        is the only surface that also has to fold in the add list.
         """
         person_ids = {row['person_id'] for row in formset.cleaned_data}
         person_ids |= {row['person_id'] for row in add_formset.cleaned_data if row['add']}
@@ -689,7 +811,7 @@ class MembersView(BaseView, View):
                 person=person, name=person.name, role_ids=frozenset(role.pk for role in row['roles']),
             ))
         return RosterEditBuffer(
-            semester_id=_parse_int(submitted_semester_id),
+            semester_id=_parse_roster_int(submitted_semester_id),
             semester_updated_at=parse_datetime(submitted_stamp) or timezone.now(),
             entries=entries,
             removed_person_ids=frozenset(removed_person_ids),
@@ -730,7 +852,7 @@ class MembersView(BaseView, View):
         mismatched_person_ids = mismatched_person_ids_for(semester)
         rows = []
         for form in formset:
-            person_id = _parse_int(form['person_id'].value())
+            person_id = _parse_roster_int(form['person_id'].value())
             rows.append({
                 'form': form,
                 'is_self': person_id == requesting_admin_id,
@@ -780,6 +902,81 @@ class RosterImportView(AdminRequiredMixin, View):
             'add_rows': _add_rows(add_formset),
             'import_source_semester': proposal.source_semester,
         })
+
+
+class RosterPreviewView(PreviewMixin, AdminRequiredMixin, View):
+    """`/members/preview/`: an admin's Preview of a Roster edit Buffer, computed without committing it (issue #228, ADR 0008).
+
+    A POST-only sibling of `/members/`'s Save endpoint, bound to the exact
+    same `RosterEditFormSet` and the exact same POST body — same field
+    names, management form and hidden staleness fields — as the Save
+    endpoint, per ADR 0008's "one parsing and validation path" rule.
+    `PreviewMixin` owns the savepoint/rollback shape; this view supplies
+    only the form and the `preview_roster_edits()` call. Fired by the edit
+    table's Role checkboxes and `remove` toggles on `change` (never by
+    typing in the name field), targeting the `#roster-fallout` region with
+    an `outerHTML` swap synced against any other in-flight Preview.
+    """
+
+    template_name = 'scheduling/_roster_preview.html'
+
+    def run_preview(self, request):
+        """Bind the Roster edit formset and render its Fallout, or a Validation Error banner if it doesn't bind."""
+        semester = get_viewing_semester(request)
+        if semester is None:
+            return render(request, self.template_name, {
+                'formset_errors': ['No Semester is being edited.'],
+                'fallout': None,
+            })
+        formset = RosterEditFormSet(request.POST, prefix='roster')
+        if not formset.is_valid():
+            return render(request, self.template_name, {
+                'formset_errors': self._formset_errors(formset),
+                'fallout': None,
+            })
+        submitted_semester_id = request.POST.get('roster_semester_id', '')
+        submitted_stamp = request.POST.get('roster_semester_updated_at', '')
+        buffer = _build_roster_buffer(formset, submitted_semester_id, submitted_stamp)
+        fallout = preview_roster_edits(buffer, viewing_semester=semester, requesting_admin=request.user)
+        return render(request, self.template_name, {'formset_errors': [], 'fallout': fallout})
+
+    def _formset_errors(self, formset):
+        """Return a flat list of 'Row N (field): message' strings naming an invalid formset's per-row errors."""
+        errors = []
+        for index, form in enumerate(formset.forms):
+            for field, field_errors in form.errors.items():
+                for message in field_errors:
+                    errors.append(f'Row {index + 1} ({field}): {message}')
+        errors.extend(formset.non_form_errors())
+        return errors
+
+
+class RosterRemovalConfirmView(PreviewMixin, AdminRequiredMixin, View):
+    """`/members/preview/confirm-removal/`: the one-dialog-per-batch removal confirmation (issue #228, ADR 0008).
+
+    Runs the same `preview_roster_edits()` computation as the on-page
+    Preview (fetched by the edit table's Save button, only when at least
+    one `remove` checkbox is checked), so the confirm dialog can never
+    disagree with what the Preview already showed. Renders just the
+    removal-related subset: each removed Person's name and email, plus the
+    batch's loud Fallout lines.
+    """
+
+    template_name = 'scheduling/_roster_removal_confirm.html'
+
+    def run_preview(self, request):
+        """Bind the Roster edit formset and render the removal confirmation dialog's body."""
+        semester = get_viewing_semester(request)
+        if semester is None:
+            return HttpResponseBadRequest('No Semester is being edited.')
+        formset = RosterEditFormSet(request.POST, prefix='roster')
+        if not formset.is_valid():
+            return HttpResponseBadRequest('The Roster edit Buffer is invalid.')
+        submitted_semester_id = request.POST.get('roster_semester_id', '')
+        submitted_stamp = request.POST.get('roster_semester_updated_at', '')
+        buffer = _build_roster_buffer(formset, submitted_semester_id, submitted_stamp)
+        fallout = preview_roster_edits(buffer, viewing_semester=semester, requesting_admin=request.user)
+        return render(request, self.template_name, {'fallout': fallout})
 
 
 class MemberDetailView(BaseView, View):
@@ -1166,123 +1363,6 @@ class RehearsalEditView(AdminRequiredMixin, View):
     def _get_rehearsal(self, pk):
         """Return the viewing Semester's Rehearsal with this id, or 404 (mirrors SongDetailView's scoping)."""
         return get_object_or_404(_scoped_to_viewing_semester(Rehearsal, get_viewing_semester(self.request)), pk=pk)
-
-
-class SongManageView(AdminRequiredMixin, View):
-    """`/manage/setlist/`: an admin lists and adds the viewing Semester's Songs (issue #60, #17 story 11)."""
-
-    template_name = 'scheduling/manage_setlist.html'
-
-    def get(self, request):
-        """Render the viewing Semester's Songs in position order alongside an empty create form."""
-        return render(request, self.template_name, self._build_context())
-
-    def post(self, request):
-        """Validate the create form and append a new Song at the end of the viewing Semester's setlist."""
-        semester = get_viewing_semester(request)
-        if semester is None:
-            messages.error(request, 'Create a Semester before adding Songs.')
-            return redirect('scheduling:manage-setlist')
-        with transaction.atomic():
-            semester = _lock_semester(semester)
-            instance = Song(semester=semester, position=self._next_position(semester))
-            form = SongForm(request.POST, instance=instance)
-            if form.is_valid():
-                form.save()
-                messages.success(request, 'Song added.')
-                return redirect('scheduling:manage-setlist')
-        return render(request, self.template_name, self._build_context(form))
-
-    def _next_position(self, semester):
-        """Return one past the viewing Semester's highest Song position (1 if it has no Songs yet)."""
-        highest = Song.objects.filter(semester=semester).aggregate(highest=models.Max('position'))['highest']
-        return (highest or 0) + 1
-
-    def _build_context(self, form=None):
-        """Build context: the viewing Semester's Songs plus the create form (fresh if none is given)."""
-        semester = get_viewing_semester(self.request)
-        return {
-            'semester': semester,
-            'songs': _scoped_to_viewing_semester(Song, semester),
-            'form': form or SongForm(),
-        }
-
-
-class SongEditView(AdminRequiredMixin, View):
-    """`/manage/setlist/<pk>/edit/`: an admin edits an existing Song's title/artist/length/notes (issue #60, #17 story 11)."""
-
-    template_name = 'scheduling/manage_setlist_edit.html'
-
-    def get(self, request, pk):
-        """Render the edit form pre-filled with the target Song's current values."""
-        song = self._get_song(pk)
-        return render(request, self.template_name, {'song': song, 'form': SongForm(instance=song)})
-
-    def post(self, request, pk):
-        """Validate and save the edit, or re-render with errors."""
-        song = self._get_song(pk)
-        form = SongForm(request.POST, instance=song)
-        if form.is_valid():
-            form.save()
-            messages.success(request, 'Song updated.')
-            return redirect('scheduling:manage-setlist')
-        return render(request, self.template_name, {'song': song, 'form': form})
-
-    def _get_song(self, pk):
-        """Return the viewing Semester's Song with this id, or 404 (mirrors SongDetailView's scoping)."""
-        return get_object_or_404(_scoped_to_viewing_semester(Song, get_viewing_semester(self.request)), pk=pk)
-
-
-class SongDeleteView(AdminRequiredMixin, View):
-    """`/manage/setlist/<pk>/delete/`: an admin removes a Song from the setlist (issue #60, #17 story 11)."""
-
-    def post(self, request, pk):
-        """Delete the viewing Semester's target Song and redirect back to the setlist with a success message."""
-        song = get_object_or_404(_scoped_to_viewing_semester(Song, get_viewing_semester(request)), pk=pk)
-        song.delete()
-        messages.success(request, 'Song removed.')
-        return redirect('scheduling:manage-setlist')
-
-
-class SongMoveView(AdminRequiredMixin, View):
-    """`/manage/setlist/<pk>/move-up|down/`: an admin swaps a Song's position with its neighbor (issue #60, #17 story 11).
-
-    Reuses the deferred `unique_song_position_per_semester` constraint the
-    same way `Song.Meta` already relies on: both rows' positions are
-    swapped inside one atomic transaction, so the transient collision
-    between them is never checked mid-transaction.
-    """
-
-    UP = 'up'
-    DOWN = 'down'
-
-    def post(self, request, pk, direction):
-        """Swap the viewing Semester's target Song's position with its previous/next neighbor, if one exists."""
-        song = get_object_or_404(_scoped_to_viewing_semester(Song, get_viewing_semester(request)), pk=pk)
-        with transaction.atomic():
-            _lock_semester(song.semester)
-            song.refresh_from_db()
-            neighbor = self._neighbor(song, direction)
-            if neighbor is not None:
-                self._swap_positions(song, neighbor)
-                messages.success(request, 'Setlist reordered.')
-        return redirect('scheduling:manage-setlist')
-
-    def _neighbor(self, song, direction):
-        """Return the Song immediately before/after `song` in its Semester's position order, or None at either end."""
-        songs = list(Song.objects.filter(semester=song.semester).order_by('position'))
-        index = songs.index(song)
-        if direction == self.UP and index > 0:
-            return songs[index - 1]
-        if direction == self.DOWN and index < len(songs) - 1:
-            return songs[index + 1]
-        return None
-
-    def _swap_positions(self, song_a, song_b):
-        """Swap two Songs' positions. Must be called within a transaction holding the Semester's row lock."""
-        song_a.position, song_b.position = song_b.position, song_a.position
-        song_a.save(update_fields=['position'])
-        song_b.save(update_fields=['position'])
 
 
 class SongRoleAssignmentManageView(AdminRequiredMixin, View):
