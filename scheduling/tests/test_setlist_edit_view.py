@@ -340,6 +340,55 @@ class SetlistEditSaveTests(TestCase):
         self.assertEqual(live_song.title, 'Live Title')
         self.assertEqual(Semester.objects.get(pk=live.pk).updated_at, live.updated_at)
 
+    def test_a_song_order_missing_a_surviving_prefix_is_rejected_and_writes_nothing(self):
+        """A `song_order` that drops an existing row's prefix is rejected wholesale, not silently applied."""
+        semester = SemesterFactory()
+        first = SongFactory(semester=semester, position=1, title='First')
+        second = SongFactory(semester=semester, position=2, title='Second')
+        admin_client(self)
+        data = formset_data([first, second], edits={second.pk: {'title': 'New Second'}})
+        data['song_order'] = ['song-0']
+
+        response = self.client.post(reverse('scheduling:setlist-edit'), data)
+
+        self.assertEqual(response.status_code, 200)
+        second.refresh_from_db()
+        self.assertEqual(second.title, 'Second')
+        self.assertContains(response, 'reload and reapply')
+
+    def test_a_song_order_with_a_duplicated_prefix_is_rejected_and_writes_nothing(self):
+        """A `song_order` naming one prefix twice (and another not at all) is rejected wholesale."""
+        semester = SemesterFactory()
+        first = SongFactory(semester=semester, position=1, title='First')
+        second = SongFactory(semester=semester, position=2, title='Second')
+        admin_client(self)
+        data = formset_data([first, second])
+        data['song_order'] = ['song-0', 'song-0']
+
+        response = self.client.post(reverse('scheduling:setlist-edit'), data)
+
+        self.assertEqual(response.status_code, 200)
+        first.refresh_from_db()
+        second.refresh_from_db()
+        self.assertEqual(first.position, 1)
+        self.assertEqual(second.position, 2)
+        self.assertContains(response, 'reload and reapply')
+
+    def test_a_song_order_naming_an_unknown_prefix_is_rejected_and_writes_nothing(self):
+        """A `song_order` token that names no formset prefix at all is rejected wholesale."""
+        semester = SemesterFactory()
+        song = SongFactory(semester=semester, position=1, title='Original')
+        admin_client(self)
+        data = formset_data([song])
+        data['song_order'] = ['song-99']
+
+        response = self.client.post(reverse('scheduling:setlist-edit'), data)
+
+        self.assertEqual(response.status_code, 200)
+        song.refresh_from_db()
+        self.assertEqual(song.title, 'Original')
+        self.assertContains(response, 'reload and reapply')
+
     def test_cancel_link_returns_to_the_read_mode_setlist(self):
         """The Cancel affordance is a plain link back to the read-mode /setlist/ page."""
         semester = SemesterFactory()

@@ -260,6 +260,7 @@ class SetlistEditView(AdminRequiredMixin, View):
     fragment_template_name = 'scheduling/_setlist_edit.html'
     page_template_name = 'scheduling/setlist_edit.html'
     STALE_MESSAGE = 'The setlist changed while you were editing — reload and reapply.'
+    MALFORMED_ORDER_MESSAGE = 'The setlist could not be saved — reload and reapply.'
 
     def get(self, request):
         """Render the edit grid: a bare fragment for htmx, a full page otherwise."""
@@ -276,35 +277,39 @@ class SetlistEditView(AdminRequiredMixin, View):
         songs = _scoped_to_viewing_semester(Song, semester).order_by('position')
         formset = SetlistEditFormSet(request.POST, queryset=songs, prefix='song')
         if formset.is_valid():
-            stale = self._save_if_current(semester, formset, request.POST.get('semester_updated_at', ''))
-            if not stale:
+            stale, malformed = self._save_if_current(semester, formset, request.POST.get('semester_updated_at', ''))
+            if not stale and not malformed:
                 messages.success(request, 'Setlist updated.')
                 return redirect('scheduling:setlist')
-            messages.error(request, self.STALE_MESSAGE)
+            messages.error(request, self.STALE_MESSAGE if stale else self.MALFORMED_ORDER_MESSAGE)
         return self._render(request, semester, formset, status=200)
 
     def _save_if_current(self, semester, formset, submitted_stamp):
-        """Save `formset` and bump the Semester's stamp if `submitted_stamp` still matches; return whether it was stale.
+        """Save `formset` and bump the Semester's stamp if `submitted_stamp` still matches; return (stale, malformed).
 
         Locks the Semester row for the duration of the check-and-save so a
         concurrent save can't slip in between the comparison and the write.
-        Rolls back and writes nothing when the stamp is stale, without
-        issuing any further query inside the doomed transaction.
+        Rolls back and writes nothing when the stamp is stale, or when
+        `_save_buffer` rejects the submitted `song_order` as malformed,
+        without issuing any further query inside the doomed transaction.
         """
         stale = False
+        malformed = False
         with transaction.atomic():
             locked = _lock_semester(semester)
-            if self._stamp_matches(locked, submitted_stamp):
-                self._save_buffer(locked, formset)
-                locked.updated_at = timezone.now()
-                locked.save(update_fields=['updated_at'])
-            else:
+            if not self._stamp_matches(locked, submitted_stamp):
                 stale = True
                 transaction.set_rollback(True)
-        return stale
+            elif not self._save_buffer(locked, formset):
+                malformed = True
+                transaction.set_rollback(True)
+            else:
+                locked.updated_at = timezone.now()
+                locked.save(update_fields=['updated_at'])
+        return stale, malformed
 
     def _save_buffer(self, semester, formset):
-        """Apply the buffer's edits, adds, reorder and deletes as one write (issue #179).
+        """Apply the buffer's edits, adds, reorder and deletes as one write (issue #179); return whether it saved.
 
         Runs inside the caller's locked transaction. A row's formset slot
         (`song-N-*`) never moves on drag — only Django's own initial/extra
@@ -317,26 +322,36 @@ class SetlistEditView(AdminRequiredMixin, View):
         buffer's row order because SortableJS physically moves each row's
         DOM node — including its `song_order` input — on drop.
 
-        Every surviving row named there — changed, unchanged or brand-new —
-        is saved with a throwaway position first (position isn't a form
-        field, so a new instance has none yet); `reorder_songs()` then
-        renumbers that exact order to a contiguous 1..N. An untouched extra
-        row (added, then left blank) is dropped rather than saved, mirroring
-        `ModelFormSet.save_new_objects()`'s own `has_changed()` guard.
-        Deletions (`delete_songs_with_recordings`) run after survivors are
-        saved so a row moved out from under a doomed Song's old position
-        never collides — the deferred unique constraint makes the whole
-        sequence collision-free either way.
+        Before any write, `song_order` is checked to be an exact
+        duplicate-free permutation of the formset's own form prefixes —
+        every row's `song_order` input travels with it regardless of
+        whether that row is deleted or an untouched blank add, so the
+        full prefix set (not just the surviving ones) is what the grid's
+        JS actually submits. An unknown, duplicate, or missing prefix
+        returns `False` and writes nothing, rather than silently omitting
+        a surviving Song's edits or assigning conflicting positions.
+        Every surviving row named there — changed, unchanged or
+        brand-new — is then saved with a throwaway position first
+        (position isn't a form field, so a new instance has none yet);
+        `reorder_songs()` renumbers that exact order to a contiguous
+        1..N, on the surviving Song ids alone, so valid deletions remain
+        supported. Deletions (`delete_songs_with_recordings`) run after
+        survivors are saved so a row moved out from under a doomed
+        Song's old position never collides — the deferred unique
+        constraint makes the whole sequence collision-free either way.
         """
         deleted_forms = formset.deleted_forms
         deleted_songs = [form.instance for form in deleted_forms if form.instance.pk]
         extra_forms = set(formset.extra_forms)
         forms_by_prefix = {form.prefix: form for form in formset.forms}
+
         order_tokens = formset.data.getlist('song_order')
-        ordered_forms = [forms_by_prefix[token] for token in order_tokens if token in forms_by_prefix]
+        if sorted(order_tokens) != sorted(forms_by_prefix):
+            return False
 
         ordered_ids = []
-        for form in ordered_forms:
+        for token in order_tokens:
+            form = forms_by_prefix[token]
             if form in deleted_forms:
                 continue
             if form in extra_forms and not form.has_changed():
@@ -351,6 +366,7 @@ class SetlistEditView(AdminRequiredMixin, View):
             delete_songs_with_recordings(deleted_songs)
 
         reorder_songs(semester, ordered_ids)
+        return True
 
     def _stamp_matches(self, semester, submitted_stamp):
         """Return whether `submitted_stamp` (an isoformat string) still matches `semester.updated_at`."""

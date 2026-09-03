@@ -5,6 +5,7 @@ document.addEventListener('alpine:init', () => {
   Alpine.data('setlistEdit', (confirmUrl) => ({
     confirmHtml: '',
     confirmUrl,
+    deleteError: '',
     sortable: null,
 
     init() {
@@ -101,21 +102,35 @@ document.addEventListener('alpine:init', () => {
         .map((group) => group.dataset.songId);
     },
 
+    // Fetches the deletion confirmation and only opens the dialog on a successful response --
+    // a failed request must never let 'Delete Anyway' submit the destructive Save without the
+    // admin having seen the recording/uploader counts, so it surfaces a retryable error instead.
     async onSubmit(event) {
       const songIds = this.deletedSongIds();
       if (songIds.length === 0) {
         return;
       }
       event.preventDefault();
+      this.deleteError = '';
       const form = document.getElementById('setlist-edit-form');
       const csrfToken = form.querySelector('[name=csrfmiddlewaretoken]').value;
       const body = new FormData();
       songIds.forEach((songId) => body.append('song_id', songId));
-      const response = await fetch(this.confirmUrl, {
-        method: 'POST',
-        headers: { 'X-CSRFToken': csrfToken },
-        body,
-      });
+      let response;
+      try {
+        response = await fetch(this.confirmUrl, {
+          method: 'POST',
+          headers: { 'X-CSRFToken': csrfToken },
+          body,
+        });
+      } catch (error) {
+        this.deleteError = 'Could not reach the server to confirm deletions. Check your connection and click Save Changes again.';
+        return;
+      }
+      if (!response.ok) {
+        this.deleteError = 'Could not load the deletion confirmation. Click Save Changes again to retry.';
+        return;
+      }
       this.confirmHtml = await response.text();
       this.$refs.deleteDialog.showModal();
     },

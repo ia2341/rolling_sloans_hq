@@ -30,6 +30,7 @@
     <button type="button" id="add-song-row" @click="addRow">+ Add song</button>
     <button type="submit" id="save-setlist-changes">Save Changes</button>
   </form>
+  <p id="setlist-delete-confirm-error" x-show="deleteError" x-text="deleteError" role="alert"></p>
   <a href="{% url 'scheduling:setlist' %}" id="cancel-setlist-edit">Cancel</a>
 
   <template id="setlist-empty-form-template">
