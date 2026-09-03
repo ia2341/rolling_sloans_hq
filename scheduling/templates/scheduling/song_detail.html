@@ -4,6 +4,18 @@
 <h1>{{ song.title }} — {{ song.artist }}</h1>
 <p>Rehearsed {{ rehearsal_count_actual }} of {{ rehearsal_count_target }} rehearsals.</p>
 
+<h2>Fill Status</h2>
+<ul>
+  {% for status in fill_statuses %}
+    <li{% if status.is_understaffed %} class="rs-muted"{% endif %}>
+      {{ status.role.name }} — {{ status.actual }} of {{ status.target }}
+      {% if status.is_retired_role %}<span class="rs-muted">(retired role)</span>{% endif %}
+    </li>
+  {% empty %}
+    <li>No role requirements yet.</li>
+  {% endfor %}
+</ul>
+
 <h2>Assignments</h2>
 <ul>
   {% for assignment in assignments %}

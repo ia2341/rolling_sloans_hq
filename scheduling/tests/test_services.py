@@ -27,6 +27,7 @@ from scheduling.services import (
     breaks_for,
     conflict_history_for,
     declare_conflict,
+    fill_status_for,
     future_rehearsals_for,
     performers_for,
     recording_count_for,
@@ -165,6 +166,76 @@ class PerformersForTests(TestCase):
         performers = performers_for(song)
 
         self.assertEqual(performers, [])
+
+
+class FillStatusForTests(TestCase):
+    def test_no_requirements_yields_empty_list(self):
+        """A Song with no SongRoleRequirements returns an empty result, not an error."""
+        song = SongFactory()
+
+        statuses = fill_status_for(song)
+
+        self.assertEqual(statuses, [])
+
+    def test_role_under_target_is_flagged_understaffed(self):
+        """A Role with fewer assignments than its target is flagged is_understaffed."""
+        song = SongFactory()
+        role = RoleFactory(name='Singer')
+        SongRoleRequirementFactory(song=song, role=role, count=3)
+        SongRoleAssignmentFactory(song=song, role=role)
+
+        [status] = fill_status_for(song)
+
+        self.assertEqual(status.target, 3)
+        self.assertEqual(status.actual, 1)
+        self.assertTrue(status.is_understaffed)
+
+    def test_role_exactly_at_target_is_not_flagged(self):
+        """A Role with assignments equal to its target is not flagged understaffed."""
+        song = SongFactory()
+        role = RoleFactory()
+        SongRoleRequirementFactory(song=song, role=role, count=2)
+        SongRoleAssignmentFactory(song=song, role=role)
+        SongRoleAssignmentFactory(song=song, role=role)
+
+        [status] = fill_status_for(song)
+
+        self.assertEqual(status.actual, 2)
+        self.assertFalse(status.is_understaffed)
+
+    def test_role_over_target_is_not_flagged(self):
+        """A Role with more assignments than its target is not flagged understaffed (a target is never a cap)."""
+        song = SongFactory()
+        role = RoleFactory()
+        SongRoleRequirementFactory(song=song, role=role, count=1)
+        SongRoleAssignmentFactory(song=song, role=role)
+        SongRoleAssignmentFactory(song=song, role=role)
+
+        [status] = fill_status_for(song)
+
+        self.assertEqual(status.actual, 2)
+        self.assertFalse(status.is_understaffed)
+
+    def test_requirement_on_a_retired_role_is_present_and_flagged(self):
+        """A Requirement naming a retired Role is included, flagged is_retired_role, never filtered out."""
+        song = SongFactory()
+        retired_role = RoleFactory(is_active=False)
+        SongRoleRequirementFactory(song=song, role=retired_role, count=1)
+
+        [status] = fill_status_for(song)
+
+        self.assertEqual(status.role, retired_role)
+        self.assertTrue(status.is_retired_role)
+
+    def test_scoped_to_the_given_song_only(self):
+        """A Requirement on a different Song is not included."""
+        song = SongFactory()
+        other_song = SongFactory(semester=song.semester)
+        SongRoleRequirementFactory(song=other_song)
+
+        statuses = fill_status_for(song)
+
+        self.assertEqual(statuses, [])
 
 
 class RecordingCountForTests(TestCase):

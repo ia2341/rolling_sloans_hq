@@ -47,6 +47,7 @@ from scheduling.services import (
     declare_conflict,
     declared_roles_for,
     delete_semester,
+    fill_status_for,
     future_rehearsals_for,
     get_live_semester,
     get_viewing_semester,
@@ -443,10 +444,11 @@ class SongDetailView(BaseView, DetailView):
         return _scoped_to_viewing_semester(Song, get_viewing_semester(self.request))
 
     def get_context_data(self, **kwargs):
-        """Add the Song's SongRoleAssignments, Recordings grouped by RehearsalSong slot, and rehearsal-count target vs. actual."""
+        """Add the Song's SongRoleAssignments, Role fill status, Recordings grouped by RehearsalSong slot, and rehearsal-count target vs. actual."""
         context = super().get_context_data(**kwargs)
         song = self.object
         context['assignments'] = SongRoleAssignment.objects.filter(song=song)
+        context['fill_statuses'] = fill_status_for(song)
         context['recording_groups'] = [
             {
                 'rehearsal_song': group.rehearsal_song,
