@@ -1,23 +1,48 @@
-{# The Overview's admin Semester panel (issue #169). `semester_options` is empty #}
-{# for a member, so the panel is absent rather than hidden. The semester-setup #}
-{# wizard later adds a "Create Semester" button here and owns the final layout. #}
-{% if semester_options %}
+{# The Home admin panel (issue #199): the Semester dropdown (issue #169), publish (issue #170) #}
+{# and delete (issue #171) for the currently viewed Semester, and doors to the surviving #}
+{# `/manage/` surfaces. Gated on `request.user.is_admin` directly (not on `semester_options` #}
+{# being non-empty) so the panel still renders — sans dropdown and Semester actions — when no #}
+{# Semester exists yet. The semester-setup wizard (issue #198 §12) later adds a "Create #}
+{# Semester" button here; it owns the panel's final layout. #}
+{% if request.user.is_admin %}
 <article class="rs-semester-panel" data-testid="semester-panel">
   <h2>Semester</h2>
-  {# A plain POST-and-redirect form: which Semester an admin edits must never #}
-  {# hinge on a script having loaded. #}
-  <form method="post" action="{% url 'scheduling:manage-semester-select' %}">
-    {% csrf_token %}
-    <input type="hidden" name="next" value="{{ request.get_full_path }}">
-    <label for="semester-select">Viewing</label>
-    <select id="semester-select" name="semester">
-      {% for option in semester_options %}
-        <option value="{{ option.semester.pk }}"{% if option.is_viewing %} selected{% endif %}>
-          {{ option.semester.name }} — {{ option.status }}
-        </option>
-      {% endfor %}
-    </select>
-    <button type="submit">Switch semester</button>
-  </form>
+
+  {% if semester_options %}
+    {# A plain POST-and-redirect form: which Semester an admin edits must never #}
+    {# hinge on a script having loaded. #}
+    <form method="post" action="{% url 'scheduling:manage-semester-select' %}">
+      {% csrf_token %}
+      <input type="hidden" name="next" value="{{ request.get_full_path }}">
+      <label for="semester-select">Viewing</label>
+      <select id="semester-select" name="semester">
+        {% for option in semester_options %}
+          <option value="{{ option.semester.pk }}"{% if option.is_viewing %} selected{% endif %}>
+            {{ option.semester.name }} — {{ option.status }}
+          </option>
+        {% endfor %}
+      </select>
+      <button type="submit">Switch semester</button>
+    </form>
+
+    {% if semester %}
+      {# Publish and delete are issue #170's and #171's own actions, reused as-is: no second #}
+      {# implementation here, just the form/link aimed at the currently viewed Semester. #}
+      <form method="post" action="{% url 'scheduling:manage-semesters-publish' semester.pk %}">
+        {% csrf_token %}
+        <button type="submit">Publish {{ semester.name }}</button>
+      </form>
+      {% if semester != live_semester %}
+        <a href="{% url 'scheduling:manage-semesters-delete' semester.pk %}">Delete {{ semester.name }}</a>
+      {% endif %}
+    {% endif %}
+  {% else %}
+    <p>No semesters exist yet.</p>
+  {% endif %}
+
+  <nav aria-label="Admin surfaces">
+    <a href="{% url 'scheduling:manage-conflicts' %}">Manage conflicts</a>
+    <a href="{% url 'identity:people' %}">Manage people</a>
+  </nav>
 </article>
 {% endif %}

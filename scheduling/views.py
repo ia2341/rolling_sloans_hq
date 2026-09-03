@@ -123,11 +123,12 @@ class OverviewView(BaseView, TemplateView):
     template_name = 'scheduling/overview.html'
 
     def get_context_data(self, **kwargs):
-        """Add the Next Rehearsal card (issue #94), song-progress table (issue #93) and admin Semester panel (issue #169)."""
+        """Add the Next Rehearsal card (issue #94), song-progress table (issue #93) and admin panel (issues #169, #199)."""
         context = super().get_context_data(**kwargs)
         semester = get_viewing_semester(self.request)
         context['semester'] = semester
         context['semester_options'] = semester_options_for(self.request)
+        context['live_semester'] = get_live_semester()
         context['next_rehearsal'] = None
         context['next_rehearsal_suggestion'] = None
         context['upcoming_rehearsals'] = []
