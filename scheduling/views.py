@@ -29,6 +29,7 @@ from scheduling.forms import (
     SetlistEditEmptyFormSet,
     SetlistEditFormSet,
     SongRoleAssignmentForm,
+    SpotifyImportForm,
 )
 from scheduling.models import (
     Conflict,
@@ -88,6 +89,7 @@ from scheduling.services import (
     songs_with_progress_for,
     upcoming_rehearsals_for,
 )
+from scheduling.spotify import SpotifyImportError, import_playlist
 
 
 def _scoped_to_viewing_semester(model, semester):
@@ -543,6 +545,85 @@ def _build_roster_buffer(formset, submitted_semester_id, submitted_stamp):
         entries=entries,
         removed_person_ids=frozenset(removed_person_ids),
     )
+
+
+class SetlistImportView(AdminRequiredMixin, View):
+    """`/setlist/edit/import/`: turns a pasted Spotify playlist link into filled buffer rows (issue #184).
+
+    A fetch-and-inject helper for the edit grid already open, the same
+    shape as `SetlistDeleteConfirmView` — not a second write path. It
+    writes nothing: `import_playlist()` only reads from Spotify, and the
+    rows this renders are unsaved `Song` instances the client appends to
+    its own buffer; only `SetlistEditView`'s Save persists anything, so a
+    bad import costs a Cancel rather than a cleanup. A malformed link
+    (caught by `SpotifyImportForm` before any request), an unconfigured
+    import, or any other `SpotifyImportError` (private/missing playlist,
+    auth failure, rate limit, transport error) all render the same
+    fragment with a readable `error` instead of raising, leaving the
+    admin's buffer untouched.
+    """
+
+    template_name = 'scheduling/_setlist_edit_import_result.html'
+
+    def post(self, request):
+        """Validate the playlist link, import it, and render new buffer rows or a readable error."""
+        semester = get_viewing_semester(request)
+        if semester is None:
+            return HttpResponseBadRequest()
+        form = SpotifyImportForm(request.POST)
+        if not form.is_valid():
+            return render(request, self.template_name, {'error': form.errors['playlist_url'][0]})
+        try:
+            result = import_playlist(form.cleaned_data['playlist_url'])
+        except SpotifyImportError as error:
+            return render(request, self.template_name, {'error': str(error)})
+
+        next_index = self._parse_next_index(request.POST.get('next_index', ''))
+        row_forms = [
+            self._row_form(imported_song, next_index + offset)
+            for offset, imported_song in enumerate(result.songs)
+        ]
+        return render(request, self.template_name, {
+            'forms': row_forms,
+            'added_count': len(row_forms),
+            'skipped_count': result.skipped_count,
+            'skipped_reasons': result.skipped_reasons,
+        })
+
+    def _parse_next_index(self, raw_value):
+        """Return `raw_value` as a non-negative int, or 0 for a missing/malformed value."""
+        try:
+            value = int(raw_value)
+        except ValueError:
+            return 0
+        return max(value, 0)
+
+    def _row_form(self, imported_song, index):
+        """Build one unbound `SetlistEditFormSet`-shaped row at slot `song-{index}`, filled from `imported_song`.
+
+        Mirrors `SetlistEditFormSet.empty_form`'s own construction (same
+        `add_fields()` call, so the `id`/`DELETE` fields the grid's row
+        partial expects are present) but at a real slot index with the
+        imported track's values as initial data, rather than a blank
+        `__prefix__` row for the client to fill in by hand.
+        """
+        blank_formset = SetlistEditFormSet(queryset=Song.objects.none(), prefix='song')
+        form = blank_formset.form(
+            auto_id=blank_formset.auto_id,
+            prefix=blank_formset.add_prefix(index),
+            empty_permitted=True,
+            use_required_attribute=False,
+            initial={
+                'title': imported_song.title,
+                'artist': imported_song.artist,
+                'length': imported_song.length,
+                # Always blank, never `imported_song.notes` — notes have no Spotify
+                # equivalent, and the column must plainly read as the admin's (issue #184).
+                'notes': '',
+            },
+        )
+        blank_formset.add_fields(form, None)
+        return form
 
 
 class MembersView(BaseView, View):
