@@ -1,6 +1,6 @@
 """apply_song_role_assignments(): the semester-wide removal write and the two staleness checks (issue #210)."""
 
-from datetime import timedelta
+from datetime import date, timedelta
 
 from django.test import TestCase
 
@@ -53,8 +53,8 @@ class ApplySongRoleAssignmentsTests(TestCase):
         removed pk is simply gone from every Rehearsal's grid and the
         concert setlist for that Song — there is no other row to check.
         """
-        RehearsalFactory(semester=self.semester)
-        RehearsalFactory(semester=self.semester)
+        RehearsalFactory(semester=self.semester, date=date(2026, 9, 16))
+        RehearsalFactory(semester=self.semester, date=date(2026, 9, 23))
         buffer = self._buffer(removed_assignment_ids=[self.assignment.pk])
 
         apply_song_role_assignments(buffer, viewing_semester=self.semester)

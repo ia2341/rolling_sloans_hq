@@ -1,6 +1,6 @@
 """Shared scheduling service functions (issue #92, issue #95, issue #98, issue #99)."""
 
-from datetime import time, timedelta
+from datetime import date, time, timedelta
 
 from django.test import TestCase
 from django.utils import timezone
@@ -251,8 +251,12 @@ class RecordingCountForTests(TestCase):
     def test_counts_recordings_across_every_rehearsal_song_slot(self):
         """Recordings across multiple RehearsalSong slots for the Song all count."""
         song = SongFactory()
-        first_slot = RehearsalSongFactory(song=song, rehearsal=RehearsalFactory(semester=song.semester))
-        second_slot = RehearsalSongFactory(song=song, rehearsal=RehearsalFactory(semester=song.semester))
+        first_slot = RehearsalSongFactory(
+            song=song, rehearsal=RehearsalFactory(semester=song.semester, date=date(2026, 9, 16)),
+        )
+        second_slot = RehearsalSongFactory(
+            song=song, rehearsal=RehearsalFactory(semester=song.semester, date=date(2026, 9, 23)),
+        )
         RecordingFactory(rehearsal_song=first_slot)
         RecordingFactory(rehearsal_song=first_slot)
         RecordingFactory(rehearsal_song=second_slot)
@@ -639,8 +643,8 @@ class ConflictHistoryForTests(TestCase):
 
     def test_only_includes_rehearsals_with_a_submitted_conflict(self):
         """A Rehearsal with no Conflict for this Person is not in History; one with a Conflict is."""
-        RehearsalFactory(semester=self.semester)
-        declared = RehearsalFactory(semester=self.semester)
+        RehearsalFactory(semester=self.semester, date=date(2026, 9, 16))
+        declared = RehearsalFactory(semester=self.semester, date=date(2026, 9, 23))
         ConflictFactory(person=self.person, rehearsal=declared, type=Conflict.FULL_CONFLICT)
 
         rows = conflict_history_for(self.semester, self.person)

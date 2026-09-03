@@ -499,9 +499,9 @@ class SongDetailViewTests(TestCase):
         """actual counts this Song's RehearsalSong rows; target counts the Semester's non-Dress Rehearsals."""
         semester = SemesterFactory()
         song = SongFactory(semester=semester)
-        rehearsal_one = RehearsalFactory(semester=semester, is_full_setlist=False)
-        rehearsal_two = RehearsalFactory(semester=semester, is_full_setlist=False)
-        RehearsalFactory(semester=semester, is_full_setlist=True)
+        rehearsal_one = RehearsalFactory(semester=semester, date=date(2026, 9, 16), is_full_setlist=False)
+        rehearsal_two = RehearsalFactory(semester=semester, date=date(2026, 9, 23), is_full_setlist=False)
+        RehearsalFactory(semester=semester, date=date(2026, 9, 30), is_full_setlist=True)
         RehearsalSongFactory(song=song, rehearsal=rehearsal_one, order=1)
         RehearsalSongFactory(song=song, rehearsal=rehearsal_two, order=1)
 
