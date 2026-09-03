@@ -1,7 +1,7 @@
 """Application services for the scheduling domain."""
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, time, timedelta
 from itertools import pairwise
 from uuid import uuid4
@@ -1413,3 +1413,197 @@ def _apply_roster_edit_entry(entry: RosterEditEntry, semester: Semester) -> None
         MembershipRole.objects.filter(
             membership=membership, role_id__in=current_role_ids - entry.role_ids,
         ).delete()
+
+
+@dataclass(frozen=True)
+class RosterRemoval:
+    """One Person a Roster edit Buffer removes, carrying the name/email its removal confirm dialog needs (issue #228).
+
+    Email is otherwise kept off the Roster surfaces (ADR 0005); the
+    removal confirmation is the one place it's shown, so an admin can tell
+    apart two similarly-named people before dropping one of them.
+    """
+
+    person_id: int
+    name: str
+    email: str
+
+
+@dataclass(frozen=True)
+class RosterEditFallout:
+    """Every observable consequence of a Roster edit Buffer, computed without committing it (issue #228).
+
+    `is_blocked` is true iff the Buffer cannot be saved at all (a
+    WrongViewingSemesterError or SelfRemovalError) — a Validation Error in
+    ADR 0008's terms, never blended with Fallout; `pending_*` and
+    `loud`/`quiet` are all empty when blocked, since nothing was computed.
+    `pending_*` name every row's outcome for the Preview's summary list.
+    `loud`/`quiet` are human-readable Fallout messages in the two ADR
+    0002/issue #228 tiers; neither ever blocks a save. `is_stale` flags a
+    `Semester.updated_at` mismatch — reported, never refused, per ADR 0008.
+    """
+
+    is_blocked: bool
+    block_message: str
+    is_stale: bool
+    pending_adds: list[str]
+    pending_removals: list[RosterRemoval]
+    pending_role_changes: list[str]
+    pending_name_edits: list[str]
+    loud: list[str]
+    quiet: list[str]
+
+
+def _blocked_roster_fallout(block_message: str, *, is_stale: bool = False) -> RosterEditFallout:
+    """Return a RosterEditFallout reporting a hard block, with every Fallout/pending list empty."""
+    return RosterEditFallout(
+        is_blocked=True,
+        block_message=block_message,
+        is_stale=is_stale,
+        pending_adds=[],
+        pending_removals=[],
+        pending_role_changes=[],
+        pending_name_edits=[],
+        loud=[],
+        quiet=[],
+    )
+
+
+def preview_roster_edits(buffer: RosterEditBuffer, *, viewing_semester: Semester, requesting_admin: Person) -> RosterEditFallout:
+    """Run the real `apply_roster_edits()` for `buffer` and report every observable consequence, without committing it.
+
+    ADR 0008/issue #228: this function's write is real — it must be called
+    inside a transaction the *caller* rolls back (`PreviewMixin` does this
+    for the Roster Preview view; tests must wrap the call the same way).
+    Called outside such a transaction, this function corrupts the
+    database.
+
+    Snapshots Membership/Role state, Role Assignment mismatch flags and
+    per-Song Role Requirement fill status *before* calling
+    `apply_roster_edits()` (with a copy of `buffer` whose
+    `semester_updated_at` is swapped for the Semester's current value, so
+    the real function's own staleness check always passes and the write
+    actually runs), then re-reads the same state *after* and diffs the
+    two — every Fallout line is a real before/after comparison, never a
+    guess from the Buffer alone. A `WrongViewingSemesterError` or
+    `SelfRemovalError` from `apply_roster_edits()` is reported as
+    `is_blocked` with no Fallout computed at all, rather than
+    re-implementing either check here.
+    """
+    if viewing_semester is None:
+        return _blocked_roster_fallout(
+            "This Roster edit Buffer's Semester doesn't match the Semester you're currently viewing."
+        )
+
+    current_semester = Semester.objects.get(pk=viewing_semester.pk)
+    is_stale = buffer.semester_updated_at != current_semester.updated_at
+
+    person_ids_in_batch = [entry.person.pk for entry in buffer.entries]
+    membership_person_ids_before = frozenset(
+        Membership.objects.filter(semester=viewing_semester, person_id__in=person_ids_in_batch)
+        .values_list('person_id', flat=True)
+    )
+    role_ids_before_by_person = {
+        person_id: frozenset(
+            MembershipRole.objects.filter(
+                membership__person_id=person_id, membership__semester=viewing_semester,
+            ).values_list('role_id', flat=True)
+        )
+        for person_id in person_ids_in_batch
+    }
+    names_before_by_person = {entry.person.pk: entry.person.name for entry in buffer.entries}
+
+    removed_people_by_id = Person.objects.in_bulk(buffer.removed_person_ids)
+    removal_counts_before = {
+        person_id: (
+            SongRoleAssignment.objects.filter(person_id=person_id, song__semester=viewing_semester).count(),
+            Conflict.objects.filter(person_id=person_id, rehearsal__semester=viewing_semester).count(),
+        )
+        for person_id in buffer.removed_person_ids
+    }
+
+    songs = list(Song.objects.filter(semester=viewing_semester))
+    fill_before = {song.pk: {status.role.pk: status for status in fill_status_for(song)} for song in songs}
+    mismatch_before = dict(
+        SongRoleAssignment.objects.filter(song__semester=viewing_semester).values_list('pk', 'is_role_mismatch')
+    )
+
+    apply_buffer = replace(buffer, semester_updated_at=current_semester.updated_at)
+    try:
+        apply_roster_edits(apply_buffer, viewing_semester=viewing_semester, requesting_admin=requesting_admin)
+    except (WrongViewingSemesterError, SelfRemovalError) as error:
+        return _blocked_roster_fallout(str(error), is_stale=is_stale)
+
+    pending_adds = []
+    pending_removals = [
+        RosterRemoval(person_id=person_id, name=person.name, email=person.email)
+        for person_id, person in removed_people_by_id.items()
+    ]
+    pending_role_changes = []
+    pending_name_edits = []
+    for entry in buffer.entries:
+        person_id = entry.person.pk
+        if person_id not in membership_person_ids_before:
+            pending_adds.append(entry.name)
+            continue
+        if entry.name != names_before_by_person[person_id]:
+            pending_name_edits.append(f'{names_before_by_person[person_id]} → {entry.name}')
+        if entry.role_ids != role_ids_before_by_person[person_id]:
+            pending_role_changes.append(entry.name)
+
+    loud = []
+    for person_id, (assignment_count, conflict_count) in removal_counts_before.items():
+        if assignment_count == 0 and conflict_count == 0:
+            continue
+        name = removed_people_by_id[person_id].name
+        loud.append(
+            f"{name}'s removal destroys {assignment_count} Role Assignment{'' if assignment_count == 1 else 's'} "
+            f"and deletes {conflict_count} Conflict{'' if conflict_count == 1 else 's'}."
+        )
+
+    for song in songs:
+        before_map = fill_before[song.pk]
+        after_map = {status.role.pk: status for status in fill_status_for(song)}
+        for role_id, before_status in before_map.items():
+            after_status = after_map.get(role_id)
+            if before_status.actual > 0 and after_status is not None and after_status.actual == 0:
+                loud.append(
+                    f'{song.title} has no one left to fill {before_status.role.name} (target {before_status.target}).'
+                )
+
+    quiet = []
+    for entry in buffer.entries:
+        person_id = entry.person.pk
+        after_role_count = MembershipRole.objects.filter(
+            membership__person_id=person_id, membership__semester=viewing_semester,
+        ).count()
+        if after_role_count == 0:
+            quiet.append(f'{entry.name} has no declared Roles.')
+
+    after_assignments = {
+        assignment.pk: assignment
+        for assignment in SongRoleAssignment.objects.filter(
+            song__semester=viewing_semester,
+        ).select_related('person', 'role', 'song')
+    }
+    for assignment_id, was_mismatch in mismatch_before.items():
+        after_assignment = after_assignments.get(assignment_id)
+        if after_assignment is None or was_mismatch:
+            continue
+        if after_assignment.is_role_mismatch:
+            quiet.append(
+                f"{after_assignment.person.name}'s change newly flags their {after_assignment.role.name} "
+                f'assignment on {after_assignment.song.title} as a mismatch.'
+            )
+
+    return RosterEditFallout(
+        is_blocked=False,
+        block_message='',
+        is_stale=is_stale,
+        pending_adds=pending_adds,
+        pending_removals=pending_removals,
+        pending_role_changes=pending_role_changes,
+        pending_name_edits=pending_name_edits,
+        loud=loud,
+        quiet=quiet,
+    )

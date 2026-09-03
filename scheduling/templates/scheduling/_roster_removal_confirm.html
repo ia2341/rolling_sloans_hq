@@ -1,0 +1,11 @@
+<p>Removing {{ fallout.pending_removals|length }} member{{ fallout.pending_removals|length|pluralize }} from the Roster:</p>
+<ul id="roster-removal-confirm-people">
+  {% for removal in fallout.pending_removals %}
+    <li>{{ removal.name }} ({{ removal.email }})</li>
+  {% endfor %}
+</ul>
+{% if fallout.loud %}
+  <ul id="roster-removal-confirm-loud-fallout">
+    {% for line in fallout.loud %}<li>{{ line }}</li>{% endfor %}
+  </ul>
+{% endif %}
