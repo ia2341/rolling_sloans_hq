@@ -55,6 +55,7 @@ from scheduling.services import (
     CONFLICT_LATE_ARRIVAL,
     AdjudicationBuffer,
     AdjudicationEntry,
+    AssignmentEditBuffer,
     InvalidSemesterNameError,
     LiveSemesterDeletionError,
     RecordingUploadError,
@@ -62,13 +63,16 @@ from scheduling.services import (
     RosterEditEntry,
     SelfRemovalError,
     StaleAdjudicationSemesterError,
+    StaleAssignmentSemesterError,
     StaleRosterSemesterError,
     UnknownConflictError,
     WrongAdjudicationSemesterError,
     WrongViewingSemesterError,
     apply_adjudications,
     apply_roster_edits,
+    apply_song_role_assignments,
     assigned_songs_for,
+    assignment_grid_is_editable,
     assignment_matrix_for,
     attendance_suggestion_for,
     breaks_for,
@@ -286,6 +290,7 @@ def _build_schedule_context(request, semester, view_mode, rehearsal, error_rehea
         'view_mode': view_mode,
         'rehearsal': None,
         'matrix': None,
+        'can_edit_assignments': False,
         'my_song_ids': set(),
         'my_attendance_suggestion': None,
         'my_breaks': [],
@@ -317,6 +322,7 @@ def _build_schedule_context(request, semester, view_mode, rehearsal, error_rehea
         return context
     matrix = assignment_matrix_for(rehearsal)
     context['matrix'] = matrix
+    context['can_edit_assignments'] = request.user.is_admin and assignment_grid_is_editable(rehearsal)
     context['my_song_ids'] = set(
         SongRoleAssignment.objects.filter(
             person=request.user, song__in=[row.song for row in matrix.rows],
@@ -1422,6 +1428,67 @@ class ConflictDeleteView(BaseView, View):
         return _schedule_redirect(request, rehearsal)
 
 
+def _editable_assignment_rehearsal_or_404(request, rehearsal_id):
+    """Return the viewing Semester's Rehearsal that `rehearsal_id` names and whose assignment grid offers edit mode, or 404.
+
+    `assignment_grid_is_editable()` is the single definition of
+    "editable" here too (issue #210) — a hand-crafted POST naming a
+    past-dated Rehearsal 404s rather than silently applying a removal the
+    grid never offered a control for.
+    """
+    rehearsal = get_object_or_404(
+        _scoped_to_viewing_semester(Rehearsal, get_viewing_semester(request)), pk=rehearsal_id,
+    )
+    if not assignment_grid_is_editable(rehearsal):
+        raise Http404('This Rehearsal is not editable.')
+    return rehearsal
+
+
+class AssignmentEditSaveView(AdminRequiredMixin, View):
+    """`/schedule/<rehearsal_id>/assignments/save/`: applies a buffer of ✕'d SongRoleAssignment removals (issue #210, ADR-0009).
+
+    Removal-only for this slice: adding a person is the picker, landing in
+    a later ticket. The buffer is entirely client-side (Alpine) up to this
+    point — clicking an ✕ never round-trips — so this view is reached only
+    by the one "Save Changes" submission, carrying every removed chip's
+    assignment id plus the hidden Semester id/stamp the grid was rendered
+    against.
+    """
+
+    def post(self, request, rehearsal_id):
+        """Apply the submitted removals through `apply_song_role_assignments()`, or report why the save was rejected."""
+        rehearsal = _editable_assignment_rehearsal_or_404(request, rehearsal_id)
+        semester = get_viewing_semester(request)
+        buffer = self._build_buffer(request)
+        try:
+            apply_song_role_assignments(buffer, viewing_semester=semester)
+        except (WrongViewingSemesterError, StaleAssignmentSemesterError) as error:
+            messages.error(request, str(error))
+        else:
+            messages.success(request, 'Assignments updated.')
+        return _schedule_redirect(request, rehearsal)
+
+    def _build_buffer(self, request):
+        """Turn the POST body's hidden Semester stamp and removed-id list into an AssignmentEditBuffer."""
+        removed_ids = frozenset(_parse_assignment_ids(request.POST.getlist('removed_assignment_id')))
+        return AssignmentEditBuffer(
+            semester_id=_parse_roster_int(request.POST.get('assignment_semester_id', '')),
+            semester_updated_at=parse_datetime(request.POST.get('assignment_semester_updated_at', '')) or timezone.now(),
+            removed_assignment_ids=removed_ids,
+        )
+
+
+def _parse_assignment_ids(raw_values):
+    """Return the subset of `raw_values` that parse as ints, silently dropping anything malformed."""
+    parsed = []
+    for raw_value in raw_values:
+        try:
+            parsed.append(int(raw_value))
+        except ValueError:
+            continue
+    return parsed
+
+
 class RehearsalManageView(AdminRequiredMixin, View):
     """`/manage/schedule/`: an admin lists and creates the viewing Semester's Rehearsals (issue #60, #17 story 10)."""
 
@@ -1707,11 +1774,12 @@ class SemesterSetupView(AdminRequiredMixin, View):
     both from the most recently created Semester (falling back to
     `TIMING_DEFAULT_CONSTANTS` when there is none), and POST creates the
     draft immediately via `create_semester()`, switches this admin's
-    session selection to it, and redirects to the finish screen. Nothing
-    here is held hostage to finishing the rest of the wizard — steps 3-5
-    (roster, setlist, rehearsal dates) are separate, independently
-    skippable tickets not yet built, so this screen goes straight from
-    submit to finish.
+    session selection to it, and redirects into step 3 (the roster
+    import). Nothing here is held hostage to finishing the rest of the
+    wizard — steps 3-5 (roster, setlist, rehearsal dates) are separate,
+    independently skippable steps, and `SemesterSetupRosterView` itself
+    bounces straight to finish when there's no prior Semester to import
+    from, so this view never needs to check that itself.
 
     Reached two ways with the same form and the same code path: a direct
     GET renders the full page (the no-JS fallback, and the bookmarkable
@@ -1756,8 +1824,80 @@ class SemesterSetupView(AdminRequiredMixin, View):
             else:
                 set_viewing_semester(request, semester)
                 messages.success(request, f'{semester.name} created as a draft.')
-                return redirect('scheduling:manage-semester-setup-finish', pk=semester.pk)
+                return redirect('scheduling:manage-semester-setup-roster', pk=semester.pk)
         return self._render(request, form)
+
+
+class SemesterSetupRosterView(AdminRequiredMixin, View):
+    """`/manage/semesters/setup/<pk>/roster/`: Semester setup step 3, import the roster from the prior Semester (issue #201).
+
+    "Clone", "copy semester" and "carry over" were all considered for
+    this step's name and refused: ADR 0001 holds that a Semester's
+    Membership/MembershipRole rows are re-created fresh per term, never
+    linked across one, and those words imply exactly the linkage that
+    forbids. Committing here creates fresh rows referencing the prior
+    Semester in no way at all — nothing in the schema records that an
+    import happened.
+
+    No derivation of its own: the read is `import_roster_from_semester()`
+    and the write is `apply_roster_edits()` (#185), the same pair the
+    Band Members tab's "Import from <Semester>" button uses, so skipping
+    this step and doing the same job there afterwards produces the same
+    result. No Role editing and no invite affordance — those live on the
+    Band Members tab's own Roster editor. Reached only by redirect (from
+    step 1's POST, or this view's own GET/POST when there's nothing to
+    import), so unlike `SemesterSetupView` it needs no modal-fragment
+    variant: a direct hit and the Home panel's post-redirect navigation
+    both land on the plain full page.
+    """
+
+    template_name = 'scheduling/semester_setup_roster.html'
+
+    def get(self, request, pk):
+        """Render the prior Semester's roster as a checkbox list ticked by default, or skip straight to finish."""
+        semester = get_object_or_404(Semester, pk=pk)
+        proposal = import_roster_from_semester(semester)
+        if proposal.source_semester is None:
+            return redirect('scheduling:manage-semester-setup-finish', pk=semester.pk)
+        return self._render(request, semester, proposal)
+
+    def post(self, request, pk):
+        """Import the ticked people, with their copied Role declarations, into the new Semester."""
+        semester = get_object_or_404(Semester, pk=pk)
+        proposal = import_roster_from_semester(semester)
+        if proposal.source_semester is None:
+            return redirect('scheduling:manage-semester-setup-finish', pk=semester.pk)
+        checked_ids = {_parse_roster_int(value) for value in request.POST.getlist('person_id')}
+        entries = [
+            RosterEditEntry(
+                person=candidate.person, name=candidate.person.name,
+                role_ids=frozenset(role.pk for role in candidate.roles),
+            )
+            for candidate in proposal.people if candidate.person.pk in checked_ids
+        ]
+        buffer = RosterEditBuffer(
+            semester_id=semester.pk, semester_updated_at=semester.updated_at,
+            entries=entries, removed_person_ids=frozenset(),
+        )
+        try:
+            apply_roster_edits(buffer, viewing_semester=semester, requesting_admin=request.user)
+        except (WrongViewingSemesterError, StaleRosterSemesterError, SelfRemovalError) as error:
+            messages.error(request, str(error))
+            return self._render(request, semester, proposal, checked_ids=checked_ids)
+        messages.success(request, f'Imported {len(entries)} member(s) from {proposal.source_semester.name}.')
+        return redirect('scheduling:manage-semester-setup-finish', pk=semester.pk)
+
+    def _render(self, request, semester, proposal, checked_ids=None):
+        """Render the checkbox list, ticked by default unless `checked_ids` carries a rejected submission's ticks."""
+        if checked_ids is None:
+            checked_ids = {candidate.person.pk for candidate in proposal.people}
+        rows = [
+            {'person': candidate.person, 'roles': candidate.roles, 'checked': candidate.person.pk in checked_ids}
+            for candidate in proposal.people
+        ]
+        return render(request, self.template_name, {
+            'semester': semester, 'source_semester': proposal.source_semester, 'rows': rows,
+        })
 
 
 class SemesterSetupFinishView(AdminRequiredMixin, View):

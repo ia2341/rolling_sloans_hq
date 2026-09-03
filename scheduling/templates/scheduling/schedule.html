@@ -64,43 +64,77 @@
     {% include "scheduling/_availability.html" with availability=my_availability %}
   </div>
 
-  <p>
-    <label>
-      <input type="checkbox" id="my-songs-only-filter">
-      My Songs Only
-    </label>
-  </p>
+  <div x-data="{ editing: false, removed: [] }">
+    {% if can_edit_assignments %}
+      <p>
+        <button type="button" id="edit-assignments-button" x-show="!editing" @click="editing = true">Edit assignments</button>
+      </p>
+    {% endif %}
 
-  <table id="assignment-matrix">
-    <thead>
-      <tr>
-        <th>Song</th>
-        <th>Start Time</th>
-        {% for role in matrix.roles %}
-          <th>{{ role.name }}</th>
-        {% endfor %}
-      </tr>
-    </thead>
-    <tbody>
-      {% for row in matrix.rows %}
-        <tr data-song-id="{{ row.song.pk }}" data-mine="{% if row.song.pk in my_song_ids %}true{% else %}false{% endif %}">
-          <td>{{ row.song.title }}</td>
-          <td>{% if row.start_time %}{{ row.start_time }}{% else %}&mdash;{% endif %}</td>
-          {% for cell in row.cells %}
-            <td>
-              {% for entry in cell.entries %}
-                {% include "scheduling/_assignment_chip.html" %}{% if not forloop.last %}, {% endif %}
-              {% empty %}
-                &mdash;
+    <p x-show="!editing">
+      <label>
+        <input type="checkbox" id="my-songs-only-filter">
+        My Songs Only
+      </label>
+    </p>
+
+    {% if can_edit_assignments %}
+      <form method="post" action="{% url 'scheduling:schedule-assignments-save' rehearsal.pk %}">
+        {% csrf_token %}
+        <input type="hidden" name="view" value="{{ view_mode }}">
+        <input type="hidden" name="assignment_semester_id" value="{{ semester.pk }}">
+        <input type="hidden" name="assignment_semester_updated_at" value="{{ semester.updated_at.isoformat }}">
+        <template x-for="id in removed" :key="id">
+          <input type="hidden" name="removed_assignment_id" :value="id">
+        </template>
+    {% endif %}
+
+      <table id="assignment-matrix">
+        <thead>
+          <tr>
+            <th>Song</th>
+            <th>Start Time</th>
+            {% for role in matrix.roles %}
+              <th>{{ role.name }}</th>
+            {% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in matrix.rows %}
+            <tr data-song-id="{{ row.song.pk }}" data-mine="{% if row.song.pk in my_song_ids %}true{% else %}false{% endif %}">
+              <td>{{ row.song.title }}</td>
+              <td>{% if row.start_time %}{{ row.start_time }}{% else %}&mdash;{% endif %}</td>
+              {% for cell in row.cells %}
+                <td>
+                  {% for entry in cell.entries %}
+                    {% include "scheduling/_assignment_chip.html" %}{% if not forloop.last %} {% endif %}
+                  {% empty %}
+                    &mdash;
+                  {% endfor %}
+                </td>
               {% endfor %}
-            </td>
+            </tr>
+          {% empty %}
+            <tr>
+              <td colspan="{{ matrix.roles|length|add:2 }}">
+                No songs scheduled for this rehearsal.
+                {% if can_edit_assignments and not rehearsal.is_full_setlist %}
+                  <a href="{% url 'scheduling:manage-schedule-edit' rehearsal.pk %}">Schedule songs for this rehearsal</a>
+                {% endif %}
+              </td>
+            </tr>
           {% endfor %}
-        </tr>
-      {% empty %}
-        <tr><td colspan="{{ matrix.roles|length|add:2 }}">No songs scheduled for this rehearsal.</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
+        </tbody>
+      </table>
+
+    {% if can_edit_assignments %}
+        <p x-show="editing">
+          <button type="submit" id="save-assignment-changes">Save Changes</button>
+          <button type="button" @click="editing = false; removed = []">Cancel</button>
+        </p>
+      </form>
+    {% endif %}
+  </div>
 {% endif %}
 
 <script src="{% static 'scheduling/js/schedule.js' %}"></script>

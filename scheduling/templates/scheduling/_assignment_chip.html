@@ -1,1 +1,14 @@
-<span{% if entry.is_role_mismatch %} class="role-mismatch"{% endif %}>{{ entry.person.name }}</span>
+{% if can_edit_assignments %}
+  <span class="assignment-chip" x-show="!removed.includes({{ entry.id }})">
+    <span{% if entry.is_role_mismatch %} class="role-mismatch"{% endif %}>{{ entry.person.name }}</span>
+    <button
+      type="button"
+      class="assignment-chip-remove"
+      x-show="editing"
+      @click="removed.push({{ entry.id }})"
+      aria-label="Remove {{ entry.person.name }}"
+    >&times;</button>
+  </span>
+{% else %}
+  <span{% if entry.is_role_mismatch %} class="role-mismatch"{% endif %}>{{ entry.person.name }}</span>
+{% endif %}
