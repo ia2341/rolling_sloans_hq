@@ -7,6 +7,7 @@ from django.utils import timezone
 
 from identity.factories import PersonFactory
 from scheduling.factories import (
+    BackupFactory,
     ConflictFactory,
     ConflictWindowFactory,
     MembershipFactory,
@@ -145,6 +146,22 @@ class PerformersForTests(TestCase):
         song = SongFactory()
         other_song = SongFactory(semester=song.semester)
         SongRoleAssignmentFactory(song=other_song)
+
+        performers = performers_for(song)
+
+        self.assertEqual(performers, [])
+
+    def test_a_backup_only_person_is_excluded(self):
+        """A Person who is only a Backup on the Song's slot, with no SongRoleAssignment, is not a performer (ADR-0007 §5).
+
+        The Setlist reports who plays the Song at the concert, so folding a
+        one-evening Backup into it would misreport that fact — unlike the
+        three attendance reads, performers_for() is deliberately not routed
+        through the widened slot-membership helper (issue #175).
+        """
+        song = SongFactory()
+        rehearsal_song = RehearsalSongFactory(song=song, rehearsal=RehearsalFactory(semester=song.semester))
+        BackupFactory(rehearsal_song=rehearsal_song, role=RoleFactory())
 
         performers = performers_for(song)
 

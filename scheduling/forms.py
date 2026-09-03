@@ -170,6 +170,28 @@ class SongForm(forms.ModelForm):
         fields: ClassVar[list[str]] = ['title', 'artist', 'length', 'notes']
 
 
+class SongEditForm(forms.ModelForm):
+    """One row of the setlist edit grid: title/artist/length/notes on an existing Song (issue #178).
+
+    Shares `SongForm`'s field set and `M:SS` length widget; kept as a
+    separate class because it is always used inside `SetlistEditFormSet`
+    (extra=0, no add/delete this ticket) rather than standalone.
+    """
+
+    length = SongLengthField(label='Length')
+
+    class Meta:
+        model = Song
+        fields: ClassVar[list[str]] = ['title', 'artist', 'length', 'notes']
+
+
+# The setlist edit grid's buffer: every existing Song on the viewing Semester, one `SongEditForm` row each,
+# with no add/delete row this ticket (reordering/adding/deleting Songs is the next ticket, issue #178).
+SetlistEditFormSet = forms.modelformset_factory(
+    Song, form=SongEditForm, extra=0, can_delete=False,
+)
+
+
 class SongRoleAssignmentForm(forms.ModelForm):
     """Assigns a Person to a Role on a Song, restricted to the viewing Semester's Songs (issue #60).
 

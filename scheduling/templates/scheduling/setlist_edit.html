@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Edit Setlist{% endblock %}
+{% block content %}
+<h1>{% if semester %}{{ semester }} Setlist{% else %}Setlist{% endif %}</h1>
+
+{% for message in messages %}
+  <p>{{ message }}</p>
+{% endfor %}
+
+<div id="setlist-surface">
+{% include "scheduling/_setlist_edit.html" %}
+</div>
+{% endblock %}
