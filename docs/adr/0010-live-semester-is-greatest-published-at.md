@@ -2,14 +2,14 @@
 
 `Semester` carries the whole lifecycle in **two nullable-or-stamped datetimes and nothing else**: `published_at` (null means never published — a draft) and `created_at` (`auto_now_add`, so semesters can be ordered chronologically without leaning on primary keys). The **Live Semester** — the one non-admin members see — is derived, every time it is asked for, as the row with the greatest non-null `published_at`.
 
-There is no `status` enum, no partial unique constraint, no singleton pointer row, and no unpublish action. Publishing sets `published_at` to now; that is the entire operation, and it is idempotent on the already-live Semester. Rolling back is Publishing an older Semester, which bumps its stamp past the incumbent's — an honest record of what is live *now*, rather than a mutation that erases the fact that something else was live yesterday.
+There is no `status` enum, no partial unique constraint, no singleton pointer row, and no unpublish action. Publishing sets `published_at` to now; that is the entire operation. Re-publishing the already-live Semester restamps it and leaves it live — the write is not a no-op, but it changes nothing anyone can observe, so a double-click is harmless. Rolling back is Publishing an older Semester, which bumps its stamp past the incumbent's — an honest record of what is live *now*, rather than a mutation that erases the fact that something else was live yesterday.
 
 ## Why not a `status` enum
 
 `draft | live | archived` is the shape a reader reaches for first. It was rejected because:
 
 - It buys an **archived** state nothing in this domain needs, and then demands an explicit archive step on every publish: making Fall 2027 live means also demoting Fall 2026, so one user action becomes two writes that can disagree.
-- Keeping "at most one live" true then needs a partial unique constraint (`WHERE status = 'live'`) *and* the demotion write inside the same transaction. The datetime formulation makes the invariant structural — "greatest" is unique by construction — so there is nothing to enforce and nothing to get out of step.
+- Keeping "at most one live" true then needs a partial unique constraint (`WHERE status = 'live'`) *and* the demotion write inside the same transaction. The datetime formulation makes the invariant structural instead: `published_at` alone is not unique — two rows can carry the same instant — so the resolver orders by `published_at` descending and then by `id` descending, and *that* pair is unique by construction. Exactly one row is first, whatever the data, so there is nothing to enforce and nothing to get out of step. See "Ties fall back to the greater `id`" below.
 - It cannot express rollback without a third write. With `published_at`, rollback and publish are literally the same code path.
 
 ## Why not a singleton pointer row
