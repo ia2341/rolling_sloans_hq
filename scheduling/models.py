@@ -511,28 +511,30 @@ class RehearsalSong(models.Model):
 
 
 def slots_for_person(rehearsal, person):
-    """Return the RehearsalSong rows in `rehearsal`'s Running Order that `person` is on (issue #173).
+    """Return the RehearsalSong rows in `rehearsal`'s Running Order that `person` is on (issues #173, #175).
 
     The single definition of "which slots is this Person on at this
     Rehearsal", shared by Rehearsal.attendance_for() and by
-    services._regular_rehearsal_attendance_suggestion()/breaks_for(), so
-    that widening it later (to count Backups, ADR-0007) is one edit rather
-    than three that could disagree. Membership is derived today from the
-    Person's SongRoleAssignments on the slot's Song, exactly as each of
-    those reads derived it before.
+    services._regular_rehearsal_attendance_suggestion()/breaks_for(). Slot
+    membership is the union of two independent facts: the Person's
+    SongRoleAssignments on the slot's Song, and any Backup recorded for
+    them directly on the slot (ADR-0007) — a Backup "genuinely changes when
+    that person must arrive and leave", exactly like a standing assignment.
 
     Internal to the scheduling app despite the plain name: it lives here
     rather than in services.py only because models.py cannot import
     services.py. The tested surface stays the three public reads. It is
     deliberately not used by services.performers_for(), which is a
-    Song-level Setlist read rather than a rehearsal-slot one (ADR-0007).
+    Song-level Setlist read rather than a rehearsal-slot one (ADR-0007
+    §5) — folding a Backup into it would misreport who performs the Song.
 
     Returned unordered and distinct: a Person holding two Role Assignments
-    on the same Song must not yield that slot twice, since breaks_for()
-    walks the rows pairwise.
+    on the same Song, or both an Assignment and a Backup on the same slot,
+    must not yield that slot twice, since breaks_for() walks the rows
+    pairwise.
     """
-    return RehearsalSong.objects.filter(
-        rehearsal=rehearsal, song__songroleassignment__person=person,
+    return RehearsalSong.objects.filter(rehearsal=rehearsal).filter(
+        models.Q(song__songroleassignment__person=person) | models.Q(backup__person=person),
     ).distinct()
 
 
