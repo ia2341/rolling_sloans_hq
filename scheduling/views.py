@@ -43,9 +43,11 @@ from scheduling.services import (
     declare_conflict,
     declared_roles_for,
     future_rehearsals_for,
+    get_live_semester,
     get_viewing_semester,
     next_attended_rehearsal_for,
     performers_for,
+    publish_semester,
     recording_count_for,
     recording_groups_for,
     rehearsal_count_target,
@@ -931,3 +933,33 @@ class RecordingDeleteView(BaseView, View):
         recording.delete()
         messages.success(request, 'Recording deleted.')
         return redirect('scheduling:song-detail', pk=song_id)
+
+
+class SemesterManageView(AdminRequiredMixin, View):
+    """`/manage/semesters/`: an admin lists every Semester with its Live/Draft/Previously published state (issue #170)."""
+
+    template_name = 'scheduling/manage_semesters.html'
+
+    def get(self, request):
+        """Render every Semester, newest-created first, alongside the Live Semester for status labeling."""
+        semesters = Semester.objects.order_by('-created_at', '-id')
+        return render(request, self.template_name, {
+            'semesters': semesters,
+            'live_semester': get_live_semester(),
+        })
+
+
+class SemesterPublishView(AdminRequiredMixin, View):
+    """`/manage/semesters/<pk>/publish/`: an admin publishes a Semester, making it the Live Semester (issue #170).
+
+    Publishing sets `published_at` to now and does nothing else — it is
+    visibility only, never gating or locking edits inside any Semester.
+    Pressing this on the already-live Semester is harmless (ADR-0010).
+    """
+
+    def post(self, request, pk):
+        """Publish the target Semester and redirect back to the Semesters list with a success message."""
+        semester = get_object_or_404(Semester, pk=pk)
+        publish_semester(semester)
+        messages.success(request, f'{semester} published.')
+        return redirect('scheduling:manage-semesters')

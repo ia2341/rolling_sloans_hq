@@ -213,6 +213,18 @@ def get_live_semester() -> Semester | None:
     return Semester.objects.exclude(published_at=None).order_by('-published_at', '-id').first()
 
 
+def publish_semester(semester: Semester) -> None:
+    """Stamp `semester.published_at` to now — the whole of Publish (issue #170).
+
+    Visibility only: it never gates or locks edits inside the Semester.
+    Bumping `published_at` on an already-live Semester is harmless and is
+    the same code path rollback uses — re-publishing an older Semester
+    simply makes that one's `published_at` the greatest again.
+    """
+    semester.published_at = timezone.now()
+    semester.save(update_fields=['published_at'])
+
+
 def get_viewing_semester(request) -> Semester | None:
     """Return the Semester `request` is scoped to, for reads and writes alike.
 
