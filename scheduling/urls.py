@@ -21,6 +21,7 @@ urlpatterns = [
     ),
     path('songs/<int:pk>/', views.SongDetailView.as_view(), name='song-detail'),
     path('members/', views.MembersView.as_view(), name='members'),
+    path('members/import/', views.RosterImportView.as_view(), name='members-roster-import'),
     path('members/preview/', views.RosterPreviewView.as_view(), name='members-preview'),
     path(
         'members/preview/confirm-removal/',

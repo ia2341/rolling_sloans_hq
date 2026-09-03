@@ -55,6 +55,10 @@
   {% else %}
     <p>No band members on the roster yet.</p>
   {% endif %}
+
+  <h2>Add to Roster</h2>
+  {% include "scheduling/_members_add_list.html" %}
+
   <button type="submit" id="save-roster-changes">Save Changes</button>
 </form>
 
