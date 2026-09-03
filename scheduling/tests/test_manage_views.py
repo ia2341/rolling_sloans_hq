@@ -44,9 +44,13 @@ class AnonymousAccessTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class NonAdminAccessTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic non-admin Person to log in as before each test."""
+        cls.person = PersonFactory(password=PASSWORD, is_admin=False)
+
     def setUp(self):
-        """Log in a synthetic non-admin Person before each test."""
-        self.person = PersonFactory(password=PASSWORD, is_admin=False)
+        """Log in as the synthetic Person before each test."""
         self.client.login(username=self.person.email, password=PASSWORD)
 
     def test_manage_schedule_is_forbidden_for_non_admin(self):
@@ -82,11 +86,15 @@ class NonAdminAccessTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class RehearsalManageViewTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic admin Person, with a current Semester."""
+        cls.admin = PersonFactory(password=PASSWORD, is_admin=True)
+        cls.semester = SemesterFactory()
+
     def setUp(self):
-        """Log in a synthetic admin Person, with a current Semester, before each test."""
-        self.admin = PersonFactory(password=PASSWORD, is_admin=True)
+        """Log in as the synthetic admin Person before each test."""
         self.client.login(username=self.admin.email, password=PASSWORD)
-        self.semester = SemesterFactory()
 
     def test_lists_current_semester_rehearsals(self):
         """The schedule page lists the current Semester's Rehearsals."""
@@ -204,13 +212,17 @@ class RehearsalManageViewTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class SongRoleAssignmentManageViewTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic admin Person, with a current Semester and Song."""
+        cls.admin = PersonFactory(password=PASSWORD, is_admin=True)
+        cls.semester = SemesterFactory()
+        cls.song = SongFactory(semester=cls.semester, position=1)
+        cls.role = RoleFactory()
+
     def setUp(self):
-        """Log in a synthetic admin Person, with a current Semester and Song, before each test."""
-        self.admin = PersonFactory(password=PASSWORD, is_admin=True)
+        """Log in as the synthetic admin Person before each test."""
         self.client.login(username=self.admin.email, password=PASSWORD)
-        self.semester = SemesterFactory()
-        self.song = SongFactory(semester=self.semester, position=1)
-        self.role = RoleFactory()
 
     def test_lists_current_semester_assignments(self):
         """The assignments page lists SongRoleAssignments for the current Semester's Songs."""

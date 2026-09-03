@@ -34,9 +34,13 @@ class RemovedRouteNamesTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class RemovedPathsTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic admin Person to log in as, so a 404 below can't be mistaken for an auth gate."""
+        cls.admin = PersonFactory(password=PASSWORD, is_admin=True)
+
     def setUp(self):
-        """Log in a synthetic admin Person, so a 404 below can't be mistaken for an auth gate."""
-        self.admin = PersonFactory(password=PASSWORD, is_admin=True)
+        """Log in as the synthetic admin Person before each test."""
         self.client.login(username=self.admin.email, password=PASSWORD)
 
     def test_the_removed_paths_404_for_an_admin_with_no_redirect(self):

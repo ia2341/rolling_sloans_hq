@@ -37,9 +37,13 @@ class AnonymousAccessTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class NonAdminAccessTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic non-admin Person to log in as before each test."""
+        cls.person = PersonFactory(password=PASSWORD, is_admin=False)
+
     def setUp(self):
-        """Log in a synthetic non-admin Person before each test."""
-        self.person = PersonFactory(password=PASSWORD, is_admin=False)
+        """Log in as the synthetic non-admin Person before each test."""
         self.client.login(username=self.person.email, password=PASSWORD)
 
     def test_people_get_is_forbidden_for_non_admin(self):
@@ -68,9 +72,13 @@ class NonAdminAccessTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class PeopleViewGetTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic admin Person to log in as before each test."""
+        cls.admin = PersonFactory(password=PASSWORD, is_admin=True)
+
     def setUp(self):
-        """Log in a synthetic admin Person before each test."""
-        self.admin = PersonFactory(password=PASSWORD, is_admin=True)
+        """Log in as the synthetic admin Person before each test."""
         self.client.login(username=self.admin.email, password=PASSWORD)
 
     def test_lists_existing_people(self):
@@ -86,9 +94,13 @@ class PeopleViewGetTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class PeopleViewPostTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic admin Person to log in as before each test."""
+        cls.admin = PersonFactory(password=PASSWORD, is_admin=True)
+
     def setUp(self):
-        """Log in a synthetic admin Person before each test."""
-        self.admin = PersonFactory(password=PASSWORD, is_admin=True)
+        """Log in as the synthetic admin Person before each test."""
         self.client.login(username=self.admin.email, password=PASSWORD)
 
     def test_valid_post_invites_person_and_redirects_with_message(self):

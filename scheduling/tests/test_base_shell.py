@@ -42,9 +42,13 @@ class AnonymousAccessTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class NavRenderingTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic Person to log in as before each test."""
+        cls.person = PersonFactory(password=PASSWORD)
+
     def setUp(self):
-        """Log in a synthetic Person before each test."""
-        self.person = PersonFactory(password=PASSWORD)
+        """Log in as the synthetic Person before each test."""
         self.client.login(username=self.person.email, password=PASSWORD)
 
     def test_each_route_marks_its_own_tab_as_current(self):

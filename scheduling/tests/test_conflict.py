@@ -132,10 +132,11 @@ class ConflictFieldTests(TestCase):
 class ConflictDressRehearsalTests(TestCase):
     """Dress Rehearsal attendance is mandatory, so no Conflict may point at one (ADR-0006)."""
 
-    def setUp(self):
+    @classmethod
+    def setUpTestData(cls):
         """Build a Person and a Dress Rehearsal for every test."""
-        self.person = PersonFactory()
-        self.dress_rehearsal = RehearsalFactory(is_full_setlist=True)
+        cls.person = PersonFactory()
+        cls.dress_rehearsal = RehearsalFactory(is_full_setlist=True)
 
     def test_clean_rejects_a_conflict_on_the_dress_rehearsal(self):
         """clean() raises a ValidationError so a ModelForm surfaces it as a field error, not a 500."""
