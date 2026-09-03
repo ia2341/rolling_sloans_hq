@@ -24,6 +24,7 @@ from scheduling.models import (
     Semester,
     Song,
     SongRoleAssignment,
+    SongRoleRequirement,
     slots_for_person,
 )
 
@@ -555,6 +556,51 @@ def performers_for(song) -> list[SongPerformer]:
     return [
         SongPerformer(person=person, roles=roles_by_person_id[person.id])
         for person in people_in_order
+    ]
+
+
+@dataclass(frozen=True)
+class RoleFillStatus:
+    """One SongRoleRequirement's target headcount versus its Role's actual assignment count (issue #207).
+
+    A Requirement is a target, never a cap (issue #33): sitting at or over
+    target is the normal, unflagged case, and only `is_understaffed`
+    distinguishes the quiet under-target state a member can notice and
+    volunteer to fill. `is_retired_role` surfaces a Requirement naming a
+    Role that's since been deactivated, without hiding it.
+    """
+
+    role: Role
+    target: int
+    actual: int
+    is_understaffed: bool
+    is_retired_role: bool
+
+
+def fill_status_for(song) -> list[RoleFillStatus]:
+    """Return `song`'s Role Requirements as target-vs-actual fill status, ordered by Role name.
+
+    A Song with no Requirements returns an empty list rather than raising. A
+    Requirement naming a retired Role is included and flagged via
+    `is_retired_role`, never filtered out, since it's real data an admin may
+    want to clear later (issue #207).
+    """
+    requirements = SongRoleRequirement.objects.filter(song=song).select_related('role').order_by('role__name')
+    actual_by_role_id = dict(
+        SongRoleAssignment.objects.filter(song=song)
+        .values('role_id')
+        .annotate(actual=Count('id'))
+        .values_list('role_id', 'actual'),
+    )
+    return [
+        RoleFillStatus(
+            role=requirement.role,
+            target=requirement.count,
+            actual=actual_by_role_id.get(requirement.role_id, 0),
+            is_understaffed=actual_by_role_id.get(requirement.role_id, 0) < requirement.count,
+            is_retired_role=not requirement.role.is_active,
+        )
+        for requirement in requirements
     ]
 
 
