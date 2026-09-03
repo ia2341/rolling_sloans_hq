@@ -1203,9 +1203,17 @@ def import_roster_from_semester(semester: Semester) -> RosterImportProposal:
 def conflict_history_for(semester, person) -> list[ConflictHistoryRow]:
     """Return every Rehearsal in `semester` that `person` has declared a Conflict for, in date order (issue #99).
 
-    Includes past and future Rehearsals alike — History is the record of
-    every declaration made, not just the still-editable ones; `is_future`
-    tells the view/template which rows may offer Edit/Delete.
+    **There is no History surface any more** (issue #190): the Conflicts
+    page and its History section are both gone, and availability now folds
+    into the rehearsal it concerns on `/schedule/`. This survives as the
+    *per-row lookup* feeding that read — a reader who greps for "history"
+    looking for a page will not find one. `conflict_rows_by_rehearsal()`
+    is the shape `/schedule/` actually consumes.
+
+    Includes past and future Rehearsals alike — a declaration stays
+    visible on its own row once its Rehearsal has passed, inside the
+    collapsed past section; `is_future` tells the view/template which rows
+    may offer edit and delete.
     """
     today = timezone.localdate()
     conflicts = Conflict.objects.filter(
@@ -1223,6 +1231,33 @@ def conflict_history_for(semester, person) -> list[ConflictHistoryRow]:
             is_future=conflict.rehearsal.date >= today,
         ))
     return rows
+
+
+def conflict_rows_by_rehearsal(semester, person) -> dict[int, ConflictHistoryRow]:
+    """Return `person`'s Conflict rows in `semester`, keyed by Rehearsal id (issue #190).
+
+    The shape `/schedule/` actually reads: every rehearsal it renders —
+    the `?view=next` detail, and every past and future `?view=all` row —
+    asks this one dict whether the viewer has declared against that
+    Rehearsal, so the merged page costs the same single query the
+    standalone Conflicts page did rather than one lookup per row.
+    """
+    return {row.rehearsal.pk: row for row in conflict_history_for(semester, person)}
+
+
+def landing_rehearsal_for(person, semester):
+    """Return the Rehearsal `/schedule/` anchors on for `person`, or None if `semester` has none upcoming (issue #190).
+
+    `next_attended_rehearsal_for()` first — landing on the Rehearsal you
+    are personally needed at is the page's value in the common case, and
+    the fallback must not move that anchor for a member who has one. But a
+    member holding no Role Assignments at all is needed at none, and since
+    declaring a Conflict is now an affordance *on* a rehearsal, "No
+    upcoming rehearsal to show" would hide the declare path from exactly
+    the members most likely to want it. So they fall back to the band's
+    literal next Rehearsal.
+    """
+    return next_attended_rehearsal_for(person, semester) or _upcoming_rehearsals(semester).first()
 
 
 class WrongViewingSemesterError(ValueError):
