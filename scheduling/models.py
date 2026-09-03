@@ -133,11 +133,15 @@ class SongRoleRequirement(models.Model):
 
     song = models.ForeignKey(Song, on_delete=models.CASCADE)
     role = models.ForeignKey(Role, on_delete=models.CASCADE)
-    count = models.PositiveIntegerField()
+    count = models.PositiveIntegerField(validators=[MinValueValidator(1)])
 
     class Meta:
         constraints: ClassVar[list[models.BaseConstraint]] = [
             models.UniqueConstraint(fields=['song', 'role'], name='unique_role_requirement_per_song'),
+            models.CheckConstraint(
+                condition=models.Q(count__gte=1),
+                name='role_requirement_count_at_least_one',
+            ),
         ]
 
     def __str__(self):
