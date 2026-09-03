@@ -1,5 +1,7 @@
 """preview_roster_edits(): Fallout tiering computed by running the real apply and rolling it back (issue #228, ADR 0008)."""
 
+from datetime import date
+
 from django.db import transaction
 from django.test import TestCase
 
@@ -132,8 +134,8 @@ class PreviewRosterEditsTests(TestCase):
         song_b = SongFactory(semester=self.semester)
         SongRoleAssignmentFactory(song=song_a, person=removed)
         SongRoleAssignmentFactory(song=song_b, person=removed)
-        rehearsal_a = RehearsalFactory(semester=self.semester)
-        rehearsal_b = RehearsalFactory(semester=self.semester)
+        rehearsal_a = RehearsalFactory(semester=self.semester, date=date(2026, 9, 16))
+        rehearsal_b = RehearsalFactory(semester=self.semester, date=date(2026, 9, 23))
         ConflictFactory(person=removed, rehearsal=rehearsal_a)
         ConflictFactory(person=removed, rehearsal=rehearsal_b)
         buffer = self._buffer(removed_person_ids=[removed.pk])

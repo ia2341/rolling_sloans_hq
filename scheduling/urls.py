@@ -17,6 +17,10 @@ urlpatterns = [
         'schedule/<int:rehearsal_id>/assignments/picker/<int:song_id>/<int:role_id>/',
         views.AssignmentPickerView.as_view(), name='schedule-assignments-picker',
     ),
+    path(
+        'schedule/<int:rehearsal_id>/assignments/preview/',
+        views.AssignmentPreviewView.as_view(), name='schedule-assignments-preview',
+    ),
     path('setlist/', views.SetlistView.as_view(), name='setlist'),
     path('setlist/edit/', views.SetlistEditView.as_view(), name='setlist-edit'),
     path(

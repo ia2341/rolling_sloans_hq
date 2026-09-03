@@ -109,11 +109,13 @@ from scheduling.services import (
     performers_for,
     preview_adjudications,
     preview_roster_edits,
+    preview_song_role_assignments,
     publish_semester,
     recording_count_for,
     recording_groups_for,
     rehearsal_count_target,
     rehearsal_schedule_for,
+    reorder_rehearsal_songs,
     reorder_songs,
     reserve_recording_upload,
     roster_for,
@@ -149,6 +151,17 @@ def _lock_semester(semester):
     `unique_song_position_per_semester`.
     """
     return Semester.objects.select_for_update().get(pk=semester.pk)
+
+
+def _lock_rehearsal(rehearsal):
+    """Row-lock `rehearsal` for the duration of the enclosing transaction.
+
+    Must be called inside `transaction.atomic()`. Mirrors `_lock_semester()`:
+    serializes concurrent Running Order renumbers against the same
+    Rehearsal so two overlapping edits can't compute/apply stale `order`
+    values and collide on `unique_order_per_rehearsal`.
+    """
+    return Rehearsal.objects.select_for_update().get(pk=rehearsal.pk)
 
 
 class OverviewView(BaseView, TemplateView):
@@ -307,6 +320,9 @@ def _build_schedule_context(request, semester, view_mode, rehearsal, error_rehea
         'my_breaks': [],
         'my_availability': None,
         'schedule': None,
+        'pending_editing': False,
+        'pending_removed_json': '[]',
+        'pending_added_json': '[]',
     }
     if semester is None:
         return context
@@ -1670,7 +1686,7 @@ def _editable_assignment_rehearsal_or_404(request, rehearsal_id):
 
 
 class AssignmentEditSaveView(AdminRequiredMixin, View):
-    """`/schedule/<rehearsal_id>/assignments/save/`: applies a buffer of ✕'d removals and picker adds (issues #210, #211, ADR-0009).
+    """`/schedule/<rehearsal_id>/assignments/save/`: applies a buffer of ✕'d removals and picker adds (issues #210, #211, #212, ADR-0009).
 
     The buffer is entirely client-side (Alpine) up to this point —
     clicking an ✕ or picking a person in the "+" popover never
@@ -1681,28 +1697,98 @@ class AssignmentEditSaveView(AdminRequiredMixin, View):
     """
 
     def post(self, request, rehearsal_id):
-        """Apply the submitted removals and adds through `apply_song_role_assignments()`, or report why the save was rejected."""
+        """Apply the submitted removals and adds, or re-render the grid with the pending Buffer intact (issue #212)."""
         rehearsal = _editable_assignment_rehearsal_or_404(request, rehearsal_id)
         semester = get_viewing_semester(request)
-        buffer = self._build_buffer(request)
+        buffer = _build_assignment_buffer(request)
         try:
             apply_song_role_assignments(buffer, viewing_semester=semester)
         except (WrongViewingSemesterError, StaleAssignmentSemesterError) as error:
             messages.error(request, str(error))
-        else:
-            messages.success(request, 'Assignments updated.')
+            return self._render_with_pending_buffer(request, rehearsal, buffer)
+        messages.success(request, 'Assignments updated.')
         return _schedule_redirect(request, rehearsal)
 
-    def _build_buffer(self, request):
-        """Turn the POST body's hidden Semester stamp, removed-id list, and added-entry list into an AssignmentEditBuffer."""
-        removed_ids = frozenset(_parse_assignment_ids(request.POST.getlist('removed_assignment_id')))
-        added_entries = frozenset(_parse_added_entries(request.POST.getlist('added_assignment_entry')))
-        return AssignmentEditBuffer(
-            semester_id=_parse_roster_int(request.POST.get('assignment_semester_id', '')),
-            semester_updated_at=parse_datetime(request.POST.get('assignment_semester_updated_at', '')) or timezone.now(),
-            removed_assignment_ids=removed_ids,
-            added_entries=added_entries,
-        )
+    def _render_with_pending_buffer(self, request, rehearsal, buffer):
+        """Re-render /schedule/'s rehearsal-detail view with `buffer`'s removed/added still loaded into edit mode.
+
+        A Validation Error (a wrong or stale Semester) must never cost the
+        rest of an admin's edits (issue #212 acceptance): unlike the
+        ordinary success path, this renders the page directly rather than
+        redirecting, since a redirect would reload the page and lose the
+        client-side (Alpine) buffer entirely.
+        """
+        context = _build_schedule_context(request, get_viewing_semester(request), VIEW_NEXT, rehearsal)
+        context['pending_editing'] = True
+        context.update(_pending_assignment_buffer_context(buffer.removed_assignment_ids, buffer.added_entries))
+        return render(request, 'scheduling/schedule.html', context, status=200)
+
+
+def _build_assignment_buffer(request):
+    """Turn the POST body's hidden Semester stamp, removed-id list, and added-entry list into an AssignmentEditBuffer.
+
+    Shared by `AssignmentEditSaveView` and `AssignmentPreviewView` (issue
+    #212) — Save and Preview must parse the exact same POST body into the
+    exact same Buffer shape, per ADR 0008.
+    """
+    removed_ids = frozenset(_parse_assignment_ids(request.POST.getlist('removed_assignment_id')))
+    added_entries = frozenset(_parse_added_entries(request.POST.getlist('added_assignment_entry')))
+    return AssignmentEditBuffer(
+        semester_id=_parse_roster_int(request.POST.get('assignment_semester_id', '')),
+        semester_updated_at=parse_datetime(request.POST.get('assignment_semester_updated_at', '')) or timezone.now(),
+        removed_assignment_ids=removed_ids,
+        added_entries=added_entries,
+    )
+
+
+def _pending_assignment_buffer_context(removed_ids, added_entries):
+    """Return the two JSON strings that re-seed the Alpine assignment-grid buffer on a blocked save (issue #212).
+
+    `added_entries` is `[(song_id, role_id, person_id), ...]`; each
+    Person's name is looked up so the re-rendered grid's picked chips show
+    a name instead of a bare id, matching what the picker itself would
+    have shown when the pick was first made.
+    """
+    person_ids = {person_id for _, _, person_id in added_entries}
+    names_by_id = dict(Person.objects.filter(pk__in=person_ids).values_list('pk', 'name'))
+    pending_added = [
+        {
+            'key': f'{song_id}-{role_id}-{person_id}',
+            'songId': song_id,
+            'roleId': role_id,
+            'personId': person_id,
+            'personName': names_by_id.get(person_id, ''),
+        }
+        for song_id, role_id, person_id in added_entries
+    ]
+    return {
+        'pending_removed_json': json.dumps(list(removed_ids)),
+        'pending_added_json': json.dumps(pending_added),
+    }
+
+
+class AssignmentPreviewView(PreviewMixin, AdminRequiredMixin, View):
+    """`/schedule/<rehearsal_id>/assignments/preview/`: Fallout for a candidate assignment edit Buffer (issue #212, ADR 0008).
+
+    A POST-only sibling of the Save endpoint, bound to the exact same POST
+    body — same hidden Semester stamp, same removed/added field names —
+    per ADR 0008's "one parsing and validation path" rule. Fired when the
+    "+" popover closes (the dialog's native `close` event), never per pick
+    inside an open popover: the popover is the bounded edit gesture, ADR
+    0008's rule with the gesture correctly identified. `PreviewMixin` owns
+    the savepoint/rollback shape; this view supplies only the Buffer and
+    the `preview_song_role_assignments()` call.
+    """
+
+    template_name = 'scheduling/_assignment_fallout.html'
+
+    def run_preview(self, request, rehearsal_id):
+        """Build the submitted assignment edit Buffer and render its Fallout for `rehearsal_id`'s grid, or 404."""
+        rehearsal = _editable_assignment_rehearsal_or_404(request, rehearsal_id)
+        semester = get_viewing_semester(request)
+        buffer = _build_assignment_buffer(request)
+        fallout = preview_song_role_assignments(buffer, rehearsal=rehearsal, viewing_semester=semester)
+        return render(request, self.template_name, {'fallout': fallout})
 
 
 def _parse_assignment_ids(raw_values):
@@ -1793,11 +1879,18 @@ class RehearsalEditView(AdminRequiredMixin, View):
         return render(request, self.template_name, {'rehearsal': rehearsal, 'form': RehearsalForm(instance=rehearsal)})
 
     def post(self, request, pk):
-        """Validate and save the edit, or re-render with errors."""
+        """Validate and save the edit, re-deriving its RehearsalSongs' persisted times, or re-render with errors."""
         rehearsal = self._get_rehearsal(pk)
         form = RehearsalForm(request.POST, instance=rehearsal)
         if form.is_valid():
-            form.save()
+            with transaction.atomic():
+                _lock_rehearsal(rehearsal)
+                form.save()
+                existing_order = list(
+                    RehearsalSong.objects.filter(rehearsal=rehearsal).order_by('order').values_list('pk', flat=True)
+                )
+                if existing_order:
+                    reorder_rehearsal_songs(rehearsal, existing_order)
             messages.success(request, 'Rehearsal updated.')
             return redirect('scheduling:manage-schedule')
         return render(request, self.template_name, {'rehearsal': rehearsal, 'form': form})

@@ -1,6 +1,6 @@
 """Shared scheduling service functions (issue #92, issue #95, issue #98, issue #99)."""
 
-from datetime import time, timedelta
+from datetime import date, time, timedelta
 
 from django.test import TestCase
 from django.utils import timezone
@@ -100,7 +100,7 @@ class SongRehearsalProgressTests(TestCase):
         """RehearsalSong rows for a different Song are not counted."""
         other_song = SongFactory(semester=self.song.semester)
         self._rehearsal_song(self.past_date)
-        other_rehearsal = RehearsalFactory(semester=self.song.semester, date=self.past_date)
+        other_rehearsal = RehearsalFactory(semester=self.song.semester, date=self.future_date)
         RehearsalSongFactory(song=other_song, rehearsal=other_rehearsal, order=99)
 
         progress = song_rehearsal_progress(self.song)
@@ -252,8 +252,12 @@ class RecordingCountForTests(TestCase):
     def test_counts_recordings_across_every_rehearsal_song_slot(self):
         """Recordings across multiple RehearsalSong slots for the Song all count."""
         song = SongFactory()
-        first_slot = RehearsalSongFactory(song=song, rehearsal=RehearsalFactory(semester=song.semester))
-        second_slot = RehearsalSongFactory(song=song, rehearsal=RehearsalFactory(semester=song.semester))
+        first_slot = RehearsalSongFactory(
+            song=song, rehearsal=RehearsalFactory(semester=song.semester, date=date(2026, 9, 16)),
+        )
+        second_slot = RehearsalSongFactory(
+            song=song, rehearsal=RehearsalFactory(semester=song.semester, date=date(2026, 9, 23)),
+        )
         RecordingFactory(rehearsal_song=first_slot)
         RecordingFactory(rehearsal_song=first_slot)
         RecordingFactory(rehearsal_song=second_slot)
@@ -727,8 +731,8 @@ class ConflictHistoryForTests(TestCase):
 
     def test_only_includes_rehearsals_with_a_submitted_conflict(self):
         """A Rehearsal with no Conflict for this Person is not in History; one with a Conflict is."""
-        RehearsalFactory(semester=self.semester)
-        declared = RehearsalFactory(semester=self.semester)
+        RehearsalFactory(semester=self.semester, date=date(2026, 9, 16))
+        declared = RehearsalFactory(semester=self.semester, date=date(2026, 9, 23))
         ConflictFactory(person=self.person, rehearsal=declared, type=Conflict.FULL_CONFLICT)
 
         rows = conflict_history_for(self.semester, self.person)
@@ -826,10 +830,11 @@ class ConflictHistoryForTests(TestCase):
         self.assertFalse(by_rehearsal[past])
         self.assertTrue(by_rehearsal[future])
 
-    def test_rows_ordered_by_date_then_start_time(self):
-        """History rows are ordered by Rehearsal date, then start_time."""
-        later = RehearsalFactory(semester=self.semester, start_time=time(19, 0))
-        earlier = RehearsalFactory(semester=self.semester, date=later.date, start_time=time(17, 0))
+    def test_rows_ordered_by_date(self):
+        """History rows are ordered by Rehearsal date (issue #214: one Rehearsal per date per Semester, so date alone orders them)."""
+        today = timezone.localdate()
+        later = RehearsalFactory(semester=self.semester, date=today + timedelta(days=1), start_time=time(17, 0))
+        earlier = RehearsalFactory(semester=self.semester, date=today, start_time=time(19, 0))
         ConflictFactory(person=self.person, rehearsal=later, type=Conflict.FULL_CONFLICT)
         ConflictFactory(person=self.person, rehearsal=earlier, type=Conflict.FULL_CONFLICT)
 
@@ -859,11 +864,11 @@ class RehearsalScheduleForTests(TestCase):
             [row.rehearsal for row in schedule.future], [today_rehearsal, future],
         )
 
-    def test_rows_ordered_by_date_then_start_time(self):
-        """Rows within each split are ordered by date, then start_time."""
+    def test_rows_ordered_by_date(self):
+        """Rows within each split are ordered by date (issue #214: one Rehearsal per date per Semester, so date alone orders them)."""
         today = timezone.localdate()
-        later = RehearsalFactory(semester=self.semester, date=today + timedelta(days=1), start_time=time(19, 0))
-        earlier = RehearsalFactory(semester=self.semester, date=today + timedelta(days=1), start_time=time(17, 0))
+        later = RehearsalFactory(semester=self.semester, date=today + timedelta(days=2), start_time=time(17, 0))
+        earlier = RehearsalFactory(semester=self.semester, date=today + timedelta(days=1), start_time=time(19, 0))
 
         schedule = rehearsal_schedule_for(self.semester, self.person)
 
