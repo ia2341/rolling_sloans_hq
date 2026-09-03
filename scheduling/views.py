@@ -18,7 +18,7 @@ from django.utils.http import url_has_allowed_host_and_scheme
 from django.views import View
 from django.views.generic import DetailView, TemplateView
 
-from config.views import AdminRequiredMixin, BaseView
+from config.views import AdminRequiredMixin, BaseView, PreviewMixin
 from identity.models import Person
 from scheduling.forms import (
     DeclareConflictForm,
@@ -70,6 +70,7 @@ from scheduling.services import (
     mismatched_person_ids_for,
     next_attended_rehearsal_for,
     performers_for,
+    preview_roster_edits,
     publish_semester,
     recording_count_for,
     recording_groups_for,
@@ -492,6 +493,51 @@ class SetlistDeleteConfirmView(AdminRequiredMixin, View):
         return render(request, self.template_name, {'summaries': summaries})
 
 
+def _parse_roster_int(raw_value):
+    """Return `raw_value` as an int, or -1 (matching no real row/Semester) when it isn't one.
+
+    Shared by `MembersView` and the Roster Preview surface (issue #228) so
+    the two never drift on how a malformed hidden field is coerced.
+    """
+    try:
+        return int(raw_value)
+    except (TypeError, ValueError):
+        return -1
+
+
+def _build_roster_buffer(formset, submitted_semester_id, submitted_stamp):
+    """Turn a valid RosterEditFormSet into a RosterEditBuffer, carrying the Semester state it was rendered against.
+
+    Shared by `MembersView.post()` and `RosterPreviewView.run_preview()`
+    (issue #228) — the Preview and Save endpoints must parse the exact
+    same POST body into the exact same Buffer shape, per ADR 0008.
+    `submitted_semester_id`/`submitted_stamp` are the hidden fields
+    stamped at render time, not the live session's viewing Semester —
+    `apply_roster_edits()`/`preview_roster_edits()` are where those are
+    compared against current state.
+    """
+    person_ids = {row['person_id'] for row in formset.cleaned_data}
+    people_by_id = Person.objects.in_bulk(person_ids)
+    entries = []
+    removed_person_ids = set()
+    for row in formset.cleaned_data:
+        person = people_by_id.get(row['person_id'])
+        if person is None:
+            continue
+        if row['remove']:
+            removed_person_ids.add(person.pk)
+            continue
+        entries.append(RosterEditEntry(
+            person=person, name=row['name'], role_ids=frozenset(role.pk for role in row['roles']),
+        ))
+    return RosterEditBuffer(
+        semester_id=_parse_roster_int(submitted_semester_id),
+        semester_updated_at=parse_datetime(submitted_stamp) or timezone.now(),
+        entries=entries,
+        removed_person_ids=frozenset(removed_person_ids),
+    )
+
+
 class MembersView(BaseView, View):
     """`/members/`: the Band Members roster, plus an admin's in-place "Edit roster" mode (issues #137, #227).
 
@@ -569,41 +615,12 @@ class MembersView(BaseView, View):
         ]
 
     def _build_buffer(self, formset, submitted_semester_id, submitted_stamp):
-        """Turn a valid edit formset into a RosterEditBuffer, carrying the Semester state it was rendered against.
-
-        `submitted_semester_id`/`submitted_stamp` are the hidden fields
-        stamped at render time, not the live session's viewing Semester —
-        `apply_roster_edits()` is the one place that compares them against
-        current state, raising `WrongViewingSemesterError`/
-        `StaleRosterSemesterError` if either has moved since.
-        """
-        person_ids = {row['person_id'] for row in formset.cleaned_data}
-        people_by_id = Person.objects.in_bulk(person_ids)
-        entries = []
-        removed_person_ids = set()
-        for row in formset.cleaned_data:
-            person = people_by_id.get(row['person_id'])
-            if person is None:
-                continue
-            if row['remove']:
-                removed_person_ids.add(person.pk)
-                continue
-            entries.append(RosterEditEntry(
-                person=person, name=row['name'], role_ids=frozenset(role.pk for role in row['roles']),
-            ))
-        return RosterEditBuffer(
-            semester_id=self._parse_int(submitted_semester_id),
-            semester_updated_at=parse_datetime(submitted_stamp) or timezone.now(),
-            entries=entries,
-            removed_person_ids=frozenset(removed_person_ids),
-        )
+        """Turn a valid edit formset into a RosterEditBuffer; delegates to the shared `_build_roster_buffer()` (issue #228)."""
+        return _build_roster_buffer(formset, submitted_semester_id, submitted_stamp)
 
     def _parse_int(self, raw_value):
-        """Return `raw_value` as an int, or -1 (matching no real row/Semester) when it isn't one."""
-        try:
-            return int(raw_value)
-        except (TypeError, ValueError):
-            return -1
+        """Return `raw_value` as an int, or -1 when it isn't one; delegates to the shared `_parse_roster_int()` (issue #228)."""
+        return _parse_roster_int(raw_value)
 
     def _render_read(self, request, semester):
         """Render read mode: the bare roster fragment for htmx, the full page otherwise."""
@@ -648,6 +665,81 @@ class MembersView(BaseView, View):
     def _is_htmx(self, request):
         """Return whether `request` is an htmx-driven in-place swap rather than a direct/no-JS navigation."""
         return request.headers.get('HX-Request') == 'true'
+
+
+class RosterPreviewView(PreviewMixin, AdminRequiredMixin, View):
+    """`/members/preview/`: an admin's Preview of a Roster edit Buffer, computed without committing it (issue #228, ADR 0008).
+
+    A POST-only sibling of `/members/`'s Save endpoint, bound to the exact
+    same `RosterEditFormSet` and the exact same POST body — same field
+    names, management form and hidden staleness fields — as the Save
+    endpoint, per ADR 0008's "one parsing and validation path" rule.
+    `PreviewMixin` owns the savepoint/rollback shape; this view supplies
+    only the form and the `preview_roster_edits()` call. Fired by the edit
+    table's Role checkboxes and `remove` toggles on `change` (never by
+    typing in the name field), targeting the `#roster-fallout` region with
+    an `outerHTML` swap synced against any other in-flight Preview.
+    """
+
+    template_name = 'scheduling/_roster_preview.html'
+
+    def run_preview(self, request):
+        """Bind the Roster edit formset and render its Fallout, or a Validation Error banner if it doesn't bind."""
+        semester = get_viewing_semester(request)
+        if semester is None:
+            return render(request, self.template_name, {
+                'formset_errors': ['No Semester is being edited.'],
+                'fallout': None,
+            })
+        formset = RosterEditFormSet(request.POST, prefix='roster')
+        if not formset.is_valid():
+            return render(request, self.template_name, {
+                'formset_errors': self._formset_errors(formset),
+                'fallout': None,
+            })
+        submitted_semester_id = request.POST.get('roster_semester_id', '')
+        submitted_stamp = request.POST.get('roster_semester_updated_at', '')
+        buffer = _build_roster_buffer(formset, submitted_semester_id, submitted_stamp)
+        fallout = preview_roster_edits(buffer, viewing_semester=semester, requesting_admin=request.user)
+        return render(request, self.template_name, {'formset_errors': [], 'fallout': fallout})
+
+    def _formset_errors(self, formset):
+        """Return a flat list of 'Row N (field): message' strings naming an invalid formset's per-row errors."""
+        errors = []
+        for index, form in enumerate(formset.forms):
+            for field, field_errors in form.errors.items():
+                for message in field_errors:
+                    errors.append(f'Row {index + 1} ({field}): {message}')
+        errors.extend(formset.non_form_errors())
+        return errors
+
+
+class RosterRemovalConfirmView(PreviewMixin, AdminRequiredMixin, View):
+    """`/members/preview/confirm-removal/`: the one-dialog-per-batch removal confirmation (issue #228, ADR 0008).
+
+    Runs the same `preview_roster_edits()` computation as the on-page
+    Preview (fetched by the edit table's Save button, only when at least
+    one `remove` checkbox is checked), so the confirm dialog can never
+    disagree with what the Preview already showed. Renders just the
+    removal-related subset: each removed Person's name and email, plus the
+    batch's loud Fallout lines.
+    """
+
+    template_name = 'scheduling/_roster_removal_confirm.html'
+
+    def run_preview(self, request):
+        """Bind the Roster edit formset and render the removal confirmation dialog's body."""
+        semester = get_viewing_semester(request)
+        if semester is None:
+            return HttpResponseBadRequest('No Semester is being edited.')
+        formset = RosterEditFormSet(request.POST, prefix='roster')
+        if not formset.is_valid():
+            return HttpResponseBadRequest('The Roster edit Buffer is invalid.')
+        submitted_semester_id = request.POST.get('roster_semester_id', '')
+        submitted_stamp = request.POST.get('roster_semester_updated_at', '')
+        buffer = _build_roster_buffer(formset, submitted_semester_id, submitted_stamp)
+        fallout = preview_roster_edits(buffer, viewing_semester=semester, requesting_admin=request.user)
+        return render(request, self.template_name, {'fallout': fallout})
 
 
 class MemberDetailView(BaseView, View):
