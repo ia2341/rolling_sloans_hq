@@ -3,7 +3,7 @@
 import json
 
 from django.contrib import messages
-from django.db import IntegrityError, models, transaction
+from django.db import models, transaction
 from django.http import (
     Http404,
     HttpResponseBadRequest,
