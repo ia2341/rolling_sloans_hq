@@ -1106,6 +1106,144 @@ def apply_song_role_assignments(buffer: AssignmentEditBuffer, *, viewing_semeste
         semester.save(update_fields=['updated_at'])
 
 
+@dataclass(frozen=True)
+class AssignmentEditFallout:
+    """Every observable consequence of a candidate SongRoleAssignment edit Buffer for one Rehearsal (issue #212, ADR 0008).
+
+    `is_blocked` mirrors `apply_song_role_assignments()`'s two checks
+    (wrong Semester, stale stamp) with no Fallout computed at all -- a
+    Validation Error in ADR 0008's terms, never blended with Fallout.
+    `loud`/`quiet` are the two ADR-0002/issue #185-worded tiers, computed
+    against the Rehearsal's current (post-apply) assignment state rather
+    than a before/after diff: loud is the warning ADR-0009 built this
+    per-Rehearsal surface to raise (an assigned Person who can't be there
+    that evening), and quiet is a standing signal resolved elsewhere (an
+    unfilled Role Requirement, a role mismatch) -- neither ever blocks a
+    save. `is_stale` flags a `Semester.updated_at` mismatch, reported never
+    refused, per ADR 0008. Never reads `Conflict.status`.
+    """
+
+    is_blocked: bool
+    block_message: str
+    is_stale: bool
+    loud: list[str]
+    quiet: list[str]
+
+
+def _blocked_assignment_fallout(block_message: str, *, is_stale: bool = False) -> AssignmentEditFallout:
+    """Return an AssignmentEditFallout reporting a hard block, with no Fallout lines computed at all."""
+    return AssignmentEditFallout(is_blocked=True, block_message=block_message, is_stale=is_stale, loud=[], quiet=[])
+
+
+def _assignment_fallout_lines(rehearsal, songs):
+    """Return (loud, quiet) Fallout lines for `rehearsal`'s current (post-apply) assignments over `songs` (issue #212).
+
+    Loud: an assigned Person with a full Conflict for `rehearsal` (moot for
+    the Dress Rehearsal, which no Conflict can point at per ADR-0006), or a
+    partial Conflict whose Window overlaps the Song's RehearsalSong slot --
+    only computable through a Rehearsal, which is ADR-0009's whole reason
+    this surface exists. Quiet: an unfilled Role Requirement, or a role
+    mismatch -- both standing flags resolved elsewhere (ADR-0002), kept
+    quiet so they don't train an admin to ignore the loud tier. Reads
+    `Conflict.type` to tell full from partial, never `Conflict.status`.
+    """
+    song_ids = [song.pk for song in songs]
+    assignments = list(
+        SongRoleAssignment.objects.filter(song_id__in=song_ids)
+        .select_related('person', 'role', 'song')
+        .order_by('song__position', 'role__name', 'person__name')
+    )
+    person_ids = {assignment.person_id for assignment in assignments}
+
+    full_conflict_person_ids = frozenset(
+        Conflict.objects.filter(
+            rehearsal=rehearsal, type=Conflict.FULL_CONFLICT, person_id__in=person_ids,
+        ).values_list('person_id', flat=True)
+    )
+    partial_conflicts = Conflict.objects.filter(
+        rehearsal=rehearsal, type=Conflict.PARTIAL, person_id__in=person_ids,
+    ).prefetch_related('conflictwindow_set')
+    windows_by_person_id = {
+        conflict.person_id: [
+            (window.unavailable_start, window.unavailable_end) for window in conflict.conflictwindow_set.all()
+        ]
+        for conflict in partial_conflicts
+    }
+    slot_by_song_id = {
+        rehearsal_song.song_id: (rehearsal_song.start_time, rehearsal_song.end_time)
+        for rehearsal_song in RehearsalSong.objects.filter(rehearsal=rehearsal, song_id__in=song_ids)
+    }
+
+    loud = []
+    for assignment in assignments:
+        if assignment.person_id in full_conflict_person_ids:
+            loud.append(
+                f'{assignment.person.name} is assigned to {assignment.song.title} but has a full Conflict '
+                'for this Rehearsal.'
+            )
+            continue
+        windows = windows_by_person_id.get(assignment.person_id)
+        slot = slot_by_song_id.get(assignment.song_id)
+        if windows and slot is not None and any(
+            _windows_overlap(window_start, window_end, slot[0], slot[1]) for window_start, window_end in windows
+        ):
+            loud.append(
+                f"{assignment.person.name} is assigned to {assignment.song.title}, but a declared Conflict "
+                'Window overlaps its rehearsal slot.'
+            )
+
+    quiet = []
+    for song in songs:
+        for status in fill_status_for(song):
+            if status.is_understaffed:
+                quiet.append(
+                    f"{song.title}'s {status.role.name} Requirement is unfilled ({status.actual}/{status.target})."
+                )
+    for assignment in assignments:
+        if assignment.is_role_mismatch:
+            quiet.append(
+                f"{assignment.person.name}'s {assignment.role.name} assignment on {assignment.song.title} "
+                "doesn't match their declared Roles."
+            )
+
+    return loud, quiet
+
+
+def preview_song_role_assignments(buffer: AssignmentEditBuffer, *, rehearsal, viewing_semester: Semester) -> AssignmentEditFallout:
+    """Run the real `apply_song_role_assignments()` for `buffer` and report `rehearsal`'s Fallout, without committing it.
+
+    ADR 0008/issue #212: this function's write is real -- it must be called
+    inside a transaction the *caller* rolls back (`PreviewMixin` does this
+    for the Preview view; tests must wrap the call the same way). Called
+    outside such a transaction, this function corrupts the database.
+
+    Mirrors `apply_song_role_assignments()`'s wrong-Semester check so a
+    Preview can never disagree with what Save would reject. The Semester's
+    current `updated_at` is swapped in before the real call runs (mirroring
+    `preview_roster_edits()`), so the write actually applies regardless of
+    whether the submitted Buffer's own stamp is stale; `is_stale` is
+    reported separately, from the *original* stamp, exactly like the Save
+    endpoint's own staleness check would see it.
+    """
+    if viewing_semester is None or buffer.semester_id != viewing_semester.pk:
+        return _blocked_assignment_fallout(
+            "This assignment edit Buffer's Semester doesn't match the Semester you're currently viewing."
+        )
+
+    current_semester = Semester.objects.get(pk=viewing_semester.pk)
+    is_stale = buffer.semester_updated_at != current_semester.updated_at
+
+    apply_buffer = replace(buffer, semester_updated_at=current_semester.updated_at)
+    try:
+        apply_song_role_assignments(apply_buffer, viewing_semester=viewing_semester)
+    except (WrongViewingSemesterError, StaleAssignmentSemesterError) as error:
+        return _blocked_assignment_fallout(str(error), is_stale=is_stale)
+
+    songs, _ = _matrix_songs(rehearsal)
+    loud, quiet = _assignment_fallout_lines(rehearsal, songs)
+    return AssignmentEditFallout(is_blocked=False, block_message='', is_stale=is_stale, loud=loud, quiet=quiet)
+
+
 def upcoming_rehearsals_for(semester, count=3):
     """Return `semester`'s next `count` upcoming Rehearsals, band-wide, in date order."""
     return list(_upcoming_rehearsals(semester)[:count])

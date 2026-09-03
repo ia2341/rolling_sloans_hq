@@ -6,11 +6,19 @@
 // directives, so its person rows carry no @click of their own -- clicking one is caught by
 // event delegation on the static <dialog> wrapper instead (a plain DOM click bubbles through
 // injected content exactly like any other node).
+//
+// The dialog itself carries the Fallout Preview's hx-* attributes (issue #212), firing on the
+// dialog's native "close" event -- however the popover closed (a pick, Cancel, or Escape) -- and
+// never per pick inside an open popover, since the popover is the bounded edit gesture (ADR
+// 0008). hx-include reads the whole edit form's current buffer, so the fired Preview always
+// reflects every pending removal and pick, not just the one that just happened.
 document.addEventListener('alpine:init', () => {
-  Alpine.data('assignmentGrid', (pickerUrlTemplate) => ({
-    editing: false,
-    removed: [],
-    added: [],
+  // initialRemoved/initialAdded/initialEditing re-seed the buffer after a blocked Save re-renders the
+  // page (issue #212) -- a Validation Error must never cost the rest of an admin's pending edits.
+  Alpine.data('assignmentGrid', (pickerUrlTemplate, initialRemoved = [], initialAdded = [], initialEditing = false) => ({
+    editing: initialEditing,
+    removed: [...initialRemoved],
+    added: [...initialAdded],
     pickerSongId: null,
     pickerRoleId: null,
     pickerHtml: '',
@@ -19,6 +27,7 @@ document.addEventListener('alpine:init', () => {
     extraRoles: [],
     selectedRoleToAdd: '',
     addableRoles: [],
+    previewError: '',
 
     // "+ Add role" (issue #213): every addable Role (active, not already a column),
     // read once from the json_script the server rendered -- a plain data island, not
@@ -115,6 +124,18 @@ document.addEventListener('alpine:init', () => {
 
     removeAdded(key) {
       this.added = this.added.filter((item) => item.key !== key);
+    },
+
+    // A failed Preview (network error or non-2xx from the popover-close htmx request) must never read
+    // as data loss: the Fallout region is left exactly as it was (htmx only swaps it on a successful
+    // response), an inline note says so explicitly, and Save stays enabled -- Save recomputes and
+    // revalidates everything server-side regardless (issue #212, mirroring issue #228's rosterEdit).
+    onPreviewError() {
+      this.previewError = 'Preview unavailable right now — your edits are still here, and Save is still enabled.';
+    },
+
+    onPreviewSettled() {
+      this.previewError = '';
     },
   }));
 });
