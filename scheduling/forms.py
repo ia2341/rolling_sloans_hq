@@ -20,6 +20,7 @@ from scheduling.services import (
     CONFLICT_EARLY_DEPARTURE,
     CONFLICT_LATE_ARRIVAL,
 )
+from scheduling.spotify import SpotifyImportError, extract_playlist_id
 
 
 class MembershipRolesForm(forms.ModelForm):
@@ -185,6 +186,27 @@ SetlistEditFormSet = forms.modelformset_factory(
 SetlistEditEmptyFormSet = forms.modelformset_factory(
     Song, form=SongEditForm, extra=1, can_delete=True,
 )
+
+
+class SpotifyImportForm(forms.Form):
+    """Validates a pasted Spotify playlist link before any network call (issue #184).
+
+    `clean_playlist_url` runs the same well-formedness check
+    `spotify.import_playlist()` runs first regardless, exposed here so a
+    malformed or non-Spotify link lands as a field error on this form
+    rather than only surfacing after a fetch to the import endpoint.
+    """
+
+    playlist_url = forms.CharField(label='Spotify playlist link')
+
+    def clean_playlist_url(self):
+        """Return the submitted URL unchanged, or raise a field error for anything that isn't a playlist link."""
+        url = self.cleaned_data['playlist_url']
+        try:
+            extract_playlist_id(url)
+        except SpotifyImportError as error:
+            raise forms.ValidationError(str(error)) from error
+        return url
 
 
 class RosterEditRowForm(forms.Form):

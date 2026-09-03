@@ -1,6 +1,6 @@
 <div
   id="setlist-edit-surface"
-  x-data="setlistEdit('{% url 'scheduling:setlist-edit-confirm-delete' %}')"
+  x-data="setlistEdit('{% url 'scheduling:setlist-edit-confirm-delete' %}', '{% url 'scheduling:setlist-edit-import' %}')"
   x-init="init()"
 >
   <form method="post" action="{% url 'scheduling:setlist-edit' %}" id="setlist-edit-form" @submit="onSubmit">
@@ -32,6 +32,19 @@
   </form>
   <p id="setlist-delete-confirm-error" x-show="deleteError" x-text="deleteError" role="alert"></p>
   <a href="{% url 'scheduling:setlist' %}" id="cancel-setlist-edit">Cancel</a>
+
+  <div id="setlist-import">
+    <label for="id_playlist_url">Import from Spotify playlist</label>
+    <input
+      type="text" id="id_playlist_url" name="playlist_url"
+      x-model="playlistUrl" placeholder="https://open.spotify.com/playlist/..."
+    >
+    <button type="button" id="import-playlist-button" @click="importPlaylist" :disabled="importing">
+      <span x-text="importing ? 'Importing…' : 'Import'"></span>
+    </button>
+    <p id="setlist-import-error" x-show="importError" x-text="importError" role="alert"></p>
+    <p id="setlist-import-summary" x-show="importSummary" x-text="importSummary"></p>
+  </div>
 
   <template id="setlist-empty-form-template">
     {% include "scheduling/_setlist_edit_row.html" with form=formset.empty_form %}

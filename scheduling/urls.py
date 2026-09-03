@@ -15,6 +15,10 @@ urlpatterns = [
         'setlist/edit/confirm-delete/',
         views.SetlistDeleteConfirmView.as_view(), name='setlist-edit-confirm-delete',
     ),
+    path(
+        'setlist/edit/import/',
+        views.SetlistImportView.as_view(), name='setlist-edit-import',
+    ),
     path('songs/<int:pk>/', views.SongDetailView.as_view(), name='song-detail'),
     path('members/', views.MembersView.as_view(), name='members'),
     path('members/<int:pk>/', views.MemberDetailView.as_view(), name='member-detail'),

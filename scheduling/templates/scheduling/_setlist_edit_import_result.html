@@ -1,0 +1,16 @@
+{% if error %}
+<p id="setlist-import-error" role="alert">{{ error }}</p>
+{% else %}
+<div id="setlist-import-rows" data-added-count="{{ added_count }}">
+  {% for form in forms %}
+    {% include "scheduling/_setlist_edit_row.html" %}
+  {% endfor %}
+</div>
+<p id="setlist-import-summary">
+  Imported {{ added_count }} song{{ added_count|pluralize }}.
+  {% if skipped_count %}
+    Skipped {{ skipped_count }} item{{ skipped_count|pluralize }}
+    ({% for reason, count in skipped_reasons.items %}{{ count }} {{ reason }}{% if not forloop.last %}, {% endif %}{% endfor %}).
+  {% endif %}
+</p>
+{% endif %}
