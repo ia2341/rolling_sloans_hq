@@ -255,8 +255,8 @@ class ConflictAdjudicationDetailViewSaveTests(TestCase):
         response = self.client.get(reverse('scheduling:manage-conflicts-detail', args=[self.rehearsal.pk]))
 
         self.assertEqual(response.status_code, 200)
-        pairs = response.context['pairs']
-        self.assertEqual({pair[0].conflict.pk for pair in pairs}, {self.first.pk, self.second.pk})
+        triples = response.context['triples']
+        self.assertEqual({triple[0].conflict.pk for triple in triples}, {self.first.pk, self.second.pk})
 
     def test_save_commits_both_rows_in_one_request(self):
         """A single Save Changes decides every row on the Rehearsal."""
