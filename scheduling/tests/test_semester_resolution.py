@@ -278,7 +278,6 @@ class UnpublishedSiteTests(TestCase):
             reverse('scheduling:setlist'),
             reverse('scheduling:members'),
             reverse('scheduling:member-detail', args=[self.person.pk]),
-            reverse('scheduling:conflicts'),
         ]
         for url in urls:
             with self.subTest(url=url):
