@@ -1,0 +1,19 @@
+{# The shell's non-live Semester warning (issue #169). Rendered by base.html on #}
+{# every page from the `semester_banner` context processor, so no page can omit #}
+{# it; `semester_banner` is None for a member and on the Live Semester. #}
+{% if semester_banner %}
+<aside class="rs-semester-banner" data-testid="semester-banner" role="status">
+  <strong>You are viewing {{ semester_banner.semester.name }}</strong>
+  — this is not what members see.
+  {% if semester_banner.live_semester %}
+    <form method="post" action="{% url 'scheduling:manage-semester-select' %}">
+      {% csrf_token %}
+      <input type="hidden" name="semester" value="">
+      <input type="hidden" name="next" value="{{ request.get_full_path }}">
+      <button type="submit">Back to {{ semester_banner.live_semester.name }}</button>
+    </form>
+  {% else %}
+    <span class="rs-muted">Nothing is published yet, so members see no semester at all.</span>
+  {% endif %}
+</aside>
+{% endif %}

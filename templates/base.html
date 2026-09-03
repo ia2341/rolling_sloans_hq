@@ -26,6 +26,8 @@
     <button type="submit">Log out</button>
   </form>
 </nav>
+{# Renders on every page from the shared shell, so no page can forget it (issue #169). #}
+{% include "scheduling/_semester_banner.html" %}
 {% block content %}{% endblock %}
 </body>
 </html>

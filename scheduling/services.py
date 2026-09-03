@@ -27,6 +27,9 @@ from scheduling.models import (
 
 MAX_RECORDING_FILE_SIZE = 50 * 1024 * 1024
 VIEWING_SEMESTER_SESSION_KEY = 'viewing_semester_id'
+SEMESTER_STATUS_LIVE = 'Live'
+SEMESTER_STATUS_DRAFT = 'Draft'
+SEMESTER_STATUS_PREVIOUSLY_PUBLISHED = 'Previously published'
 PRESIGNED_URL_EXPIRY_SECONDS = 900
 SUPPORTED_RECORDING_CONTENT_TYPES = frozenset(
     {
@@ -50,6 +53,23 @@ _FILE_EXTENSIONS_BY_CONTENT_TYPE = {
 
 class RecordingUploadError(ValueError):
     """Raised when a recording object is not a valid private audio upload."""
+
+
+@dataclass(frozen=True)
+class SemesterOption:
+    """One entry in the admin's Semester dropdown: a Semester, its Live/Draft/Previously-published label, and whether it's the one on screen."""
+
+    semester: Semester
+    status: str
+    is_viewing: bool
+
+
+@dataclass(frozen=True)
+class SemesterBanner:
+    """The shell's warning that this request is scoped to a Semester members can't see, plus the Live Semester to return to (None when nothing is published)."""
+
+    semester: Semester
+    live_semester: Semester | None
 
 
 @dataclass(frozen=True)
@@ -240,6 +260,62 @@ def get_viewing_semester(request) -> Semester | None:
         if selected is not None:
             return selected
     return get_live_semester() or Semester.objects.order_by('-created_at', '-id').first()
+
+
+def semester_options_for(request) -> list['SemesterOption']:
+    """Return every Semester as a switcher option, newest-created first, or nothing for a non-admin (issue #169).
+
+    The label distinguishes the three states an admin has to tell apart at a
+    glance: the Live Semester, a Draft (null `published_at`), and a
+    Previously published one — a term that was live and has since been
+    superseded. Exactly one option carries `is_viewing`, matching whatever
+    `get_viewing_semester()` resolves, so the dropdown preselects the same
+    Semester the page is actually rendering.
+
+    A member gets an empty list rather than a hidden one: there is nothing
+    for them to choose between, so the data never reaches the template.
+    """
+    if not _is_admin(getattr(request, 'user', None)):
+        return []
+    live = get_live_semester()
+    viewing = get_viewing_semester(request)
+    return [
+        SemesterOption(
+            semester=semester,
+            status=_semester_status(semester, live),
+            is_viewing=viewing is not None and semester.pk == viewing.pk,
+        )
+        for semester in Semester.objects.order_by('-created_at', '-id')
+    ]
+
+
+def _semester_status(semester: Semester, live: Semester | None) -> str:
+    """Return `semester`'s switcher label, given the already-resolved Live Semester."""
+    if live is not None and semester.pk == live.pk:
+        return SEMESTER_STATUS_LIVE
+    if semester.published_at is None:
+        return SEMESTER_STATUS_DRAFT
+    return SEMESTER_STATUS_PREVIOUSLY_PUBLISHED
+
+
+def semester_banner_for(request) -> 'SemesterBanner | None':
+    """Return the warning banner for a request resolved to something other than the Live Semester, else None (issue #169).
+
+    Only an admin can ever be looking at a non-live Semester, so a member
+    always gets None. `live_semester` is carried alongside so the banner can
+    offer a way back — and is itself None when nothing is published at all,
+    the bootstrapping case where an admin views the newest draft by fallback
+    and there is nowhere to return to.
+    """
+    if not _is_admin(getattr(request, 'user', None)):
+        return None
+    viewing = get_viewing_semester(request)
+    if viewing is None:
+        return None
+    live = get_live_semester()
+    if live is not None and viewing.pk == live.pk:
+        return None
+    return SemesterBanner(semester=viewing, live_semester=live)
 
 
 def set_viewing_semester(request, semester: Semester | None) -> None:
