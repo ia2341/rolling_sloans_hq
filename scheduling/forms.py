@@ -212,6 +212,29 @@ class SpotifyImportForm(forms.Form):
         return url
 
 
+class SemesterSetupForm(forms.Form):
+    """Steps 1-2 of Semester setup: a name plus the six timing defaults, in one submission (issue #200).
+
+    Not a `ModelForm`: the write goes through `services.create_semester()`,
+    which also owns the blank/duplicate-name rejection (surfaced here as a
+    field error by the view, so there's exactly one place that decision is
+    made). This form only validates shape — a non-blank name, and six
+    non-negative integers, plainly labelled instead of by model field name.
+    """
+
+    name = forms.CharField(max_length=255, label='Semester name')
+    default_rehearsal_duration_minutes = forms.IntegerField(min_value=0, label='Rehearsal duration (minutes)')
+    default_setup_grace_minutes = forms.IntegerField(min_value=0, label='Setup grace period (minutes)')
+    default_teardown_grace_minutes = forms.IntegerField(min_value=0, label='Teardown grace period (minutes)')
+    default_song_slot_count = forms.IntegerField(min_value=0, label='Song slot count')
+    default_arrival_buffer_minutes = forms.IntegerField(min_value=0, label='Arrival buffer (minutes)')
+    default_departure_buffer_minutes = forms.IntegerField(min_value=0, label='Departure buffer (minutes)')
+
+    def timing_defaults(self):
+        """Return the six cleaned timing-default fields as a dict, suitable for `create_semester(**...)`."""
+        return {field: self.cleaned_data[field] for field in self.fields if field != 'name'}
+
+
 class RosterEditRowForm(forms.Form):
     """One row of the Roster edit table: an existing Membership's Person, editable name and declared Roles (issue #227).
 

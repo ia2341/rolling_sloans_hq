@@ -239,6 +239,29 @@ def get_live_semester() -> Semester | None:
     return Semester.objects.exclude(published_at=None).order_by('-published_at', '-id').first()
 
 
+class InvalidSemesterNameError(ValueError):
+    """Raised by `create_semester()` for a blank name, or one matching an existing Semester (issue #200)."""
+
+
+def create_semester(name: str, **timing_defaults) -> Semester:
+    """Create and return a new draft Semester (`published_at` null) named `name`, carrying `timing_defaults` (issue #200).
+
+    The one seam Semester setup adds outside the Django admin panel: it
+    takes no semester row lock (it renumbers nothing and the row does not
+    exist yet) and registers no side effect. `name` is compared
+    case-insensitively against every existing Semester, live or draft, so
+    two terms an admin cannot tell apart by name is never possible; a blank
+    or duplicate name raises `InvalidSemesterNameError` before anything is
+    written, and every other Semester is left untouched.
+    """
+    name = name.strip()
+    if not name:
+        raise InvalidSemesterNameError('Name your new semester before continuing.')
+    if Semester.objects.filter(name__iexact=name).exists():
+        raise InvalidSemesterNameError(f'A semester named "{name}" already exists — choose a different name.')
+    return Semester.objects.create(name=name, **timing_defaults)
+
+
 def publish_semester(semester: Semester) -> None:
     """Stamp `semester.published_at` to now — the whole of Publish (issue #170).
 
