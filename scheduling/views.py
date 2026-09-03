@@ -35,6 +35,10 @@ from scheduling.forms import (
     RosterInviteForm,
     SetlistEditEmptyFormSet,
     SetlistEditFormSet,
+    SongRequirementAddFormSet,
+    SongRequirementAddRoleForm,
+    SongRequirementAddRowForm,
+    SongRequirementEditFormSet,
     SongRoleAssignmentForm,
     SpotifyImportForm,
 )
@@ -47,6 +51,7 @@ from scheduling.models import (
     Semester,
     Song,
     SongRoleAssignment,
+    SongRoleRequirement,
 )
 from scheduling.services import (
     CONFLICT_EARLY_DEPARTURE,
@@ -58,13 +63,17 @@ from scheduling.services import (
     RosterEditBuffer,
     RosterEditEntry,
     SelfRemovalError,
+    SongRoleRequirementBuffer,
+    SongRoleRequirementEntry,
     StaleAdjudicationSemesterError,
     StaleRosterSemesterError,
+    StaleSongRoleRequirementsError,
     UnknownConflictError,
     WrongAdjudicationSemesterError,
     WrongViewingSemesterError,
     apply_adjudications,
     apply_roster_edits,
+    apply_song_role_requirements,
     assigned_songs_for,
     assignment_matrix_for,
     attendance_suggestion_for,
@@ -1204,6 +1213,7 @@ class SongDetailView(BaseView, DetailView):
         """Add the Song's SongRoleAssignments, Role fill status, Recordings grouped by RehearsalSong slot, and rehearsal-count target vs. actual."""
         context = super().get_context_data(**kwargs)
         song = self.object
+        context['semester'] = get_viewing_semester(self.request)
         context['assignments'] = SongRoleAssignment.objects.filter(song=song)
         context['fill_statuses'] = fill_status_for(song)
         context['recording_groups'] = [
@@ -1223,6 +1233,199 @@ class SongDetailView(BaseView, DetailView):
         context['rehearsal_count_target'] = rehearsal_count_target(song)
         context['rehearsal_count_actual'] = song.rehearsalsong_set.count()
         return context
+
+
+class SongRequirementsEditView(AdminRequiredMixin, View):
+    """`/songs/<pk>/requirements/edit/`: an admin's in-place editable Role×count table for a Song's Requirements (issue #209).
+
+    A sibling of `SongDetailView`, mirroring `SetlistEditView`'s shape
+    (issue #178) — a dedicated `AdminRequiredMixin` view, a hidden
+    `Semester.updated_at` stamp, one "Save Changes" boundary — rather than
+    the Roster's Preview/Fallout apparatus (issue #185). Applying ADR
+    0008's own test to this surface — is there fallout only the server can
+    compute? — comes back negative on both counts: deleting a Requirement
+    destroys nothing and cascades nowhere, and unfilled count is target
+    minus actual, which the Song page already renders in read mode. So
+    this surface ships no `preview_` sibling, deliberately (see
+    `apply_song_role_requirements()`'s docstring, and
+    `scheduling/tests/test_song_requirements_edit_view.py`'s negative
+    route-table test for the enforced absence).
+
+    GET renders the table — a bare fragment for the "Edit requirements"
+    button's htmx swap, or a full page for a direct/no-JS request. POST
+    commits the whole buffer — count changes, deletes, and "+ Add
+    requirement" rows — as one atomic write via
+    `apply_song_role_requirements()`, or writes nothing and re-renders
+    with every submitted value preserved.
+    """
+
+    fragment_template_name = 'scheduling/_song_requirements_edit.html'
+    page_template_name = 'scheduling/song_requirements_edit.html'
+    STALE_MESSAGE = 'The Requirements changed while you were editing — reload and reapply.'
+    WRONG_SEMESTER_MESSAGE = 'This Semester changed while you were editing — reload and reapply.'
+    DUPLICATE_MESSAGE = 'Each Role can only have one Requirement per Song.'
+
+    def get(self, request, pk):
+        """Render the edit table: a bare fragment for htmx, a full page otherwise."""
+        semester = get_viewing_semester(request)
+        song = self._song(pk, semester)
+        requirements = self._requirements(song)
+        formset = SongRequirementEditFormSet(
+            initial=[{'role_id': r.role_id, 'count': r.count} for r in requirements], prefix='req',
+        )
+        add_formset = SongRequirementAddFormSet(
+            prefix='add', form_kwargs={'excluded_role_ids': [r.role_id for r in requirements]},
+        )
+        return self._render(request, song, semester, formset, add_formset, requirements)
+
+    def post(self, request, pk):
+        """Validate and apply the whole Requirements Buffer atomically, or re-render with errors."""
+        semester = get_viewing_semester(request)
+        song = self._song(pk, semester)
+        requirements = self._requirements(song)
+        submitted_semester_id = request.POST.get('requirements_semester_id', '')
+        submitted_stamp = request.POST.get('requirements_semester_updated_at', '')
+        formset = SongRequirementEditFormSet(request.POST, prefix='req')
+        add_formset = SongRequirementAddFormSet(
+            request.POST, prefix='add', form_kwargs={'excluded_role_ids': [r.role_id for r in requirements]},
+        )
+        if formset.is_valid() and add_formset.is_valid():
+            entries, duplicate = self._build_entries(formset, add_formset)
+            if duplicate:
+                messages.error(request, self.DUPLICATE_MESSAGE)
+            else:
+                buffer = SongRoleRequirementBuffer(
+                    song_id=song.pk,
+                    semester_id=_parse_roster_int(submitted_semester_id),
+                    semester_updated_at=parse_datetime(submitted_stamp) or timezone.now(),
+                    entries=entries,
+                )
+                try:
+                    apply_song_role_requirements(buffer, viewing_semester=semester)
+                except WrongViewingSemesterError:
+                    messages.error(request, self.WRONG_SEMESTER_MESSAGE)
+                except StaleSongRoleRequirementsError:
+                    messages.error(request, self.STALE_MESSAGE)
+                else:
+                    messages.success(request, 'Requirements updated.')
+                    return redirect('scheduling:song-detail', pk=song.pk)
+        return self._render(
+            request, song, semester, formset, add_formset, requirements,
+            semester_id=submitted_semester_id, stamp=submitted_stamp, status=200,
+        )
+
+    def _build_entries(self, formset, add_formset):
+        """Turn the valid edit and add formsets into a list of SongRoleRequirementEntry, flagging any duplicate Role."""
+        entries = []
+        seen_role_ids = set()
+        duplicate = False
+        for row in formset.cleaned_data:
+            if row['remove']:
+                continue
+            role_id = row['role_id']
+            if role_id in seen_role_ids:
+                duplicate = True
+            seen_role_ids.add(role_id)
+            entries.append(SongRoleRequirementEntry(role_id=role_id, count=row['count']))
+        for row in add_formset.cleaned_data:
+            if not row or row.get('DELETE'):
+                continue
+            role = row['role']
+            if role.pk in seen_role_ids:
+                duplicate = True
+            seen_role_ids.add(role.pk)
+            entries.append(SongRoleRequirementEntry(role_id=role.pk, count=row['count']))
+        return entries, duplicate
+
+    def _song(self, pk, semester):
+        """Return the viewing Semester's Song with this id, or 404."""
+        return get_object_or_404(_scoped_to_viewing_semester(Song, semester), pk=pk)
+
+    def _requirements(self, song):
+        """Return `song`'s SongRoleRequirements, ordered by Role name."""
+        return list(SongRoleRequirement.objects.filter(song=song).select_related('role').order_by('role__name'))
+
+    def _render(self, request, song, semester, formset, add_formset, requirements, *, semester_id=None, stamp=None, status=200):
+        """Render the fragment for an htmx request, else the full page; both carry the same buffer."""
+        context = self._build_context(song, semester, formset, add_formset, requirements, semester_id, stamp)
+        template = self.fragment_template_name if _is_htmx(request) else self.page_template_name
+        return render(request, template, context, status=status)
+
+    def _build_context(self, song, semester, formset, add_formset, requirements, semester_id, stamp):
+        """Build the shared context for both the fragment and full-page renders.
+
+        Pairs each edit row with its Role by reading `role_id`'s raw
+        submitted value rather than `cleaned_data`, so this pairing
+        survives an otherwise-invalid formset — the same every-value-
+        preserved re-render `SetlistEditView` gives a rejected buffer.
+        """
+        requirements_by_role_id = {r.role_id: r for r in requirements}
+        rows = []
+        for form in formset:
+            role_id = _parse_roster_int(form['role_id'].value())
+            requirement = requirements_by_role_id.get(role_id)
+            rows.append({
+                'form': form,
+                'role': requirement.role if requirement else None,
+                'is_retired_role': requirement is not None and not requirement.role.is_active,
+            })
+        return {
+            'song': song,
+            'semester': semester,
+            'formset': formset,
+            'rows': rows,
+            'add_formset': add_formset,
+            'requirements_semester_id': semester_id if semester_id is not None else (semester.pk if semester else ''),
+            'requirements_semester_updated_at': (
+                stamp if stamp is not None else (semester.updated_at.isoformat() if semester else '')
+            ),
+        }
+
+
+class SongRequirementAddRoleView(AdminRequiredMixin, View):
+    """`/songs/<pk>/requirements/roles/add/`: the Song requirements editor's inline "Add Role" control (issue #209).
+
+    Calls `create_or_reactivate_role()` (issue #225) unchanged — the same
+    single Role-creation path the Roster editor's "Add Role" control uses
+    (`RosterAddRoleView`) — and commits immediately, outside the Buffer:
+    discarding the pending Requirement edits afterward must not un-invent
+    a Role the triggering row already selected. Rebuilds only the
+    triggering add-row's `role` field, from the same
+    `SongRequirementAddRowForm` the live add formset renders (excluding
+    the Song's other current Requirements from its choices, same as the
+    live render), so field names/ids stay identical after the swap and the
+    new Role is immediately selectable on the row that created it.
+    """
+
+    template_name = 'scheduling/_song_requirement_role_select.html'
+
+    def post(self, request, pk):
+        """Create/reactivate the named Role, select it on the triggering add-row, and re-render that row's Role field."""
+        form = SongRequirementAddRoleForm(request.POST)
+        if not form.is_valid():
+            return HttpResponseBadRequest()
+        semester = get_viewing_semester(request)
+        song = get_object_or_404(_scoped_to_viewing_semester(Song, semester), pk=pk)
+        prefix = form.cleaned_data['prefix']
+        result = create_or_reactivate_role(form.cleaned_data['role_name'])
+        excluded_role_ids = SongRoleRequirement.objects.filter(song=song).exclude(
+            role_id=result.role.pk,
+        ).values_list('role_id', flat=True)
+        row_form = SongRequirementAddRowForm(
+            prefix=prefix, initial={'role': result.role.pk}, excluded_role_ids=excluded_role_ids,
+        )
+        return render(request, self.template_name, {
+            'field': row_form['role'],
+            'message': self._message_for(result),
+        })
+
+    def _message_for(self, result):
+        """Return the admin-facing message naming how create_or_reactivate_role() resolved the Role."""
+        if result.created:
+            return f'Added "{result.role.name}".'
+        if result.reactivated:
+            return f'Reactivated "{result.role.name}".'
+        return f'Matched existing "{result.role.name}".'
 
 
 _CONFLICT_STATUS_TEXT = {

@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}Edit Requirements — {{ song.title }}{% endblock %}
+{% block content %}
+{% for message in messages %}
+  <p>{{ message }}</p>
+{% endfor %}
+<div id="requirements-surface">
+{% include "scheduling/_song_requirements_edit.html" %}
+</div>
+
+<script src="{% static 'scheduling/js/song_requirements_edit.js' %}" defer></script>
+{% endblock %}
