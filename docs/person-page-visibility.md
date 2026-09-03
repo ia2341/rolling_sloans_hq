@@ -5,7 +5,7 @@ The field-by-field verdicts governing the two member-facing roster routes:
 - **`/members/`** — the Band Members list (`MembersView`, issue #137)
 - **`/members/<int:pk>/`** — the single person page (issue #138), read-only for a teammate and editable in place for your own pk
 
-Both routes are member-facing surfaces for every logged-in Person, admins included. Admin status changes nothing about what these two pages render; the admin edit layer of issue #130 attaches to `/members/<pk>/` and is bound by the same verdicts.
+Both routes are member-facing surfaces for every logged-in Person, admins included. Admin status changes nothing about what these two pages render, apart from one exception each, split by cardinality: `/members/` gains an admin-only **Edit roster** mode across the whole Roster (issue #227), and `/members/<pk>/` keeps the always-inline `MembershipRolesForm` that lets *you* edit your own declared Roles regardless of admin status (issue #138). Both edit surfaces are bound by the same verdicts below.
 
 **How to read a verdict.** *Teammate* is any logged-in Person viewing someone else's row or page. *Self* is a Person viewing their own. **`never`** means never on **these two surfaces** — it is not a claim about the whole application. Several fields marked `never` here are legitimately rendered elsewhere: `Song.artist` on the Song page, `Conflict.reason` on `/schedule/` for its owner and in `ConflictAdmin` for an admin.
 
@@ -13,14 +13,19 @@ Both routes are member-facing surfaces for every logged-in Person, admins includ
 
 ## `/members/` — the list row
 
-| Field | Teammate | Self | Notes |
-| --- | --- | --- | --- |
-| `Person.name` | ✅ | ✅ | Links to `/members/<pk>/` |
-| `Person.pk` | ✅ | ✅ | As the link target only, never rendered as text |
-| `Semester.name` | ✅ | ✅ | Page heading, via the current Semester |
-| `MembershipRole.role` → `Role.name` | ✅ | ✅ | Comma-joined; `—` when none declared |
-| Count of distinct assigned Songs | ✅ | ✅ | `Membership.songs_count`, annotated by `roster_for` |
-| everything else | ❌ never | ❌ never | Notably `Person.email` and every admin-status field |
+**Admin (edit mode)** is the third verdict column added by issue #227's Roster editor: an admin-only mode on this same route, entered via "Edit roster", holding one Pending Buffer committed by `apply_roster_edits()` under a single Save Changes. It never changes the Teammate/Self verdicts for a non-admin viewer, or for an admin who hasn't pressed the button (read mode stays byte-identical).
+
+| Field | Teammate | Self | Admin (edit mode) | Notes |
+| --- | --- | --- | --- | --- |
+| `Person.name` | ✅ | ✅ | ✅ read + **write** | Read mode links to `/members/<pk>/`; edit mode renders it as a text field instead |
+| `Person.pk` | ✅ | ✅ | ✅ | As the link target (read mode) or the row's hidden identity (edit mode); never rendered as text |
+| `Semester.name` | ✅ | ✅ | ✅ | Page heading, via the session-selected viewing Semester (issue #167); the non-live banner renders whenever it's a draft |
+| `MembershipRole.role` → `Role.name` | ✅ | ✅ | ✅ read + **write** | Read mode comma-joins declared Roles (`—` when none); edit mode renders a checkbox group over **active** Roles only |
+| Count of distinct assigned Songs | ✅ | ✅ | ❌ never | `Membership.songs_count`, annotated by `roster_for`; not a candidate for editing, so edit mode omits it |
+| `SongRoleAssignment.is_role_mismatch` | ❌ never | ❌ never | ✅ quiet flag | The admin's queue marker (ADR 0002), surfaced only in edit mode as a per-row completeness flag — never a name, never a Song, never rendered to a Teammate or Self view |
+| Remove-from-Roster control | ❌ never | ❌ never | ✅, except the requesting admin's own row | Absent (with a short reason in its place) from the row belonging to the admin submitting the request — `apply_roster_edits()`'s `SelfRemovalError` backstops a hand-crafted POST |
+| `Conflict`, `ConflictWindow` (any field, `reason` above all) | ❌ never | ❌ never | ❌ never | ADR 0005's boundary is drawn around the surface, not the viewer — nothing about Roster editing needs Conflict data |
+| everything else | ❌ never | ❌ never | ❌ never | Notably `Person.email` and every admin-status field — cross-semester identity stays on the admin-only people-management page, since admin status is not semester-scoped |
 
 ## `/members/<int:pk>/` — the person page
 
@@ -55,7 +60,7 @@ Current `Semester` only, per ADR 0001 — there is no past-semester history on t
 | --- | --- | --- | --- |
 | `song` → `Song.title` | ✅ | ✅ | Links to the Song page |
 | `role` → `Role.name` | ✅ | ✅ | The Role filled on that Song — see "Role mismatch is inferable" below |
-| `is_role_mismatch` | ❌ never | ❌ never | ADR 0002 makes this an admin queue marker, not a fact about the Person. A teammate has no business being told someone is playing outside their declared Roles, and showing it to the Person invites them to self-resolve the adjudication ADR 0002 assigns to an admin. Issue #130 surfaces it |
+| `is_role_mismatch` | ❌ never | ❌ never | ADR 0002 makes this an admin queue marker, not a fact about the Person. A teammate has no business being told someone is playing outside their declared Roles, and showing it to the Person invites them to self-resolve the adjudication ADR 0002 assigns to an admin. Issue #227 surfaces it, on the Roster editor's per-row completeness flag on **`/members/`** — not on this page |
 | `Song.artist`, `length`, `notes`, `position` | ❌ never | ❌ never | Song detail belongs on the Song page |
 
 ### `Conflict` and `ConflictWindow`
