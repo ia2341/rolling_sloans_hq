@@ -186,9 +186,11 @@ class SongEditForm(forms.ModelForm):
 
 
 # The setlist edit grid's buffer: every existing Song on the viewing Semester, one `SongEditForm` row each,
-# with no add/delete row this ticket (reordering/adding/deleting Songs is the next ticket, issue #178).
+# plus whatever rows the grid's JS appends (cloned from `empty_form`) or strikes for deletion (issue #179).
+# `extra=0`: added rows arrive purely by the client bumping TOTAL_FORMS past INITIAL_FORMS, the same
+# mechanism Django's own admin inlines use for a dynamic "add another" row.
 SetlistEditFormSet = forms.modelformset_factory(
-    Song, form=SongEditForm, extra=0, can_delete=False,
+    Song, form=SongEditForm, extra=0, can_delete=True,
 )
 
 

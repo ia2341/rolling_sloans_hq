@@ -1,0 +1,14 @@
+<p>Deleting {{ summaries|length }} song{{ summaries|length|pluralize }} will also delete:</p>
+<ul>
+  {% for item in summaries %}
+    <li>
+      {% if item.recording_count %}
+        &ldquo;{{ item.song.title }}&rdquo; has {{ item.recording_count }} recording{{ item.recording_count|pluralize }}
+        from {{ item.uploader_count }} member{{ item.uploader_count|pluralize }}.
+        Deleting it deletes them permanently.
+      {% else %}
+        &ldquo;{{ item.song.title }}&rdquo; — no recordings.
+      {% endif %}
+    </li>
+  {% endfor %}
+</ul>
