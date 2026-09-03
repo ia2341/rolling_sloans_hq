@@ -24,7 +24,7 @@ def noop_reverse(apps, schema_editor):
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('scheduling', '0016_backup'),
+        ('scheduling', '0017_semester_updated_at'),
     ]
 
     operations = [
