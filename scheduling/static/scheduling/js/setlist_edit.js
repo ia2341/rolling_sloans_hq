@@ -93,6 +93,10 @@ document.addEventListener('alpine:init', () => {
         return;
       }
       const importedRows = wrapper.querySelector('#setlist-import-rows');
+      if (!importedRows) {
+        this.importError = 'Your session may have expired. Reload the page and log in again, then retry the import.';
+        return;
+      }
       const addedCount = Number(importedRows.dataset.addedCount || '0');
       Array.from(importedRows.children).forEach((row) => rows.appendChild(row));
       totalForms.value = String(nextIndex + addedCount);
