@@ -41,6 +41,15 @@
       {% endfor %}
     </tbody>
   </table>
+{% elif request.user.is_admin %}
+  <p>No songs yet — add the first one.</p>
+  <button
+    type="button"
+    id="add-first-song-button"
+    hx-get="{% url 'scheduling:setlist-edit' %}"
+    hx-target="#setlist-surface"
+    hx-swap="innerHTML"
+  >Add the first one</button>
 {% else %}
   <p>No songs on the setlist yet.</p>
 {% endif %}

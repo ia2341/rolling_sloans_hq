@@ -7,7 +7,7 @@ from django.test import TestCase
 
 from scheduling.factories import SemesterFactory, SongFactory
 from scheduling.fields import SongLengthField, format_song_length
-from scheduling.forms import SongForm
+from scheduling.forms import SongEditForm
 from scheduling.models import Song
 
 
@@ -162,20 +162,20 @@ class SongLengthFieldRejectionTests(TestCase):
             self.field.clean('0:00')
 
 
-class SongFormLengthTests(TestCase):
-    """The existing admin Song form uses the M:SS field, so today's admin surface gets this behaviour."""
+class SongEditFormLengthTests(TestCase):
+    """The setlist edit grid's row form uses the M:SS field, so the admin's editing surface gets this behaviour."""
 
     def setUp(self):
         """Build a Semester for the Songs these forms bind to."""
         self.semester = SemesterFactory()
 
     def test_form_uses_the_song_length_field(self):
-        """SongForm's `length` is the M:SS field, not Django's default DurationField."""
-        self.assertIsInstance(SongForm().fields['length'], SongLengthField)
+        """SongEditForm's `length` is the M:SS field, not Django's default DurationField."""
+        self.assertIsInstance(SongEditForm().fields['length'], SongLengthField)
 
     def test_m_ss_input_saves_minutes_and_seconds(self):
         """An admin typing `3:45` into the Song form stores three minutes forty-five seconds."""
-        form = SongForm(
+        form = SongEditForm(
             {'title': 'Some Song', 'artist': 'Some Artist', 'length': '3:45', 'notes': ''},
             instance=Song(semester=self.semester, position=1),
         )
@@ -186,7 +186,7 @@ class SongFormLengthTests(TestCase):
 
     def test_unparseable_input_is_a_length_field_error(self):
         """A bad length is a per-field error on `length`, leaving the rest of the submission intact."""
-        form = SongForm(
+        form = SongEditForm(
             {'title': 'Some Song', 'artist': 'Some Artist', 'length': 'about four minutes', 'notes': ''},
             instance=Song(semester=self.semester, position=1),
         )
@@ -197,4 +197,4 @@ class SongFormLengthTests(TestCase):
     def test_existing_length_renders_back_as_m_ss(self):
         """Editing a saved Song shows its length as M:SS, so an admin sees what they typed."""
         song = SongFactory(semester=self.semester, length=timedelta(minutes=12, seconds=5))
-        self.assertIn('value="12:05"', SongForm(instance=song).as_p())
+        self.assertIn('value="12:05"', SongEditForm(instance=song).as_p())

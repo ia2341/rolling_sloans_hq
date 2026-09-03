@@ -13,4 +13,7 @@
     Not needed
   {% endif %}
   {% include "scheduling/_availability.html" with availability=row.availability %}
+  {% if request.user.is_admin %}
+    <a href="{% url 'scheduling:manage-conflicts-detail' row.rehearsal.pk %}">Manage conflicts for this rehearsal</a>
+  {% endif %}
 </li>
