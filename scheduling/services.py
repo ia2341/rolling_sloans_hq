@@ -1173,7 +1173,13 @@ def apply_roster_edits(buffer: RosterEditBuffer, *, viewing_semester: Semester, 
 
 
 def _purge_person_from_semester(person_id: int, semester: Semester) -> None:
-    """Delete `person_id`'s Membership, declared Roles, Role Assignments and Conflicts scoped to `semester`."""
+    """Delete `person_id`'s Role Assignments and Conflicts scoped to `semester`, then their Membership.
+
+    The Membership delete cascades onto its MembershipRoles (FK
+    `on_delete=CASCADE`), the same mechanism `delete_semester()` relies on
+    — declared Roles have no existence independent of their Membership, so
+    there is nothing here that needs deleting explicitly.
+    """
     SongRoleAssignment.objects.filter(person_id=person_id, song__semester=semester).delete()
     Conflict.objects.filter(person_id=person_id, rehearsal__semester=semester).delete()
     Membership.objects.filter(person_id=person_id, semester=semester).delete()
