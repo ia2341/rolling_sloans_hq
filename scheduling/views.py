@@ -55,6 +55,7 @@ from scheduling.services import (
     CONFLICT_LATE_ARRIVAL,
     AdjudicationBuffer,
     AdjudicationEntry,
+    AssignmentEditBuffer,
     InvalidSemesterNameError,
     LiveSemesterDeletionError,
     RecordingUploadError,
@@ -62,13 +63,16 @@ from scheduling.services import (
     RosterEditEntry,
     SelfRemovalError,
     StaleAdjudicationSemesterError,
+    StaleAssignmentSemesterError,
     StaleRosterSemesterError,
     UnknownConflictError,
     WrongAdjudicationSemesterError,
     WrongViewingSemesterError,
     apply_adjudications,
     apply_roster_edits,
+    apply_song_role_assignments,
     assigned_songs_for,
+    assignment_grid_is_editable,
     assignment_matrix_for,
     attendance_suggestion_for,
     breaks_for,
@@ -285,6 +289,7 @@ def _build_schedule_context(request, semester, view_mode, rehearsal, error_rehea
         'view_mode': view_mode,
         'rehearsal': None,
         'matrix': None,
+        'can_edit_assignments': False,
         'my_song_ids': set(),
         'my_attendance_suggestion': None,
         'my_breaks': [],
@@ -316,6 +321,7 @@ def _build_schedule_context(request, semester, view_mode, rehearsal, error_rehea
         return context
     matrix = assignment_matrix_for(rehearsal)
     context['matrix'] = matrix
+    context['can_edit_assignments'] = request.user.is_admin and assignment_grid_is_editable(rehearsal)
     context['my_song_ids'] = set(
         SongRoleAssignment.objects.filter(
             person=request.user, song__in=[row.song for row in matrix.rows],
@@ -1419,6 +1425,67 @@ class ConflictDeleteView(BaseView, View):
         Conflict.objects.filter(person=request.user, rehearsal=rehearsal).delete()
         messages.success(request, 'Conflict removed.')
         return _schedule_redirect(request, rehearsal)
+
+
+def _editable_assignment_rehearsal_or_404(request, rehearsal_id):
+    """Return the viewing Semester's Rehearsal that `rehearsal_id` names and whose assignment grid offers edit mode, or 404.
+
+    `assignment_grid_is_editable()` is the single definition of
+    "editable" here too (issue #210) — a hand-crafted POST naming a
+    past-dated Rehearsal 404s rather than silently applying a removal the
+    grid never offered a control for.
+    """
+    rehearsal = get_object_or_404(
+        _scoped_to_viewing_semester(Rehearsal, get_viewing_semester(request)), pk=rehearsal_id,
+    )
+    if not assignment_grid_is_editable(rehearsal):
+        raise Http404('This Rehearsal is not editable.')
+    return rehearsal
+
+
+class AssignmentEditSaveView(AdminRequiredMixin, View):
+    """`/schedule/<rehearsal_id>/assignments/save/`: applies a buffer of ✕'d SongRoleAssignment removals (issue #210, ADR-0009).
+
+    Removal-only for this slice: adding a person is the picker, landing in
+    a later ticket. The buffer is entirely client-side (Alpine) up to this
+    point — clicking an ✕ never round-trips — so this view is reached only
+    by the one "Save Changes" submission, carrying every removed chip's
+    assignment id plus the hidden Semester id/stamp the grid was rendered
+    against.
+    """
+
+    def post(self, request, rehearsal_id):
+        """Apply the submitted removals through `apply_song_role_assignments()`, or report why the save was rejected."""
+        rehearsal = _editable_assignment_rehearsal_or_404(request, rehearsal_id)
+        semester = get_viewing_semester(request)
+        buffer = self._build_buffer(request)
+        try:
+            apply_song_role_assignments(buffer, viewing_semester=semester)
+        except (WrongViewingSemesterError, StaleAssignmentSemesterError) as error:
+            messages.error(request, str(error))
+        else:
+            messages.success(request, 'Assignments updated.')
+        return _schedule_redirect(request, rehearsal)
+
+    def _build_buffer(self, request):
+        """Turn the POST body's hidden Semester stamp and removed-id list into an AssignmentEditBuffer."""
+        removed_ids = frozenset(_parse_assignment_ids(request.POST.getlist('removed_assignment_id')))
+        return AssignmentEditBuffer(
+            semester_id=_parse_roster_int(request.POST.get('assignment_semester_id', '')),
+            semester_updated_at=parse_datetime(request.POST.get('assignment_semester_updated_at', '')) or timezone.now(),
+            removed_assignment_ids=removed_ids,
+        )
+
+
+def _parse_assignment_ids(raw_values):
+    """Return the subset of `raw_values` that parse as ints, silently dropping anything malformed."""
+    parsed = []
+    for raw_value in raw_values:
+        try:
+            parsed.append(int(raw_value))
+        except ValueError:
+            continue
+    return parsed
 
 
 class RehearsalManageView(AdminRequiredMixin, View):

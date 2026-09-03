@@ -875,6 +875,83 @@ def _matrix_entries_by_song_role(songs, roles):
     return result
 
 
+def assignment_grid_is_editable(rehearsal) -> bool:
+    """Return whether an admin gets an "Edit assignments" control on `rehearsal`'s assignment grid (issue #210).
+
+    A usability rule, not a data-integrity one (ADR-0009): every
+    SongRoleAssignment row reachable through a past-dated Rehearsal's grid
+    is exactly as writable in the database as any other, and removing one
+    still reaches every Rehearsal and the concert semester-wide regardless
+    of which grid the admin removed it from. The rule exists only because a
+    grid captioned with a stale date is a misleading place to change a live
+    concert lineup — unlike the rehearsal editor's own past-date lock,
+    which *is* about integrity. A same-day Rehearsal stays editable all day
+    (whole days, not instants, so a last-minute reassignment during
+    tonight's rehearsal is possible). The Dress Rehearsal is always
+    editable: its rows are the live setlist (ADR-0003) and it is the
+    Semester's last-dated Rehearsal, so it is the backstop that keeps a
+    late Semester editable once every other Rehearsal has passed.
+    """
+    return rehearsal.is_full_setlist or rehearsal.date >= timezone.localdate()
+
+
+class StaleAssignmentSemesterError(ValueError):
+    """Raised when an assignment edit Buffer's Semester changed since the Buffer was loaded (issue #210)."""
+
+
+@dataclass(frozen=True)
+class AssignmentEditBuffer:
+    """The Pending Buffer `apply_song_role_assignments()` commits in one transaction (issue #210).
+
+    Removal-only for this slice (ADR-0009): `removed_assignment_ids` names
+    every SongRoleAssignment row to delete, wherever on the grid its chip's
+    ✕ was clicked. `semester_id` and `semester_updated_at` back the same
+    two staleness checks `RosterEditBuffer` uses — `semester_id` against
+    the caller's session-scoped viewing Semester, `semester_updated_at`
+    against the Semester row's current stamp.
+    """
+
+    semester_id: int
+    semester_updated_at: datetime
+    removed_assignment_ids: frozenset[int]
+
+
+def apply_song_role_assignments(buffer: AssignmentEditBuffer, *, viewing_semester: Semester) -> None:
+    """Apply a Buffer of SongRoleAssignment removals in one transaction (issue #210, ADR-0009).
+
+    Removal is semester-wide: SongRoleAssignment is (song, role, person)
+    with no rehearsal FK, so deleting a row here removes that Person from
+    that Song at every Rehearsal and at the concert, not only the Rehearsal
+    whose grid the admin was viewing. Takes no Semester row lock — nothing
+    here renumbers Song positions or RehearsalSong order, so there is no
+    ordering constraint to serialize against. Registers no
+    `transaction.on_commit()` call — nothing here reaches outside the
+    Semester (no mail, no object storage).
+
+    Raises `WrongViewingSemesterError` if `buffer.semester_id` doesn't
+    match `viewing_semester`, checked before any transaction opens. Raises
+    `StaleAssignmentSemesterError` inside the transaction if the Semester's
+    `updated_at` no longer matches `buffer.semester_updated_at`, rolling
+    back whatever this call had already applied.
+    """
+    if viewing_semester is None or buffer.semester_id != viewing_semester.pk:
+        raise WrongViewingSemesterError(
+            "This assignment edit Buffer's Semester doesn't match the Semester you're currently viewing."
+        )
+
+    with transaction.atomic():
+        semester = Semester.objects.get(pk=buffer.semester_id)
+        if semester.updated_at != buffer.semester_updated_at:
+            raise StaleAssignmentSemesterError('The assignments changed while you were editing — reload and reapply.')
+
+        SongRoleAssignment.objects.filter(
+            pk__in=buffer.removed_assignment_ids, song__semester=semester,
+        ).delete()
+
+        semester.updated_at = timezone.now()
+        semester.save(update_fields=['updated_at'])
+
+
 def upcoming_rehearsals_for(semester, count=3):
     """Return `semester`'s next `count` upcoming Rehearsals, band-wide, in date order."""
     return list(_upcoming_rehearsals(semester)[:count])
@@ -1490,7 +1567,12 @@ def landing_rehearsal_for(person, semester):
 
 
 class WrongViewingSemesterError(ValueError):
-    """Raised when a Roster edit Buffer's Semester id doesn't match the session-scoped viewing Semester (issue #226)."""
+    """Raised when a Pending Buffer's Semester id doesn't match the session-scoped viewing Semester.
+
+    Shared across every ADR-0008 apply function that carries this
+    staleness check: `apply_roster_edits()` (issue #226) and
+    `apply_song_role_assignments()` (issue #210).
+    """
 
 
 class StaleRosterSemesterError(ValueError):

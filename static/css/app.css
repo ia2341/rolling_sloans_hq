@@ -29,6 +29,13 @@
   --rs-danger-color: var(--pico-del-color);
   --rs-warning-border-color: var(--pico-del-color);
 
+  /* Assignment-grid chip (issue #210) */
+  --rs-chip-bg: var(--pico-secondary-background);
+  --rs-chip-border-color: var(--rs-border-color);
+  --rs-chip-radius: 999px;
+  --rs-chip-padding-inline: var(--rs-space-sm);
+  --rs-chip-gap: var(--rs-space-xs);
+
   /* Pico theming hooks. */
   --pico-font-size: 100%;
 }
@@ -312,4 +319,28 @@ body > nav [aria-current='page'] {
     display: block;
     font-weight: bold;
   }
+}
+
+/* Assignment-edit-mode chips (issue #210): a cell's entries render as
+   small pills once the grid is edit-capable, each carrying an inline
+   remove control. */
+.assignment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--rs-chip-gap);
+  padding-inline: var(--rs-chip-padding-inline);
+  margin-inline-end: var(--rs-space-xs);
+  margin-block-end: var(--rs-space-xs);
+  border: 1px solid var(--rs-chip-border-color);
+  border-radius: var(--rs-chip-radius);
+  background: var(--rs-chip-bg);
+}
+
+.assignment-chip-remove {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--rs-danger-color);
+  cursor: pointer;
+  line-height: 1;
 }
