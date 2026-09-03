@@ -78,14 +78,14 @@ class RosterStepAuthTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class RosterStepGetTests(TestCase):
-    def test_no_prior_semester_redirects_straight_to_finish(self):
+    def test_no_prior_semester_redirects_straight_to_the_setlist_step(self):
         """With no prior Semester, the step is skipped entirely rather than rendered empty."""
         semester = SemesterFactory(draft=True)
         admin_client(self)
 
         response = self.client.get(roster_url(semester))
 
-        self.assertRedirects(response, reverse('scheduling:manage-semester-setup-finish', args=[semester.pk]))
+        self.assertRedirects(response, reverse('scheduling:manage-semester-setup-setlist', args=[semester.pk]))
 
     def test_renders_the_prior_semesters_roster_ticked_by_default(self):
         """Each of the prior Semester's People renders, pre-ticked, with their declared Roles shown read-only."""
@@ -132,7 +132,7 @@ class RosterStepPostTests(TestCase):
 
         response = self.client.post(roster_url(semester), {'person_id': [prior_membership.person.pk]})
 
-        self.assertRedirects(response, reverse('scheduling:manage-semester-setup-finish', args=[semester.pk]))
+        self.assertRedirects(response, reverse('scheduling:manage-semester-setup-setlist', args=[semester.pk]))
         new_membership = Membership.objects.get(semester=semester, person=prior_membership.person)
         new_roles = list(MembershipRole.objects.filter(membership=new_membership).values_list('role', flat=True))
         self.assertEqual(new_roles, [role.pk])
@@ -168,7 +168,7 @@ class RosterStepPostTests(TestCase):
         self.assertTrue(Membership.objects.filter(semester=semester, person=included.person).exists())
         self.assertFalse(Membership.objects.filter(semester=semester, person=excluded.person).exists())
 
-    def test_empty_submission_imports_nobody_and_still_finishes(self):
+    def test_empty_submission_imports_nobody_and_still_moves_on(self):
         """Unticking everyone (select-none) is a valid submission that imports no one."""
         prior = SemesterFactory()
         semester = SemesterFactory(draft=True)
@@ -177,27 +177,27 @@ class RosterStepPostTests(TestCase):
 
         response = self.client.post(roster_url(semester), {})
 
-        self.assertRedirects(response, reverse('scheduling:manage-semester-setup-finish', args=[semester.pk]))
+        self.assertRedirects(response, reverse('scheduling:manage-semester-setup-setlist', args=[semester.pk]))
         self.assertFalse(Membership.objects.filter(semester=semester).exists())
 
-    def test_no_prior_semester_post_redirects_straight_to_finish_and_creates_nothing(self):
-        """Posting to the step with no prior Semester also just redirects to finish, creating nothing."""
+    def test_no_prior_semester_post_redirects_straight_to_the_setlist_step_and_creates_nothing(self):
+        """Posting to the step with no prior Semester also just redirects onward, creating nothing."""
         semester = SemesterFactory(draft=True)
         admin_client(self)
 
         response = self.client.post(roster_url(semester), {'person_id': ['999999']})
 
-        self.assertRedirects(response, reverse('scheduling:manage-semester-setup-finish', args=[semester.pk]))
+        self.assertRedirects(response, reverse('scheduling:manage-semester-setup-setlist', args=[semester.pk]))
         self.assertFalse(Membership.objects.filter(semester=semester).exists())
 
     def test_skipping_the_step_leaves_a_valid_draft(self):
-        """The Skip link is a plain GET to finish, and the draft Semester still exists afterwards."""
+        """The Skip link is a plain GET to the setlist step, and the draft Semester still exists afterwards."""
         prior = SemesterFactory()
         semester = SemesterFactory(draft=True)
         MembershipFactory(semester=prior)
         admin_client(self)
 
-        response = self.client.get(reverse('scheduling:manage-semester-setup-finish', args=[semester.pk]))
+        response = self.client.get(reverse('scheduling:manage-semester-setup-setlist', args=[semester.pk]))
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(Semester.objects.filter(pk=semester.pk, published_at=None).exists())

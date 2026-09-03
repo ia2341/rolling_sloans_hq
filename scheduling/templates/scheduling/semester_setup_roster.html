@@ -37,7 +37,7 @@
   </table>
   <button type="submit">Import roster</button>
 </form>
-<a href="{% url 'scheduling:manage-semester-setup-finish' pk=semester.pk %}">Skip this step</a>
+<a href="{% url 'scheduling:manage-semester-setup-setlist' pk=semester.pk %}">Skip this step</a>
 
 <script src="{% static 'scheduling/js/roster_import_step.js' %}" defer></script>
 {% endblock %}

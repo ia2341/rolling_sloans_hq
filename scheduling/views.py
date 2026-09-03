@@ -1776,10 +1776,11 @@ class SemesterSetupView(AdminRequiredMixin, View):
     draft immediately via `create_semester()`, switches this admin's
     session selection to it, and redirects into step 3 (the roster
     import). Nothing here is held hostage to finishing the rest of the
-    wizard — steps 3-5 (roster, setlist, rehearsal dates) are separate,
-    independently skippable steps, and `SemesterSetupRosterView` itself
-    bounces straight to finish when there's no prior Semester to import
-    from, so this view never needs to check that itself.
+    wizard — steps 3-4 (roster, setlist) are separate, independently
+    skippable steps, and `SemesterSetupRosterView` itself bounces
+    straight to step 4 (or, with nothing to import, straight past both
+    to finish) when there's no prior Semester to import from, so this
+    view never needs to check that itself.
 
     Reached two ways with the same form and the same code path: a direct
     GET renders the full page (the no-JS fallback, and the bookmarkable
@@ -1814,7 +1815,7 @@ class SemesterSetupView(AdminRequiredMixin, View):
         return self._render(request, form)
 
     def post(self, request):
-        """Validate and create the draft Semester, switch the session's viewing Semester, and redirect to finish."""
+        """Validate and create the draft Semester, switch the session's viewing Semester, and redirect to step 3."""
         form = SemesterSetupForm(request.POST)
         if form.is_valid():
             try:
@@ -1848,17 +1849,19 @@ class SemesterSetupRosterView(AdminRequiredMixin, View):
     step 1's POST, or this view's own GET/POST when there's nothing to
     import), so unlike `SemesterSetupView` it needs no modal-fragment
     variant: a direct hit and the Home panel's post-redirect navigation
-    both land on the plain full page.
+    both land on the plain full page. Both its exits move on to step 4
+    (the setlist import, issue #202), never straight to finish, except
+    when there is no prior Semester to import from at all.
     """
 
     template_name = 'scheduling/semester_setup_roster.html'
 
     def get(self, request, pk):
-        """Render the prior Semester's roster as a checkbox list ticked by default, or skip straight to finish."""
+        """Render the prior Semester's roster as a checkbox list ticked by default, or skip straight to step 4."""
         semester = get_object_or_404(Semester, pk=pk)
         proposal = import_roster_from_semester(semester)
         if proposal.source_semester is None:
-            return redirect('scheduling:manage-semester-setup-finish', pk=semester.pk)
+            return redirect('scheduling:manage-semester-setup-setlist', pk=semester.pk)
         return self._render(request, semester, proposal)
 
     def post(self, request, pk):
@@ -1866,7 +1869,7 @@ class SemesterSetupRosterView(AdminRequiredMixin, View):
         semester = get_object_or_404(Semester, pk=pk)
         proposal = import_roster_from_semester(semester)
         if proposal.source_semester is None:
-            return redirect('scheduling:manage-semester-setup-finish', pk=semester.pk)
+            return redirect('scheduling:manage-semester-setup-setlist', pk=semester.pk)
         checked_ids = {_parse_roster_int(value) for value in request.POST.getlist('person_id')}
         entries = [
             RosterEditEntry(
@@ -1885,7 +1888,7 @@ class SemesterSetupRosterView(AdminRequiredMixin, View):
             messages.error(request, str(error))
             return self._render(request, semester, proposal, checked_ids=checked_ids)
         messages.success(request, f'Imported {len(entries)} member(s) from {proposal.source_semester.name}.')
-        return redirect('scheduling:manage-semester-setup-finish', pk=semester.pk)
+        return redirect('scheduling:manage-semester-setup-setlist', pk=semester.pk)
 
     def _render(self, request, semester, proposal, checked_ids=None):
         """Render the checkbox list, ticked by default unless `checked_ids` carries a rejected submission's ticks."""
@@ -1897,6 +1900,43 @@ class SemesterSetupRosterView(AdminRequiredMixin, View):
         ]
         return render(request, self.template_name, {
             'semester': semester, 'source_semester': proposal.source_semester, 'rows': rows,
+        })
+
+
+class SemesterSetupSetlistView(AdminRequiredMixin, View):
+    """`/manage/semesters/setup/<pk>/setlist/`: Semester setup step 4, importing the setlist (issue #202).
+
+    No import or commit logic of its own — it wraps the same editable
+    setlist grid and Spotify-import controls the Setlist tab's
+    `SetlistEditView`/`SetlistImportView` already provide (issues #178,
+    #179, #184): the paste-a-link box, the unsaved preview rows a
+    playlist fills in before anything is written, and the Save button,
+    all posting to their existing endpoints unchanged. Reusing the
+    fragment verbatim is what keeps "read through #183, write through
+    the existing setlist save path" true with no second implementation
+    and no new preview/apply pair (issue #198 §8).
+
+    Saving lands the admin on the Setlist tab, same as it would from
+    there directly. A Skip link moves straight to the finish screen
+    without writing anything — this step, like every step after 1-2,
+    must never trap the admin: a bad or abandoned import is finished
+    later from the Setlist tab, not from here.
+    """
+
+    template_name = 'scheduling/semester_setup_setlist.html'
+
+    def get(self, request, pk):
+        """Render the wizard's setlist step: the Setlist tab's own edit grid, plus a Skip link to finish."""
+        semester = get_object_or_404(Semester, pk=pk)
+        if get_viewing_semester(request) != semester:
+            set_viewing_semester(request, semester)
+        songs = Song.objects.filter(semester=semester).order_by('position')
+        formset_class = SetlistEditFormSet if songs.exists() else SetlistEditEmptyFormSet
+        formset = formset_class(queryset=songs, prefix='song')
+        return render(request, self.template_name, {
+            'semester': semester,
+            'formset': formset,
+            'stamp': semester.updated_at.isoformat(),
         })
 
 
