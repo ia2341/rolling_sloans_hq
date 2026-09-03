@@ -169,7 +169,14 @@ class RehearsalSongFactory(factory.django.DjangoModelFactory):
 
 
 class ConflictFactory(factory.django.DjangoModelFactory):
-    """Builds a Person's declared unavailability for a Rehearsal, with a fresh Person/Rehearsal by default."""
+    """Builds a Person's declared unavailability for a Rehearsal, with a fresh Person/Rehearsal by default.
+
+    Defaults to an unadjudicated declaration — pending, with no note —
+    which is what a member's own declaration produces. Pass `status` and
+    `adjudication_note` to build an already-decided Conflict; synthesize
+    the note through Faker rather than writing a realistic-looking one,
+    per the repo's privacy constraint.
+    """
 
     class Meta:
         model = Conflict
@@ -177,6 +184,8 @@ class ConflictFactory(factory.django.DjangoModelFactory):
     person = factory.SubFactory(PersonFactory)
     rehearsal = factory.SubFactory(RehearsalFactory)
     type = Conflict.FULL_CONFLICT
+    status = Conflict.PENDING
+    adjudication_note = ''
 
 
 class ConflictWindowFactory(factory.django.DjangoModelFactory):
