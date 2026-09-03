@@ -4,7 +4,7 @@ import json
 
 from django.contrib import messages
 from django.db import IntegrityError, models, transaction
-from django.http import Http404, JsonResponse
+from django.http import Http404, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.utils.http import url_has_allowed_host_and_scheme
@@ -33,6 +33,7 @@ from scheduling.models import (
 from scheduling.services import (
     CONFLICT_EARLY_DEPARTURE,
     CONFLICT_LATE_ARRIVAL,
+    LiveSemesterDeletionError,
     RecordingUploadError,
     assigned_songs_for,
     assignment_matrix_for,
@@ -43,6 +44,7 @@ from scheduling.services import (
     create_recording_playback_url,
     declare_conflict,
     declared_roles_for,
+    delete_semester,
     future_rehearsals_for,
     get_live_semester,
     get_viewing_semester,
@@ -55,6 +57,7 @@ from scheduling.services import (
     rehearsal_schedule_for,
     reserve_recording_upload,
     roster_for,
+    semester_deletion_summary,
     semester_options_for,
     set_viewing_semester,
     song_rehearsal_progress,
@@ -1000,4 +1003,36 @@ class SemesterPublishView(AdminRequiredMixin, View):
         semester = get_object_or_404(Semester, pk=pk)
         publish_semester(semester)
         messages.success(request, f'{semester} published.')
+        return redirect('scheduling:manage-semesters')
+
+
+class SemesterDeleteView(AdminRequiredMixin, View):
+    """`/manage/semesters/<pk>/delete/`: an admin confirms and hard-deletes a non-Live Semester (issue #171).
+
+    GET renders one confirmation naming the counts of everything the delete
+    would destroy (no export/keep branch, per the spec); POST performs it.
+    The Live Semester is refused by `delete_semester()` itself, not just
+    here, so a POST that races a publish still 400s instead of deleting.
+    """
+
+    template_name = 'scheduling/manage_semesters_delete.html'
+
+    def get(self, request, pk):
+        """Render the confirmation naming the Semester's member/song/rehearsal/recording counts."""
+        semester = get_object_or_404(Semester, pk=pk)
+        if semester == get_live_semester():
+            raise Http404('The Live Semester cannot be deleted.')
+        return render(request, self.template_name, {
+            'semester': semester,
+            'summary': semester_deletion_summary(semester),
+        })
+
+    def post(self, request, pk):
+        """Delete the target Semester, or reject the Live Semester with a 400, and redirect with a message."""
+        semester = get_object_or_404(Semester, pk=pk)
+        try:
+            delete_semester(semester)
+        except LiveSemesterDeletionError as error:
+            return HttpResponseBadRequest(str(error))
+        messages.success(request, f'{semester} deleted.')
         return redirect('scheduling:manage-semesters')

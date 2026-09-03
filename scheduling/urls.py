@@ -20,6 +20,7 @@ urlpatterns = [
     path('manage/semester/', views.SemesterSelectView.as_view(), name='manage-semester-select'),
     path('manage/semesters/', views.SemesterManageView.as_view(), name='manage-semesters'),
     path('manage/semesters/<int:pk>/publish/', views.SemesterPublishView.as_view(), name='manage-semesters-publish'),
+    path('manage/semesters/<int:pk>/delete/', views.SemesterDeleteView.as_view(), name='manage-semesters-delete'),
     path('manage/schedule/', views.RehearsalManageView.as_view(), name='manage-schedule'),
     path('manage/schedule/<int:pk>/edit/', views.RehearsalEditView.as_view(), name='manage-schedule-edit'),
     path('manage/setlist/', views.SongManageView.as_view(), name='manage-setlist'),
