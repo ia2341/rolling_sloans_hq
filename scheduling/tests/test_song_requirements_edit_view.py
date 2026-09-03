@@ -406,6 +406,63 @@ class SongRequirementsEditSaveTests(TestCase):
         self.assertEqual(live_requirement.count, 1)
 
 
+@override_settings(SECURE_SSL_REDIRECT=False)
+class SongRequirementsEditTamperedPostTests(TestCase):
+    """A hand-crafted POST to the edit formset can't smuggle in rows the rendered page never offered."""
+
+    def test_an_unknown_role_id_in_an_edit_row_is_ignored(self):
+        """An edit-row `role_id` naming no current Requirement is dropped, not passed through as a create."""
+        semester = SemesterFactory()
+        song = SongFactory(semester=semester)
+        requirement = SongRoleRequirementFactory(song=song, count=1)
+        other_role = RoleFactory()
+        admin_client(self)
+        data = post_data(song, [requirement], edits={requirement.pk: {'count': 2}})
+        data['req-0-role_id'] = str(other_role.pk)
+
+        response = self.client.post(reverse('scheduling:song-requirements-edit', args=[song.pk]), data)
+
+        self.assertRedirects(response, reverse('scheduling:song-detail', args=[song.pk]))
+        self.assertFalse(SongRoleRequirement.objects.filter(song=song, role=other_role).exists())
+
+    def test_a_total_forms_count_past_initial_forms_does_not_crash(self):
+        """Raising `req-TOTAL_FORMS` above `req-INITIAL_FORMS` adds a blank extra form Django skips, not a 500."""
+        semester = SemesterFactory()
+        song = SongFactory(semester=semester)
+        requirement = SongRoleRequirementFactory(song=song, count=1)
+        admin_client(self)
+        data = post_data(song, [requirement], edits={requirement.pk: {'count': 2}})
+        data['req-TOTAL_FORMS'] = str(int(data['req-TOTAL_FORMS']) + 1)
+
+        response = self.client.post(reverse('scheduling:song-requirements-edit', args=[song.pk]), data)
+
+        self.assertRedirects(response, reverse('scheduling:song-detail', args=[song.pk]))
+        requirement.refresh_from_db()
+        self.assertEqual(requirement.count, 2)
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class SongRequirementAddRoleExclusionTests(TestCase):
+    """The inline "Add Role" control can't hand back a Role the Song already requires (issue #266 review)."""
+
+    def test_a_name_matching_an_already_required_role_is_not_offered(self):
+        """Typing a name that resolves to an already-required Role reports it instead of pre-selecting it."""
+        semester = SemesterFactory()
+        song = SongFactory(semester=semester)
+        role = RoleFactory(name='Bass')
+        SongRoleRequirementFactory(song=song, role=role, count=1)
+        admin_client(self)
+
+        response = self.client.post(
+            reverse('scheduling:song-requirements-add-role', args=[song.pk]),
+            {'prefix': 'add-0', 'role_name': 'Bass'},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'already has a Requirement')
+        self.assertNotContains(response, f'value="{role.pk}" selected')
+
+
 class NoPreviewEndpointTests(TestCase):
     """This surface ships no `preview_` sibling, deliberately (see `apply_song_role_requirements()`'s docstring).
 

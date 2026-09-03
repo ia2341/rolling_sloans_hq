@@ -1300,7 +1300,7 @@ class SongRequirementsEditView(AdminRequiredMixin, View):
             request.POST, prefix='add', form_kwargs={'excluded_role_ids': [r.role_id for r in requirements]},
         )
         if formset.is_valid() and add_formset.is_valid():
-            entries, duplicate = self._build_entries(formset, add_formset)
+            entries, duplicate = self._build_entries(formset, add_formset, requirements)
             if duplicate:
                 messages.error(request, self.DUPLICATE_MESSAGE)
             else:
@@ -1324,15 +1324,29 @@ class SongRequirementsEditView(AdminRequiredMixin, View):
             semester_id=submitted_semester_id, stamp=submitted_stamp, status=200,
         )
 
-    def _build_entries(self, formset, add_formset):
-        """Turn the valid edit and add formsets into a list of SongRoleRequirementEntry, flagging any duplicate Role."""
+    def _build_entries(self, formset, add_formset, requirements):
+        """Turn the valid edit and add formsets into a list of SongRoleRequirementEntry, flagging any duplicate Role.
+
+        A hand-crafted POST can raise `req-TOTAL_FORMS` past
+        `req-INITIAL_FORMS` (this formset's `extra=0` means the page never
+        submits more forms than it rendered) or carry a `role_id` this Song
+        has no current Requirement for. Django marks any such extra form
+        `empty_permitted`, so its `cleaned_data` is `{}`; skip it rather
+        than KeyError on `row['remove']`. A `role_id` outside
+        `requirements`' own ids is skipped too, so this can never hand
+        `apply_song_role_requirements()` a role the create branch would
+        otherwise insert as a fresh row.
+        """
+        known_role_ids = {r.role_id for r in requirements}
         entries = []
         seen_role_ids = set()
         duplicate = False
         for row in formset.cleaned_data:
-            if row['remove']:
+            if not row or row['remove']:
                 continue
             role_id = row['role_id']
+            if role_id not in known_role_ids:
+                continue
             if role_id in seen_role_ids:
                 duplicate = True
             seen_role_ids.add(role_id)
@@ -1418,19 +1432,25 @@ class SongRequirementAddRoleView(AdminRequiredMixin, View):
         song = get_object_or_404(_scoped_to_viewing_semester(Song, semester), pk=pk)
         prefix = form.cleaned_data['prefix']
         result = create_or_reactivate_role(form.cleaned_data['role_name'])
-        excluded_role_ids = SongRoleRequirement.objects.filter(song=song).exclude(
-            role_id=result.role.pk,
-        ).values_list('role_id', flat=True)
+        excluded_role_ids = list(SongRoleRequirement.objects.filter(song=song).values_list('role_id', flat=True))
+        # An entered name can resolve to a Role the Song already has a Requirement for. Keeping it in
+        # the exclusion set (rather than special-casing it out, as if it were this row's own pending
+        # value) stops the rebuilt select from ever offering a Role Save Changes would reject anyway.
+        already_required = result.role.pk in excluded_role_ids
         row_form = SongRequirementAddRowForm(
-            prefix=prefix, initial={'role': result.role.pk}, excluded_role_ids=excluded_role_ids,
+            prefix=prefix,
+            initial={} if already_required else {'role': result.role.pk},
+            excluded_role_ids=excluded_role_ids,
         )
         return render(request, self.template_name, {
             'field': row_form['role'],
-            'message': self._message_for(result),
+            'message': self._message_for(result, already_required=already_required),
         })
 
-    def _message_for(self, result):
+    def _message_for(self, result, *, already_required=False):
         """Return the admin-facing message naming how create_or_reactivate_role() resolved the Role."""
+        if already_required:
+            return f'"{result.role.name}" already has a Requirement for this Song.'
         if result.created:
             return f'Added "{result.role.name}".'
         if result.reactivated:

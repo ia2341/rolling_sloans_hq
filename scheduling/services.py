@@ -1937,10 +1937,14 @@ def apply_song_role_requirements(buffer: SongRoleRequirementBuffer, *, viewing_s
     Raises `WrongViewingSemesterError` if `buffer.semester_id` doesn't
     match `viewing_semester`, checked before any transaction opens, so two
     open tabs can't write pending edits built against one term into
-    another. Raises `StaleSongRoleRequirementsError` inside the transaction
-    if the Semester's `updated_at` no longer matches
-    `buffer.semester_updated_at`, rolling back whatever this call had
-    already applied.
+    another. Raises `StaleSongRoleRequirementsError` if the Semester's
+    `updated_at` no longer matches `buffer.semester_updated_at`, checked
+    via a conditional `UPDATE ... WHERE updated_at = <buffer's stamp>` —
+    not a row lock, a single compare-and-swap statement — so the read of
+    the stamp and its bump to a fresh value happen as one atomic operation
+    a concurrent call can't interleave with; two overlapping requests
+    built from the same stale stamp can no longer both pass the check and
+    commit.
     """
     if viewing_semester is None or buffer.semester_id != viewing_semester.pk:
         raise WrongViewingSemesterError(
@@ -1948,12 +1952,15 @@ def apply_song_role_requirements(buffer: SongRoleRequirementBuffer, *, viewing_s
         )
 
     with transaction.atomic():
-        semester = Semester.objects.get(pk=buffer.semester_id)
-        if semester.updated_at != buffer.semester_updated_at:
+        rows_updated = Semester.objects.filter(
+            pk=buffer.semester_id, updated_at=buffer.semester_updated_at,
+        ).update(updated_at=timezone.now())
+        if rows_updated == 0:
             raise StaleSongRoleRequirementsError(
                 'The Requirements changed while you were editing — reload and reapply.'
             )
 
+        semester = Semester.objects.get(pk=buffer.semester_id)
         song = Song.objects.get(pk=buffer.song_id, semester=semester)
         existing_by_role_id = {
             requirement.role_id: requirement
@@ -1972,8 +1979,5 @@ def apply_song_role_requirements(buffer: SongRoleRequirementBuffer, *, viewing_s
             elif existing.count != entry.count:
                 existing.count = entry.count
                 existing.save(update_fields=['count'])
-
-        semester.updated_at = timezone.now()
-        semester.save(update_fields=['updated_at'])
 
     return song
