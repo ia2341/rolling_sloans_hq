@@ -4,7 +4,12 @@ import json
 
 from django.contrib import messages
 from django.db import IntegrityError, transaction
-from django.http import Http404, HttpResponseBadRequest, JsonResponse
+from django.http import (
+    Http404,
+    HttpResponseBadRequest,
+    HttpResponseForbidden,
+    JsonResponse,
+)
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
@@ -13,11 +18,13 @@ from django.views import View
 from django.views.generic import DetailView, TemplateView
 
 from config.views import AdminRequiredMixin, BaseView
+from identity.models import Person
 from scheduling.forms import (
     DeclareConflictForm,
     MembershipRolesForm,
     RecordingUploadForm,
     RehearsalForm,
+    RosterEditFormSet,
     SetlistEditFormSet,
     SongRoleAssignmentForm,
 )
@@ -36,6 +43,12 @@ from scheduling.services import (
     CONFLICT_LATE_ARRIVAL,
     LiveSemesterDeletionError,
     RecordingUploadError,
+    RosterEditBuffer,
+    RosterEditEntry,
+    SelfRemovalError,
+    StaleRosterSemesterError,
+    WrongViewingSemesterError,
+    apply_roster_edits,
     assigned_songs_for,
     assignment_matrix_for,
     attendance_suggestion_for,
@@ -51,6 +64,7 @@ from scheduling.services import (
     future_rehearsals_for,
     get_live_semester,
     get_viewing_semester,
+    mismatched_person_ids_for,
     next_attended_rehearsal_for,
     performers_for,
     publish_semester,
@@ -411,24 +425,162 @@ class SetlistDeleteConfirmView(AdminRequiredMixin, View):
         return render(request, self.template_name, {'summaries': summaries})
 
 
-class MembersView(BaseView, TemplateView):
-    """`/members/`: the Band Members roster for the viewing Semester — name, declared Roles, Song count (issue #137).
+class MembersView(BaseView, View):
+    """`/members/`: the Band Members roster, plus an admin's in-place "Edit roster" mode (issues #137, #227).
 
-    Read-only and identical for admins and members: no email column and no
-    admin badge, both of which stay confined to the admin-only people
-    management page. Admin edit affordances are a future hook point
-    (issue #130).
+    Read mode is byte-identical for admins and members — no email column,
+    no admin badge — apart from the admin-only "Edit roster" button.
+    Deliberately **not** a separate route (that shape is `manage/`, which
+    this map exists to retire): `?mode=edit` toggles the edit table on the
+    same URL the reader is already on, htmx-swapped in place like
+    `SetlistEditView`'s grid but without a sibling URL of its own. `GET`
+    ignores `?mode=edit` for a non-admin, so a crafted query string can't
+    show a member the edit affordance. `POST` (Save Changes) is the only
+    mutation surface and is admin-gated by hand, since `AdminRequiredMixin`
+    would also lock a member out of the shared read-mode `GET`; an
+    anonymous POST is redirected to login by `BaseView` before `dispatch`
+    reaches this check.
     """
 
     template_name = 'scheduling/members.html'
+    edit_template_name = 'scheduling/members_edit.html'
+    edit_fragment_template_name = 'scheduling/_members_edit.html'
+    read_fragment_template_name = 'scheduling/_members_read.html'
 
-    def get_context_data(self, **kwargs):
-        """Add the viewing Semester and its roster, or an empty roster when there's no viewing Semester yet."""
-        context = super().get_context_data(**kwargs)
-        semester = get_viewing_semester(self.request)
-        context['semester'] = semester
-        context['members'] = roster_for(_scoped_to_viewing_semester(Membership, semester))
-        return context
+    def dispatch(self, request, *args, **kwargs):
+        """Return 403 for a logged-in non-admin's POST; defer to the login-gated dispatch chain otherwise."""
+        if request.method == 'POST' and request.user.is_authenticated and not request.user.is_admin:
+            return HttpResponseForbidden()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get(self, request):
+        """Render the read-mode roster, or an admin's `?mode=edit` edit table."""
+        semester = get_viewing_semester(request)
+        if request.user.is_admin and request.GET.get('mode') == 'edit' and semester is not None:
+            formset = RosterEditFormSet(initial=self._edit_initial(semester), prefix='roster')
+            return self._render_edit(
+                request, semester, formset, semester_id=semester.pk, stamp=semester.updated_at.isoformat(),
+            )
+        return self._render_read(request, semester)
+
+    def post(self, request):
+        """Validate and apply the whole Roster edit Buffer atomically, or re-render the edit table with errors."""
+        semester = get_viewing_semester(request)
+        if semester is None:
+            return redirect('scheduling:members')
+        submitted_semester_id = request.POST.get('roster_semester_id', '')
+        submitted_stamp = request.POST.get('roster_semester_updated_at', '')
+        formset = RosterEditFormSet(request.POST, prefix='roster')
+        if formset.is_valid():
+            buffer = self._build_buffer(formset, submitted_semester_id, submitted_stamp)
+            try:
+                apply_roster_edits(buffer, viewing_semester=semester, requesting_admin=request.user)
+            except (WrongViewingSemesterError, StaleRosterSemesterError, SelfRemovalError) as error:
+                messages.error(request, str(error))
+                return self._render_edit(
+                    request, semester, formset, semester_id=submitted_semester_id, stamp=submitted_stamp, status=200,
+                )
+            messages.success(request, 'Roster updated.')
+            return redirect('scheduling:members')
+        return self._render_edit(
+            request, semester, formset, semester_id=submitted_semester_id, stamp=submitted_stamp, status=200,
+        )
+
+    def _edit_initial(self, semester):
+        """Build the edit formset's initial data: one row per existing Membership, ordered by Person name."""
+        memberships = roster_for(_scoped_to_viewing_semester(Membership, semester))
+        return [
+            {
+                'person_id': membership.person_id,
+                'name': membership.person.name,
+                'roles': [
+                    membership_role.role_id for membership_role in membership.membershiprole_set.all()
+                ],
+                'remove': False,
+            }
+            for membership in memberships
+        ]
+
+    def _build_buffer(self, formset, submitted_semester_id, submitted_stamp):
+        """Turn a valid edit formset into a RosterEditBuffer, carrying the Semester state it was rendered against.
+
+        `submitted_semester_id`/`submitted_stamp` are the hidden fields
+        stamped at render time, not the live session's viewing Semester —
+        `apply_roster_edits()` is the one place that compares them against
+        current state, raising `WrongViewingSemesterError`/
+        `StaleRosterSemesterError` if either has moved since.
+        """
+        person_ids = {row['person_id'] for row in formset.cleaned_data}
+        people_by_id = Person.objects.in_bulk(person_ids)
+        entries = []
+        removed_person_ids = set()
+        for row in formset.cleaned_data:
+            person = people_by_id.get(row['person_id'])
+            if person is None:
+                continue
+            if row['remove']:
+                removed_person_ids.add(person.pk)
+                continue
+            entries.append(RosterEditEntry(
+                person=person, name=row['name'], role_ids=frozenset(role.pk for role in row['roles']),
+            ))
+        return RosterEditBuffer(
+            semester_id=self._parse_int(submitted_semester_id),
+            semester_updated_at=parse_datetime(submitted_stamp) or timezone.now(),
+            entries=entries,
+            removed_person_ids=frozenset(removed_person_ids),
+        )
+
+    def _parse_int(self, raw_value):
+        """Return `raw_value` as an int, or -1 (matching no real row/Semester) when it isn't one."""
+        try:
+            return int(raw_value)
+        except (TypeError, ValueError):
+            return -1
+
+    def _render_read(self, request, semester):
+        """Render read mode: the bare roster fragment for htmx, the full page otherwise."""
+        context = {
+            'semester': semester,
+            'members': roster_for(_scoped_to_viewing_semester(Membership, semester)),
+        }
+        template = self.read_fragment_template_name if self._is_htmx(request) else self.template_name
+        return render(request, template, context)
+
+    def _render_edit(self, request, semester, formset, semester_id, stamp, status=200):
+        """Render edit mode: the bare edit-table fragment for htmx, the full page otherwise."""
+        context = {
+            'semester': semester,
+            'formset': formset,
+            'rows': self._edit_rows(formset, semester, request.user.pk),
+            'roster_semester_id': semester_id,
+            'roster_semester_updated_at': stamp,
+        }
+        template = self.edit_fragment_template_name if self._is_htmx(request) else self.edit_template_name
+        return render(request, template, context, status=status)
+
+    def _edit_rows(self, formset, semester, requesting_admin_id):
+        """Pair each formset row with its Person id, so a bound-or-not row can flag itself/its mismatch state.
+
+        Reads `person_id`'s raw submitted value rather than `cleaned_data`,
+        so this pairing survives an otherwise-invalid formset — the same
+        every-value-preserved re-render `SetlistEditView` gives a rejected
+        buffer.
+        """
+        mismatched_person_ids = mismatched_person_ids_for(semester)
+        rows = []
+        for form in formset:
+            person_id = self._parse_int(form['person_id'].value())
+            rows.append({
+                'form': form,
+                'is_self': person_id == requesting_admin_id,
+                'is_mismatched': person_id in mismatched_person_ids,
+            })
+        return rows
+
+    def _is_htmx(self, request):
+        """Return whether `request` is an htmx-driven in-place swap rather than a direct/no-JS navigation."""
+        return request.headers.get('HX-Request') == 'true'
 
 
 class MemberDetailView(BaseView, View):
