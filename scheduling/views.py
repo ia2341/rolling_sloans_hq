@@ -141,6 +141,17 @@ def _lock_semester(semester):
     return Semester.objects.select_for_update().get(pk=semester.pk)
 
 
+def _lock_rehearsal(rehearsal):
+    """Row-lock `rehearsal` for the duration of the enclosing transaction.
+
+    Must be called inside `transaction.atomic()`. Mirrors `_lock_semester()`:
+    serializes concurrent Running Order renumbers against the same
+    Rehearsal so two overlapping edits can't compute/apply stale `order`
+    values and collide on `unique_order_per_rehearsal`.
+    """
+    return Rehearsal.objects.select_for_update().get(pk=rehearsal.pk)
+
+
 class OverviewView(BaseView, TemplateView):
     """`/`: a logged-in member's personalized Next Rehearsal card, 3-rehearsal preview, and song-progress table."""
 
@@ -1538,9 +1549,10 @@ class RehearsalEditView(AdminRequiredMixin, View):
         form = RehearsalForm(request.POST, instance=rehearsal)
         if form.is_valid():
             with transaction.atomic():
+                _lock_rehearsal(rehearsal)
                 form.save()
                 existing_order = list(
-                    RehearsalSong.objects.filter(rehearsal=rehearsal).values_list('pk', flat=True)
+                    RehearsalSong.objects.filter(rehearsal=rehearsal).order_by('order').values_list('pk', flat=True)
                 )
                 if existing_order:
                     reorder_rehearsal_songs(rehearsal, existing_order)
