@@ -1,4 +1,4 @@
-"""Roster service seams: create_or_reactivate_role() and import_roster_from_semester() (issue #225)."""
+"""Roster service seams: create_or_reactivate_role(), import_roster_from_semester() (#225) and unrostered_people_for() (#229)."""
 
 from django.db import transaction
 from django.test import TestCase, TransactionTestCase
@@ -15,6 +15,7 @@ from scheduling.services import (
     RosterImportProposal,
     create_or_reactivate_role,
     import_roster_from_semester,
+    unrostered_people_for,
 )
 
 
@@ -158,3 +159,43 @@ class ImportRosterFromSemesterTests(TestCase):
         proposal = import_roster_from_semester(target)
 
         self.assertEqual(proposal, RosterImportProposal(source_semester=None, people=[]))
+
+
+class UnrosteredPeopleForTests(TestCase):
+    def test_returns_active_people_with_no_membership_in_the_semester_ordered_by_name(self):
+        """People holding no Membership in the Semester come back sorted by name."""
+        semester = SemesterFactory()
+        zed = PersonFactory(name='Zed Placeholder')
+        amy = PersonFactory(name='Amy Placeholder')
+
+        people = unrostered_people_for(semester)
+
+        self.assertEqual(people, [amy, zed])
+
+    def test_excludes_a_person_already_rostered_in_the_semester(self):
+        """A Person already holding a Membership in the Semester is absent from the list."""
+        semester = SemesterFactory()
+        membership = MembershipFactory(semester=semester)
+
+        people = unrostered_people_for(semester)
+
+        self.assertNotIn(membership.person, people)
+
+    def test_a_person_rostered_only_in_another_semester_is_still_offered(self):
+        """A Membership in a different Semester doesn't exclude a Person from this Semester's add list."""
+        other_semester = SemesterFactory()
+        semester = SemesterFactory()
+        membership = MembershipFactory(semester=other_semester)
+
+        people = unrostered_people_for(semester)
+
+        self.assertIn(membership.person, people)
+
+    def test_excludes_deactivated_people_silently(self):
+        """A deactivated Person never appears in the add list, with no error."""
+        semester = SemesterFactory()
+        PersonFactory(is_active=False)
+
+        people = unrostered_people_for(semester)
+
+        self.assertEqual(people, [])

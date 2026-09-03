@@ -1200,6 +1200,20 @@ def import_roster_from_semester(semester: Semester) -> RosterImportProposal:
     return RosterImportProposal(source_semester=source, people=people)
 
 
+def unrostered_people_for(semester: Semester) -> list[Person]:
+    """Return every active Person holding no Membership in `semester`, ordered by name (issue #229).
+
+    Backs the Roster editor's add list — the People a "Save Changes"
+    batch could newly roster. Deactivated People are excluded silently: a
+    Person who cannot log in cannot act on a Membership, so offering them
+    here would create a row nobody can ever use; reactivating somebody
+    stays a people-management act, deliberately not offered here.
+    """
+    return list(
+        Person.objects.filter(is_active=True).exclude(membership__semester=semester).order_by('name')
+    )
+
+
 def conflict_history_for(semester, person) -> list[ConflictHistoryRow]:
     """Return every Rehearsal in `semester` that `person` has declared a Conflict for, in date order (issue #99).
 

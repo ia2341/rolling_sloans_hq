@@ -17,6 +17,7 @@ urlpatterns = [
     ),
     path('songs/<int:pk>/', views.SongDetailView.as_view(), name='song-detail'),
     path('members/', views.MembersView.as_view(), name='members'),
+    path('members/import/', views.RosterImportView.as_view(), name='members-roster-import'),
     path('members/<int:pk>/', views.MemberDetailView.as_view(), name='member-detail'),
     path('me/recordings/', views.RecordingUploadView.as_view(), name='recordings'),
     path('me/recordings/presign/', views.RecordingPresignView.as_view(), name='recordings-presign'),

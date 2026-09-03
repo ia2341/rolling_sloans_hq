@@ -224,6 +224,33 @@ class RosterEditRowForm(forms.Form):
 RosterEditFormSet = forms.formset_factory(RosterEditRowForm, extra=0)
 
 
+class RosterAddRowForm(forms.Form):
+    """One row of the Roster add list: a not-yet-rostered Person, whether to add them, and the Roles to declare (issue #229).
+
+    A plain `Form`, not a `ModelForm`: `add` and `roles` map onto a
+    `Membership`/`MembershipRole` pair that doesn't exist yet, so there's
+    no instance to bind to. `person_id` is a hidden field carrying which
+    Person this row proposes, the same pairing convention
+    `RosterEditRowForm` uses, so an invalid submission can still be read
+    back field-by-field to preserve per-row display state. Ticking `roles`
+    with `add` left unticked is legal and simply declares nothing — only a
+    ticked `add` turns this row into a `RosterEditEntry` for
+    `apply_roster_edits()`.
+    """
+
+    person_id = forms.IntegerField(widget=forms.HiddenInput)
+    add = forms.BooleanField(required=False)
+    roles = forms.ModelMultipleChoiceField(
+        queryset=Role.objects.filter(is_active=True),
+        required=False,
+        widget=forms.CheckboxSelectMultiple,
+    )
+
+
+# The Roster add list's buffer: one `RosterAddRowForm` per Person not yet on the Semester's Roster (issue #229).
+RosterAddFormSet = forms.formset_factory(RosterAddRowForm, extra=0)
+
+
 class SongRoleAssignmentForm(forms.ModelForm):
     """Assigns a Person to a Role on a Song, restricted to the viewing Semester's Songs (issue #60).
 

@@ -25,6 +25,7 @@ from scheduling.forms import (
     MembershipRolesForm,
     RecordingUploadForm,
     RehearsalForm,
+    RosterAddFormSet,
     RosterEditFormSet,
     SetlistEditFormSet,
     SongForm,
@@ -66,6 +67,7 @@ from scheduling.services import (
     future_rehearsals_for,
     get_live_semester,
     get_viewing_semester,
+    import_roster_from_semester,
     landing_rehearsal_for,
     mismatched_person_ids_for,
     next_attended_rehearsal_for,
@@ -84,6 +86,7 @@ from scheduling.services import (
     song_deletion_summaries,
     song_rehearsal_progress,
     songs_with_progress_for,
+    unrostered_people_for,
     upcoming_rehearsals_for,
 )
 
@@ -492,6 +495,41 @@ class SetlistDeleteConfirmView(AdminRequiredMixin, View):
         return render(request, self.template_name, {'summaries': summaries})
 
 
+def _parse_int(raw_value):
+    """Return `raw_value` as an int, or -1 (matching no real row/Semester) when it isn't one."""
+    try:
+        return int(raw_value)
+    except (TypeError, ValueError):
+        return -1
+
+
+def _add_initial(semester, imported_roles_by_person_id=None):
+    """Build the Roster add list's initial rows: one per unrostered Person, optionally pre-ticked from an import proposal (issue #229).
+
+    `imported_roles_by_person_id`, when given, maps a Person id to the
+    Roles `import_roster_from_semester()` proposes for them; a Person
+    present in it renders pre-ticked with those Roles, and everyone else
+    renders untouched. `None` (the plain edit-mode render, no import
+    pressed) leaves every row unticked.
+    """
+    imported_roles_by_person_id = imported_roles_by_person_id or {}
+    rows = []
+    for person in unrostered_people_for(semester):
+        roles = imported_roles_by_person_id.get(person.pk)
+        rows.append({'person_id': person.pk, 'add': roles is not None, 'roles': roles or []})
+    return rows
+
+
+def _add_rows(add_formset):
+    """Pair each add-list formset row with its Person, so an invalid re-render can still show the row's name."""
+    person_ids = [_parse_int(form['person_id'].value()) for form in add_formset]
+    people_by_id = Person.objects.in_bulk(person_ids)
+    return [
+        {'form': form, 'person': people_by_id.get(_parse_int(form['person_id'].value()))}
+        for form in add_formset
+    ]
+
+
 class MembersView(BaseView, View):
     """`/members/`: the Band Members roster, plus an admin's in-place "Edit roster" mode (issues #137, #227).
 
@@ -521,36 +559,41 @@ class MembersView(BaseView, View):
         return super().dispatch(request, *args, **kwargs)
 
     def get(self, request):
-        """Render the read-mode roster, or an admin's `?mode=edit` edit table."""
+        """Render the read-mode roster, or an admin's `?mode=edit` edit table plus add list."""
         semester = get_viewing_semester(request)
         if request.user.is_admin and request.GET.get('mode') == 'edit' and semester is not None:
             formset = RosterEditFormSet(initial=self._edit_initial(semester), prefix='roster')
+            add_formset = RosterAddFormSet(initial=_add_initial(semester), prefix='roster_add')
             return self._render_edit(
-                request, semester, formset, semester_id=semester.pk, stamp=semester.updated_at.isoformat(),
+                request, semester, formset, add_formset,
+                semester_id=semester.pk, stamp=semester.updated_at.isoformat(),
             )
         return self._render_read(request, semester)
 
     def post(self, request):
-        """Validate and apply the whole Roster edit Buffer atomically, or re-render the edit table with errors."""
+        """Validate and apply the whole Roster edit Buffer (edit rows plus add-list ticks) atomically, or re-render with errors."""
         semester = get_viewing_semester(request)
         if semester is None:
             return redirect('scheduling:members')
         submitted_semester_id = request.POST.get('roster_semester_id', '')
         submitted_stamp = request.POST.get('roster_semester_updated_at', '')
         formset = RosterEditFormSet(request.POST, prefix='roster')
-        if formset.is_valid():
-            buffer = self._build_buffer(formset, submitted_semester_id, submitted_stamp)
+        add_formset = RosterAddFormSet(request.POST, prefix='roster_add')
+        if formset.is_valid() and add_formset.is_valid():
+            buffer = self._build_buffer(formset, add_formset, submitted_semester_id, submitted_stamp)
             try:
                 apply_roster_edits(buffer, viewing_semester=semester, requesting_admin=request.user)
             except (WrongViewingSemesterError, StaleRosterSemesterError, SelfRemovalError) as error:
                 messages.error(request, str(error))
                 return self._render_edit(
-                    request, semester, formset, semester_id=submitted_semester_id, stamp=submitted_stamp, status=200,
+                    request, semester, formset, add_formset,
+                    semester_id=submitted_semester_id, stamp=submitted_stamp, status=200,
                 )
             messages.success(request, 'Roster updated.')
             return redirect('scheduling:members')
         return self._render_edit(
-            request, semester, formset, semester_id=submitted_semester_id, stamp=submitted_stamp, status=200,
+            request, semester, formset, add_formset,
+            semester_id=submitted_semester_id, stamp=submitted_stamp, status=200,
         )
 
     def _edit_initial(self, semester):
@@ -568,16 +611,21 @@ class MembersView(BaseView, View):
             for membership in memberships
         ]
 
-    def _build_buffer(self, formset, submitted_semester_id, submitted_stamp):
-        """Turn a valid edit formset into a RosterEditBuffer, carrying the Semester state it was rendered against.
+    def _build_buffer(self, formset, add_formset, submitted_semester_id, submitted_stamp):
+        """Turn the valid edit and add-list formsets into one RosterEditBuffer, carrying the Semester state they were rendered against.
 
         `submitted_semester_id`/`submitted_stamp` are the hidden fields
         stamped at render time, not the live session's viewing Semester —
         `apply_roster_edits()` is the one place that compares them against
         current state, raising `WrongViewingSemesterError`/
-        `StaleRosterSemesterError` if either has moved since.
+        `StaleRosterSemesterError` if either has moved since. A ticked
+        add-list row becomes an ordinary `RosterEditEntry` alongside the
+        edit table's rows: `apply_roster_edits()` get-or-creates the
+        Membership either way, so an add is indistinguishable from an edit
+        of an existing row by the time it reaches the service layer.
         """
         person_ids = {row['person_id'] for row in formset.cleaned_data}
+        person_ids |= {row['person_id'] for row in add_formset.cleaned_data if row['add']}
         people_by_id = Person.objects.in_bulk(person_ids)
         entries = []
         removed_person_ids = set()
@@ -591,19 +639,21 @@ class MembersView(BaseView, View):
             entries.append(RosterEditEntry(
                 person=person, name=row['name'], role_ids=frozenset(role.pk for role in row['roles']),
             ))
+        for row in add_formset.cleaned_data:
+            if not row['add']:
+                continue
+            person = people_by_id.get(row['person_id'])
+            if person is None:
+                continue
+            entries.append(RosterEditEntry(
+                person=person, name=person.name, role_ids=frozenset(role.pk for role in row['roles']),
+            ))
         return RosterEditBuffer(
-            semester_id=self._parse_int(submitted_semester_id),
+            semester_id=_parse_int(submitted_semester_id),
             semester_updated_at=parse_datetime(submitted_stamp) or timezone.now(),
             entries=entries,
             removed_person_ids=frozenset(removed_person_ids),
         )
-
-    def _parse_int(self, raw_value):
-        """Return `raw_value` as an int, or -1 (matching no real row/Semester) when it isn't one."""
-        try:
-            return int(raw_value)
-        except (TypeError, ValueError):
-            return -1
 
     def _render_read(self, request, semester):
         """Render read mode: the bare roster fragment for htmx, the full page otherwise."""
@@ -614,12 +664,15 @@ class MembersView(BaseView, View):
         template = self.read_fragment_template_name if self._is_htmx(request) else self.template_name
         return render(request, template, context)
 
-    def _render_edit(self, request, semester, formset, semester_id, stamp, status=200):
-        """Render edit mode: the bare edit-table fragment for htmx, the full page otherwise."""
+    def _render_edit(self, request, semester, formset, add_formset, semester_id, stamp, status=200):
+        """Render edit mode: the bare edit-table-plus-add-list fragment for htmx, the full page otherwise."""
         context = {
             'semester': semester,
             'formset': formset,
             'rows': self._edit_rows(formset, semester, request.user.pk),
+            'add_formset': add_formset,
+            'add_rows': _add_rows(add_formset),
+            'import_source_semester': import_roster_from_semester(semester).source_semester,
             'roster_semester_id': semester_id,
             'roster_semester_updated_at': stamp,
         }
@@ -637,7 +690,7 @@ class MembersView(BaseView, View):
         mismatched_person_ids = mismatched_person_ids_for(semester)
         rows = []
         for form in formset:
-            person_id = self._parse_int(form['person_id'].value())
+            person_id = _parse_int(form['person_id'].value())
             rows.append({
                 'form': form,
                 'is_self': person_id == requesting_admin_id,
@@ -648,6 +701,38 @@ class MembersView(BaseView, View):
     def _is_htmx(self, request):
         """Return whether `request` is an htmx-driven in-place swap rather than a direct/no-JS navigation."""
         return request.headers.get('HX-Request') == 'true'
+
+
+class RosterImportView(AdminRequiredMixin, View):
+    """`/members/import/`: prefill the Roster add list's ticks from the prior Semester's Roster, writing nothing (issue #229).
+
+    A sibling read of `MembersView`'s edit mode, not a mutation: it swaps
+    only the add-list fragment (`hx-target="#roster-add-list"`), so the
+    edit table above it and any rows an admin already hand-ticked are left
+    alone. `apply_roster_edits()`'s later "Save Changes" POST is the only
+    write path either surface ever commits through — pressing Import
+    again simply re-derives the same proposal, and, per issue #225,
+    `import_roster_from_semester()` returns copied Role values, never
+    references into the prior Semester's rows.
+    """
+
+    template_name = 'scheduling/_members_add_list.html'
+
+    def get(self, request):
+        """Render the add-list fragment with ticks/Roles prefilled from `import_roster_from_semester()`."""
+        semester = get_viewing_semester(request)
+        if semester is None:
+            return HttpResponseForbidden()
+        proposal = import_roster_from_semester(semester)
+        imported_roles_by_person_id = {imported.person.pk: imported.roles for imported in proposal.people}
+        add_formset = RosterAddFormSet(
+            initial=_add_initial(semester, imported_roles_by_person_id), prefix='roster_add',
+        )
+        return render(request, self.template_name, {
+            'add_formset': add_formset,
+            'add_rows': _add_rows(add_formset),
+            'import_source_semester': proposal.source_semester,
+        })
 
 
 class MemberDetailView(BaseView, View):

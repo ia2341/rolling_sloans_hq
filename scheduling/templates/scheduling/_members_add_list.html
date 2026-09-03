@@ -1,0 +1,43 @@
+<div id="roster-add-list">
+  {{ add_formset.management_form }}
+  {% if import_source_semester %}
+    <button
+      type="button"
+      id="import-roster-button"
+      hx-get="{% url 'scheduling:members-roster-import' %}"
+      hx-target="#roster-add-list"
+      hx-swap="outerHTML"
+    >Import from {{ import_source_semester }}</button>
+  {% endif %}
+  {% if add_formset.non_form_errors %}
+    <ul class="errors">
+      {% for error in add_formset.non_form_errors %}<li>{{ error }}</li>{% endfor %}
+    </ul>
+  {% endif %}
+  {% if add_rows %}
+    <table id="roster-add-table">
+      <thead>
+        <tr>
+          <th>Add</th>
+          <th>Name</th>
+          <th>Roles</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in add_rows %}
+          <tr class="roster-add-row">
+            {{ row.form.person_id }}
+            <td>{{ row.form.add }}</td>
+            <td>{{ row.person.name }}</td>
+            <td>
+              {{ row.form.roles }}
+              {{ row.form.roles.errors }}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p>Everyone active is already on the roster.</p>
+  {% endif %}
+</div>

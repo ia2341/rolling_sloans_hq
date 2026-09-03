@@ -38,12 +38,23 @@ def _row_payload(prefix_index, membership, name=None, role_ids=(), remove=False)
 
 
 def _formset_payload(rows, semester):
-    """Assemble a full RosterEditFormSet POST body (management form, hidden stamp, and every row)."""
+    """Assemble a full RosterEditFormSet POST body (management form, hidden stamp, and every row), plus an empty add-list.
+
+    The add-list's own RosterAddFormSet (issue #229) is a mandatory sibling
+    of the edit table in the same POST body — Django raises if a
+    formset's management form is missing entirely — so every test here
+    that doesn't exercise the add list still supplies its (empty)
+    management form.
+    """
     payload = {
         'roster-TOTAL_FORMS': str(len(rows)),
         'roster-INITIAL_FORMS': str(len(rows)),
         'roster-MIN_NUM_FORMS': '0',
         'roster-MAX_NUM_FORMS': '1000',
+        'roster_add-TOTAL_FORMS': '0',
+        'roster_add-INITIAL_FORMS': '0',
+        'roster_add-MIN_NUM_FORMS': '0',
+        'roster_add-MAX_NUM_FORMS': '1000',
         'roster_semester_id': str(semester.pk),
         'roster_semester_updated_at': semester.updated_at.isoformat(),
     }
