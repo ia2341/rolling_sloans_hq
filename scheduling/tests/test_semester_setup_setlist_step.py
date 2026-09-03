@@ -10,7 +10,12 @@ from identity.factories import PersonFactory
 from scheduling.factories import SemesterFactory, SongFactory
 from scheduling.models import Song
 from scheduling.services import VIEWING_SEMESTER_SESSION_KEY
-from scheduling.spotify import ImportedSong, PlaylistImportResult, SpotifyImportError
+from scheduling.spotify import (
+    ImportedSong,
+    PlaylistImportResult,
+    SpotifyImportError,
+    SpotifyImportUnavailable,
+)
 from scheduling.tests.test_setlist_reorder_add_delete import build_post_data
 
 PASSWORD = 'a-strong-test-password-123'
@@ -154,6 +159,24 @@ class SetlistStepImportAndSaveTests(TestCase):
             })
 
         self.assertContains(response, 'playlist not found')
+        self.assertEqual(Song.objects.count(), 0)
+
+    def test_a_rate_limit_or_missing_credential_renders_a_retry_hint_and_writes_nothing(self):
+        """A rate limit, transport failure, or absent credential renders the same readable-error path, unretried."""
+        semester = SemesterFactory(draft=True)
+        admin_client(self)
+        self.client.get(reverse('scheduling:manage-semester-setup-setlist', args=[semester.pk]))
+
+        with patch(
+            'scheduling.views.import_playlist',
+            side_effect=SpotifyImportUnavailable('Spotify import is not configured. Try again later.'),
+        ):
+            response = self.client.post(reverse('scheduling:setlist-edit-import'), {
+                'playlist_url': 'https://open.spotify.com/playlist/37i9dQZF1E8KcRnHXtvNli',
+                'next_index': '0',
+            })
+
+        self.assertContains(response, 'Try again later')
         self.assertEqual(Song.objects.count(), 0)
 
     def test_skipped_items_are_reported_with_a_count_and_reason(self):
