@@ -38,8 +38,21 @@
               {% endif %}
             </td>
             <td>
-              {{ row.form.roles }}
-              {{ row.form.roles.errors }}
+              <div id="roster-roles-{{ row.form.prefix }}">
+                {{ row.form.roles }}
+                {{ row.form.roles.errors }}
+              </div>
+              <input type="hidden" name="kind" value="roster">
+              <input type="hidden" name="prefix" value="{{ row.form.prefix }}">
+              <input type="text" name="role_name" class="add-role-name-input" placeholder="New role">
+              <button
+                type="button"
+                class="add-role-button"
+                hx-post="{% url 'scheduling:members-add-role' %}"
+                hx-target="#roster-roles-{{ row.form.prefix }}"
+                hx-swap="innerHTML"
+                hx-include="closest td"
+              >Add Role</button>
             </td>
             <td>
               {% if row.is_self %}
@@ -60,6 +73,19 @@
   {% include "scheduling/_members_add_list.html" %}
 
   <button type="submit" id="save-roster-changes">Save Changes</button>
+</form>
+
+<h2>Invite Someone New</h2>
+<form method="post" action="{% url 'scheduling:members-roster-invite' %}" id="roster-invite-form">
+  {% csrf_token %}
+  {{ invite_form.non_field_errors }}
+  <label for="{{ invite_form.name.id_for_label }}">Name</label>
+  {{ invite_form.name }}
+  {{ invite_form.name.errors }}
+  <label for="{{ invite_form.email.id_for_label }}">Email</label>
+  {{ invite_form.email }}
+  {{ invite_form.email.errors }}
+  <button type="submit" id="invite-person-button">Invite</button>
 </form>
 
 <div id="roster-fallout"></div>

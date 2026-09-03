@@ -31,8 +31,21 @@
             <td>{{ row.form.add }}</td>
             <td>{{ row.person.name }}</td>
             <td>
-              {{ row.form.roles }}
-              {{ row.form.roles.errors }}
+              <div id="roster-add-roles-{{ row.form.prefix }}">
+                {{ row.form.roles }}
+                {{ row.form.roles.errors }}
+              </div>
+              <input type="hidden" name="kind" value="roster_add">
+              <input type="hidden" name="prefix" value="{{ row.form.prefix }}">
+              <input type="text" name="role_name" class="add-role-name-input" placeholder="New role">
+              <button
+                type="button"
+                class="add-role-button"
+                hx-post="{% url 'scheduling:members-add-role' %}"
+                hx-target="#roster-add-roles-{{ row.form.prefix }}"
+                hx-swap="innerHTML"
+                hx-include="closest td"
+              >Add Role</button>
             </td>
           </tr>
         {% endfor %}
