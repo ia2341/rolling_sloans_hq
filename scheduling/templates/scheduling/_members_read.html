@@ -1,0 +1,42 @@
+<h1>{% if semester %}{{ semester }} Band Members{% else %}Band Members{% endif %}</h1>
+
+{% if semester and request.user.is_admin %}
+  <button
+    type="button"
+    id="edit-roster-button"
+    hx-get="{% url 'scheduling:members' %}?mode=edit"
+    hx-target="#roster-surface"
+    hx-swap="innerHTML"
+  >Edit roster</button>
+{% endif %}
+
+{% if members %}
+  <table id="members-table">
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Roles</th>
+        <th>Songs</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for membership in members %}
+        <tr>
+          <td>
+            <a href="{% url 'scheduling:member-detail' membership.person.pk %}">{{ membership.person.name }}</a>
+          </td>
+          <td>
+            {% for membership_role in membership.membershiprole_set.all %}
+              {{ membership_role.role }}{% if not forloop.last %}, {% endif %}
+            {% empty %}
+              &mdash;
+            {% endfor %}
+          </td>
+          <td>{{ membership.songs_count }} Song{{ membership.songs_count|pluralize }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% else %}
+  <p>No band members on the roster yet.</p>
+{% endif %}

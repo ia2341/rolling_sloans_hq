@@ -463,6 +463,20 @@ def declared_roles_for(membership):
     return Role.objects.filter(membershiprole__membership=membership).order_by('name')
 
 
+def mismatched_person_ids_for(semester) -> frozenset[int]:
+    """Return the ids of every Person holding a mismatched SongRoleAssignment on `semester`'s Songs (issue #227).
+
+    Backs the Roster editor's quiet per-row completeness flag: a batched
+    lookup rather than one query per row, so the flag's cost doesn't grow
+    with the roster.
+    """
+    return frozenset(
+        SongRoleAssignment.objects.filter(
+            song__semester=semester, is_role_mismatch=True,
+        ).values_list('person_id', flat=True)
+    )
+
+
 def assigned_songs_for(person, semester):
     """Return `person`'s SongRoleAssignments on `semester`'s Songs, in setlist-position order (issue #138).
 

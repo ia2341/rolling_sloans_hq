@@ -1,10 +1,10 @@
 {% extends "base.html" %}
-{% block title %}Band Members{% endblock %}
+{% block title %}Edit Roster{% endblock %}
 {% block content %}
 {% for message in messages %}
   <p>{{ message }}</p>
 {% endfor %}
 <div id="roster-surface">
-{% include "scheduling/_members_read.html" %}
+{% include "scheduling/_members_edit.html" %}
 </div>
 {% endblock %}

@@ -192,6 +192,36 @@ SetlistEditFormSet = forms.modelformset_factory(
 )
 
 
+class RosterEditRowForm(forms.Form):
+    """One row of the Roster edit table: an existing Membership's Person, editable name and declared Roles (issue #227).
+
+    A plain `Form` rather than a `ModelForm` bound to `Membership`, since
+    the row edits fields spanning two models (`Person.name`,
+    `MembershipRole` via `roles`) that no single model instance owns.
+    `person_id` is carried as a hidden field so the view can turn a valid
+    row back into a `RosterEditEntry` without re-deriving which Person it
+    belongs to, and so an invalid submission can still be read back
+    field-by-field (via `form['person_id'].value()`) to preserve per-row
+    display state. `remove` has no widget rendered for the requesting
+    admin's own row (`_members_edit.html`), with `apply_roster_edits()`'s
+    `SelfRemovalError` as the backstop against a hand-crafted POST.
+    """
+
+    person_id = forms.IntegerField(widget=forms.HiddenInput)
+    name = forms.CharField(max_length=255)
+    roles = forms.ModelMultipleChoiceField(
+        queryset=Role.objects.filter(is_active=True),
+        required=False,
+        widget=forms.CheckboxSelectMultiple,
+    )
+    remove = forms.BooleanField(required=False)
+
+
+# The Roster edit table's buffer: one `RosterEditRowForm` per existing Membership, with no add-row this
+# ticket (adding a Person to the Roster is a later slice of map #185, per issue #227's acceptance criteria).
+RosterEditFormSet = forms.formset_factory(RosterEditRowForm, extra=0)
+
+
 class SongRoleAssignmentForm(forms.ModelForm):
     """Assigns a Person to a Role on a Song, restricted to the viewing Semester's Songs (issue #60).
 
