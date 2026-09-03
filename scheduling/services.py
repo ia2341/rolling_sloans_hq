@@ -25,6 +25,7 @@ from scheduling.models import (
     Semester,
     Song,
     SongRoleAssignment,
+    SongRoleRequirement,
     slots_for_person,
 )
 
@@ -317,6 +318,73 @@ def _delete_recording_objects(object_keys: list[str]) -> None:
             logger.exception('Failed to delete recording object %r from storage after Semester deletion.', object_key)
 
 
+def reorder_songs(semester: Semester, ordered_song_ids: list[int]) -> None:
+    """Renumber `ordered_song_ids`'s Songs to a contiguous 1..N, in that order (issue #179).
+
+    The setlist edit grid's Save is the only caller: `ordered_song_ids` is
+    the buffer's surviving row order (deleted rows already excluded), never
+    a client-submitted position. Must run inside the caller's
+    `transaction.atomic()` — a whole-table renumber briefly assigns
+    positions that collide with each other's prior values, which is only
+    free of a mid-transaction constraint violation because
+    `unique_song_position_per_semester` is `Deferrable.DEFERRED`.
+    """
+    songs_by_id = {song.pk: song for song in Song.objects.filter(semester=semester, pk__in=ordered_song_ids)}
+    for position, song_id in enumerate(ordered_song_ids, start=1):
+        song = songs_by_id[song_id]
+        song.position = position
+        song.save(update_fields=['position'])
+
+
+@dataclass(frozen=True)
+class SongDeletionSummary:
+    """One doomed Song's recording/uploader counts, for the setlist edit grid's delete confirmation (issue #179)."""
+
+    song: Song
+    recording_count: int
+    uploader_count: int
+
+
+def song_deletion_summaries(songs) -> list['SongDeletionSummary']:
+    """Return each of `songs`' recording count and distinct-uploader count, for the delete confirmation dialog.
+
+    A pure counts read: no locking, no transaction, nothing written. Not
+    ADR-0008 preview machinery — there is nothing to roll back.
+    """
+    summaries = []
+    for song in songs:
+        recordings = Recording.objects.filter(rehearsal_song__song=song)
+        summaries.append(SongDeletionSummary(
+            song=song,
+            recording_count=recordings.count(),
+            uploader_count=recordings.values('uploaded_by').distinct().count(),
+        ))
+    return summaries
+
+
+def delete_songs_with_recordings(songs) -> None:
+    """Hard-delete `songs`, cleaning up their Recordings' storage objects (issue #179).
+
+    Mirrors `delete_semester`'s shape (issue #171): the cascade
+    (`RehearsalSong.song` and `Recording.rehearsal_song` both
+    `on_delete=CASCADE`) destroys every RehearsalSong and Recording row for
+    these Songs, so object keys are collected first, while they're still
+    reachable. Storage deletion is registered with `transaction.on_commit()`
+    and reuses `_delete_recording_objects`'s best-effort, log-don't-raise
+    behavior — a storage failure never blocks or rolls back the Save this
+    runs inside.
+    """
+    song_ids = [song.pk for song in songs]
+    if not song_ids:
+        return
+    object_keys = list(
+        Recording.objects.filter(rehearsal_song__song_id__in=song_ids).values_list('file', flat=True)
+    )
+    Song.objects.filter(pk__in=song_ids).delete()
+    if object_keys:
+        transaction.on_commit(lambda: _delete_recording_objects(object_keys))
+
+
 def get_viewing_semester(request) -> Semester | None:
     """Return the Semester `request` is scoped to, for reads and writes alike.
 
@@ -556,6 +624,51 @@ def performers_for(song) -> list[SongPerformer]:
     return [
         SongPerformer(person=person, roles=roles_by_person_id[person.id])
         for person in people_in_order
+    ]
+
+
+@dataclass(frozen=True)
+class RoleFillStatus:
+    """One SongRoleRequirement's target headcount versus its Role's actual assignment count (issue #207).
+
+    A Requirement is a target, never a cap (issue #33): sitting at or over
+    target is the normal, unflagged case, and only `is_understaffed`
+    distinguishes the quiet under-target state a member can notice and
+    volunteer to fill. `is_retired_role` surfaces a Requirement naming a
+    Role that's since been deactivated, without hiding it.
+    """
+
+    role: Role
+    target: int
+    actual: int
+    is_understaffed: bool
+    is_retired_role: bool
+
+
+def fill_status_for(song) -> list[RoleFillStatus]:
+    """Return `song`'s Role Requirements as target-vs-actual fill status, ordered by Role name.
+
+    A Song with no Requirements returns an empty list rather than raising. A
+    Requirement naming a retired Role is included and flagged via
+    `is_retired_role`, never filtered out, since it's real data an admin may
+    want to clear later (issue #207).
+    """
+    requirements = SongRoleRequirement.objects.filter(song=song).select_related('role').order_by('role__name')
+    actual_by_role_id = dict(
+        SongRoleAssignment.objects.filter(song=song)
+        .values('role_id')
+        .annotate(actual=Count('id'))
+        .values_list('role_id', 'actual'),
+    )
+    return [
+        RoleFillStatus(
+            role=requirement.role,
+            target=requirement.count,
+            actual=actual_by_role_id.get(requirement.role_id, 0),
+            is_understaffed=actual_by_role_id.get(requirement.role_id, 0) < requirement.count,
+            is_retired_role=not requirement.role.is_active,
+        )
+        for requirement in requirements
     ]
 
 
@@ -1131,3 +1244,124 @@ def landing_rehearsal_for(person, semester):
     literal next Rehearsal.
     """
     return next_attended_rehearsal_for(person, semester) or _upcoming_rehearsals(semester).first()
+
+
+class WrongViewingSemesterError(ValueError):
+    """Raised when a Roster edit Buffer's Semester id doesn't match the session-scoped viewing Semester (issue #226)."""
+
+
+class StaleRosterSemesterError(ValueError):
+    """Raised when a Roster edit Buffer's Semester changed since the Buffer was loaded (issue #226)."""
+
+
+class SelfRemovalError(ValueError):
+    """Raised when a Roster edit Buffer would remove the requesting admin's own Person (issue #226)."""
+
+
+@dataclass(frozen=True)
+class RosterEditEntry:
+    """One Person's target Roster state in a Buffer: the name to save and the Role set to declare (issue #226)."""
+
+    person: Person
+    name: str
+    role_ids: frozenset[int]
+
+
+@dataclass(frozen=True)
+class RosterEditBuffer:
+    """The whole diff `apply_roster_edits()` commits in one transaction (issue #226).
+
+    `semester_id` and `semester_updated_at` back the two staleness checks:
+    `semester_id` is cross-checked against the caller's session-scoped
+    viewing Semester (two open tabs editing different terms), and
+    `semester_updated_at` against the Semester row's current stamp (another
+    admin's save landed first). `entries` carries every Person the Buffer
+    wants rostered afterward — existing or newly added — with the name and
+    Role set to save; `removed_person_ids` names every Person to purge from
+    the Roster. A Person id appearing in neither is left untouched.
+    """
+
+    semester_id: int
+    semester_updated_at: datetime
+    entries: list[RosterEditEntry]
+    removed_person_ids: frozenset[int]
+
+
+def apply_roster_edits(buffer: RosterEditBuffer, *, viewing_semester: Semester, requesting_admin: Person) -> None:
+    """Apply a whole Roster Pending Buffer — adds, removals, Role sets and name edits — in one transaction (issue #226).
+
+    The single write the Roster edit surface and its Preview both run
+    (ADR-0008, issue #185): a failure anywhere leaves nothing applied.
+    Takes no Semester row lock — nothing here renumbers positions, and the
+    Membership/MembershipRole uniqueness constraints plus get-or-create
+    absorb the concurrent-admin case, the same reasoning the existing
+    `_membership_for_writing()` write helper documents.
+
+    Removing a Person is a Semester-scoped purge, not a bare Membership
+    delete: it also deletes that Semester's `SongRoleAssignment` rows and
+    `Conflict` rows for them, since both point at `Person` rather than at
+    `Membership` and would otherwise survive un-rostered. A prior Semester's
+    rows for the same Person are untouched. Role-set changes go through
+    ordinary `MembershipRole` creates/deletes so the model's own
+    `post_save`/`post_delete` signals re-evaluate `is_role_mismatch` on
+    every affected `SongRoleAssignment`/`Backup` — this function never
+    recomputes that flag by hand.
+
+    Raises `WrongViewingSemesterError` if `buffer.semester_id` doesn't match
+    `viewing_semester`, or `SelfRemovalError` if the Buffer would remove
+    `requesting_admin`'s own Person — both checked, and both writing
+    nothing, before any transaction opens. Raises `StaleRosterSemesterError`
+    inside the transaction if the Semester's `updated_at` no longer matches
+    `buffer.semester_updated_at`, rolling back whatever this call had
+    already applied. Makes no external call (no mail, no object storage),
+    so nothing here needs `transaction.on_commit()`.
+    """
+    if viewing_semester is None or buffer.semester_id != viewing_semester.pk:
+        raise WrongViewingSemesterError(
+            "This Roster edit Buffer's Semester doesn't match the Semester you're currently viewing."
+        )
+    if requesting_admin.pk in buffer.removed_person_ids:
+        raise SelfRemovalError('An admin cannot remove their own Person from the Roster.')
+
+    with transaction.atomic():
+        semester = Semester.objects.get(pk=buffer.semester_id)
+        if semester.updated_at != buffer.semester_updated_at:
+            raise StaleRosterSemesterError('The Roster changed while you were editing — reload and reapply.')
+
+        for person_id in buffer.removed_person_ids:
+            _purge_person_from_semester(person_id, semester)
+        for entry in buffer.entries:
+            _apply_roster_edit_entry(entry, semester)
+
+        semester.updated_at = timezone.now()
+        semester.save(update_fields=['updated_at'])
+
+
+def _purge_person_from_semester(person_id: int, semester: Semester) -> None:
+    """Delete `person_id`'s Role Assignments and Conflicts scoped to `semester`, then their Membership.
+
+    The Membership delete cascades onto its MembershipRoles (FK
+    `on_delete=CASCADE`), the same mechanism `delete_semester()` relies on
+    — declared Roles have no existence independent of their Membership, so
+    there is nothing here that needs deleting explicitly.
+    """
+    SongRoleAssignment.objects.filter(person_id=person_id, song__semester=semester).delete()
+    Conflict.objects.filter(person_id=person_id, rehearsal__semester=semester).delete()
+    Membership.objects.filter(person_id=person_id, semester=semester).delete()
+
+
+def _apply_roster_edit_entry(entry: RosterEditEntry, semester: Semester) -> None:
+    """Save `entry.name` onto its Person, then get-or-create their Membership and reconcile its declared Roles."""
+    if entry.person.name != entry.name:
+        entry.person.name = entry.name
+        entry.person.save(update_fields=['name'])
+    membership, _ = Membership.objects.get_or_create(person=entry.person, semester=semester)
+    current_role_ids = frozenset(
+        MembershipRole.objects.filter(membership=membership).values_list('role_id', flat=True)
+    )
+    for role_id in entry.role_ids - current_role_ids:
+        MembershipRole.objects.create(membership=membership, role_id=role_id)
+    if current_role_ids - entry.role_ids:
+        MembershipRole.objects.filter(
+            membership=membership, role_id__in=current_role_ids - entry.role_ids,
+        ).delete()

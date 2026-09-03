@@ -499,6 +499,90 @@ class SongDetailViewTests(TestCase):
         self.assertEqual(response.context['rehearsal_count_actual'], 2)
         self.assertEqual(response.context['rehearsal_count_target'], 2)
 
+    def test_fill_status_renders_target_versus_actual(self):
+        """The Fill Status list shows "Role — n of target" for each Role Requirement."""
+        semester = SemesterFactory()
+        song = SongFactory(semester=semester)
+        role = RoleFactory(name='Singer')
+        SongRoleRequirementFactory(song=song, role=role, count=3)
+        SongRoleAssignmentFactory(song=song, role=role)
+
+        response = self.client.get(reverse('scheduling:song-detail', args=[song.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        [status] = response.context['fill_statuses']
+        self.assertEqual(status.role, role)
+        self.assertEqual(status.target, 3)
+        self.assertEqual(status.actual, 1)
+        self.assertContains(response, 'Singer')
+        self.assertContains(response, '1 of 3')
+
+    def test_understaffed_role_renders_in_the_quiet_tier(self):
+        """A Role under its target renders with the quiet-tier CSS class, not as an error."""
+        semester = SemesterFactory()
+        song = SongFactory(semester=semester)
+        role = RoleFactory()
+        SongRoleRequirementFactory(song=song, role=role, count=2)
+
+        response = self.client.get(reverse('scheduling:song-detail', args=[song.pk]))
+
+        self.assertContains(response, 'rs-muted')
+        self.assertNotContains(response, 'rs-danger')
+
+    def test_no_requirements_renders_cleanly(self):
+        """A Song with no Role Requirements renders an empty Fill Status result, not an error."""
+        song = SongFactory(semester=SemesterFactory())
+
+        response = self.client.get(reverse('scheduling:song-detail', args=[song.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['fill_statuses'], [])
+
+    def test_requirement_on_retired_role_is_present_not_filtered(self):
+        """A Requirement naming a retired Role still appears on the page, quietly flagged."""
+        semester = SemesterFactory()
+        song = SongFactory(semester=semester)
+        retired_role = RoleFactory(name='Retired Role', is_active=False)
+        SongRoleRequirementFactory(song=song, role=retired_role, count=1)
+
+        response = self.client.get(reverse('scheduling:song-detail', args=[song.pk]))
+
+        self.assertContains(response, 'Retired Role')
+        [status] = response.context['fill_statuses']
+        self.assertTrue(status.is_retired_role)
+
+    def test_fill_status_renders_for_a_plain_member_not_only_an_admin(self):
+        """A non-admin Person's request still receives fill status in the response, asserted at the HTTP level."""
+        semester = SemesterFactory()
+        song = SongFactory(semester=semester)
+        role = RoleFactory(name='Guitarist')
+        SongRoleRequirementFactory(song=song, role=role, count=2)
+        self.assertFalse(self.person.is_admin)
+
+        response = self.client.get(reverse('scheduling:song-detail', args=[song.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Guitarist')
+        self.assertContains(response, '0 of 2')
+
+    def test_fill_status_rendering_is_identical_for_admin_and_member(self):
+        """An admin and a plain member see the same rendered fill status for the same Song."""
+        semester = SemesterFactory()
+        song = SongFactory(semester=semester)
+        role = RoleFactory(name='Drummer')
+        SongRoleRequirementFactory(song=song, role=role, count=2)
+        SongRoleAssignmentFactory(song=song, role=role)
+        admin = PersonFactory(password=PASSWORD, is_admin=True)
+        url = reverse('scheduling:song-detail', args=[song.pk])
+
+        member_response = self.client.get(url)
+        self.client.login(username=admin.email, password=PASSWORD)
+        admin_response = self.client.get(url)
+
+        self.assertEqual(member_response.status_code, 200)
+        self.assertEqual(admin_response.status_code, 200)
+        self.assertEqual(member_response.context['fill_statuses'], admin_response.context['fill_statuses'])
+
     def test_404_for_unknown_song(self):
         """A request for a nonexistent Song id returns 404."""
         response = self.client.get(reverse('scheduling:song-detail', args=[999999]))

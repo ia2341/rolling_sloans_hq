@@ -1,0 +1,34 @@
+<div class="setlist-edit-row-group" data-song-id="{{ form.instance.pk|default:'' }}" data-form-prefix="{{ form.prefix }}">
+  <div class="setlist-edit-row">
+    {{ form.id }}
+    {# The buffer's row order (issue #179): travels with this row on drag, independent of its formset slot. #}
+    <input type="hidden" name="song_order" class="song-order-field" value="{{ form.prefix }}">
+    <span class="song-delete-checkbox-wrapper" style="display:none">{{ form.DELETE }}</span>
+    <span class="setlist-row-number"></span>
+    <span class="setlist-drag-handle" aria-hidden="true" title="Drag to reorder">⠿</span>
+    <span class="setlist-move-buttons">
+      <button type="button" class="setlist-move-up" @click="moveUp($event)" aria-label="Move up">↑</button>
+      <button type="button" class="setlist-move-down" @click="moveDown($event)" aria-label="Move down">↓</button>
+    </span>
+    <span class="setlist-field">
+      {{ form.title }}
+      {{ form.title.errors }}
+    </span>
+    <span class="setlist-field">
+      {{ form.artist }}
+      {{ form.artist.errors }}
+    </span>
+    <span class="setlist-field">
+      {{ form.length }}
+      {{ form.length.errors }}
+    </span>
+    <details class="setlist-notes-expander">
+      <summary>Notes</summary>
+    </details>
+    <button type="button" class="setlist-delete-toggle" @click="toggleDelete($event)">Delete</button>
+  </div>
+  <div class="setlist-edit-notes-row">
+    {{ form.notes }}
+    {{ form.notes.errors }}
+  </div>
+</div>

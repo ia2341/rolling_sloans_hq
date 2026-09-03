@@ -48,6 +48,8 @@ from scheduling.services import (
     declare_conflict,
     declared_roles_for,
     delete_semester,
+    delete_songs_with_recordings,
+    fill_status_for,
     future_rehearsals_for,
     get_live_semester,
     get_viewing_semester,
@@ -59,11 +61,13 @@ from scheduling.services import (
     recording_groups_for,
     rehearsal_count_target,
     rehearsal_schedule_for,
+    reorder_songs,
     reserve_recording_upload,
     roster_for,
     semester_deletion_summary,
     semester_options_for,
     set_viewing_semester,
+    song_deletion_summaries,
     song_rehearsal_progress,
     songs_with_progress_for,
     upcoming_rehearsals_for,
@@ -305,22 +309,24 @@ class SetlistView(BaseView, TemplateView):
 
 
 class SetlistEditView(AdminRequiredMixin, View):
-    """`/setlist/edit/`: an admin's in-place editable grid for the viewing Semester's setlist (issue #178).
+    """`/setlist/edit/`: an admin's in-place editable grid for the viewing Semester's setlist (issues #178, #179).
 
     A sibling of `SetlistView` rather than a `/manage/` screen, because the
     point of this ticket is that an admin fixes a mistake on the page they
     spotted it on. GET renders the grid — as a bare fragment for the
     htmx-driven "Edit setlist" button's in-place swap, or as a full page
     (banner and all) for a direct/no-JS request. POST commits the whole
-    buffer as one atomic write, or writes nothing and re-renders the full
-    page with every submitted value preserved: per-field errors on a
-    validation failure, or a stale-stamp notice when another admin's save
-    landed first (the optimistic-concurrency stamp from #178's map).
+    buffer — edits, reorder, adds and deletes together — as one atomic
+    write, or writes nothing and re-renders the full page with every
+    submitted value preserved: per-field errors on a validation failure, or
+    a stale-stamp notice when another admin's save landed first (the
+    optimistic-concurrency stamp from #178's map).
     """
 
     fragment_template_name = 'scheduling/_setlist_edit.html'
     page_template_name = 'scheduling/setlist_edit.html'
     STALE_MESSAGE = 'The setlist changed while you were editing — reload and reapply.'
+    MALFORMED_ORDER_MESSAGE = 'The setlist could not be saved — reload and reapply.'
 
     def get(self, request):
         """Render the edit grid: a bare fragment for htmx, a full page otherwise."""
@@ -337,32 +343,96 @@ class SetlistEditView(AdminRequiredMixin, View):
         songs = _scoped_to_viewing_semester(Song, semester).order_by('position')
         formset = SetlistEditFormSet(request.POST, queryset=songs, prefix='song')
         if formset.is_valid():
-            stale = self._save_if_current(semester, formset, request.POST.get('semester_updated_at', ''))
-            if not stale:
+            stale, malformed = self._save_if_current(semester, formset, request.POST.get('semester_updated_at', ''))
+            if not stale and not malformed:
                 messages.success(request, 'Setlist updated.')
                 return redirect('scheduling:setlist')
-            messages.error(request, self.STALE_MESSAGE)
+            messages.error(request, self.STALE_MESSAGE if stale else self.MALFORMED_ORDER_MESSAGE)
         return self._render(request, semester, formset, status=200)
 
     def _save_if_current(self, semester, formset, submitted_stamp):
-        """Save `formset` and bump the Semester's stamp if `submitted_stamp` still matches; return whether it was stale.
+        """Save `formset` and bump the Semester's stamp if `submitted_stamp` still matches; return (stale, malformed).
 
         Locks the Semester row for the duration of the check-and-save so a
         concurrent save can't slip in between the comparison and the write.
-        Rolls back and writes nothing when the stamp is stale, without
-        issuing any further query inside the doomed transaction.
+        Rolls back and writes nothing when the stamp is stale, or when
+        `_save_buffer` rejects the submitted `song_order` as malformed,
+        without issuing any further query inside the doomed transaction.
         """
         stale = False
+        malformed = False
         with transaction.atomic():
             locked = _lock_semester(semester)
-            if self._stamp_matches(locked, submitted_stamp):
-                formset.save()
-                locked.updated_at = timezone.now()
-                locked.save(update_fields=['updated_at'])
-            else:
+            if not self._stamp_matches(locked, submitted_stamp):
                 stale = True
                 transaction.set_rollback(True)
-        return stale
+            elif not self._save_buffer(locked, formset):
+                malformed = True
+                transaction.set_rollback(True)
+            else:
+                locked.updated_at = timezone.now()
+                locked.save(update_fields=['updated_at'])
+        return stale, malformed
+
+    def _save_buffer(self, semester, formset):
+        """Apply the buffer's edits, adds, reorder and deletes as one write (issue #179); return whether it saved.
+
+        Runs inside the caller's locked transaction. A row's formset slot
+        (`song-N-*`) never moves on drag — only Django's own initial/extra
+        boundary can tell an existing Song's submitted id from a new row's,
+        and that boundary is a fixed index cutoff, not a per-row flag,
+        so renaming an existing row's slot on every drag would risk landing
+        it past `INITIAL_FORMS` and silently duplicating it as new. Visual
+        order instead travels as the repeated `song_order` field's *request
+        order* (each value naming a slot's prefix), which is exactly the
+        buffer's row order because SortableJS physically moves each row's
+        DOM node — including its `song_order` input — on drop.
+
+        Before any write, `song_order` is checked to be an exact
+        duplicate-free permutation of the formset's own form prefixes —
+        every row's `song_order` input travels with it regardless of
+        whether that row is deleted or an untouched blank add, so the
+        full prefix set (not just the surviving ones) is what the grid's
+        JS actually submits. An unknown, duplicate, or missing prefix
+        returns `False` and writes nothing, rather than silently omitting
+        a surviving Song's edits or assigning conflicting positions.
+        Every surviving row named there — changed, unchanged or
+        brand-new — is then saved with a throwaway position first
+        (position isn't a form field, so a new instance has none yet);
+        `reorder_songs()` renumbers that exact order to a contiguous
+        1..N, on the surviving Song ids alone, so valid deletions remain
+        supported. Deletions (`delete_songs_with_recordings`) run after
+        survivors are saved so a row moved out from under a doomed
+        Song's old position never collides — the deferred unique
+        constraint makes the whole sequence collision-free either way.
+        """
+        deleted_forms = formset.deleted_forms
+        deleted_songs = [form.instance for form in deleted_forms if form.instance.pk]
+        extra_forms = set(formset.extra_forms)
+        forms_by_prefix = {form.prefix: form for form in formset.forms}
+
+        order_tokens = formset.data.getlist('song_order')
+        if sorted(order_tokens) != sorted(forms_by_prefix):
+            return False
+
+        ordered_ids = []
+        for token in order_tokens:
+            form = forms_by_prefix[token]
+            if form in deleted_forms:
+                continue
+            if form in extra_forms and not form.has_changed():
+                continue
+            song = form.save(commit=False)
+            song.semester = semester
+            song.position = 0
+            song.save()
+            ordered_ids.append(song.pk)
+
+        if deleted_songs:
+            delete_songs_with_recordings(deleted_songs)
+
+        reorder_songs(semester, ordered_ids)
+        return True
 
     def _stamp_matches(self, semester, submitted_stamp):
         """Return whether `submitted_stamp` (an isoformat string) still matches `semester.updated_at`."""
@@ -383,6 +453,29 @@ class SetlistEditView(AdminRequiredMixin, View):
             'formset': formset,
             'stamp': semester.updated_at.isoformat() if semester else '',
         }
+
+
+class SetlistDeleteConfirmView(AdminRequiredMixin, View):
+    """`/setlist/edit/confirm-delete/`: names the doomed Songs' recording/uploader counts before a Save (issue #179).
+
+    Fetched by the edit grid's JS only when the buffer contains at least
+    one deletion, with the struck rows' Song ids as `song_id` POST values.
+    A pure counts read — it writes nothing and rolls nothing back — so it
+    is not subject to ADR-0008's preview machinery and doesn't wait on
+    #144. Scoped to the viewing Semester like every other read here, so a
+    tampered id from another Semester is silently dropped rather than
+    leaking a count across Semesters.
+    """
+
+    template_name = 'scheduling/_setlist_delete_confirm.html'
+
+    def post(self, request):
+        """Render the confirmation fragment naming each requested Song's recording/uploader counts."""
+        semester = get_viewing_semester(request)
+        song_ids = request.POST.getlist('song_id')
+        songs = _scoped_to_viewing_semester(Song, semester).filter(pk__in=song_ids).order_by('position')
+        summaries = song_deletion_summaries(songs)
+        return render(request, self.template_name, {'summaries': summaries})
 
 
 class MembersView(BaseView, TemplateView):
@@ -509,10 +602,11 @@ class SongDetailView(BaseView, DetailView):
         return _scoped_to_viewing_semester(Song, get_viewing_semester(self.request))
 
     def get_context_data(self, **kwargs):
-        """Add the Song's SongRoleAssignments, Recordings grouped by RehearsalSong slot, and rehearsal-count target vs. actual."""
+        """Add the Song's SongRoleAssignments, Role fill status, Recordings grouped by RehearsalSong slot, and rehearsal-count target vs. actual."""
         context = super().get_context_data(**kwargs)
         song = self.object
         context['assignments'] = SongRoleAssignment.objects.filter(song=song)
+        context['fill_statuses'] = fill_status_for(song)
         context['recording_groups'] = [
             {
                 'rehearsal_song': group.rehearsal_song,
