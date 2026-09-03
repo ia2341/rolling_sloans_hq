@@ -62,4 +62,8 @@ urlpatterns = [
         'manage/conflicts/<int:rehearsal_id>/',
         views.ConflictAdjudicationDetailView.as_view(), name='manage-conflicts-detail',
     ),
+    path(
+        'manage/conflicts/<int:rehearsal_id>/preview/',
+        views.AdjudicationPreviewView.as_view(), name='manage-conflicts-preview',
+    ),
 ]

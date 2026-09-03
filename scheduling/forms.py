@@ -292,11 +292,31 @@ class AdjudicationRowForm(forms.Form):
     unchanged. `note` is never required — a note is offered on an approval
     exactly as readily as on a rejection, and an admin deciding a dozen
     rows in one batch must not be made to type something in every one.
+
+    `preview_url`, when passed, wires `status`'s widget to POST the whole
+    form to the Feasibility Preview endpoint on change — never `note`,
+    which must never trigger a Preview (issue #194). It's a constructor
+    kwarg rather than a class-level `reverse_lazy()` attribute because the
+    URL is per-Rehearsal; the view passes it via `form_kwargs` when
+    instantiating the formset.
     """
 
     conflict_id = forms.IntegerField(widget=forms.HiddenInput)
     status = forms.ChoiceField(choices=Conflict.STATUS_CHOICES)
     note = forms.CharField(max_length=255, required=False)
+
+    def __init__(self, *args, preview_url=None, **kwargs):
+        """Wire `status`'s widget to fire a Preview POST on change, when `preview_url` is given."""
+        super().__init__(*args, **kwargs)
+        if preview_url:
+            self.fields['status'].widget.attrs.update({
+                'hx-post': preview_url,
+                'hx-trigger': 'change',
+                'hx-target': '#adjudication-preview',
+                'hx-swap': 'outerHTML',
+                'hx-sync': 'closest form:replace',
+                'hx-include': 'closest form',
+            })
 
 
 # One row per existing Conflict on the target Rehearsal — no add/remove, unlike RosterEditFormSet's
