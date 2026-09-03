@@ -155,8 +155,8 @@ class WizardEntryPostTests(TestCase):
             target_status_code=302,
         )
 
-    def test_valid_submission_with_no_prior_semester_lands_on_the_finish_screen(self):
-        """With no prior Semester, following the redirect chain from a valid submission lands on the finish screen."""
+    def test_valid_submission_with_no_prior_semester_lands_on_the_setlist_step(self):
+        """With no prior Semester, following the redirect chain from a valid submission lands on step 4 (setlist)."""
         admin_client(self)
 
         response = self.client.post(reverse('scheduling:manage-semester-setup'), VALID_POST_DATA, follow=True)
@@ -164,7 +164,7 @@ class WizardEntryPostTests(TestCase):
         semester = Semester.objects.get(name='Fall 2026')
         self.assertEqual(response.redirect_chain, [
             (reverse('scheduling:manage-semester-setup-roster', args=[semester.pk]), 302),
-            (reverse('scheduling:manage-semester-setup-finish', args=[semester.pk]), 302),
+            (reverse('scheduling:manage-semester-setup-setlist', args=[semester.pk]), 302),
         ])
         self.assertEqual(response.status_code, 200)
 
