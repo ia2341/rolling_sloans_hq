@@ -1850,8 +1850,8 @@ class SemesterSetupRosterView(AdminRequiredMixin, View):
     import), so unlike `SemesterSetupView` it needs no modal-fragment
     variant: a direct hit and the Home panel's post-redirect navigation
     both land on the plain full page. Both its exits move on to step 4
-    (the setlist import, issue #202), never straight to finish, except
-    when there is no prior Semester to import from at all.
+    (the setlist import, issue #202), never straight to finish — even
+    with no prior Semester to import from, step 4 still follows.
     """
 
     template_name = 'scheduling/semester_setup_roster.html'
