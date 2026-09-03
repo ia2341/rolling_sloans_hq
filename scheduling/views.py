@@ -103,6 +103,7 @@ from scheduling.services import (
     recording_groups_for,
     rehearsal_count_target,
     rehearsal_schedule_for,
+    reorder_rehearsal_songs,
     reorder_songs,
     reserve_recording_upload,
     roster_for,
@@ -1532,11 +1533,17 @@ class RehearsalEditView(AdminRequiredMixin, View):
         return render(request, self.template_name, {'rehearsal': rehearsal, 'form': RehearsalForm(instance=rehearsal)})
 
     def post(self, request, pk):
-        """Validate and save the edit, or re-render with errors."""
+        """Validate and save the edit, re-deriving its RehearsalSongs' persisted times, or re-render with errors."""
         rehearsal = self._get_rehearsal(pk)
         form = RehearsalForm(request.POST, instance=rehearsal)
         if form.is_valid():
-            form.save()
+            with transaction.atomic():
+                form.save()
+                existing_order = list(
+                    RehearsalSong.objects.filter(rehearsal=rehearsal).values_list('pk', flat=True)
+                )
+                if existing_order:
+                    reorder_rehearsal_songs(rehearsal, existing_order)
             messages.success(request, 'Rehearsal updated.')
             return redirect('scheduling:manage-schedule')
         return render(request, self.template_name, {'rehearsal': rehearsal, 'form': form})
