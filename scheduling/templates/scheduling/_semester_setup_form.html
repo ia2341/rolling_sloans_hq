@@ -1,0 +1,32 @@
+{# Semester setup steps 1-2's form (issue #200): shared between the full page (semester_setup.html, the #}
+{# no-JS fallback and the direct-link target) and the Home panel's modal, which fetches this same #}
+{# fragment so there is exactly one template for the step, never two implementations of it. #}
+<div id="semester-setup-form">
+  <p>Step 1&ndash;2 of 5 &mdash; name your new semester and confirm its timing defaults. Importing a roster, a
+    setlist and rehearsal dates are optional steps that come later, each from its own tab.</p>
+
+  <form method="post" action="{% url 'scheduling:manage-semester-setup' %}">
+    {% csrf_token %}
+    <label for="{{ form.name.id_for_label }}">{{ form.name.label }}</label>
+    {{ form.name }}
+    {% if form.name.errors %}
+      <ul class="errors">{% for error in form.name.errors %}<li>{{ error }}</li>{% endfor %}</ul>
+    {% endif %}
+
+    <details>
+      <summary>Timing defaults</summary>
+      {% for field in form %}
+        {% if field.name != 'name' %}
+          <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+          {{ field }}
+          {% if field.errors %}
+            <ul class="errors">{% for error in field.errors %}<li>{{ error }}</li>{% endfor %}</ul>
+          {% endif %}
+        {% endif %}
+      {% endfor %}
+    </details>
+
+    <button type="submit">Create Semester</button>
+  </form>
+  <a href="{% url 'scheduling:overview' %}">Cancel</a>
+</div>

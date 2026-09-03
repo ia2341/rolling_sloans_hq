@@ -9,6 +9,10 @@ urlpatterns = [
     path('schedule/', views.ScheduleView.as_view(), name='schedule'),
     path('schedule/<int:rehearsal_id>/conflict/', views.ConflictDeclareView.as_view(), name='conflict-declare'),
     path('schedule/<int:rehearsal_id>/conflict/delete/', views.ConflictDeleteView.as_view(), name='conflict-delete'),
+    path(
+        'schedule/<int:rehearsal_id>/assignments/save/',
+        views.AssignmentEditSaveView.as_view(), name='schedule-assignments-save',
+    ),
     path('setlist/', views.SetlistView.as_view(), name='setlist'),
     path('setlist/edit/', views.SetlistEditView.as_view(), name='setlist-edit'),
     path(
@@ -42,6 +46,11 @@ urlpatterns = [
     path('me/recordings/presign/', views.RecordingPresignView.as_view(), name='recordings-presign'),
     path('me/recordings/<int:pk>/delete/', views.RecordingDeleteView.as_view(), name='recordings-delete'),
     path('manage/semester/', views.SemesterSelectView.as_view(), name='manage-semester-select'),
+    path('manage/semesters/setup/', views.SemesterSetupView.as_view(), name='manage-semester-setup'),
+    path(
+        'manage/semesters/setup/<int:pk>/finish/',
+        views.SemesterSetupFinishView.as_view(), name='manage-semester-setup-finish',
+    ),
     path('manage/semesters/', views.SemesterManageView.as_view(), name='manage-semesters'),
     path('manage/semesters/<int:pk>/publish/', views.SemesterPublishView.as_view(), name='manage-semesters-publish'),
     path('manage/semesters/<int:pk>/delete/', views.SemesterDeleteView.as_view(), name='manage-semesters-delete'),

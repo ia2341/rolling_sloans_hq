@@ -239,6 +239,29 @@ def get_live_semester() -> Semester | None:
     return Semester.objects.exclude(published_at=None).order_by('-published_at', '-id').first()
 
 
+class InvalidSemesterNameError(ValueError):
+    """Raised by `create_semester()` for a blank name, or one matching an existing Semester (issue #200)."""
+
+
+def create_semester(name: str, **timing_defaults) -> Semester:
+    """Create and return a new draft Semester (`published_at` null) named `name`, carrying `timing_defaults` (issue #200).
+
+    The one seam Semester setup adds outside the Django admin panel: it
+    takes no semester row lock (it renumbers nothing and the row does not
+    exist yet) and registers no side effect. `name` is compared
+    case-insensitively against every existing Semester, live or draft, so
+    two terms an admin cannot tell apart by name is never possible; a blank
+    or duplicate name raises `InvalidSemesterNameError` before anything is
+    written, and every other Semester is left untouched.
+    """
+    name = name.strip()
+    if not name:
+        raise InvalidSemesterNameError('Name your new semester before continuing.')
+    if Semester.objects.filter(name__iexact=name).exists():
+        raise InvalidSemesterNameError(f'A semester named "{name}" already exists — choose a different name.')
+    return Semester.objects.create(name=name, **timing_defaults)
+
+
 def publish_semester(semester: Semester) -> None:
     """Stamp `semester.published_at` to now — the whole of Publish (issue #170).
 
@@ -850,6 +873,83 @@ def _matrix_entries_by_song_role(songs, roles):
         )
         result.setdefault((assignment.song_id, assignment.role_id), []).append(entry)
     return result
+
+
+def assignment_grid_is_editable(rehearsal) -> bool:
+    """Return whether an admin gets an "Edit assignments" control on `rehearsal`'s assignment grid (issue #210).
+
+    A usability rule, not a data-integrity one (ADR-0009): every
+    SongRoleAssignment row reachable through a past-dated Rehearsal's grid
+    is exactly as writable in the database as any other, and removing one
+    still reaches every Rehearsal and the concert semester-wide regardless
+    of which grid the admin removed it from. The rule exists only because a
+    grid captioned with a stale date is a misleading place to change a live
+    concert lineup — unlike the rehearsal editor's own past-date lock,
+    which *is* about integrity. A same-day Rehearsal stays editable all day
+    (whole days, not instants, so a last-minute reassignment during
+    tonight's rehearsal is possible). The Dress Rehearsal is always
+    editable: its rows are the live setlist (ADR-0003) and it is the
+    Semester's last-dated Rehearsal, so it is the backstop that keeps a
+    late Semester editable once every other Rehearsal has passed.
+    """
+    return rehearsal.is_full_setlist or rehearsal.date >= timezone.localdate()
+
+
+class StaleAssignmentSemesterError(ValueError):
+    """Raised when an assignment edit Buffer's Semester changed since the Buffer was loaded (issue #210)."""
+
+
+@dataclass(frozen=True)
+class AssignmentEditBuffer:
+    """The Pending Buffer `apply_song_role_assignments()` commits in one transaction (issue #210).
+
+    Removal-only for this slice (ADR-0009): `removed_assignment_ids` names
+    every SongRoleAssignment row to delete, wherever on the grid its chip's
+    ✕ was clicked. `semester_id` and `semester_updated_at` back the same
+    two staleness checks `RosterEditBuffer` uses — `semester_id` against
+    the caller's session-scoped viewing Semester, `semester_updated_at`
+    against the Semester row's current stamp.
+    """
+
+    semester_id: int
+    semester_updated_at: datetime
+    removed_assignment_ids: frozenset[int]
+
+
+def apply_song_role_assignments(buffer: AssignmentEditBuffer, *, viewing_semester: Semester) -> None:
+    """Apply a Buffer of SongRoleAssignment removals in one transaction (issue #210, ADR-0009).
+
+    Removal is semester-wide: SongRoleAssignment is (song, role, person)
+    with no rehearsal FK, so deleting a row here removes that Person from
+    that Song at every Rehearsal and at the concert, not only the Rehearsal
+    whose grid the admin was viewing. Takes no Semester row lock — nothing
+    here renumbers Song positions or RehearsalSong order, so there is no
+    ordering constraint to serialize against. Registers no
+    `transaction.on_commit()` call — nothing here reaches outside the
+    Semester (no mail, no object storage).
+
+    Raises `WrongViewingSemesterError` if `buffer.semester_id` doesn't
+    match `viewing_semester`, checked before any transaction opens. Raises
+    `StaleAssignmentSemesterError` inside the transaction if the Semester's
+    `updated_at` no longer matches `buffer.semester_updated_at`, rolling
+    back whatever this call had already applied.
+    """
+    if viewing_semester is None or buffer.semester_id != viewing_semester.pk:
+        raise WrongViewingSemesterError(
+            "This assignment edit Buffer's Semester doesn't match the Semester you're currently viewing."
+        )
+
+    with transaction.atomic():
+        semester = Semester.objects.get(pk=buffer.semester_id)
+        if semester.updated_at != buffer.semester_updated_at:
+            raise StaleAssignmentSemesterError('The assignments changed while you were editing — reload and reapply.')
+
+        SongRoleAssignment.objects.filter(
+            pk__in=buffer.removed_assignment_ids, song__semester=semester,
+        ).delete()
+
+        semester.updated_at = timezone.now()
+        semester.save(update_fields=['updated_at'])
 
 
 def upcoming_rehearsals_for(semester, count=3):
@@ -1467,7 +1567,12 @@ def landing_rehearsal_for(person, semester):
 
 
 class WrongViewingSemesterError(ValueError):
-    """Raised when a Roster edit Buffer's Semester id doesn't match the session-scoped viewing Semester (issue #226)."""
+    """Raised when a Pending Buffer's Semester id doesn't match the session-scoped viewing Semester.
+
+    Shared across every ADR-0008 apply function that carries this
+    staleness check: `apply_roster_edits()` (issue #226) and
+    `apply_song_role_assignments()` (issue #210).
+    """
 
 
 class StaleRosterSemesterError(ValueError):
