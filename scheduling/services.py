@@ -318,6 +318,73 @@ def _delete_recording_objects(object_keys: list[str]) -> None:
             logger.exception('Failed to delete recording object %r from storage after Semester deletion.', object_key)
 
 
+def reorder_songs(semester: Semester, ordered_song_ids: list[int]) -> None:
+    """Renumber `ordered_song_ids`'s Songs to a contiguous 1..N, in that order (issue #179).
+
+    The setlist edit grid's Save is the only caller: `ordered_song_ids` is
+    the buffer's surviving row order (deleted rows already excluded), never
+    a client-submitted position. Must run inside the caller's
+    `transaction.atomic()` — a whole-table renumber briefly assigns
+    positions that collide with each other's prior values, which is only
+    free of a mid-transaction constraint violation because
+    `unique_song_position_per_semester` is `Deferrable.DEFERRED`.
+    """
+    songs_by_id = {song.pk: song for song in Song.objects.filter(semester=semester, pk__in=ordered_song_ids)}
+    for position, song_id in enumerate(ordered_song_ids, start=1):
+        song = songs_by_id[song_id]
+        song.position = position
+        song.save(update_fields=['position'])
+
+
+@dataclass(frozen=True)
+class SongDeletionSummary:
+    """One doomed Song's recording/uploader counts, for the setlist edit grid's delete confirmation (issue #179)."""
+
+    song: Song
+    recording_count: int
+    uploader_count: int
+
+
+def song_deletion_summaries(songs) -> list['SongDeletionSummary']:
+    """Return each of `songs`' recording count and distinct-uploader count, for the delete confirmation dialog.
+
+    A pure counts read: no locking, no transaction, nothing written. Not
+    ADR-0008 preview machinery — there is nothing to roll back.
+    """
+    summaries = []
+    for song in songs:
+        recordings = Recording.objects.filter(rehearsal_song__song=song)
+        summaries.append(SongDeletionSummary(
+            song=song,
+            recording_count=recordings.count(),
+            uploader_count=recordings.values('uploaded_by').distinct().count(),
+        ))
+    return summaries
+
+
+def delete_songs_with_recordings(songs) -> None:
+    """Hard-delete `songs`, cleaning up their Recordings' storage objects (issue #179).
+
+    Mirrors `delete_semester`'s shape (issue #171): the cascade
+    (`RehearsalSong.song` and `Recording.rehearsal_song` both
+    `on_delete=CASCADE`) destroys every RehearsalSong and Recording row for
+    these Songs, so object keys are collected first, while they're still
+    reachable. Storage deletion is registered with `transaction.on_commit()`
+    and reuses `_delete_recording_objects`'s best-effort, log-don't-raise
+    behavior — a storage failure never blocks or rolls back the Save this
+    runs inside.
+    """
+    song_ids = [song.pk for song in songs]
+    if not song_ids:
+        return
+    object_keys = list(
+        Recording.objects.filter(rehearsal_song__song_id__in=song_ids).values_list('file', flat=True)
+    )
+    Song.objects.filter(pk__in=song_ids).delete()
+    if object_keys:
+        transaction.on_commit(lambda: _delete_recording_objects(object_keys))
+
+
 def get_viewing_semester(request) -> Semester | None:
     """Return the Semester `request` is scoped to, for reads and writes alike.
 
