@@ -7,6 +7,7 @@ from django.db import IntegrityError, models, transaction
 from django.http import Http404, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.views import View
 from django.views.generic import DetailView, TemplateView
@@ -17,6 +18,7 @@ from scheduling.forms import (
     MembershipRolesForm,
     RecordingUploadForm,
     RehearsalForm,
+    SetlistEditFormSet,
     SongForm,
     SongRoleAssignmentForm,
 )
@@ -234,6 +236,87 @@ class SetlistView(BaseView, TemplateView):
             song.recording_count = recording_count_for(song)
         context['songs'] = songs
         return context
+
+
+class SetlistEditView(AdminRequiredMixin, View):
+    """`/setlist/edit/`: an admin's in-place editable grid for the viewing Semester's setlist (issue #178).
+
+    A sibling of `SetlistView` rather than a `/manage/` screen, because the
+    point of this ticket is that an admin fixes a mistake on the page they
+    spotted it on. GET renders the grid — as a bare fragment for the
+    htmx-driven "Edit setlist" button's in-place swap, or as a full page
+    (banner and all) for a direct/no-JS request. POST commits the whole
+    buffer as one atomic write, or writes nothing and re-renders the full
+    page with every submitted value preserved: per-field errors on a
+    validation failure, or a stale-stamp notice when another admin's save
+    landed first (the optimistic-concurrency stamp from #178's map).
+    """
+
+    fragment_template_name = 'scheduling/_setlist_edit.html'
+    page_template_name = 'scheduling/setlist_edit.html'
+    STALE_MESSAGE = 'The setlist changed while you were editing — reload and reapply.'
+
+    def get(self, request):
+        """Render the edit grid: a bare fragment for htmx, a full page otherwise."""
+        semester = get_viewing_semester(request)
+        songs = _scoped_to_viewing_semester(Song, semester).order_by('position')
+        formset = SetlistEditFormSet(queryset=songs, prefix='song')
+        return self._render(request, semester, formset)
+
+    def post(self, request):
+        """Validate and save the whole buffer atomically, honoring the Semester's optimistic-concurrency stamp."""
+        semester = get_viewing_semester(request)
+        if semester is None:
+            return redirect('scheduling:setlist')
+        songs = _scoped_to_viewing_semester(Song, semester).order_by('position')
+        formset = SetlistEditFormSet(request.POST, queryset=songs, prefix='song')
+        if formset.is_valid():
+            stale = self._save_if_current(semester, formset, request.POST.get('semester_updated_at', ''))
+            if not stale:
+                messages.success(request, 'Setlist updated.')
+                return redirect('scheduling:setlist')
+            messages.error(request, self.STALE_MESSAGE)
+        return self._render(request, semester, formset, status=200)
+
+    def _save_if_current(self, semester, formset, submitted_stamp):
+        """Save `formset` and bump the Semester's stamp if `submitted_stamp` still matches; return whether it was stale.
+
+        Locks the Semester row for the duration of the check-and-save so a
+        concurrent save can't slip in between the comparison and the write.
+        Rolls back and writes nothing when the stamp is stale, without
+        issuing any further query inside the doomed transaction.
+        """
+        stale = False
+        with transaction.atomic():
+            locked = _lock_semester(semester)
+            if self._stamp_matches(locked, submitted_stamp):
+                formset.save()
+                locked.updated_at = timezone.now()
+                locked.save(update_fields=['updated_at'])
+            else:
+                stale = True
+                transaction.set_rollback(True)
+        return stale
+
+    def _stamp_matches(self, semester, submitted_stamp):
+        """Return whether `submitted_stamp` (an isoformat string) still matches `semester.updated_at`."""
+        parsed = parse_datetime(submitted_stamp or '')
+        return parsed is not None and parsed == semester.updated_at
+
+    def _render(self, request, semester, formset, status=200):
+        """Render the fragment for an htmx request, else the full page; both carry the same buffer."""
+        context = self._build_context(semester, formset)
+        if request.headers.get('HX-Request') == 'true':
+            return render(request, self.fragment_template_name, context, status=status)
+        return render(request, self.page_template_name, context, status=status)
+
+    def _build_context(self, semester, formset):
+        """Build the shared context for both the fragment and full-page renders."""
+        return {
+            'semester': semester,
+            'formset': formset,
+            'stamp': semester.updated_at.isoformat() if semester else '',
+        }
 
 
 class MembersView(BaseView, TemplateView):
