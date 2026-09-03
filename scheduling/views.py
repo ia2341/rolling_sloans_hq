@@ -1,6 +1,7 @@
 """Member read routes (issue #56), self-service routes (issues #57, #58, #61), and admin management routes (issue #60)."""
 
 import json
+import re
 
 from django.contrib import messages
 from django.db import transaction
@@ -27,6 +28,7 @@ from scheduling.forms import (
     RehearsalForm,
     RosterAddFormSet,
     RosterEditFormSet,
+    SemesterSetupForm,
     SetlistEditEmptyFormSet,
     SetlistEditFormSet,
     SongRoleAssignmentForm,
@@ -45,6 +47,7 @@ from scheduling.models import (
 from scheduling.services import (
     CONFLICT_EARLY_DEPARTURE,
     CONFLICT_LATE_ARRIVAL,
+    InvalidSemesterNameError,
     LiveSemesterDeletionError,
     RecordingUploadError,
     RosterEditBuffer,
@@ -61,6 +64,7 @@ from scheduling.services import (
     conflict_adjudication_index_for,
     conflict_rows_by_rehearsal,
     create_recording_playback_url,
+    create_semester,
     declare_conflict,
     declared_roles_for,
     delete_semester,
@@ -1547,6 +1551,112 @@ class RecordingDeleteView(BaseView, View):
         recording.delete()
         messages.success(request, 'Recording deleted.')
         return redirect('scheduling:song-detail', pk=song_id)
+
+
+TIMING_DEFAULT_CONSTANTS = {
+    'default_rehearsal_duration_minutes': 240,
+    'default_song_slot_count': 6,
+    'default_setup_grace_minutes': 10,
+    'default_teardown_grace_minutes': 10,
+    'default_arrival_buffer_minutes': 5,
+    'default_departure_buffer_minutes': 5,
+}
+"""The wizard's timing-default fallback when there is no prior Semester to prefill from (issue #198 §6, #200).
+
+A UI convenience belonging to the wizard, not the domain: `create_semester()`
+takes whatever timing defaults its caller passes and has no fallback of its
+own.
+"""
+
+_SEMESTER_NAME_PATTERN = re.compile(r'^(Fall|Spring)\s+(\d{4})$', re.IGNORECASE)
+
+
+def _suggested_semester_name(prior_semester):
+    """Return a suggested next name parsed from `prior_semester`'s name, or '' when it can't be inferred.
+
+    A two-line UI convenience with zero downstream authority (issue #200,
+    mirroring #198 decision #4's date-range prefill): "Fall <year>"
+    suggests "Spring <year + 1>" and vice versa. Anything else — no prior
+    Semester, or a name that doesn't parse — leaves the field blank rather
+    than guessing or erroring.
+    """
+    if prior_semester is None:
+        return ''
+    match = _SEMESTER_NAME_PATTERN.match(prior_semester.name.strip())
+    if not match:
+        return ''
+    season, year = match.group(1).capitalize(), int(match.group(2))
+    if season == 'Fall':
+        return f'Spring {year + 1}'
+    return f'Fall {year}'
+
+
+class SemesterSetupView(AdminRequiredMixin, View):
+    """`/manage/semester/setup/`: Semester setup steps 1-2, the wizard's only required screen (issue #200).
+
+    A name plus the six timing defaults in one submission: GET prefills
+    both from the most recently created Semester (falling back to
+    `TIMING_DEFAULT_CONSTANTS` when there is none), and POST creates the
+    draft immediately via `create_semester()`, switches this admin's
+    session selection to it, and redirects to the finish screen. Nothing
+    here is held hostage to finishing the rest of the wizard — steps 3-5
+    (roster, setlist, rehearsal dates) are separate, independently
+    skippable tickets not yet built, so this screen goes straight from
+    submit to finish.
+    """
+
+    template_name = 'scheduling/semester_setup.html'
+
+    def get(self, request):
+        """Render the form, prefilled from the most recently created Semester if one exists."""
+        prior_semester = Semester.objects.order_by('-created_at', '-id').first()
+        initial = {'name': _suggested_semester_name(prior_semester)}
+        if prior_semester is not None:
+            for field in TIMING_DEFAULT_CONSTANTS:
+                initial[field] = getattr(prior_semester, field)
+        else:
+            initial.update(TIMING_DEFAULT_CONSTANTS)
+        form = SemesterSetupForm(initial=initial)
+        return render(request, self.template_name, {'form': form})
+
+    def post(self, request):
+        """Validate and create the draft Semester, switch the session's viewing Semester, and redirect to finish."""
+        form = SemesterSetupForm(request.POST)
+        if form.is_valid():
+            try:
+                semester = create_semester(name=form.cleaned_data['name'], **form.timing_defaults())
+            except InvalidSemesterNameError as error:
+                form.add_error('name', str(error))
+            else:
+                set_viewing_semester(request, semester)
+                messages.success(request, f'{semester.name} created as a draft.')
+                return redirect('scheduling:manage-semester-setup-finish', pk=semester.pk)
+        return render(request, self.template_name, {'form': form})
+
+
+class SemesterSetupFinishView(AdminRequiredMixin, View):
+    """`/manage/semester/setup/<pk>/finish/`: Semester setup's finish screen (issue #200).
+
+    Names what's still empty on the new draft — computed live from
+    `semester_deletion_summary()`'s counts, never stored, per #198 decision
+    #10's rejection of any persisted per-step completion state. There is no
+    "resume setup": an abandoned draft is finished from the ordinary tabs,
+    and this screen's only job is to hand the admin back to Home having
+    seen what those tabs still have to do.
+    """
+
+    template_name = 'scheduling/semester_setup_finish.html'
+
+    def get(self, request, pk):
+        """Render the new Semester's still-empty summary, or 404 if it's since been deleted."""
+        semester = get_object_or_404(Semester, pk=pk)
+        summary = semester_deletion_summary(semester)
+        return render(request, self.template_name, {
+            'semester': semester,
+            'roster_is_empty': summary.member_count == 0,
+            'setlist_is_empty': summary.song_count == 0,
+            'schedule_is_empty': summary.rehearsal_count == 0,
+        })
 
 
 class SemesterManageView(AdminRequiredMixin, View):

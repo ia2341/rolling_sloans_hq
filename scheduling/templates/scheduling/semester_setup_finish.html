@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}{{ semester.name }} created{% endblock %}
+{% block content %}
+<h1>{{ semester.name }} created</h1>
+<p>Your new semester is a draft &mdash; invisible to members until you publish it from the Home panel.</p>
+
+<p>Still empty:</p>
+<ul>
+  {% if roster_is_empty %}<li>no roster yet &mdash; invite or import members from the Band Members tab</li>{% endif %}
+  {% if setlist_is_empty %}<li>no setlist yet &mdash; add or import songs from the Songs tab</li>{% endif %}
+  {% if schedule_is_empty %}<li>no rehearsals scheduled yet &mdash; set up the schedule from the Home panel</li>{% endif %}
+  {% if not roster_is_empty and not setlist_is_empty and not schedule_is_empty %}
+    <li>nothing &mdash; this semester already has a roster, a setlist and rehearsals</li>
+  {% endif %}
+</ul>
+
+<a href="{% url 'scheduling:overview' %}">Back to Home</a>
+{% endblock %}

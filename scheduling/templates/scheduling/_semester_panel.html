@@ -1,12 +1,13 @@
 {# The Home admin panel (issue #199): the Semester dropdown (issue #169), publish (issue #170) #}
-{# and delete (issue #171) for the currently viewed Semester, and doors to the surviving #}
-{# `/manage/` surfaces. Gated on `request.user.is_admin` directly (not on `semester_options` #}
-{# being non-empty) so the panel still renders — sans dropdown and Semester actions — when no #}
-{# Semester exists yet. The semester-setup wizard (issue #198 §12) later adds a "Create #}
-{# Semester" button here; it owns the panel's final layout. #}
+{# and delete (issue #171) for the currently viewed Semester, Create Semester (issue #200), and #}
+{# doors to the surviving `/manage/` surfaces. Gated on `request.user.is_admin` directly (not on #}
+{# `semester_options` being non-empty) so the panel still renders — sans dropdown and Semester #}
+{# actions — when no Semester exists yet, pointing a fresh install straight at Create Semester. #}
 {% if request.user.is_admin %}
 <article class="rs-semester-panel" data-testid="semester-panel">
   <h2>Semester</h2>
+
+  <a href="{% url 'scheduling:manage-semester-setup' %}" role="button">Create Semester</a>
 
   {% if semester_options %}
     {# A plain POST-and-redirect form: which Semester an admin edits must never #}
