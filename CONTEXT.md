@@ -24,6 +24,10 @@ _Avoid_: Go live, Release, Activate
 A Person's participation in one Semester. Carries the roles that person has declared they can play *that* semester — declarations can change semester to semester as people pick up or drop instruments.
 _Avoid_: Roster entry, Profile *(as an entity — "Profile" is fine as the name of the page that presents a Membership)*
 
+**Roster**:
+The collective noun for a Semester's set of Memberships — not a model of its own, just the group of Memberships a Semester has.
+_Avoid_: Roster entry *(that's a Membership — see above)*
+
 **Role**:
 A specific instrument or function a person can fill on a song (e.g. singer, guitarist, drummer). One global catalog shared across all semesters — a semester doesn't redefine roles, it just uses whichever subset applies.
 _Avoid_: Part, Instrument
