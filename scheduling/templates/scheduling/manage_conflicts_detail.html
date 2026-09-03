@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{# Extends base.html so the non-live Semester banner renders here too (issue #191). #}
+{# The adjudication table itself is issue #192 — this page only establishes the route. #}
+{% block title %}Manage conflicts{% endblock %}
+{% block content %}
+<h1>{{ rehearsal.date }} {{ rehearsal.start_time }}&ndash;{{ rehearsal.end_time }}</h1>
+<p><a href="{% url 'scheduling:manage-conflicts' %}">Back to Manage conflicts</a></p>
+<p>Adjudication table coming soon.</p>
+{% endblock %}

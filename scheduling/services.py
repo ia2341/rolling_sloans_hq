@@ -989,6 +989,40 @@ def future_rehearsals_for(semester) -> list[Rehearsal]:
     )
 
 
+@dataclass(frozen=True)
+class ConflictAdjudicationRow:
+    """One row of the admin adjudication index: a Rehearsal plus its pending Conflict count (issue #191)."""
+
+    rehearsal: Rehearsal
+    pending_count: int
+
+
+def conflict_adjudication_index_for(semester) -> list[ConflictAdjudicationRow]:
+    """Return `semester`'s adjudicatable Rehearsals with each one's pending Conflict count, in date order (issue #191).
+
+    Shares future_rehearsals_for()'s future/non-Dress filter — the Dress
+    Rehearsal can hold no Conflict (ADR-0006), and a past Rehearsal's
+    pending count is not a work queue that ever empties (CONTEXT.md's
+    Adjudication entry) — but is its own function rather than an
+    extension of that one: future_rehearsals_for() also backs
+    member-facing declaration paths that have no business carrying a
+    Conflict-derived count. A Rehearsal with zero Conflicts still gets a
+    row, so an admin can confirm there is nothing to do rather than infer
+    it from an absence.
+    """
+    rehearsals = future_rehearsals_for(semester)
+    pending_counts = dict(
+        Conflict.objects.filter(rehearsal__in=rehearsals, status=Conflict.PENDING)
+        .values('rehearsal_id')
+        .annotate(count=Count('id'))
+        .values_list('rehearsal_id', 'count'),
+    )
+    return [
+        ConflictAdjudicationRow(rehearsal=rehearsal, pending_count=pending_counts.get(rehearsal.pk, 0))
+        for rehearsal in rehearsals
+    ]
+
+
 _CLEARED_ADJUDICATION = {'status': Conflict.PENDING, 'adjudication_note': ''}
 """The undecided verdict every declaration is written with (issue #189).
 
