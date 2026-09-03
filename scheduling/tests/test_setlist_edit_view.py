@@ -199,6 +199,22 @@ class SetlistEditGetTests(TestCase):
 
         self.assertContains(response, 'value="4:05"')
 
+    def test_grid_carries_the_mobile_card_layout_markup(self):
+        """Every row exposes a distinct drag handle, visible move buttons, and per-field labels for the
+        below-breakpoint stacked-card layout (issue #181) — the same markup, restyled by CSS alone."""
+        semester = SemesterFactory()
+        SongFactory(semester=semester)
+        admin_client(self)
+
+        response = self.client.get(reverse('scheduling:setlist-edit'))
+
+        self.assertContains(response, 'class="setlist-drag-handle"')
+        self.assertContains(response, 'class="setlist-move-buttons"')
+        self.assertContains(response, 'setlist-field-label')
+        self.assertContains(response, '>Title</label>')
+        self.assertContains(response, '>Artist</label>')
+        self.assertContains(response, '>Length</label>')
+
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class SetlistEditSaveTests(TestCase):

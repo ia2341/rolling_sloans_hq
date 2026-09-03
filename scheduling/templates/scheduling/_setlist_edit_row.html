@@ -10,15 +10,18 @@
       <button type="button" class="setlist-move-up" @click="moveUp($event)" aria-label="Move up">↑</button>
       <button type="button" class="setlist-move-down" @click="moveDown($event)" aria-label="Move down">↓</button>
     </span>
-    <span class="setlist-field">
+    <span class="setlist-field setlist-field-title">
+      <label class="setlist-field-label" for="{{ form.title.id_for_label }}">Title</label>
       {{ form.title }}
       {{ form.title.errors }}
     </span>
-    <span class="setlist-field">
+    <span class="setlist-field setlist-field-artist">
+      <label class="setlist-field-label" for="{{ form.artist.id_for_label }}">Artist</label>
       {{ form.artist }}
       {{ form.artist.errors }}
     </span>
-    <span class="setlist-field">
+    <span class="setlist-field setlist-field-length">
+      <label class="setlist-field-label" for="{{ form.length.id_for_label }}">Length</label>
       {{ form.length }}
       {{ form.length.errors }}
     </span>
