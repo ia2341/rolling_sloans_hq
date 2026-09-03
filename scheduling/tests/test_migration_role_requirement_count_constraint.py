@@ -1,4 +1,4 @@
-"""The 0018 migration: a pre-existing zero-count SongRoleRequirement must not block the incoming check constraint."""
+"""The 0019 migration: a pre-existing zero-count SongRoleRequirement must not block the incoming check constraint."""
 
 from datetime import timedelta
 
@@ -8,10 +8,10 @@ from django.test import TransactionTestCase
 
 
 class DeleteZeroCountRequirementsMigrationTests(TransactionTestCase):
-    """Migrates the real schema forward across 0018, the way it will run in production."""
+    """Migrates the real schema forward across 0019, the way it will run in production."""
 
-    migrate_from = ('scheduling', '0017_semester_updated_at')
-    migrate_to = ('scheduling', '0018_alter_songrolerequirement_count_and_more')
+    migrate_from = ('scheduling', '0018_conflict_adjudication')
+    migrate_to = ('scheduling', '0019_alter_songrolerequirement_count_and_more')
 
     def setUp(self):
         """Roll the scheduling app's schema back to just before the count constraint lands."""
