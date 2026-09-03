@@ -7,6 +7,7 @@ from django.db import IntegrityError, models, transaction
 from django.http import Http404, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views import View
 from django.views.generic import DetailView, TemplateView
 
@@ -43,15 +44,19 @@ from scheduling.services import (
     declare_conflict,
     declared_roles_for,
     future_rehearsals_for,
+    get_live_semester,
     get_viewing_semester,
     next_attended_rehearsal_for,
     performers_for,
+    publish_semester,
     recording_count_for,
     recording_groups_for,
     rehearsal_count_target,
     rehearsal_schedule_for,
     reserve_recording_upload,
     roster_for,
+    semester_options_for,
+    set_viewing_semester,
     song_rehearsal_progress,
     songs_with_progress_for,
     upcoming_rehearsals_for,
@@ -86,10 +91,11 @@ class OverviewView(BaseView, TemplateView):
     template_name = 'scheduling/overview.html'
 
     def get_context_data(self, **kwargs):
-        """Add the Next Rehearsal card (issue #94) and semester-wide song-progress table (issue #93)."""
+        """Add the Next Rehearsal card (issue #94), song-progress table (issue #93) and admin Semester panel (issue #169)."""
         context = super().get_context_data(**kwargs)
         semester = get_viewing_semester(self.request)
         context['semester'] = semester
+        context['semester_options'] = semester_options_for(self.request)
         context['next_rehearsal'] = None
         context['next_rehearsal_suggestion'] = None
         context['upcoming_rehearsals'] = []
@@ -105,6 +111,40 @@ class OverviewView(BaseView, TemplateView):
             ]
             context['songs'] = songs_with_progress_for(semester, self.request.user)
         return context
+
+
+class SemesterSelectView(AdminRequiredMixin, View):
+    """`/manage/semester/`: an admin records which Semester this session is scoped to (issue #169).
+
+    A plain POST-and-redirect form, deliberately not an HTMX or JS
+    interaction: which Semester an admin is editing must never be ambiguous
+    because a script failed to load. An empty value clears the selection,
+    which is also how the shell's banner offers a way back to the Live
+    Semester; a pk matching no Semester clears it too, so a stale form
+    silently yields the live view rather than an error page.
+    """
+
+    def post(self, request):
+        """Set (or clear) the session's Semester selection and redirect back to the submitting page."""
+        semester = self._submitted_semester(request)
+        set_viewing_semester(request, semester)
+        if semester is not None:
+            messages.success(request, f'Now viewing {semester.name}.')
+        return redirect(self._redirect_target(request))
+
+    def _submitted_semester(self, request):
+        """Return the submitted Semester, or None when the field is empty, non-numeric or names a deleted row."""
+        submitted = request.POST.get('semester') or ''
+        if not submitted.isdigit():
+            return None
+        return Semester.objects.filter(pk=submitted).first()
+
+    def _redirect_target(self, request):
+        """Return the submitted `next` when it is a safe same-site path, else the Overview."""
+        target = request.POST.get('next') or ''
+        if url_has_allowed_host_and_scheme(target, allowed_hosts={request.get_host()}, require_https=request.is_secure()):
+            return target
+        return 'scheduling:overview'
 
 
 class ScheduleView(BaseView, TemplateView):
@@ -931,3 +971,33 @@ class RecordingDeleteView(BaseView, View):
         recording.delete()
         messages.success(request, 'Recording deleted.')
         return redirect('scheduling:song-detail', pk=song_id)
+
+
+class SemesterManageView(AdminRequiredMixin, View):
+    """`/manage/semesters/`: an admin lists every Semester with its Live/Draft/Previously published state (issue #170)."""
+
+    template_name = 'scheduling/manage_semesters.html'
+
+    def get(self, request):
+        """Render every Semester, newest-created first, alongside the Live Semester for status labeling."""
+        semesters = Semester.objects.order_by('-created_at', '-id')
+        return render(request, self.template_name, {
+            'semesters': semesters,
+            'live_semester': get_live_semester(),
+        })
+
+
+class SemesterPublishView(AdminRequiredMixin, View):
+    """`/manage/semesters/<pk>/publish/`: an admin publishes a Semester, making it the Live Semester (issue #170).
+
+    Publishing sets `published_at` to now and does nothing else — it is
+    visibility only, never gating or locking edits inside any Semester.
+    Pressing this on the already-live Semester is harmless (ADR-0010).
+    """
+
+    def post(self, request, pk):
+        """Publish the target Semester and redirect back to the Semesters list with a success message."""
+        semester = get_object_or_404(Semester, pk=pk)
+        publish_semester(semester)
+        messages.success(request, f'{semester} published.')
+        return redirect('scheduling:manage-semesters')

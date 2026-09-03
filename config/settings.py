@@ -67,6 +67,9 @@ TEMPLATES = [
                 'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
+                # The non-live Semester banner renders from the shared nav shell
+                # on every page, so it can't be per-view context (issue #169).
+                'scheduling.context_processors.semester_banner',
             ],
         },
     },

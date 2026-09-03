@@ -4,6 +4,8 @@
 {% block content %}
 <h1>Overview</h1>
 
+{% include "scheduling/_semester_panel.html" %}
+
 {% if not semester %}
 <p>There is no active semester yet.</p>
 {% endif %}
