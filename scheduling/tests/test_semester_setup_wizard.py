@@ -143,14 +143,30 @@ class WizardEntryPostTests(TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertEqual(self.client.session[VIEWING_SEMESTER_SESSION_KEY], semester.pk)
 
-    def test_valid_submission_redirects_to_the_finish_screen(self):
-        """A successful submission redirects to the finish screen for the newly created Semester."""
+    def test_valid_submission_redirects_into_the_roster_step(self):
+        """A successful submission redirects into step 3 (the roster import) for the newly created Semester."""
         admin_client(self)
 
         response = self.client.post(reverse('scheduling:manage-semester-setup'), VALID_POST_DATA)
 
         semester = Semester.objects.get(name='Fall 2026')
-        self.assertRedirects(response, reverse('scheduling:manage-semester-setup-finish', args=[semester.pk]))
+        self.assertRedirects(
+            response, reverse('scheduling:manage-semester-setup-roster', args=[semester.pk]),
+            target_status_code=302,
+        )
+
+    def test_valid_submission_with_no_prior_semester_lands_on_the_setlist_step(self):
+        """With no prior Semester, following the redirect chain from a valid submission lands on step 4 (setlist)."""
+        admin_client(self)
+
+        response = self.client.post(reverse('scheduling:manage-semester-setup'), VALID_POST_DATA, follow=True)
+
+        semester = Semester.objects.get(name='Fall 2026')
+        self.assertEqual(response.redirect_chain, [
+            (reverse('scheduling:manage-semester-setup-roster', args=[semester.pk]), 302),
+            (reverse('scheduling:manage-semester-setup-setlist', args=[semester.pk]), 302),
+        ])
+        self.assertEqual(response.status_code, 200)
 
     def test_the_non_live_banner_renders_after_creation(self):
         """Following the redirect after creation, the non-live banner appears since the draft isn't published."""

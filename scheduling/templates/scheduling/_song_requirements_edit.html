@@ -1,0 +1,109 @@
+<div
+  id="song-requirements-edit-surface"
+  x-data="songRequirementsEdit()"
+  x-init="init()"
+  @change="excludeSelectedRoles()"
+  @htmx:after-swap.window="excludeSelectedRoles()"
+>
+<h2>Edit Requirements — {{ song.title }}</h2>
+
+<form method="post" action="{% url 'scheduling:song-requirements-edit' song.pk %}" id="song-requirements-edit-form">
+  {% csrf_token %}
+  <input type="hidden" name="requirements_semester_id" value="{{ requirements_semester_id }}">
+  <input type="hidden" name="requirements_semester_updated_at" value="{{ requirements_semester_updated_at }}">
+  {{ formset.management_form }}
+  {% if formset.non_form_errors %}
+    <ul class="errors">
+      {% for error in formset.non_form_errors %}<li>{{ error }}</li>{% endfor %}
+    </ul>
+  {% endif %}
+
+  <table id="song-requirements-edit-table" class="rs-stack-table">
+    <thead>
+      <tr>
+        <th>Role</th>
+        <th>Target Count</th>
+        <th>Remove</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+        <tr class="song-requirement-edit-row">
+          {{ row.form.role_id }}
+          <td data-label="Role">
+            {{ row.role.name }}
+            {% if row.is_retired_role %}
+              <span class="rs-muted" title="This Role has been retired">(retired role)</span>
+            {% endif %}
+          </td>
+          <td data-label="Target Count">
+            {{ row.form.count }}
+            {{ row.form.count.errors }}
+          </td>
+          <td data-label="Remove">
+            {{ row.form.remove }} Remove
+          </td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="3">No Role Requirements yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <h3>Add Requirement</h3>
+  <div id="song-requirement-add-rows">
+    {{ add_formset.management_form }}
+    {% if add_formset.non_form_errors %}
+      <ul class="errors">
+        {% for error in add_formset.non_form_errors %}<li>{{ error }}</li>{% endfor %}
+      </ul>
+    {% endif %}
+    {% for form in add_formset %}
+      <div class="song-requirement-add-row">
+        <div id="song-requirement-role-{{ form.prefix }}">
+          {{ form.role }}
+          {{ form.role.errors }}
+        </div>
+        {{ form.count }}
+        {{ form.count.errors }}
+        <input type="hidden" name="prefix" value="{{ form.prefix }}">
+        <input type="text" class="add-role-name-input" placeholder="New role">
+        <button
+          type="button"
+          class="add-role-button"
+          hx-post="{% url 'scheduling:song-requirements-add-role' song.pk %}"
+          hx-target="#song-requirement-role-{{ form.prefix }}"
+          hx-swap="innerHTML"
+          hx-include="closest .song-requirement-add-row"
+        >Add Role</button>
+        {% if form.DELETE %}<label>{{ form.DELETE }} Remove</label>{% endif %}
+      </div>
+    {% endfor %}
+  </div>
+  <button type="button" id="add-requirement-row" @click="addRow">+ Add requirement</button>
+
+  <button type="submit" id="save-requirements-changes">Save Changes</button>
+</form>
+
+<a href="{% url 'scheduling:song-detail' song.pk %}" id="cancel-requirements-edit">Cancel</a>
+
+<template id="song-requirement-empty-form-template">
+  <div class="song-requirement-add-row">
+    <div id="song-requirement-role-__prefix__">
+      {{ add_formset.empty_form.role }}
+    </div>
+    {{ add_formset.empty_form.count }}
+    <input type="hidden" name="prefix" value="__prefix__">
+    <input type="text" class="add-role-name-input" placeholder="New role">
+    <button
+      type="button"
+      class="add-role-button"
+      hx-post="{% url 'scheduling:song-requirements-add-role' song.pk %}"
+      hx-target="#song-requirement-role-__prefix__"
+      hx-swap="innerHTML"
+      hx-include="closest .song-requirement-add-row"
+    >Add Role</button>
+    {% if add_formset.empty_form.DELETE %}<label>{{ add_formset.empty_form.DELETE }} Remove</label>{% endif %}
+  </div>
+</template>
+</div>

@@ -1,0 +1,22 @@
+<h2>Fill Status</h2>
+
+{% if semester and request.user.is_admin %}
+  <button
+    type="button"
+    id="edit-requirements-button"
+    hx-get="{% url 'scheduling:song-requirements-edit' song.pk %}"
+    hx-target="#requirements-surface"
+    hx-swap="innerHTML"
+  >Edit requirements</button>
+{% endif %}
+
+<ul>
+  {% for status in fill_statuses %}
+    <li{% if status.is_understaffed %} class="rs-muted"{% endif %}>
+      {{ status.role.name }} — {{ status.actual }} of {{ status.target }}
+      {% if status.is_retired_role %}<span class="rs-muted">(retired role)</span>{% endif %}
+    </li>
+  {% empty %}
+    <li>No role requirements yet.</li>
+  {% endfor %}
+</ul>

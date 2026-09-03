@@ -1,9 +1,10 @@
 """Application services for the scheduling domain."""
 
 import logging
+from collections import defaultdict
 from dataclasses import dataclass, replace
 from datetime import datetime, time, timedelta
-from itertools import pairwise
+from itertools import pairwise, permutations
 from uuid import uuid4
 
 from botocore.exceptions import BotoCoreError, ClientError
@@ -14,6 +15,7 @@ from django.utils import timezone
 
 from identity.models import Person
 from scheduling.models import (
+    Backup,
     Conflict,
     ConflictWindow,
     Membership,
@@ -1281,6 +1283,309 @@ def apply_adjudications(buffer: AdjudicationBuffer, *, viewing_semester: Semeste
         semester.save(update_fields=['updated_at'])
 
 
+FEASIBLE = 'feasible'
+INFEASIBLE = 'infeasible'
+NOT_APPLICABLE = 'not_applicable'
+
+FEASIBILITY_ROW_CEILING = 8
+"""Ceiling on RehearsalSong rows conflict_feasibility_for() will exhaustively search (issue #194).
+
+8! is already 40,320 orderings and a real Rehearsal holds a handful of
+songs, so this is generous headroom rather than a tight limit. Beyond it
+the search is not attempted at all -- see ConflictFeasibilityRow.checked.
+"""
+
+
+@dataclass(frozen=True)
+class ConflictFeasibilityRow:
+    """One Conflict's feasibility verdict and standing-overlap advisory, from `conflict_feasibility_for()` (issue #194).
+
+    `checked` is False only when the search was never attempted because
+    the Rehearsal's RehearsalSong count exceeds FEASIBILITY_ROW_CEILING;
+    `verdict` is then None, meant to render as "not checked" -- never as
+    feasible or infeasible. When `checked` is True, `verdict` is one of
+    FEASIBLE/INFEASIBLE/NOT_APPLICABLE: a full Conflict is always
+    NOT_APPLICABLE (no search needed, the person just isn't there), and a
+    partial Conflict held by someone with no assigned Songs that evening
+    is always FEASIBLE (also no search needed, there's nothing to place).
+    `has_standing_overlap` is only ever True for a Conflict id passed in
+    `approved_conflict_ids` -- a pending or rejected Conflict never
+    carries the advisory, since it isn't part of the band's real state.
+    """
+
+    conflict_id: int
+    checked: bool
+    verdict: str | None
+    has_standing_overlap: bool
+
+
+def _windows_overlap(window_start, window_end, slot_start, slot_end) -> bool:
+    """True when a [window_start, window_end) unavailable range intersects a [slot_start, slot_end) slot.
+
+    Shared by conflict_feasibility_for()'s candidate-ordering search and its
+    standing-overlap advisory (issue #194), so the two can never disagree
+    about what "overlap" means. Touching endpoints don't count as overlap.
+    """
+    return window_start < slot_end and slot_start < window_end
+
+
+def _slot_duration_for(rehearsal):
+    """Return one song-slot's length for `rehearsal`, mirroring RehearsalSong._slot_duration()'s formula.
+
+    Recomputed here rather than reused from a saved RehearsalSong instance
+    because conflict_feasibility_for()'s search evaluates hypothetical
+    orderings that are never persisted (issue #194).
+    """
+    start = datetime.combine(rehearsal.date, rehearsal.start_time)
+    end = datetime.combine(rehearsal.date, rehearsal.end_time)
+    return (end - start) / rehearsal.semester.default_song_slot_count
+
+
+def _person_avoids_windows(windows, song_ids, times_by_song_id) -> bool:
+    """True if none of `song_ids`' computed (start, end) slots in `times_by_song_id` overlap any of `windows`."""
+    for song_id in song_ids:
+        slot = times_by_song_id.get(song_id)
+        if slot is None:
+            continue
+        if any(_windows_overlap(window_start, window_end, slot[0], slot[1]) for window_start, window_end in windows):
+            return False
+    return True
+
+
+def _search_feasible(active_constraints, rehearsal_songs, rehearsal) -> bool:
+    """Exhaustively search orderings of `rehearsal_songs` for one where every (windows, song_ids) constraint holds.
+
+    This is the seam a real optimiser would replace (issue #194): a
+    Rehearsal's RehearsalSong rows can carry different slot_counts, so a
+    slot's start/end depends on every row that precedes it in the
+    ordering -- slot boundaries are not fixed columns, so bipartite
+    matching of songs to slots would only be exact when every row shares
+    the same slot_count. Enumerating full orderings sidesteps that
+    entirely and is exact for the handful of songs a real Rehearsal holds.
+    """
+    slot_duration = _slot_duration_for(rehearsal)
+    rehearsal_start = datetime.combine(rehearsal.date, rehearsal.start_time)
+    for ordering in permutations(rehearsal_songs):
+        times_by_song_id = {}
+        elapsed_slots = 0
+        for rehearsal_song in ordering:
+            start = rehearsal_start + elapsed_slots * slot_duration
+            end = start + rehearsal_song.slot_count * slot_duration
+            times_by_song_id[rehearsal_song.song_id] = (start.time(), end.time())
+            elapsed_slots += rehearsal_song.slot_count
+        if all(
+            _person_avoids_windows(windows, song_ids, times_by_song_id)
+            for windows, song_ids in active_constraints
+        ):
+            return True
+    return False
+
+
+def _standing_overlap(conflict, assigned_song_ids, rehearsal_song_by_song_id, role_by_person_and_song, backed_up_slots) -> bool:
+    """True if `conflict`'s person is still assigned into one of their own Windows at the *saved* Running Order.
+
+    Computed against each assigned Song's stored RehearsalSong start_time/
+    end_time -- never a candidate ordering -- because this describes the
+    band's real state (issue #194). Silent once a Backup covers that Role
+    on that Song at that Rehearsal (ADR-0007).
+    """
+    windows = [(window.unavailable_start, window.unavailable_end) for window in conflict.conflictwindow_set.all()]
+    if not windows:
+        return False
+    for song_id in assigned_song_ids:
+        rehearsal_song = rehearsal_song_by_song_id.get(song_id)
+        if rehearsal_song is None:
+            continue
+        if not any(
+            _windows_overlap(window_start, window_end, rehearsal_song.start_time, rehearsal_song.end_time)
+            for window_start, window_end in windows
+        ):
+            continue
+        role_id = role_by_person_and_song[(conflict.person_id, song_id)]
+        if (rehearsal_song.pk, role_id) not in backed_up_slots:
+            return True
+    return False
+
+
+def conflict_feasibility_for(rehearsal, approved_conflict_ids) -> list[ConflictFeasibilityRow]:
+    """Answer, per Conflict on `rehearsal`, whether some ordering of its Running Order can accommodate it (issue #194).
+
+    A pure read: never proposes or applies an ordering, only whether one
+    exists. `approved_conflict_ids` names the joint set of partial
+    Conflicts to accommodate together -- the caller's job (typically an
+    in-progress Adjudication Buffer, not necessarily what's saved) to
+    decide which ids that is. Every row's own id is unioned into that set
+    before the check runs, so an approved row reads the real joint
+    verdict, and a pending or rejected row reads "if this were approved
+    too, given everything already approved" -- the same predicate for
+    every row, since the function has no other signal for a row's status.
+
+    A full Conflict's verdict is always NOT_APPLICABLE, no search
+    involved. A partial Conflict held by someone with no assigned Songs at
+    this Rehearsal is always FEASIBLE, also with no search. Otherwise, if
+    the Rehearsal holds more RehearsalSong rows than
+    FEASIBILITY_ROW_CEILING, the row comes back unchecked
+    (`checked=False`, `verdict=None`) rather than guessing.
+    """
+    conflicts = list(
+        Conflict.objects.filter(rehearsal=rehearsal)
+        .select_related('person')
+        .prefetch_related('conflictwindow_set')
+        .order_by('person__name'),
+    )
+    approved_ids = frozenset(approved_conflict_ids)
+    rehearsal_songs = list(RehearsalSong.objects.filter(rehearsal=rehearsal).select_related('song'))
+    song_ids = [rehearsal_song.song_id for rehearsal_song in rehearsal_songs]
+    rehearsal_song_by_song_id = {rehearsal_song.song_id: rehearsal_song for rehearsal_song in rehearsal_songs}
+
+    assigned_song_ids_by_person: dict[int, set[int]] = defaultdict(set)
+    role_by_person_and_song: dict[tuple[int, int], int] = {}
+    for song_id, person_id, role_id in SongRoleAssignment.objects.filter(
+        song_id__in=song_ids,
+    ).values_list('song_id', 'person_id', 'role_id'):
+        assigned_song_ids_by_person[person_id].add(song_id)
+        role_by_person_and_song[(person_id, song_id)] = role_id
+
+    backed_up_slots = set(
+        Backup.objects.filter(rehearsal_song__in=rehearsal_songs).values_list('rehearsal_song_id', 'role_id'),
+    )
+
+    windows_by_conflict_id = {
+        conflict.pk: [
+            (window.unavailable_start, window.unavailable_end) for window in conflict.conflictwindow_set.all()
+        ]
+        for conflict in conflicts
+        if conflict.type == Conflict.PARTIAL
+    }
+    person_id_by_conflict_id = {conflict.pk: conflict.person_id for conflict in conflicts}
+    fits_ceiling = len(rehearsal_songs) <= FEASIBILITY_ROW_CEILING
+    feasibility_cache: dict[frozenset, bool] = {}
+
+    def is_jointly_feasible(conflict_ids):
+        active_constraints = [
+            (windows_by_conflict_id[conflict_id], assigned_song_ids_by_person.get(person_id_by_conflict_id[conflict_id], set()))
+            for conflict_id in conflict_ids
+            if conflict_id in windows_by_conflict_id
+        ]
+        active_constraints = [(windows, songs) for windows, songs in active_constraints if songs]
+        if not active_constraints:
+            return True
+        cache_key = frozenset(conflict_ids)
+        if cache_key not in feasibility_cache:
+            feasibility_cache[cache_key] = _search_feasible(active_constraints, rehearsal_songs, rehearsal)
+        return feasibility_cache[cache_key]
+
+    rows = []
+    for conflict in conflicts:
+        if conflict.type == Conflict.FULL_CONFLICT:
+            rows.append(ConflictFeasibilityRow(
+                conflict_id=conflict.pk, checked=True, verdict=NOT_APPLICABLE, has_standing_overlap=False,
+            ))
+            continue
+        assigned_song_ids = assigned_song_ids_by_person.get(conflict.person_id, set())
+        if not assigned_song_ids:
+            checked, verdict = True, FEASIBLE
+        elif not fits_ceiling:
+            checked, verdict = False, None
+        else:
+            checked = True
+            verdict = FEASIBLE if is_jointly_feasible(approved_ids | {conflict.pk}) else INFEASIBLE
+        has_overlap = conflict.pk in approved_ids and _standing_overlap(
+            conflict, assigned_song_ids, rehearsal_song_by_song_id, role_by_person_and_song, backed_up_slots,
+        )
+        rows.append(ConflictFeasibilityRow(
+            conflict_id=conflict.pk, checked=checked, verdict=verdict, has_standing_overlap=has_overlap,
+        ))
+    return rows
+
+
+@dataclass(frozen=True)
+class AdjudicationFallout:
+    """Every observable consequence of a candidate Adjudication Buffer, computed without writing anything (issue #194).
+
+    `is_blocked`/`block_message` mirror apply_adjudications()'s two
+    checks (wrong Semester, unknown Conflict id) without calling it --
+    conflict_feasibility_for() is a pure read, so there's no write to
+    run-and-roll-back the way preview_roster_edits() needs.
+    `feasibility_by_conflict_id` keys every Conflict on the Rehearsal by
+    id, for a view to zip against its own rows/formset. `loud`/`quiet` are
+    the ADR-0002/issue #185-tiered Fallout lines; neither ever blocks a
+    save. `is_stale` flags a `Semester.updated_at` mismatch -- reported,
+    never refused, per ADR 0008.
+    """
+
+    is_blocked: bool
+    block_message: str
+    is_stale: bool
+    feasibility_by_conflict_id: dict[int, ConflictFeasibilityRow]
+    loud: list[str]
+    quiet: list[str]
+
+
+def _blocked_adjudication_fallout(block_message: str, *, is_stale: bool = False) -> AdjudicationFallout:
+    """Return an AdjudicationFallout reporting a hard block, with no feasibility computed and no Fallout lines."""
+    return AdjudicationFallout(
+        is_blocked=True, block_message=block_message, is_stale=is_stale,
+        feasibility_by_conflict_id={}, loud=[], quiet=[],
+    )
+
+
+def _feasibility_fallout_lines(approved_ids, feasibility_by_id, conflicts_by_id):
+    """Build loud/quiet Fallout lines for every approved Conflict id, from its feasibility verdict/advisory (issue #194).
+
+    Loud: the approval makes the joint set infeasible -- it breaks the
+    evening. Quiet: a standing overlap on an approved row -- an admin who
+    approved knowing the person will just skip a Song is in a legitimate
+    state, so this never shouts.
+    """
+    loud, quiet = [], []
+    for conflict_id in approved_ids:
+        feasibility_row = feasibility_by_id.get(conflict_id)
+        conflict = conflicts_by_id.get(conflict_id)
+        if feasibility_row is None or conflict is None:
+            continue
+        if feasibility_row.verdict == INFEASIBLE:
+            loud.append(f"Approving {conflict.person.name}'s Conflict leaves no Running Order that works for tonight.")
+        if feasibility_row.has_standing_overlap:
+            quiet.append(
+                f'{conflict.person.name} is still assigned to a Song during their approved absence, with no Backup covering it.',
+            )
+    return loud, quiet
+
+
+def preview_adjudications(buffer: AdjudicationBuffer, *, rehearsal, viewing_semester: Semester) -> AdjudicationFallout:
+    """Compute feasibility verdicts and Fallout for a candidate Adjudication Buffer, writing nothing (issue #194).
+
+    Unlike `preview_roster_edits()`, this calls no `apply_*()`:
+    `conflict_feasibility_for()` is a pure read, so the candidate approved
+    set lives only in `buffer.entries` and never touches the database.
+    Mirrors `apply_adjudications()`'s wrong-Semester and unknown-Conflict
+    checks so a Preview can never disagree with what Save would reject,
+    without re-running the write itself.
+    """
+    if viewing_semester is None or buffer.semester_id != viewing_semester.pk:
+        return _blocked_adjudication_fallout(
+            "This adjudication Buffer's Semester doesn't match the Semester you're currently viewing.",
+        )
+    conflicts = list(Conflict.objects.filter(rehearsal=rehearsal).select_related('person'))
+    conflicts_by_id = {conflict.pk: conflict for conflict in conflicts}
+    entry_ids = {entry.conflict_id for entry in buffer.entries}
+    if entry_ids - conflicts_by_id.keys():
+        return _blocked_adjudication_fallout(
+            "This adjudication Buffer names a Conflict that doesn't belong to this Rehearsal.",
+        )
+
+    is_stale = buffer.semester_updated_at != viewing_semester.updated_at
+    approved_ids = {entry.conflict_id for entry in buffer.entries if entry.status == Conflict.APPROVED}
+    feasibility_rows = conflict_feasibility_for(rehearsal, approved_ids)
+    feasibility_by_id = {row.conflict_id: row for row in feasibility_rows}
+    loud, quiet = _feasibility_fallout_lines(approved_ids, feasibility_by_id, conflicts_by_id)
+    return AdjudicationFallout(
+        is_blocked=False, block_message='', is_stale=is_stale,
+        feasibility_by_conflict_id=feasibility_by_id, loud=loud, quiet=quiet,
+    )
+
+
 _CLEARED_ADJUDICATION = {'status': Conflict.PENDING, 'adjudication_note': ''}
 """The undecided verdict every declaration is written with (issue #189).
 
@@ -1884,3 +2189,100 @@ def preview_roster_edits(buffer: RosterEditBuffer, *, viewing_semester: Semester
         loud=loud,
         quiet=quiet,
     )
+
+
+class StaleSongRoleRequirementsError(ValueError):
+    """Raised when a Song's Role Requirements changed since the edit Buffer was loaded (issue #209)."""
+
+
+@dataclass(frozen=True)
+class SongRoleRequirementEntry:
+    """One Role's desired target count in a Song Role Requirement edit Buffer (issue #209)."""
+
+    role_id: int
+    count: int
+
+
+@dataclass(frozen=True)
+class SongRoleRequirementBuffer:
+    """The whole diff `apply_song_role_requirements()` commits in one transaction (issue #209).
+
+    `entries` names every Requirement the Song should have afterward —
+    existing rows carrying an unchanged or edited `count`, plus brand-new
+    rows from "+ Add requirement" — keyed by `role_id`. Any existing
+    Requirement whose Role doesn't appear here is deleted. `semester_id`
+    and `semester_updated_at` back the same two staleness checks
+    `apply_roster_edits()` uses (issue #226): `semester_id` is cross-checked
+    against the caller's session-scoped viewing Semester (two open tabs
+    editing different terms), and `semester_updated_at` against the
+    Semester row's current stamp (another admin's save landed first).
+    """
+
+    song_id: int
+    semester_id: int
+    semester_updated_at: datetime
+    entries: list[SongRoleRequirementEntry]
+
+
+def apply_song_role_requirements(buffer: SongRoleRequirementBuffer, *, viewing_semester: Semester) -> Song:
+    """Apply a Song's Role Requirement creates, count changes and deletions in one transaction (issue #209).
+
+    This surface ships no `preview_` sibling, deliberately: applying ADR
+    0008's own test — is there fallout only the server can compute? — the
+    answer is no on both counts. Deleting a Requirement destroys nothing
+    and cascades nowhere (no SongRoleAssignment, Role, or other Song's
+    Requirements are touched), and unfilled count is target minus actual,
+    which the Song page already renders in read mode via `fill_status_for()`.
+    Asking an admin to confirm a computation the page already shows them
+    would be ceremony, not safety.
+
+    Takes no Semester row lock: nothing here renumbers positions, the same
+    reasoning #130 and `apply_roster_edits()` document.
+
+    Raises `WrongViewingSemesterError` if `buffer.semester_id` doesn't
+    match `viewing_semester`, checked before any transaction opens, so two
+    open tabs can't write pending edits built against one term into
+    another. Raises `StaleSongRoleRequirementsError` if the Semester's
+    `updated_at` no longer matches `buffer.semester_updated_at`, checked
+    via a conditional `UPDATE ... WHERE updated_at = <buffer's stamp>` —
+    not a row lock, a single compare-and-swap statement — so the read of
+    the stamp and its bump to a fresh value happen as one atomic operation
+    a concurrent call can't interleave with; two overlapping requests
+    built from the same stale stamp can no longer both pass the check and
+    commit.
+    """
+    if viewing_semester is None or buffer.semester_id != viewing_semester.pk:
+        raise WrongViewingSemesterError(
+            "This Requirements edit Buffer's Semester doesn't match the Semester you're currently viewing."
+        )
+
+    with transaction.atomic():
+        rows_updated = Semester.objects.filter(
+            pk=buffer.semester_id, updated_at=buffer.semester_updated_at,
+        ).update(updated_at=timezone.now())
+        if rows_updated == 0:
+            raise StaleSongRoleRequirementsError(
+                'The Requirements changed while you were editing — reload and reapply.'
+            )
+
+        semester = Semester.objects.get(pk=buffer.semester_id)
+        song = Song.objects.get(pk=buffer.song_id, semester=semester)
+        existing_by_role_id = {
+            requirement.role_id: requirement
+            for requirement in SongRoleRequirement.objects.filter(song=song)
+        }
+        wanted_role_ids = {entry.role_id for entry in buffer.entries}
+
+        stale_role_ids = set(existing_by_role_id) - wanted_role_ids
+        if stale_role_ids:
+            SongRoleRequirement.objects.filter(song=song, role_id__in=stale_role_ids).delete()
+
+        for entry in buffer.entries:
+            existing = existing_by_role_id.get(entry.role_id)
+            if existing is None:
+                SongRoleRequirement.objects.create(song=song, role_id=entry.role_id, count=entry.count)
+            elif existing.count != entry.count:
+                existing.count = entry.count
+                existing.save(update_fields=['count'])
+
+    return song

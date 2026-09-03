@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}Import roster{% endblock %}
+{% block content %}
+<h1>Import roster</h1>
+<p>Step 3 of 5 &mdash; bring {{ source_semester.name }}'s roster into {{ semester.name }}. Everyone is ticked
+  by default, since the common edit is unticking the few who graduated. This creates fresh Membership rows
+  for {{ semester.name }} only, copying forward each person's declared Roles as a starting point &mdash;
+  nothing here links back to {{ source_semester.name }} in any way. You can redo this later from the Band
+  Members tab if you'd rather skip it now.</p>
+
+{% for message in messages %}
+  <p>{{ message }}</p>
+{% endfor %}
+
+<form method="post" action="{% url 'scheduling:manage-semester-setup-roster' pk=semester.pk %}" x-data="rosterImportStep()">
+  {% csrf_token %}
+  <p>
+    <label for="roster-import-filter">Filter by name</label>
+    <input type="text" id="roster-import-filter" x-model="filter">
+    <button type="button" @click="selectAll">Select all</button>
+    <button type="button" @click="selectNone">Select none</button>
+  </p>
+  <table>
+    <thead>
+      <tr><th></th><th>Name</th><th>Roles</th></tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+        <tr data-name="{{ row.person.name }}" x-show="matches($el.dataset.name)">
+          <td><input type="checkbox" name="person_id" value="{{ row.person.pk }}" class="roster-import-checkbox" {% if row.checked %}checked{% endif %}></td>
+          <td>{{ row.person.name }}</td>
+          <td>{% for role in row.roles %}{{ role.name }}{% if not forloop.last %}, {% endif %}{% empty %}&mdash;{% endfor %}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <button type="submit">Import roster</button>
+</form>
+<a href="{% url 'scheduling:manage-semester-setup-setlist' pk=semester.pk %}">Skip this step</a>
+
+<script src="{% static 'scheduling/js/roster_import_step.js' %}" defer></script>
+{% endblock %}
