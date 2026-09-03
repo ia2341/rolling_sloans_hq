@@ -12,6 +12,7 @@ from django.db import IntegrityError, models, transaction
 from django.db.models import Count, Q
 from django.utils import timezone
 
+from identity.models import Person
 from scheduling.models import (
     Conflict,
     ConflictWindow,
@@ -949,6 +950,110 @@ def _derive_declaration(conflict) -> tuple[str | None, time | None]:
         if window.unavailable_end == rehearsal.end_time:
             return CONFLICT_EARLY_DEPARTURE, window.unavailable_start
     return None, None
+
+
+@dataclass(frozen=True)
+class RoleCreationResult:
+    """The outcome of `create_or_reactivate_role()` — the Role plus how it was obtained (issue #225)."""
+
+    role: Role
+    created: bool
+    reactivated: bool
+
+
+def create_or_reactivate_role(name: str) -> RoleCreationResult:
+    """Get-or-create a Role by name, case-insensitively, and commit immediately (issue #225).
+
+    Backs the inline "declare Trombone right now" control on the Roster
+    editor. Commits outside any Pending Buffer — discarding a batch of
+    Roster edits must not un-invent a Role a row is already ticking. It
+    writes with no `transaction.atomic()` wrapper and no `on_commit()`
+    deferral, so — as long as no future caller nests this call inside the
+    Roster batch's own `apply_roster_edits()` transaction — it commits in
+    Django's default autocommit mode, independent of that batch's later
+    success or failure.
+
+    A name matching an existing Role case-insensitively returns that Role
+    (`created=False`) rather than creating a near-duplicate that differs
+    only in capitalisation. If that match is retired (`is_active=False`),
+    it is flipped back to active (`reactivated=True`) — the soft-delete
+    convention's whole point (per Role's docstring). There is no retire
+    path here: retiring a Role stays a deliberate act in the Django admin.
+    """
+    name = name.strip()
+    existing = Role.objects.filter(name__iexact=name).first()
+    if existing is not None:
+        reactivated = not existing.is_active
+        if reactivated:
+            existing.is_active = True
+            existing.save(update_fields=['is_active'])
+        return RoleCreationResult(role=existing, created=False, reactivated=reactivated)
+    role = Role.objects.create(name=name)
+    return RoleCreationResult(role=role, created=True, reactivated=False)
+
+
+def _prior_semester(semester: Semester) -> Semester | None:
+    """Return the Semester chronologically immediately before `semester`, or None if it is the first (issue #225).
+
+    Ordered by `created_at` per ADR-0010, with `id` as a deterministic
+    tiebreak for rows created in the same instant.
+    """
+    return Semester.objects.filter(
+        Q(created_at__lt=semester.created_at) | Q(created_at=semester.created_at, id__lt=semester.id)
+    ).order_by('-created_at', '-id').first()
+
+
+@dataclass(frozen=True)
+class RosterImportPerson:
+    """One Person `import_roster_from_semester()` proposes to roster, with the Roles to declare fresh (issue #225)."""
+
+    person: Person
+    roles: list[Role]
+
+
+@dataclass(frozen=True)
+class RosterImportProposal:
+    """The prior Semester's Roster, proposed as fresh declarations for a target Semester (issue #225).
+
+    `source_semester` is None when there is nothing to import from, in
+    which case `people` is empty.
+    """
+
+    source_semester: Semester | None
+    people: list['RosterImportPerson']
+
+
+def import_roster_from_semester(semester: Semester) -> RosterImportProposal:
+    """Propose `semester`'s prior Semester's Roster as fresh declarations for `semester` (issue #225).
+
+    A read, not a write — nothing is saved here, so the same call can
+    serve both the Roster editor's import button and the setup wizard's
+    roster step; the write still goes through the batch save. Deactivated
+    People are excluded silently (a Person who cannot log in cannot act on
+    a Membership), and the Roles returned are values to copy into fresh
+    `MembershipRole` declarations, never references into the prior
+    Semester's rows (ADR 0001) — editing this term can never rewrite last
+    term's history.
+    """
+    source = _prior_semester(semester)
+    if source is None:
+        return RosterImportProposal(source_semester=None, people=[])
+    memberships = Membership.objects.filter(
+        semester=source, person__is_active=True,
+    ).select_related('person').prefetch_related(
+        models.Prefetch(
+            'membershiprole_set',
+            queryset=MembershipRole.objects.select_related('role').order_by('role__name'),
+        ),
+    ).order_by('person__name')
+    people = [
+        RosterImportPerson(
+            person=membership.person,
+            roles=[membership_role.role for membership_role in membership.membershiprole_set.all()],
+        )
+        for membership in memberships
+    ]
+    return RosterImportProposal(source_semester=source, people=people)
 
 
 def conflict_history_for(semester, person) -> list[ConflictHistoryRow]:
