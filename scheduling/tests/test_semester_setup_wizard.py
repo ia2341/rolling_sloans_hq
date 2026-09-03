@@ -306,3 +306,36 @@ class FreshInstallHomeTests(TestCase):
         response = self.client.get(reverse('scheduling:overview'))
 
         self.assertNotContains(response, reverse('scheduling:manage-semester-setup'))
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class ModalFragmentTests(TestCase):
+    def test_home_wires_the_create_semester_button_to_the_modal(self):
+        """The panel's Create Semester button is wired to open the fetched fragment in a dialog."""
+        admin_client(self)
+
+        response = self.client.get(reverse('scheduling:overview'))
+
+        self.assertContains(response, 'semesterSetupModal')
+        self.assertContains(response, 'id="semester-setup-dialog"')
+
+    def test_an_xhr_get_returns_only_the_form_fragment(self):
+        """A GET carrying X-Requested-With returns the bare form fragment, not the full page shell."""
+        admin_client(self)
+
+        response = self.client.get(
+            reverse('scheduling:manage-semester-setup'), HTTP_X_REQUESTED_WITH='XMLHttpRequest',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'name="name"')
+        self.assertNotContains(response, '<nav>')
+
+    def test_a_plain_get_still_returns_the_full_page(self):
+        """A GET without the XHR header renders the full page, including the nav shell."""
+        admin_client(self)
+
+        response = self.client.get(reverse('scheduling:manage-semester-setup'))
+
+        self.assertContains(response, '<nav>')
+        self.assertContains(response, 'name="name"')

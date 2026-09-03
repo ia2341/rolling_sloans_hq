@@ -2,30 +2,5 @@
 {% block title %}Semester setup{% endblock %}
 {% block content %}
 <h1>Semester setup</h1>
-<p>Step 1 of 1 &mdash; name your new semester and confirm its timing defaults.</p>
-
-<form method="post">
-  {% csrf_token %}
-  <label for="{{ form.name.id_for_label }}">{{ form.name.label }}</label>
-  {{ form.name }}
-  {% if form.name.errors %}
-    <ul class="errors">{% for error in form.name.errors %}<li>{{ error }}</li>{% endfor %}</ul>
-  {% endif %}
-
-  <details>
-    <summary>Timing defaults</summary>
-    {% for field in form %}
-      {% if field.name != 'name' %}
-        <label for="{{ field.id_for_label }}">{{ field.label }}</label>
-        {{ field }}
-        {% if field.errors %}
-          <ul class="errors">{% for error in field.errors %}<li>{{ error }}</li>{% endfor %}</ul>
-        {% endif %}
-      {% endif %}
-    {% endfor %}
-  </details>
-
-  <button type="submit">Create Semester</button>
-</form>
-<a href="{% url 'scheduling:overview' %}">Cancel</a>
+{% include "scheduling/_semester_setup_form.html" %}
 {% endblock %}

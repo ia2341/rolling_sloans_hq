@@ -1592,7 +1592,7 @@ def _suggested_semester_name(prior_semester):
 
 
 class SemesterSetupView(AdminRequiredMixin, View):
-    """`/manage/semester/setup/`: Semester setup steps 1-2, the wizard's only required screen (issue #200).
+    """`/manage/semesters/setup/`: Semester setup steps 1-2, the wizard's only required screen (issue #200).
 
     A name plus the six timing defaults in one submission: GET prefills
     both from the most recently created Semester (falling back to
@@ -1603,9 +1603,26 @@ class SemesterSetupView(AdminRequiredMixin, View):
     (roster, setlist, rehearsal dates) are separate, independently
     skippable tickets not yet built, so this screen goes straight from
     submit to finish.
+
+    Reached two ways with the same form and the same code path: a direct
+    GET renders the full page (the no-JS fallback, and the bookmarkable
+    entry point), while the Home panel's Alpine component fetches this
+    same URL with `X-Requested-With: XMLHttpRequest` and gets back only
+    the form fragment to show in its modal — never a second template for
+    the step (issue #198 §14's "over server-rendered step partials").
     """
 
     template_name = 'scheduling/semester_setup.html'
+    fragment_template_name = 'scheduling/_semester_setup_form.html'
+
+    def _render(self, request, form):
+        """Render the fragment alone for a modal fetch, or the full page for a direct GET/POST."""
+        template_name = self.fragment_template_name if self._is_fragment_request(request) else self.template_name
+        return render(request, template_name, {'form': form})
+
+    def _is_fragment_request(self, request):
+        """Return whether `request` is the Home panel's modal fetch, asking for the form fragment alone."""
+        return request.headers.get('X-Requested-With') == 'XMLHttpRequest'
 
     def get(self, request):
         """Render the form, prefilled from the most recently created Semester if one exists."""
@@ -1617,7 +1634,7 @@ class SemesterSetupView(AdminRequiredMixin, View):
         else:
             initial.update(TIMING_DEFAULT_CONSTANTS)
         form = SemesterSetupForm(initial=initial)
-        return render(request, self.template_name, {'form': form})
+        return self._render(request, form)
 
     def post(self, request):
         """Validate and create the draft Semester, switch the session's viewing Semester, and redirect to finish."""
@@ -1631,11 +1648,11 @@ class SemesterSetupView(AdminRequiredMixin, View):
                 set_viewing_semester(request, semester)
                 messages.success(request, f'{semester.name} created as a draft.')
                 return redirect('scheduling:manage-semester-setup-finish', pk=semester.pk)
-        return render(request, self.template_name, {'form': form})
+        return self._render(request, form)
 
 
 class SemesterSetupFinishView(AdminRequiredMixin, View):
-    """`/manage/semester/setup/<pk>/finish/`: Semester setup's finish screen (issue #200).
+    """`/manage/semesters/setup/<pk>/finish/`: Semester setup's finish screen (issue #200).
 
     Names what's still empty on the new draft — computed live from
     `semester_deletion_summary()`'s counts, never stored, per #198 decision
