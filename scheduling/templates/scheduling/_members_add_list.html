@@ -5,6 +5,7 @@
       type="button"
       id="import-roster-button"
       hx-get="{% url 'scheduling:members-roster-import' %}"
+      hx-include="#roster-add-list"
       hx-target="#roster-add-list"
       hx-swap="outerHTML"
     >Import from {{ import_source_semester }}</button>

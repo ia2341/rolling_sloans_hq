@@ -93,7 +93,10 @@ class AddListRenderingTests(TestCase):
 
         response = self.client.get(_edit_url())
 
-        self.assertNotContains(response, f'-person_id" value="{membership.person.pk}"')
+        self.assertNotRegex(
+            response.content.decode(),
+            rf'name="roster_add-\d+-person_id" value="{membership.person.pk}"',
+        )
 
     def test_empty_add_list_renders_a_usable_empty_state(self):
         """With nobody left to add, the add list renders empty-state copy rather than an empty table."""
@@ -151,6 +154,26 @@ class ImportPrefillTests(TestCase):
         self.assertContains(response, f'value="{self.role.pk}"')
         self.assertEqual(Membership.objects.count(), membership_count_before)
         self.assertEqual(MembershipRole.objects.count(), membership_role_count_before)
+
+    def test_pressing_import_preserves_a_hand_ticked_row_the_import_proposal_does_not_cover(self):
+        """A row an admin already hand-ticked for someone outside the import proposal survives pressing Import."""
+        hand_picked = PersonFactory(name='Hand Picked Placeholder')
+        query = {
+            'roster_add-TOTAL_FORMS': '2',
+            'roster_add-INITIAL_FORMS': '2',
+            'roster_add-MIN_NUM_FORMS': '0',
+            'roster_add-MAX_NUM_FORMS': '1000',
+            'roster_add-0-person_id': str(self.imported_person.pk),
+            'roster_add-1-person_id': str(hand_picked.pk),
+            'roster_add-1-add': 'on',
+        }
+
+        response = self.client.get(_import_url(), query)
+
+        self.assertContains(response, f'value="{hand_picked.pk}"')
+        content = response.content.decode()
+        hand_picked_row_start = content.index(f'value="{hand_picked.pk}"')
+        self.assertIn('checked', content[hand_picked_row_start:content.index('</tr>', hand_picked_row_start)])
 
     def test_saving_after_import_creates_new_declarations_leaving_the_prior_semester_untouched(self):
         """Saving an imported row creates a fresh Membership/MembershipRole for the target Semester; the prior Semester's rows survive."""

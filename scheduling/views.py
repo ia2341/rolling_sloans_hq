@@ -511,21 +511,56 @@ def _parse_int(raw_value):
         return -1
 
 
-def _add_initial(semester, imported_roles_by_person_id=None):
+def _add_initial(semester, imported_roles_by_person_id=None, current_state_by_person_id=None):
     """Build the Roster add list's initial rows: one per unrostered Person, optionally pre-ticked from an import proposal (issue #229).
 
     `imported_roles_by_person_id`, when given, maps a Person id to the
     Roles `import_roster_from_semester()` proposes for them; a Person
-    present in it renders pre-ticked with those Roles, and everyone else
-    renders untouched. `None` (the plain edit-mode render, no import
-    pressed) leaves every row unticked.
+    present in it renders pre-ticked with those Roles. `current_state_by_person_id`
+    carries whatever an admin had already hand-ticked/unticked before
+    pressing Import (`_submitted_add_state_by_person_id()`), and is used
+    as the fallback for any Person the import proposal doesn't cover, so
+    Import overlays rather than replaces hand-made edits. With neither
+    argument (the plain edit-mode render, no import pressed) every row
+    renders unticked.
     """
     imported_roles_by_person_id = imported_roles_by_person_id or {}
+    current_state_by_person_id = current_state_by_person_id or {}
     rows = []
     for person in unrostered_people_for(semester):
         roles = imported_roles_by_person_id.get(person.pk)
-        rows.append({'person_id': person.pk, 'add': roles is not None, 'roles': roles or []})
+        if roles is not None:
+            rows.append({'person_id': person.pk, 'add': True, 'roles': roles})
+            continue
+        current = current_state_by_person_id.get(person.pk)
+        if current is not None:
+            rows.append({'person_id': person.pk, 'add': current['add'], 'roles': current['role_ids']})
+            continue
+        rows.append({'person_id': person.pk, 'add': False, 'roles': []})
     return rows
+
+
+def _submitted_add_state_by_person_id(request):
+    """Return `{person_id: {'add': bool, 'role_ids': [...]}}` from an add-list formset carried in `request.GET`, or `{}` if none was submitted.
+
+    Reads raw per-field values the same way `_edit_rows()` does, rather
+    than requiring `is_valid()`, so a formset the admin hasn't finished
+    filling out can still be read back.
+    """
+    prefix = 'roster_add'
+    if f'{prefix}-TOTAL_FORMS' not in request.GET:
+        return {}
+    formset = RosterAddFormSet(request.GET, prefix=prefix)
+    state = {}
+    for form in formset:
+        person_id = _parse_int(form['person_id'].value())
+        if person_id == -1:
+            continue
+        state[person_id] = {
+            'add': bool(form['add'].value()),
+            'role_ids': form['roles'].value() or [],
+        }
+    return state
 
 
 def _add_rows(add_formset):
@@ -713,25 +748,32 @@ class RosterImportView(AdminRequiredMixin, View):
 
     A sibling read of `MembersView`'s edit mode, not a mutation: it swaps
     only the add-list fragment (`hx-target="#roster-add-list"`), so the
-    edit table above it and any rows an admin already hand-ticked are left
-    alone. `apply_roster_edits()`'s later "Save Changes" POST is the only
-    write path either surface ever commits through — pressing Import
-    again simply re-derives the same proposal, and, per issue #225,
-    `import_roster_from_semester()` returns copied Role values, never
-    references into the prior Semester's rows.
+    edit table above it is left alone. The add-list button carries
+    `hx-include="#roster-add-list"`, so any row an admin already
+    hand-ticked (or hand-unticked, for someone the import proposal also
+    covers) reaches this view as `request.GET` and is read back via
+    `_submitted_add_state_by_person_id()` — Import overlays the prior
+    Semester's proposal onto that state rather than replacing it outright.
+    `apply_roster_edits()`'s later "Save Changes" POST is the only write
+    path either surface ever commits through — pressing Import again
+    simply re-derives the same proposal over whatever is currently ticked,
+    and, per issue #225, `import_roster_from_semester()` returns copied
+    Role values, never references into the prior Semester's rows.
     """
 
     template_name = 'scheduling/_members_add_list.html'
 
     def get(self, request):
-        """Render the add-list fragment with ticks/Roles prefilled from `import_roster_from_semester()`."""
+        """Render the add-list fragment with the import proposal overlaid on any already-submitted ticks/Roles."""
         semester = get_viewing_semester(request)
         if semester is None:
             return HttpResponseForbidden()
         proposal = import_roster_from_semester(semester)
         imported_roles_by_person_id = {imported.person.pk: imported.roles for imported in proposal.people}
+        current_state_by_person_id = _submitted_add_state_by_person_id(request)
         add_formset = RosterAddFormSet(
-            initial=_add_initial(semester, imported_roles_by_person_id), prefix='roster_add',
+            initial=_add_initial(semester, imported_roles_by_person_id, current_state_by_person_id),
+            prefix='roster_add',
         )
         return render(request, self.template_name, {
             'add_formset': add_formset,
