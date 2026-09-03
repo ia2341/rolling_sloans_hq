@@ -2189,3 +2189,100 @@ def preview_roster_edits(buffer: RosterEditBuffer, *, viewing_semester: Semester
         loud=loud,
         quiet=quiet,
     )
+
+
+class StaleSongRoleRequirementsError(ValueError):
+    """Raised when a Song's Role Requirements changed since the edit Buffer was loaded (issue #209)."""
+
+
+@dataclass(frozen=True)
+class SongRoleRequirementEntry:
+    """One Role's desired target count in a Song Role Requirement edit Buffer (issue #209)."""
+
+    role_id: int
+    count: int
+
+
+@dataclass(frozen=True)
+class SongRoleRequirementBuffer:
+    """The whole diff `apply_song_role_requirements()` commits in one transaction (issue #209).
+
+    `entries` names every Requirement the Song should have afterward —
+    existing rows carrying an unchanged or edited `count`, plus brand-new
+    rows from "+ Add requirement" — keyed by `role_id`. Any existing
+    Requirement whose Role doesn't appear here is deleted. `semester_id`
+    and `semester_updated_at` back the same two staleness checks
+    `apply_roster_edits()` uses (issue #226): `semester_id` is cross-checked
+    against the caller's session-scoped viewing Semester (two open tabs
+    editing different terms), and `semester_updated_at` against the
+    Semester row's current stamp (another admin's save landed first).
+    """
+
+    song_id: int
+    semester_id: int
+    semester_updated_at: datetime
+    entries: list[SongRoleRequirementEntry]
+
+
+def apply_song_role_requirements(buffer: SongRoleRequirementBuffer, *, viewing_semester: Semester) -> Song:
+    """Apply a Song's Role Requirement creates, count changes and deletions in one transaction (issue #209).
+
+    This surface ships no `preview_` sibling, deliberately: applying ADR
+    0008's own test — is there fallout only the server can compute? — the
+    answer is no on both counts. Deleting a Requirement destroys nothing
+    and cascades nowhere (no SongRoleAssignment, Role, or other Song's
+    Requirements are touched), and unfilled count is target minus actual,
+    which the Song page already renders in read mode via `fill_status_for()`.
+    Asking an admin to confirm a computation the page already shows them
+    would be ceremony, not safety.
+
+    Takes no Semester row lock: nothing here renumbers positions, the same
+    reasoning #130 and `apply_roster_edits()` document.
+
+    Raises `WrongViewingSemesterError` if `buffer.semester_id` doesn't
+    match `viewing_semester`, checked before any transaction opens, so two
+    open tabs can't write pending edits built against one term into
+    another. Raises `StaleSongRoleRequirementsError` if the Semester's
+    `updated_at` no longer matches `buffer.semester_updated_at`, checked
+    via a conditional `UPDATE ... WHERE updated_at = <buffer's stamp>` —
+    not a row lock, a single compare-and-swap statement — so the read of
+    the stamp and its bump to a fresh value happen as one atomic operation
+    a concurrent call can't interleave with; two overlapping requests
+    built from the same stale stamp can no longer both pass the check and
+    commit.
+    """
+    if viewing_semester is None or buffer.semester_id != viewing_semester.pk:
+        raise WrongViewingSemesterError(
+            "This Requirements edit Buffer's Semester doesn't match the Semester you're currently viewing."
+        )
+
+    with transaction.atomic():
+        rows_updated = Semester.objects.filter(
+            pk=buffer.semester_id, updated_at=buffer.semester_updated_at,
+        ).update(updated_at=timezone.now())
+        if rows_updated == 0:
+            raise StaleSongRoleRequirementsError(
+                'The Requirements changed while you were editing — reload and reapply.'
+            )
+
+        semester = Semester.objects.get(pk=buffer.semester_id)
+        song = Song.objects.get(pk=buffer.song_id, semester=semester)
+        existing_by_role_id = {
+            requirement.role_id: requirement
+            for requirement in SongRoleRequirement.objects.filter(song=song)
+        }
+        wanted_role_ids = {entry.role_id for entry in buffer.entries}
+
+        stale_role_ids = set(existing_by_role_id) - wanted_role_ids
+        if stale_role_ids:
+            SongRoleRequirement.objects.filter(song=song, role_id__in=stale_role_ids).delete()
+
+        for entry in buffer.entries:
+            existing = existing_by_role_id.get(entry.role_id)
+            if existing is None:
+                SongRoleRequirement.objects.create(song=song, role_id=entry.role_id, count=entry.count)
+            elif existing.count != entry.count:
+                existing.count = entry.count
+                existing.save(update_fields=['count'])
+
+    return song

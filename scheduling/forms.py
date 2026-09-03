@@ -403,6 +403,100 @@ class RosterAddRoleForm(forms.Form):
         return name
 
 
+class SongRequirementEditRowForm(forms.Form):
+    """One row of the Song requirements edit table for an existing SongRoleRequirement (issue #209).
+
+    A plain `Form`, not a `ModelForm`: this table only retargets counts or
+    deletes rows — per #197's boundary, this page sets targets, it never
+    assigns Roles — so a row's Role is fixed and carried as a hidden
+    `role_id`, the same identity-pairing convention `RosterEditRowForm`
+    uses so an invalid submission can still be read back field-by-field to
+    preserve per-row display state.
+    """
+
+    role_id = forms.IntegerField(widget=forms.HiddenInput)
+    count = forms.IntegerField(min_value=1)
+    remove = forms.BooleanField(required=False)
+
+
+# The Song requirements edit table's buffer: one `SongRequirementEditRowForm` per existing
+# SongRoleRequirement (issue #209).
+SongRequirementEditFormSet = forms.formset_factory(SongRequirementEditRowForm, extra=0)
+
+
+class SongRequirementAddRowForm(forms.Form):
+    """A "+ Add requirement" row: a Role to require plus its target count (issue #209).
+
+    `role` is scoped to active Roles only, per the issue's picker rule —
+    no inviting an admin to plan around a retired instrument — and, via
+    `excluded_role_ids`, minus whichever Roles the Song already has a
+    (surviving) Requirement for, so the unique (Song, Role) constraint is
+    unreachable by the normal path. Excluding Roles picked by *other*
+    add-rows in the same pending batch is enforced client-side (the
+    row-adding JS); a duplicate arriving anyway is still caught,
+    defensively, by `BaseSongRequirementAddFormSet.clean()` below, since
+    the database constraint must never be the first thing that tells the
+    admin about it.
+    """
+
+    role = forms.ModelChoiceField(
+        queryset=Role.objects.filter(is_active=True),
+        widget=forms.Select(attrs={'class': 'song-requirement-role-select'}),
+    )
+    count = forms.IntegerField(min_value=1)
+
+    def __init__(self, *args, excluded_role_ids=(), **kwargs):
+        """Restrict `role`'s choices to active Roles not already required on this Song."""
+        super().__init__(*args, **kwargs)
+        self.fields['role'].queryset = Role.objects.filter(is_active=True).exclude(pk__in=excluded_role_ids)
+
+
+class BaseSongRequirementAddFormSet(forms.BaseFormSet):
+    """Rejects a duplicate Role across "+ Add requirement" rows as a Validation Error (issue #209)."""
+
+    def clean(self):
+        """Raise a non-form error if two add-rows target the same Role."""
+        if any(self.errors):
+            return
+        seen_role_ids = set()
+        for form in self.forms:
+            if not form.cleaned_data or form.cleaned_data.get('DELETE'):
+                continue
+            role = form.cleaned_data.get('role')
+            if role is None:
+                continue
+            if role.pk in seen_role_ids:
+                raise forms.ValidationError('Each Role can only have one Requirement per Song.')
+            seen_role_ids.add(role.pk)
+
+
+# The "+ Add requirement" list's buffer: zero or more `SongRequirementAddRowForm` rows, appended by the
+# edit table's JS (issue #209). `can_delete=True` lets an admin undo an add-row they no longer want before
+# Save, the same convention `SetlistEditFormSet` uses for a struck row.
+SongRequirementAddFormSet = forms.formset_factory(
+    SongRequirementAddRowForm, formset=BaseSongRequirementAddFormSet, extra=0, can_delete=True,
+)
+
+
+class SongRequirementAddRoleForm(forms.Form):
+    """The Song requirements editor's inline "Add Role" control's POST body: which add-row triggered it, and the Role name to create/reactivate (issue #209).
+
+    Mirrors `RosterAddRoleForm`'s shape: `prefix` is the triggering
+    add-row's own formset prefix, carried so the rebuilt `role` field binds
+    to the exact field name the rest of the row already uses.
+    """
+
+    prefix = forms.CharField(max_length=255)
+    role_name = forms.CharField(max_length=255)
+
+    def clean_role_name(self):
+        """Strip surrounding whitespace and reject a blank Role name."""
+        name = self.cleaned_data['role_name'].strip()
+        if not name:
+            raise forms.ValidationError('A Role name is required.')
+        return name
+
+
 class SongRoleAssignmentForm(forms.ModelForm):
     """Assigns a Person to a Role on a Song, restricted to the viewing Semester's Songs (issue #60).
 
