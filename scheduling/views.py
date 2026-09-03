@@ -1773,11 +1773,12 @@ class SemesterSetupView(AdminRequiredMixin, View):
     both from the most recently created Semester (falling back to
     `TIMING_DEFAULT_CONSTANTS` when there is none), and POST creates the
     draft immediately via `create_semester()`, switches this admin's
-    session selection to it, and redirects to the finish screen. Nothing
-    here is held hostage to finishing the rest of the wizard — steps 3-5
-    (roster, setlist, rehearsal dates) are separate, independently
-    skippable tickets not yet built, so this screen goes straight from
-    submit to finish.
+    session selection to it, and redirects into step 3 (the roster
+    import). Nothing here is held hostage to finishing the rest of the
+    wizard — steps 3-5 (roster, setlist, rehearsal dates) are separate,
+    independently skippable steps, and `SemesterSetupRosterView` itself
+    bounces straight to finish when there's no prior Semester to import
+    from, so this view never needs to check that itself.
 
     Reached two ways with the same form and the same code path: a direct
     GET renders the full page (the no-JS fallback, and the bookmarkable
@@ -1822,8 +1823,80 @@ class SemesterSetupView(AdminRequiredMixin, View):
             else:
                 set_viewing_semester(request, semester)
                 messages.success(request, f'{semester.name} created as a draft.')
-                return redirect('scheduling:manage-semester-setup-finish', pk=semester.pk)
+                return redirect('scheduling:manage-semester-setup-roster', pk=semester.pk)
         return self._render(request, form)
+
+
+class SemesterSetupRosterView(AdminRequiredMixin, View):
+    """`/manage/semesters/setup/<pk>/roster/`: Semester setup step 3, import the roster from the prior Semester (issue #201).
+
+    "Clone", "copy semester" and "carry over" were all considered for
+    this step's name and refused: ADR 0001 holds that a Semester's
+    Membership/MembershipRole rows are re-created fresh per term, never
+    linked across one, and those words imply exactly the linkage that
+    forbids. Committing here creates fresh rows referencing the prior
+    Semester in no way at all — nothing in the schema records that an
+    import happened.
+
+    No derivation of its own: the read is `import_roster_from_semester()`
+    and the write is `apply_roster_edits()` (#185), the same pair the
+    Band Members tab's "Import from <Semester>" button uses, so skipping
+    this step and doing the same job there afterwards produces the same
+    result. No Role editing and no invite affordance — those live on the
+    Band Members tab's own Roster editor. Reached only by redirect (from
+    step 1's POST, or this view's own GET/POST when there's nothing to
+    import), so unlike `SemesterSetupView` it needs no modal-fragment
+    variant: a direct hit and the Home panel's post-redirect navigation
+    both land on the plain full page.
+    """
+
+    template_name = 'scheduling/semester_setup_roster.html'
+
+    def get(self, request, pk):
+        """Render the prior Semester's roster as a checkbox list ticked by default, or skip straight to finish."""
+        semester = get_object_or_404(Semester, pk=pk)
+        proposal = import_roster_from_semester(semester)
+        if proposal.source_semester is None:
+            return redirect('scheduling:manage-semester-setup-finish', pk=semester.pk)
+        return self._render(request, semester, proposal)
+
+    def post(self, request, pk):
+        """Import the ticked people, with their copied Role declarations, into the new Semester."""
+        semester = get_object_or_404(Semester, pk=pk)
+        proposal = import_roster_from_semester(semester)
+        if proposal.source_semester is None:
+            return redirect('scheduling:manage-semester-setup-finish', pk=semester.pk)
+        checked_ids = {_parse_roster_int(value) for value in request.POST.getlist('person_id')}
+        entries = [
+            RosterEditEntry(
+                person=candidate.person, name=candidate.person.name,
+                role_ids=frozenset(role.pk for role in candidate.roles),
+            )
+            for candidate in proposal.people if candidate.person.pk in checked_ids
+        ]
+        buffer = RosterEditBuffer(
+            semester_id=semester.pk, semester_updated_at=semester.updated_at,
+            entries=entries, removed_person_ids=frozenset(),
+        )
+        try:
+            apply_roster_edits(buffer, viewing_semester=semester, requesting_admin=request.user)
+        except (WrongViewingSemesterError, StaleRosterSemesterError, SelfRemovalError) as error:
+            messages.error(request, str(error))
+            return self._render(request, semester, proposal, checked_ids=checked_ids)
+        messages.success(request, f'Imported {len(entries)} member(s) from {proposal.source_semester.name}.')
+        return redirect('scheduling:manage-semester-setup-finish', pk=semester.pk)
+
+    def _render(self, request, semester, proposal, checked_ids=None):
+        """Render the checkbox list, ticked by default unless `checked_ids` carries a rejected submission's ticks."""
+        if checked_ids is None:
+            checked_ids = {candidate.person.pk for candidate in proposal.people}
+        rows = [
+            {'person': candidate.person, 'roles': candidate.roles, 'checked': candidate.person.pk in checked_ids}
+            for candidate in proposal.people
+        ]
+        return render(request, self.template_name, {
+            'semester': semester, 'source_semester': proposal.source_semester, 'rows': rows,
+        })
 
 
 class SemesterSetupFinishView(AdminRequiredMixin, View):
