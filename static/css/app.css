@@ -274,3 +274,42 @@ body > nav [aria-current='page'] {
     width: 100%;
   }
 }
+
+/* The Roster edit table and its Add list (issue #231): a Person×Role table is
+   the widest content on this surface, with no columns left to compress on a
+   phone, so below this breakpoint each `<tr>` becomes its own card instead of
+   a row. The header hides and each cell's `data-label` (set in the template)
+   supplies the label that the header used to carry -- so the desktop table
+   and the mobile cards are the same markup, same field names, same form and
+   save path, just two renderings of one `<table>`. */
+@media (max-width: 48rem) {
+  .rs-stack-table,
+  .rs-stack-table tbody,
+  .rs-stack-table tr,
+  .rs-stack-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .rs-stack-table thead {
+    display: none;
+  }
+
+  .rs-stack-table tr {
+    padding: var(--rs-space-sm);
+    border: 1px solid var(--rs-border-color);
+    border-radius: var(--pico-border-radius);
+    margin-block-end: var(--rs-space-sm);
+  }
+
+  .rs-stack-table td {
+    padding-block: var(--rs-space-xs);
+    border: none;
+  }
+
+  .rs-stack-table td::before {
+    content: attr(data-label);
+    display: block;
+    font-weight: bold;
+  }
+}

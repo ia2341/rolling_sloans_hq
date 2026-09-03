@@ -16,7 +16,7 @@
     </ul>
   {% endif %}
   {% if add_rows %}
-    <table id="roster-add-table">
+    <table id="roster-add-table" class="rs-stack-table">
       <thead>
         <tr>
           <th>Add</th>
@@ -28,9 +28,9 @@
         {% for row in add_rows %}
           <tr class="roster-add-row">
             {{ row.form.person_id }}
-            <td>{{ row.form.add }}</td>
-            <td>{{ row.person.name }}</td>
-            <td>
+            <td data-label="Add">{{ row.form.add }}</td>
+            <td data-label="Name">{{ row.person.name }}</td>
+            <td data-label="Roles">
               <div id="roster-add-roles-{{ row.form.prefix }}">
                 {{ row.form.roles }}
                 {{ row.form.roles.errors }}

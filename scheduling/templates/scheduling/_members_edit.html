@@ -18,7 +18,7 @@
     </ul>
   {% endif %}
   {% if rows %}
-    <table id="roster-edit-table">
+    <table id="roster-edit-table" class="rs-stack-table">
       <thead>
         <tr>
           <th>Name</th>
@@ -30,14 +30,14 @@
         {% for row in rows %}
           <tr class="roster-edit-row">
             {{ row.form.person_id }}
-            <td>
+            <td data-label="Name">
               {{ row.form.name }}
               {{ row.form.name.errors }}
               {% if row.is_mismatched %}
                 <span class="roster-role-mismatch-flag" title="Assigned to a Song for a Role not on their declared Roles">&#9888;</span>
               {% endif %}
             </td>
-            <td>
+            <td data-label="Roles">
               <div id="roster-roles-{{ row.form.prefix }}">
                 {{ row.form.roles }}
                 {{ row.form.roles.errors }}
@@ -54,7 +54,7 @@
                 hx-include="closest td"
               >Add Role</button>
             </td>
-            <td>
+            <td data-label="Remove">
               {% if row.is_self %}
                 <span class="roster-no-self-removal">You can't remove yourself from the Roster.</span>
               {% else %}
