@@ -159,15 +159,15 @@ class ScheduleViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'class="role-mismatch"', count=1)
 
-    def test_add_a_conflict_link_points_at_conflicts_route_with_rehearsal_param(self):
-        """Renders an "Add a conflict" link pointing at the Conflicts route with ?rehearsal=<id>."""
+    def test_the_rehearsal_detail_carries_the_declare_form_for_that_rehearsal(self):
+        """The declare affordance is inline on the rehearsal, posting at the new /schedule/ route (issue #190)."""
         semester = SemesterFactory()
         rehearsal = RehearsalFactory(semester=semester)
 
         response = self.client.get(reverse('scheduling:schedule'), {'rehearsal': rehearsal.pk})
 
-        expected_href = f"{reverse('scheduling:conflicts')}?rehearsal={rehearsal.pk}"
-        self.assertContains(response, f'href="{expected_href}"')
+        expected_action = reverse('scheduling:conflict-declare', args=[rehearsal.pk])
+        self.assertContains(response, f'action="{expected_action}"')
 
     def test_view_all_lists_semesters_rehearsals_with_past_collapsed_and_future_expanded(self):
         """?view=all shows past Rehearsals inside a collapsed <details>, future ones outside it and expanded."""

@@ -13,7 +13,6 @@ NAV_MARKER = '<nav>'
 NAV_ROUTES = {
     'scheduling:overview': 'Overview',
     'scheduling:schedule': 'My Schedule',
-    'scheduling:conflicts': 'Conflicts',
     'scheduling:setlist': 'Songs',
     'scheduling:members': 'Band Members',
     'scheduling:member-detail': 'Profile',
