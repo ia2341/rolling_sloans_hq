@@ -19,7 +19,7 @@ VALID_URL = 'https://open.spotify.com/playlist/37i9dQZF1E8KcRnHXtvNli'
 def _track_item(name='Synth Serenade', artists=('Faux Static',), duration_ms=225_000):
     """Build a raw Spotify playlist-item payload for a usable track."""
     return {
-        'track': {
+        'item': {
             'type': 'track',
             'is_local': False,
             'name': name,
@@ -31,16 +31,16 @@ def _track_item(name='Synth Serenade', artists=('Faux Static',), duration_ms=225
 
 def _episode_item():
     """Build a raw playlist-item payload for a podcast episode."""
-    return {'track': {'type': 'episode', 'is_local': False, 'name': 'A Podcast Episode'}}
+    return {'item': {'type': 'episode', 'is_local': False, 'name': 'A Podcast Episode'}}
 
 
 def _local_file_item():
     """Build a raw playlist-item payload for a local file (null/minimal track object)."""
-    return {'track': {'is_local': True}}
+    return {'item': {'is_local': True}}
 
 
 def _page(items, next_url=None):
-    """Build one page of the playlists/{id}/tracks response shape."""
+    """Build one page of the playlists/{id}/items response shape."""
     return {'items': items, 'next': next_url}
 
 
@@ -138,6 +138,22 @@ class ImportPlaylistTests(TestCase):
             with self.assertRaises(SpotifyImportError):
                 import_playlist('https://example.com/not-spotify')
             mock_session_cls.assert_not_called()
+
+    def test_link_with_a_path_suffix_after_the_id_is_rejected(self):
+        """A trailing path segment past the playlist ID is malformed, not extra routing."""
+        with patch('scheduling.spotify.requests.Session') as mock_session_cls:
+            with self.assertRaises(SpotifyImportError):
+                import_playlist(f'{VALID_URL}/extra')
+            mock_session_cls.assert_not_called()
+
+    @patch('scheduling.spotify.requests.Session')
+    def test_link_with_a_query_string_is_still_accepted(self, mock_session_cls):
+        """A share link's tracking query string (?si=...) doesn't make the link malformed."""
+        self._mock_session(mock_session_cls, [_response(json_data=_page([_track_item()]))])
+
+        result = import_playlist(f'{VALID_URL}?si=abc123')
+
+        self.assertEqual(len(result.songs), 1)
 
     @patch('scheduling.spotify.requests.Session')
     def test_playlist_not_found_produces_a_readable_error(self, mock_session_cls):

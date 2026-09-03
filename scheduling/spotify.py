@@ -22,7 +22,7 @@ REQUEST_TIMEOUT_SECONDS = 10
 
 #: A Spotify playlist link, e.g. https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M?si=...
 _PLAYLIST_URL_PATTERN = re.compile(
-    r'^https://open\.spotify\.com/playlist/(?P<playlist_id>[A-Za-z0-9]+)(?:[/?].*)?$'
+    r'^https://open\.spotify\.com/playlist/(?P<playlist_id>[A-Za-z0-9]+)(?:/)?(?:[?#].*)?$'
 )
 
 UNAVAILABLE_MESSAGE = (
@@ -125,7 +125,7 @@ def _fetch_access_token(session, client_id, client_secret) -> str:
 def _fetch_all_playlist_items(session, access_token, playlist_id) -> list[dict]:
     """Fetch every playlist item, following pagination past the 100-item page cap."""
     headers = {'Authorization': f'Bearer {access_token}'}
-    url = f'{API_BASE_URL}/playlists/{playlist_id}/tracks'
+    url = f'{API_BASE_URL}/playlists/{playlist_id}/items'
     params = {'limit': PLAYLIST_ITEMS_PAGE_SIZE}
     items = []
     while url:
@@ -168,7 +168,7 @@ def _rows_from_items(items: list[dict]) -> PlaylistImportResult:
     skipped_reasons: dict[str, int] = {}
 
     for item in items:
-        track = item.get('track')
+        track = item.get('item')
         skip_reason = _skip_reason_for(track)
         if skip_reason:
             skipped_reasons[skip_reason] = skipped_reasons.get(skip_reason, 0) + 1
