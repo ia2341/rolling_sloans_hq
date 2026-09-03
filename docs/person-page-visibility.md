@@ -3,9 +3,9 @@
 The field-by-field verdicts governing the two member-facing roster routes:
 
 - **`/members/`** — the Band Members list (`MembersView`, issue #137)
-- **`/members/<int:pk>/`** — the single person page (issue #138), read-only for a teammate and editable in place for your own pk
+- **`/members/<int:pk>/`** — the single person page (issue #138), read-only for a teammate and editable in place for your own pk **or, since issue #232, for an admin viewing anyone's pk**
 
-Both routes are member-facing surfaces for every logged-in Person, admins included. Admin status changes nothing about what these two pages render, apart from one exception each, split by cardinality: `/members/` gains an admin-only **Edit roster** mode across the whole Roster (issue #227), and `/members/<pk>/` keeps the always-inline `MembershipRolesForm` that lets *you* edit your own declared Roles regardless of admin status (issue #138). Both edit surfaces are bound by the same verdicts below.
+Both routes are member-facing surfaces for every logged-in Person, admins included. Admin status changes nothing about what these two pages render, apart from one exception each, split by cardinality: `/members/` gains an admin-only **Edit roster** mode across the whole Roster (issue #227), and `/members/<pk>/` keeps the always-inline `MembershipRolesForm` that lets *you* edit your own declared Roles regardless of admin status (issue #138) — and now relaxes its POST guard so an admin can save that same form on **anyone's** page (issue #232). Both edit surfaces are bound by the same verdicts below.
 
 **How to read a verdict.** *Teammate* is any logged-in Person viewing someone else's row or page. *Self* is a Person viewing their own. **`never`** means never on **these two surfaces** — it is not a claim about the whole application. Several fields marked `never` here are legitimately rendered elsewhere: `Song.artist` on the Song page, `Conflict.reason` on `/schedule/` for its owner and in `ConflictAdmin` for an admin.
 
@@ -29,60 +29,62 @@ Both routes are member-facing surfaces for every logged-in Person, admins includ
 
 ## `/members/<int:pk>/` — the person page
 
+**Admin (edit mode)** below is issue #232's relaxed POST guard: the same always-inline `MembershipRolesForm` a Person sees on their own page also renders, and saves, for an admin viewing anyone else's page. It changes nothing about the Teammate/Self columns for a non-admin viewer, and it is **not** a third rendering mode with its own template branch — an admin viewing their own page still just gets the Self behavior. There is no batch, no Preview, and no remove control here at any cardinality (removal stays on `/members/`, per issue #232).
+
 ### `Person` (`identity/models.py`)
 
-| Field | Teammate | Self | Notes |
-| --- | --- | --- | --- |
-| `name` | ✅ | ✅ | |
-| `email` | ❌ never | ✅ self only | See "Known divergence" below |
-| `pk` | ✅ | ✅ | Route parameter; not rendered as text |
-| `password` | ❌ never | ❌ never | Self gets the `identity:password-change` link instead |
-| `last_login` | ❌ never | ❌ never | |
-| `is_active` | ❌ never | ❌ never | |
-| `is_admin` | ❌ never | ❌ never | Admin status is not member-facing on either route; the badge stays on the admin-only `identity/templates/identity/people.html` |
-| `is_staff`, `is_superuser` | ❌ never | ❌ never | Mirrors of `is_admin` (`Person.save()`) |
-| Permission/group relations (`PermissionsMixin`) | ❌ never | ❌ never | No Group/Permission scheme exists to render |
+| Field | Teammate | Self | Admin (edit mode) | Notes |
+| --- | --- | --- | --- | --- |
+| `name` | ✅ | ✅ | ✅ | |
+| `email` | ❌ never | ✅ self only | ❌ never | See "Known divergence" below — an admin viewing a teammate gets the Teammate verdict, not Self's |
+| `pk` | ✅ | ✅ | ✅ | Route parameter; not rendered as text |
+| `password` | ❌ never | ❌ never | ❌ never | Self gets the `identity:password-change` link instead; that link is self-only too |
+| `last_login` | ❌ never | ❌ never | ❌ never | |
+| `is_active` | ❌ never | ❌ never | ❌ never | |
+| `is_admin` | ❌ never | ❌ never | ❌ never | Admin status is not member-facing on either route; the badge stays on the admin-only `identity/templates/identity/people.html` |
+| `is_staff`, `is_superuser` | ❌ never | ❌ never | ❌ never | Mirrors of `is_admin` (`Person.save()`) |
+| Permission/group relations (`PermissionsMixin`) | ❌ never | ❌ never | ❌ never | No Group/Permission scheme exists to render |
 
 ### `Membership`, `MembershipRole`, `Role` (`scheduling/models.py`)
 
 Current `Semester` only, per ADR 0001 — there is no past-semester history on this page.
 
-| Field | Teammate | Self | Notes |
-| --- | --- | --- | --- |
-| `Membership.semester` → `Semester.name` | ✅ | ✅ | Page heading |
-| `MembershipRole.role` → `Role.name` | ✅ | ✅ read + **write** | Self edits via the always-inline `MembershipRolesForm`; no edit toggle |
-| `Role.is_active` | ❌ never | ❌ never | A declared Role that has since been retired still renders by name; the flag itself is never shown |
-| `Semester.default_*` timing fields | ❌ never | ❌ never | Not candidates on this page |
+| Field | Teammate | Self | Admin (edit mode) | Notes |
+| --- | --- | --- | --- | --- |
+| `Membership.semester` → `Semester.name` | ✅ | ✅ | ✅ | Page heading |
+| `MembershipRole.role` → `Role.name` | ✅ | ✅ read + **write** | ✅ read + **write** | Self edits via the always-inline `MembershipRolesForm`; an admin edits the same form on anyone's page (issue #232); no edit toggle either way |
+| `Role.is_active` | ❌ never | ❌ never | ❌ never | A declared Role that has since been retired still renders by name; the flag itself is never shown |
+| `Semester.default_*` timing fields | ❌ never | ❌ never | ❌ never | Not candidates on this page |
 
 ### `SongRoleAssignment` and the `Song` fields it reaches
 
-| Field | Teammate | Self | Notes |
-| --- | --- | --- | --- |
-| `song` → `Song.title` | ✅ | ✅ | Links to the Song page |
-| `role` → `Role.name` | ✅ | ✅ | The Role filled on that Song — see "Role mismatch is inferable" below |
-| `is_role_mismatch` | ❌ never | ❌ never | ADR 0002 makes this an admin queue marker, not a fact about the Person. A teammate has no business being told someone is playing outside their declared Roles, and showing it to the Person invites them to self-resolve the adjudication ADR 0002 assigns to an admin. Issue #227 surfaces it, on the Roster editor's per-row completeness flag on **`/members/`** — not on this page |
-| `Song.artist`, `length`, `notes`, `position` | ❌ never | ❌ never | Song detail belongs on the Song page |
+| Field | Teammate | Self | Admin (edit mode) | Notes |
+| --- | --- | --- | --- | --- |
+| `song` → `Song.title` | ✅ | ✅ | ✅ | Links to the Song page |
+| `role` → `Role.name` | ✅ | ✅ | ✅ | The Role filled on that Song — see "Role mismatch is inferable" below |
+| `is_role_mismatch` | ❌ never | ❌ never | ❌ never | ADR 0002 makes this an admin queue marker, not a fact about the Person. A teammate has no business being told someone is playing outside their declared Roles, and showing it to the Person invites them to self-resolve the adjudication ADR 0002 assigns to an admin. Issue #227 surfaces it, on the Roster editor's per-row completeness flag on **`/members/`** — not on this page, for an admin viewer either |
+| `Song.artist`, `length`, `notes`, `position` | ❌ never | ❌ never | ❌ never | Song detail belongs on the Song page |
 
 ### `Conflict` and `ConflictWindow`
 
-Every field, for everyone, including the owner: **`never`**. See [ADR 0005](adr/0005-conflict-privacy-boundary.md).
+Every field, for everyone, including the owner and an admin viewer of this page: **`never`**. See [ADR 0005](adr/0005-conflict-privacy-boundary.md) — the boundary is drawn around the surface, not the viewer, so issue #232's admin write access to declared Roles carries no Conflict visibility with it.
 
-| Field | Teammate | Self | Notes |
-| --- | --- | --- | --- |
-| `Conflict.reason` | ❌ never | ❌ never | The free-text field ADR 0005 exists to protect |
-| `Conflict.type`, `rehearsal`, `created_at`, `updated_at` | ❌ never | ❌ never | The owner reads these at `/schedule/` |
-| `Conflict.status` | ❌ never | ❌ never | The Adjudication outcome. The owner reads it at `/schedule/`, and an admin at `/manage/conflicts/<rehearsal_id>/`; neither of those is one of these two routes |
-| The Adjudication note | ❌ never | ❌ never | Admin-authored, and read by the Conflict's owner only — at `/schedule/`, alongside the status. Same verdict as `reason` here, for the same reason: this page has no Rehearsal in scope and is read by teammates |
-| `ConflictWindow.unavailable_start`, `unavailable_end` | ❌ never | ❌ never | |
+| Field | Teammate | Self | Admin (edit mode) | Notes |
+| --- | --- | --- | --- | --- |
+| `Conflict.reason` | ❌ never | ❌ never | ❌ never | The free-text field ADR 0005 exists to protect |
+| `Conflict.type`, `rehearsal`, `created_at`, `updated_at` | ❌ never | ❌ never | ❌ never | The owner reads these at `/schedule/` |
+| `Conflict.status` | ❌ never | ❌ never | ❌ never | The Adjudication outcome. The owner reads it at `/schedule/`, and an admin at `/manage/conflicts/<rehearsal_id>/`; neither of those is one of these two routes |
+| The Adjudication note | ❌ never | ❌ never | ❌ never | Admin-authored, and read by the Conflict's owner only — at `/schedule/`, alongside the status. Same verdict as `reason` here, for the same reason: this page has no Rehearsal in scope and is read by teammates |
+| `ConflictWindow.unavailable_start`, `unavailable_end` | ❌ never | ❌ never | ❌ never | |
 
 ### Derived attendance data (`scheduling/services.py`, `Rehearsal.attendance_for`)
 
-| Value | Teammate | Self | Notes |
-| --- | --- | --- | --- |
-| `Rehearsal.attendance_for` | ❌ never | ❌ never | Needs a Rehearsal in scope; this page has none |
-| `breaks_for` | ❌ never | ❌ never | Self reads this on Schedule |
-| `next_attended_rehearsal_for` | ❌ never | ❌ never | Self reads this on Overview |
-| `attendance_suggestion_for` | ❌ never | ❌ never | Partial inference of the same availability picture ADR 0005 protects |
+| Value | Teammate | Self | Admin (edit mode) | Notes |
+| --- | --- | --- | --- | --- |
+| `Rehearsal.attendance_for` | ❌ never | ❌ never | ❌ never | Needs a Rehearsal in scope; this page has none |
+| `breaks_for` | ❌ never | ❌ never | ❌ never | Self reads this on Schedule |
+| `next_attended_rehearsal_for` | ❌ never | ❌ never | ❌ never | Self reads this on Overview |
+| `attendance_suggestion_for` | ❌ never | ❌ never | ❌ never | Partial inference of the same availability picture ADR 0005 protects |
 
 ### `Recording`
 
@@ -92,11 +94,11 @@ Every field, for everyone: **`never`**. A Recording's identity is the `Rehearsal
 
 Every field, for everyone, including the person backing up: **`never`** on these two routes. See [ADR 0007](adr/0007-rehearsal-scoped-backup.md).
 
-| Field | Teammate | Self | Notes |
-| --- | --- | --- | --- |
-| `rehearsal_song`, `role`, `person` | ❌ never | ❌ never | A Backup is scoped to one Rehearsal slot and this page has no Rehearsal in scope — the same reason `attendance_for` is `never` above. The Backup itself **is** member-visible on the Schedule, rendered as "*name* (backup)" |
-| `covering_for` | ❌ never | ❌ never | **Admin surfaces only, everywhere.** Naming the covered Person discloses that they declared a `Conflict` for that date, which is exactly what ADR 0005 keeps off member-facing routes. ADR 0005 governs rendering, not storage |
-| `is_role_mismatch` | ❌ never | ❌ never | Same verdict and same reasoning as `SongRoleAssignment.is_role_mismatch` above: an admin queue marker per ADR 0002, not a fact about the Person |
+| Field | Teammate | Self | Admin (edit mode) | Notes |
+| --- | --- | --- | --- | --- |
+| `rehearsal_song`, `role`, `person` | ❌ never | ❌ never | ❌ never | A Backup is scoped to one Rehearsal slot and this page has no Rehearsal in scope — the same reason `attendance_for` is `never` above. The Backup itself **is** member-visible on the Schedule, rendered as "*name* (backup)" |
+| `covering_for` | ❌ never | ❌ never | ❌ never | **Admin surfaces only, everywhere** — but not *this* admin surface. Naming the covered Person discloses that they declared a `Conflict` for that date, which is exactly what ADR 0005 keeps off member-facing routes. ADR 0005 governs rendering, not storage |
+| `is_role_mismatch` | ❌ never | ❌ never | ❌ never | Same verdict and same reasoning as `SongRoleAssignment.is_role_mismatch` above: an admin queue marker per ADR 0002, not a fact about the Person |
 
 This section states a verdict the "anything not listed is `never`" default already gives, because a reader will actively wonder: a Backup *is* shown to all members on the Schedule, so its absence here would otherwise read as an oversight rather than a decision.
 
