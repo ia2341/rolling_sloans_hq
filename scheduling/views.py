@@ -736,16 +736,19 @@ class MemberDetailView(BaseView, View):
     """`/members/<int:pk>/`: one Person's page for the viewing Semester (issue #138).
 
     Two rendering modes, and no third: read-only for a teammate's pk,
-    editable in place for `request.user.pk`. The editable mode carries the
-    always-inline `MembershipRolesForm`, with no edit toggle, and is the
-    only mode with any mutation surface at all — a POST to another
-    Person's pk is a 404, not a rejected form. Issue #130 adds the third,
-    admin-editable mode here.
+    editable in place for `request.user.pk` **or an admin viewing anyone's
+    pk** (issue #232). The editable mode carries the always-inline
+    `MembershipRolesForm`, with no edit toggle, and is the only mode with
+    any mutation surface at all — a POST from a non-admin to another
+    Person's pk is a 404, not a rejected form. This is the only admin write
+    on this page: no batch, no Preview, and removal stays list-only on
+    `/members/`.
 
     Every field this renders has an explicit verdict in
     `docs/person-page-visibility.md`; ADR 0005 keeps Conflict and derived
-    attendance data off the page for everyone, its owner included, because
-    the boundary is drawn around the surface rather than the viewer.
+    attendance data off the page for everyone, its owner and an admin
+    viewer included, because the boundary is drawn around the surface
+    rather than the viewer.
 
     A Person with no viewing-Semester `Membership` 404s — except your own
     pk, which builds an unsaved `Membership` instead, so a newly-invited
@@ -757,26 +760,32 @@ class MemberDetailView(BaseView, View):
     template_name = 'scheduling/member_detail.html'
 
     def get(self, request, pk):
-        """Render `pk`'s page: read-only for a teammate, or your own with the inline Roles form."""
+        """Render `pk`'s page: read-only for a teammate, or editable for your own pk or an admin's."""
         semester = get_viewing_semester(self.request)
         person = self._get_person_or_404(request, pk, semester)
         return render(request, self.template_name, self._build_context(request, person, semester))
 
     def post(self, request, pk):
-        """Persist your own declared Roles, or 404 — a teammate's page has no mutation surface."""
-        if pk != request.user.pk:
-            raise Http404('A member can only edit their own declared Roles.')
+        """Persist declared Roles for your own pk or, if you're an admin, anyone's; 404 otherwise.
+
+        A teammate's page has no mutation surface for a non-admin viewer —
+        the guard 404s rather than rendering a rejected form, exactly as it
+        did before an admin could reach this branch at all.
+        """
+        if pk != request.user.pk and not request.user.is_admin:
+            raise Http404("A member can only edit their own declared Roles unless they're an admin.")
         semester = get_viewing_semester(request)
+        person = self._get_person_or_404(request, pk, semester)
         if semester is None:
-            return render(request, self.template_name, self._build_context(request, request.user, semester))
-        membership = self._get_or_build_membership(request.user, semester)
+            return render(request, self.template_name, self._build_context(request, person, semester))
+        membership = self._get_or_build_membership(person, semester)
         form = MembershipRolesForm(request.POST, instance=membership)
         if form.is_valid():
-            form.instance = self._membership_for_writing(request.user, semester)
+            form.instance = self._membership_for_writing(person, semester)
             form.save()
             messages.success(request, 'Profile updated.')
-            return redirect('scheduling:member-detail', pk=request.user.pk)
-        context = self._build_context(request, request.user, semester)
+            return redirect('scheduling:member-detail', pk=pk)
+        context = self._build_context(request, person, semester)
         context['form'] = form
         return render(request, self.template_name, context)
 
@@ -790,7 +799,7 @@ class MemberDetailView(BaseView, View):
         return membership.person
 
     def _build_context(self, request, person, semester):
-        """Build the render context for `person`, adding the inline Roles form only on your own page."""
+        """Build the render context for `person`, adding the inline Roles form on your own page or an admin's view of anyone's."""
         is_self = person.pk == request.user.pk
         context = {'person': person, 'is_self': is_self, 'semester': semester, 'membership': None}
         if semester is None:
@@ -799,7 +808,7 @@ class MemberDetailView(BaseView, View):
         context['membership'] = membership
         context['declared_roles'] = declared_roles_for(membership)
         context['assignments'] = assigned_songs_for(person, semester) if membership.pk else []
-        if is_self:
+        if is_self or request.user.is_admin:
             context['form'] = MembershipRolesForm(instance=membership)
         return context
 
