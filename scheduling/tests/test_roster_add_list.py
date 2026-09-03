@@ -93,7 +93,7 @@ class AddListRenderingTests(TestCase):
 
         response = self.client.get(_edit_url())
 
-        self.assertNotContains(response, f'value="{membership.person.pk}" name="roster_add')
+        self.assertNotContains(response, f'-person_id" value="{membership.person.pk}"')
 
     def test_empty_add_list_renders_a_usable_empty_state(self):
         """With nobody left to add, the add list renders empty-state copy rather than an empty table."""
