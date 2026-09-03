@@ -1,6 +1,7 @@
 from django.contrib import admin
 
 from .models import (
+    Backup,
     Conflict,
     ConflictWindow,
     Membership,
@@ -159,3 +160,18 @@ class ConflictWindowAdmin(admin.ModelAdmin):
 
     list_display = ('conflict', 'unavailable_start', 'unavailable_end')
     list_filter = ('conflict__rehearsal__semester',)
+
+
+@admin.register(Backup)
+class BackupAdmin(admin.ModelAdmin):
+    """Admin for a rehearsal-scoped substitution, surfacing role mismatches and staleness (ADR-0007, issue #176)."""
+
+    list_display = ('rehearsal_song', 'role', 'person', 'covering_for', 'is_role_mismatch')
+    list_filter = ('is_role_mismatch', 'rehearsal_song__rehearsal__semester')
+    search_fields = ('person__name', 'person__email', 'rehearsal_song__song__title')
+    readonly_fields = ('is_role_mismatch', 'stale_advisory')
+
+    @admin.display(description='Stale advisory', boolean=True)
+    def stale_advisory(self, obj):
+        """Show whether covering_for's Conflict has been withdrawn, without acting on it (ADR-0007 §3)."""
+        return obj.is_stale()
