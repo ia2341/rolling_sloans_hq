@@ -28,6 +28,14 @@ urlpatterns = [
         views.SetlistImportView.as_view(), name='setlist-edit-import',
     ),
     path('songs/<int:pk>/', views.SongDetailView.as_view(), name='song-detail'),
+    path(
+        'songs/<int:pk>/requirements/edit/',
+        views.SongRequirementsEditView.as_view(), name='song-requirements-edit',
+    ),
+    path(
+        'songs/<int:pk>/requirements/roles/add/',
+        views.SongRequirementAddRoleView.as_view(), name='song-requirements-add-role',
+    ),
     path('members/', views.MembersView.as_view(), name='members'),
     path('members/import/', views.RosterImportView.as_view(), name='members-roster-import'),
     path('members/invite/', views.RosterInviteView.as_view(), name='members-roster-invite'),
@@ -43,6 +51,14 @@ urlpatterns = [
     path('me/recordings/<int:pk>/delete/', views.RecordingDeleteView.as_view(), name='recordings-delete'),
     path('manage/semester/', views.SemesterSelectView.as_view(), name='manage-semester-select'),
     path('manage/semesters/setup/', views.SemesterSetupView.as_view(), name='manage-semester-setup'),
+    path(
+        'manage/semesters/setup/<int:pk>/roster/',
+        views.SemesterSetupRosterView.as_view(), name='manage-semester-setup-roster',
+    ),
+    path(
+        'manage/semesters/setup/<int:pk>/setlist/',
+        views.SemesterSetupSetlistView.as_view(), name='manage-semester-setup-setlist',
+    ),
     path(
         'manage/semesters/setup/<int:pk>/finish/',
         views.SemesterSetupFinishView.as_view(), name='manage-semester-setup-finish',
@@ -61,5 +77,9 @@ urlpatterns = [
     path(
         'manage/conflicts/<int:rehearsal_id>/',
         views.ConflictAdjudicationDetailView.as_view(), name='manage-conflicts-detail',
+    ),
+    path(
+        'manage/conflicts/<int:rehearsal_id>/preview/',
+        views.AdjudicationPreviewView.as_view(), name='manage-conflicts-preview',
     ),
 ]

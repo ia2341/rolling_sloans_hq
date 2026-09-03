@@ -2,8 +2,8 @@
 {# no-JS fallback and the direct-link target) and the Home panel's modal, which fetches this same #}
 {# fragment so there is exactly one template for the step, never two implementations of it. #}
 <div id="semester-setup-form">
-  <p>Step 1&ndash;2 of 5 &mdash; name your new semester and confirm its timing defaults. Importing a roster, a
-    setlist and rehearsal dates are optional steps that come later, each from its own tab.</p>
+  <p>Step 1&ndash;2 of 5 &mdash; name your new semester and confirm its timing defaults. Importing a roster
+    comes next; a setlist and rehearsal dates are optional steps that come later, each from its own tab.</p>
 
   <form method="post" action="{% url 'scheduling:manage-semester-setup' %}">
     {% csrf_token %}

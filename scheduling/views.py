@@ -37,6 +37,10 @@ from scheduling.forms import (
     SemesterSetupForm,
     SetlistEditEmptyFormSet,
     SetlistEditFormSet,
+    SongRequirementAddFormSet,
+    SongRequirementAddRoleForm,
+    SongRequirementAddRowForm,
+    SongRequirementEditFormSet,
     SongRoleAssignmentForm,
     SpotifyImportForm,
 )
@@ -50,6 +54,7 @@ from scheduling.models import (
     Semester,
     Song,
     SongRoleAssignment,
+    SongRoleRequirement,
 )
 from scheduling.services import (
     CONFLICT_EARLY_DEPARTURE,
@@ -63,15 +68,19 @@ from scheduling.services import (
     RosterEditBuffer,
     RosterEditEntry,
     SelfRemovalError,
+    SongRoleRequirementBuffer,
+    SongRoleRequirementEntry,
     StaleAdjudicationSemesterError,
     StaleAssignmentSemesterError,
     StaleRosterSemesterError,
+    StaleSongRoleRequirementsError,
     UnknownConflictError,
     WrongAdjudicationSemesterError,
     WrongViewingSemesterError,
     apply_adjudications,
     apply_roster_edits,
     apply_song_role_assignments,
+    apply_song_role_requirements,
     assigned_songs_for,
     assignment_grid_is_editable,
     assignment_matrix_for,
@@ -98,6 +107,7 @@ from scheduling.services import (
     mismatched_person_ids_for,
     next_attended_rehearsal_for,
     performers_for,
+    preview_adjudications,
     preview_roster_edits,
     publish_semester,
     recording_count_for,
@@ -1216,6 +1226,7 @@ class SongDetailView(BaseView, DetailView):
         """Add the Song's SongRoleAssignments, Role fill status, Recordings grouped by RehearsalSong slot, and rehearsal-count target vs. actual."""
         context = super().get_context_data(**kwargs)
         song = self.object
+        context['semester'] = get_viewing_semester(self.request)
         context['assignments'] = SongRoleAssignment.objects.filter(song=song)
         context['fill_statuses'] = fill_status_for(song)
         context['recording_groups'] = [
@@ -1235,6 +1246,219 @@ class SongDetailView(BaseView, DetailView):
         context['rehearsal_count_target'] = rehearsal_count_target(song)
         context['rehearsal_count_actual'] = song.rehearsalsong_set.count()
         return context
+
+
+class SongRequirementsEditView(AdminRequiredMixin, View):
+    """`/songs/<pk>/requirements/edit/`: an admin's in-place editable Role×count table for a Song's Requirements (issue #209).
+
+    A sibling of `SongDetailView`, mirroring `SetlistEditView`'s shape
+    (issue #178) — a dedicated `AdminRequiredMixin` view, a hidden
+    `Semester.updated_at` stamp, one "Save Changes" boundary — rather than
+    the Roster's Preview/Fallout apparatus (issue #185). Applying ADR
+    0008's own test to this surface — is there fallout only the server can
+    compute? — comes back negative on both counts: deleting a Requirement
+    destroys nothing and cascades nowhere, and unfilled count is target
+    minus actual, which the Song page already renders in read mode. So
+    this surface ships no `preview_` sibling, deliberately (see
+    `apply_song_role_requirements()`'s docstring, and
+    `scheduling/tests/test_song_requirements_edit_view.py`'s negative
+    route-table test for the enforced absence).
+
+    GET renders the table — a bare fragment for the "Edit requirements"
+    button's htmx swap, or a full page for a direct/no-JS request. POST
+    commits the whole buffer — count changes, deletes, and "+ Add
+    requirement" rows — as one atomic write via
+    `apply_song_role_requirements()`, or writes nothing and re-renders
+    with every submitted value preserved.
+    """
+
+    fragment_template_name = 'scheduling/_song_requirements_edit.html'
+    page_template_name = 'scheduling/song_requirements_edit.html'
+    STALE_MESSAGE = 'The Requirements changed while you were editing — reload and reapply.'
+    WRONG_SEMESTER_MESSAGE = 'This Semester changed while you were editing — reload and reapply.'
+    DUPLICATE_MESSAGE = 'Each Role can only have one Requirement per Song.'
+
+    def get(self, request, pk):
+        """Render the edit table: a bare fragment for htmx, a full page otherwise."""
+        semester = get_viewing_semester(request)
+        song = self._song(pk, semester)
+        requirements = self._requirements(song)
+        formset = SongRequirementEditFormSet(
+            initial=[{'role_id': r.role_id, 'count': r.count} for r in requirements], prefix='req',
+        )
+        add_formset = SongRequirementAddFormSet(
+            prefix='add', form_kwargs={'excluded_role_ids': [r.role_id for r in requirements]},
+        )
+        return self._render(request, song, semester, formset, add_formset, requirements)
+
+    def post(self, request, pk):
+        """Validate and apply the whole Requirements Buffer atomically, or re-render with errors."""
+        semester = get_viewing_semester(request)
+        song = self._song(pk, semester)
+        requirements = self._requirements(song)
+        submitted_semester_id = request.POST.get('requirements_semester_id', '')
+        submitted_stamp = request.POST.get('requirements_semester_updated_at', '')
+        formset = SongRequirementEditFormSet(request.POST, prefix='req')
+        add_formset = SongRequirementAddFormSet(
+            request.POST, prefix='add', form_kwargs={'excluded_role_ids': [r.role_id for r in requirements]},
+        )
+        if formset.is_valid() and add_formset.is_valid():
+            entries, duplicate = self._build_entries(formset, add_formset, requirements)
+            if duplicate:
+                messages.error(request, self.DUPLICATE_MESSAGE)
+            else:
+                buffer = SongRoleRequirementBuffer(
+                    song_id=song.pk,
+                    semester_id=_parse_roster_int(submitted_semester_id),
+                    semester_updated_at=parse_datetime(submitted_stamp) or timezone.now(),
+                    entries=entries,
+                )
+                try:
+                    apply_song_role_requirements(buffer, viewing_semester=semester)
+                except WrongViewingSemesterError:
+                    messages.error(request, self.WRONG_SEMESTER_MESSAGE)
+                except StaleSongRoleRequirementsError:
+                    messages.error(request, self.STALE_MESSAGE)
+                else:
+                    messages.success(request, 'Requirements updated.')
+                    return redirect('scheduling:song-detail', pk=song.pk)
+        return self._render(
+            request, song, semester, formset, add_formset, requirements,
+            semester_id=submitted_semester_id, stamp=submitted_stamp, status=200,
+        )
+
+    def _build_entries(self, formset, add_formset, requirements):
+        """Turn the valid edit and add formsets into a list of SongRoleRequirementEntry, flagging any duplicate Role.
+
+        A hand-crafted POST can raise `req-TOTAL_FORMS` past
+        `req-INITIAL_FORMS` (this formset's `extra=0` means the page never
+        submits more forms than it rendered) or carry a `role_id` this Song
+        has no current Requirement for. Django marks any such extra form
+        `empty_permitted`, so its `cleaned_data` is `{}`; skip it rather
+        than KeyError on `row['remove']`. A `role_id` outside
+        `requirements`' own ids is skipped too, so this can never hand
+        `apply_song_role_requirements()` a role the create branch would
+        otherwise insert as a fresh row.
+        """
+        known_role_ids = {r.role_id for r in requirements}
+        entries = []
+        seen_role_ids = set()
+        duplicate = False
+        for row in formset.cleaned_data:
+            if not row or row['remove']:
+                continue
+            role_id = row['role_id']
+            if role_id not in known_role_ids:
+                continue
+            if role_id in seen_role_ids:
+                duplicate = True
+            seen_role_ids.add(role_id)
+            entries.append(SongRoleRequirementEntry(role_id=role_id, count=row['count']))
+        for row in add_formset.cleaned_data:
+            if not row or row.get('DELETE'):
+                continue
+            role = row['role']
+            if role.pk in seen_role_ids:
+                duplicate = True
+            seen_role_ids.add(role.pk)
+            entries.append(SongRoleRequirementEntry(role_id=role.pk, count=row['count']))
+        return entries, duplicate
+
+    def _song(self, pk, semester):
+        """Return the viewing Semester's Song with this id, or 404."""
+        return get_object_or_404(_scoped_to_viewing_semester(Song, semester), pk=pk)
+
+    def _requirements(self, song):
+        """Return `song`'s SongRoleRequirements, ordered by Role name."""
+        return list(SongRoleRequirement.objects.filter(song=song).select_related('role').order_by('role__name'))
+
+    def _render(self, request, song, semester, formset, add_formset, requirements, *, semester_id=None, stamp=None, status=200):
+        """Render the fragment for an htmx request, else the full page; both carry the same buffer."""
+        context = self._build_context(song, semester, formset, add_formset, requirements, semester_id, stamp)
+        template = self.fragment_template_name if _is_htmx(request) else self.page_template_name
+        return render(request, template, context, status=status)
+
+    def _build_context(self, song, semester, formset, add_formset, requirements, semester_id, stamp):
+        """Build the shared context for both the fragment and full-page renders.
+
+        Pairs each edit row with its Role by reading `role_id`'s raw
+        submitted value rather than `cleaned_data`, so this pairing
+        survives an otherwise-invalid formset — the same every-value-
+        preserved re-render `SetlistEditView` gives a rejected buffer.
+        """
+        requirements_by_role_id = {r.role_id: r for r in requirements}
+        rows = []
+        for form in formset:
+            role_id = _parse_roster_int(form['role_id'].value())
+            requirement = requirements_by_role_id.get(role_id)
+            rows.append({
+                'form': form,
+                'role': requirement.role if requirement else None,
+                'is_retired_role': requirement is not None and not requirement.role.is_active,
+            })
+        return {
+            'song': song,
+            'semester': semester,
+            'formset': formset,
+            'rows': rows,
+            'add_formset': add_formset,
+            'requirements_semester_id': semester_id if semester_id is not None else (semester.pk if semester else ''),
+            'requirements_semester_updated_at': (
+                stamp if stamp is not None else (semester.updated_at.isoformat() if semester else '')
+            ),
+        }
+
+
+class SongRequirementAddRoleView(AdminRequiredMixin, View):
+    """`/songs/<pk>/requirements/roles/add/`: the Song requirements editor's inline "Add Role" control (issue #209).
+
+    Calls `create_or_reactivate_role()` (issue #225) unchanged — the same
+    single Role-creation path the Roster editor's "Add Role" control uses
+    (`RosterAddRoleView`) — and commits immediately, outside the Buffer:
+    discarding the pending Requirement edits afterward must not un-invent
+    a Role the triggering row already selected. Rebuilds only the
+    triggering add-row's `role` field, from the same
+    `SongRequirementAddRowForm` the live add formset renders (excluding
+    the Song's other current Requirements from its choices, same as the
+    live render), so field names/ids stay identical after the swap and the
+    new Role is immediately selectable on the row that created it.
+    """
+
+    template_name = 'scheduling/_song_requirement_role_select.html'
+
+    def post(self, request, pk):
+        """Create/reactivate the named Role, select it on the triggering add-row, and re-render that row's Role field."""
+        form = SongRequirementAddRoleForm(request.POST)
+        if not form.is_valid():
+            return HttpResponseBadRequest()
+        semester = get_viewing_semester(request)
+        song = get_object_or_404(_scoped_to_viewing_semester(Song, semester), pk=pk)
+        prefix = form.cleaned_data['prefix']
+        result = create_or_reactivate_role(form.cleaned_data['role_name'])
+        excluded_role_ids = list(SongRoleRequirement.objects.filter(song=song).values_list('role_id', flat=True))
+        # An entered name can resolve to a Role the Song already has a Requirement for. Keeping it in
+        # the exclusion set (rather than special-casing it out, as if it were this row's own pending
+        # value) stops the rebuilt select from ever offering a Role Save Changes would reject anyway.
+        already_required = result.role.pk in excluded_role_ids
+        row_form = SongRequirementAddRowForm(
+            prefix=prefix,
+            initial={} if already_required else {'role': result.role.pk},
+            excluded_role_ids=excluded_role_ids,
+        )
+        return render(request, self.template_name, {
+            'field': row_form['role'],
+            'message': self._message_for(result, already_required=already_required),
+        })
+
+    def _message_for(self, result, *, already_required=False):
+        """Return the admin-facing message naming how create_or_reactivate_role() resolved the Role."""
+        if already_required:
+            return f'"{result.role.name}" already has a Requirement for this Song.'
+        if result.created:
+            return f'Added "{result.role.name}".'
+        if result.reactivated:
+            return f'Reactivated "{result.role.name}".'
+        return f'Matched existing "{result.role.name}".'
 
 
 _CONFLICT_STATUS_TEXT = {
@@ -1811,11 +2035,13 @@ class SemesterSetupView(AdminRequiredMixin, View):
     both from the most recently created Semester (falling back to
     `TIMING_DEFAULT_CONSTANTS` when there is none), and POST creates the
     draft immediately via `create_semester()`, switches this admin's
-    session selection to it, and redirects to the finish screen. Nothing
-    here is held hostage to finishing the rest of the wizard — steps 3-5
-    (roster, setlist, rehearsal dates) are separate, independently
-    skippable tickets not yet built, so this screen goes straight from
-    submit to finish.
+    session selection to it, and redirects into step 3 (the roster
+    import). Nothing here is held hostage to finishing the rest of the
+    wizard — steps 3-4 (roster, setlist) are separate, independently
+    skippable steps, and `SemesterSetupRosterView` itself bounces
+    straight to step 4 (or, with nothing to import, straight past both
+    to finish) when there's no prior Semester to import from, so this
+    view never needs to check that itself.
 
     Reached two ways with the same form and the same code path: a direct
     GET renders the full page (the no-JS fallback, and the bookmarkable
@@ -1850,7 +2076,7 @@ class SemesterSetupView(AdminRequiredMixin, View):
         return self._render(request, form)
 
     def post(self, request):
-        """Validate and create the draft Semester, switch the session's viewing Semester, and redirect to finish."""
+        """Validate and create the draft Semester, switch the session's viewing Semester, and redirect to step 3."""
         form = SemesterSetupForm(request.POST)
         if form.is_valid():
             try:
@@ -1860,8 +2086,119 @@ class SemesterSetupView(AdminRequiredMixin, View):
             else:
                 set_viewing_semester(request, semester)
                 messages.success(request, f'{semester.name} created as a draft.')
-                return redirect('scheduling:manage-semester-setup-finish', pk=semester.pk)
+                return redirect('scheduling:manage-semester-setup-roster', pk=semester.pk)
         return self._render(request, form)
+
+
+class SemesterSetupRosterView(AdminRequiredMixin, View):
+    """`/manage/semesters/setup/<pk>/roster/`: Semester setup step 3, import the roster from the prior Semester (issue #201).
+
+    "Clone", "copy semester" and "carry over" were all considered for
+    this step's name and refused: ADR 0001 holds that a Semester's
+    Membership/MembershipRole rows are re-created fresh per term, never
+    linked across one, and those words imply exactly the linkage that
+    forbids. Committing here creates fresh rows referencing the prior
+    Semester in no way at all — nothing in the schema records that an
+    import happened.
+
+    No derivation of its own: the read is `import_roster_from_semester()`
+    and the write is `apply_roster_edits()` (#185), the same pair the
+    Band Members tab's "Import from <Semester>" button uses, so skipping
+    this step and doing the same job there afterwards produces the same
+    result. No Role editing and no invite affordance — those live on the
+    Band Members tab's own Roster editor. Reached only by redirect (from
+    step 1's POST, or this view's own GET/POST when there's nothing to
+    import), so unlike `SemesterSetupView` it needs no modal-fragment
+    variant: a direct hit and the Home panel's post-redirect navigation
+    both land on the plain full page. Both its exits move on to step 4
+    (the setlist import, issue #202), never straight to finish, except
+    when there is no prior Semester to import from at all.
+    """
+
+    template_name = 'scheduling/semester_setup_roster.html'
+
+    def get(self, request, pk):
+        """Render the prior Semester's roster as a checkbox list ticked by default, or skip straight to step 4."""
+        semester = get_object_or_404(Semester, pk=pk)
+        proposal = import_roster_from_semester(semester)
+        if proposal.source_semester is None:
+            return redirect('scheduling:manage-semester-setup-setlist', pk=semester.pk)
+        return self._render(request, semester, proposal)
+
+    def post(self, request, pk):
+        """Import the ticked people, with their copied Role declarations, into the new Semester."""
+        semester = get_object_or_404(Semester, pk=pk)
+        proposal = import_roster_from_semester(semester)
+        if proposal.source_semester is None:
+            return redirect('scheduling:manage-semester-setup-setlist', pk=semester.pk)
+        checked_ids = {_parse_roster_int(value) for value in request.POST.getlist('person_id')}
+        entries = [
+            RosterEditEntry(
+                person=candidate.person, name=candidate.person.name,
+                role_ids=frozenset(role.pk for role in candidate.roles),
+            )
+            for candidate in proposal.people if candidate.person.pk in checked_ids
+        ]
+        buffer = RosterEditBuffer(
+            semester_id=semester.pk, semester_updated_at=semester.updated_at,
+            entries=entries, removed_person_ids=frozenset(),
+        )
+        try:
+            apply_roster_edits(buffer, viewing_semester=semester, requesting_admin=request.user)
+        except (WrongViewingSemesterError, StaleRosterSemesterError, SelfRemovalError) as error:
+            messages.error(request, str(error))
+            return self._render(request, semester, proposal, checked_ids=checked_ids)
+        messages.success(request, f'Imported {len(entries)} member(s) from {proposal.source_semester.name}.')
+        return redirect('scheduling:manage-semester-setup-setlist', pk=semester.pk)
+
+    def _render(self, request, semester, proposal, checked_ids=None):
+        """Render the checkbox list, ticked by default unless `checked_ids` carries a rejected submission's ticks."""
+        if checked_ids is None:
+            checked_ids = {candidate.person.pk for candidate in proposal.people}
+        rows = [
+            {'person': candidate.person, 'roles': candidate.roles, 'checked': candidate.person.pk in checked_ids}
+            for candidate in proposal.people
+        ]
+        return render(request, self.template_name, {
+            'semester': semester, 'source_semester': proposal.source_semester, 'rows': rows,
+        })
+
+
+class SemesterSetupSetlistView(AdminRequiredMixin, View):
+    """`/manage/semesters/setup/<pk>/setlist/`: Semester setup step 4, importing the setlist (issue #202).
+
+    No import or commit logic of its own — it wraps the same editable
+    setlist grid and Spotify-import controls the Setlist tab's
+    `SetlistEditView`/`SetlistImportView` already provide (issues #178,
+    #179, #184): the paste-a-link box, the unsaved preview rows a
+    playlist fills in before anything is written, and the Save button,
+    all posting to their existing endpoints unchanged. Reusing the
+    fragment verbatim is what keeps "read through #183, write through
+    the existing setlist save path" true with no second implementation
+    and no new preview/apply pair (issue #198 §8).
+
+    Saving lands the admin on the Setlist tab, same as it would from
+    there directly. A Skip link moves straight to the finish screen
+    without writing anything — this step, like every step after 1-2,
+    must never trap the admin: a bad or abandoned import is finished
+    later from the Setlist tab, not from here.
+    """
+
+    template_name = 'scheduling/semester_setup_setlist.html'
+
+    def get(self, request, pk):
+        """Render the wizard's setlist step: the Setlist tab's own edit grid, plus a Skip link to finish."""
+        semester = get_object_or_404(Semester, pk=pk)
+        if get_viewing_semester(request) != semester:
+            set_viewing_semester(request, semester)
+        songs = Song.objects.filter(semester=semester).order_by('position')
+        formset_class = SetlistEditFormSet if songs.exists() else SetlistEditEmptyFormSet
+        formset = formset_class(queryset=songs, prefix='song')
+        return render(request, self.template_name, {
+            'semester': semester,
+            'formset': formset,
+            'stamp': semester.updated_at.isoformat(),
+        })
 
 
 class SemesterSetupFinishView(AdminRequiredMixin, View):
@@ -1972,6 +2309,75 @@ class ConflictAdjudicationIndexView(AdminRequiredMixin, TemplateView):
         return context
 
 
+def _adjudication_preview_url(rehearsal):
+    """Return the Feasibility Preview endpoint's URL for `rehearsal`, wired onto every row's status widget.
+
+    Shared by the Save endpoint and the Preview endpoint itself (issue
+    #194) — a Preview response re-renders the same formset, so its rows
+    need the same live-toggle wiring as the initial page for a second
+    toggle to keep firing.
+    """
+    return reverse('scheduling:manage-conflicts-preview', args=[rehearsal.pk])
+
+
+def _adjudication_initial(rows):
+    """Build the adjudication formset's initial data: one row per Conflict, at its current status with an empty note."""
+    return [
+        {'conflict_id': row.conflict.pk, 'status': row.status, 'note': ''}
+        for row in rows
+    ]
+
+
+def _build_adjudication_buffer(rehearsal, formset, submitted_semester_id, submitted_stamp):
+    """Turn a valid AdjudicationFormSet into an AdjudicationBuffer, carrying the Semester state it was rendered against.
+
+    `submitted_semester_id`/`submitted_stamp` are the hidden fields
+    stamped at render time, not the live session's viewing Semester —
+    `apply_adjudications()`/`preview_adjudications()` are the ones place
+    that compare them against current state, raising or reporting a stale
+    stamp if either has moved since. Shared by the Save endpoint and the
+    Feasibility Preview endpoint (issue #194), so the two can never
+    disagree about how a submitted row maps onto a Buffer entry.
+    """
+    entries = [
+        AdjudicationEntry(
+            conflict_id=row['conflict_id'], status=row['status'], note=row['note'],
+        )
+        for row in formset.cleaned_data
+    ]
+    return AdjudicationBuffer(
+        rehearsal_id=rehearsal.pk,
+        semester_id=_parse_roster_int(submitted_semester_id),
+        semester_updated_at=parse_datetime(submitted_stamp) or timezone.now(),
+        entries=entries,
+    )
+
+
+def _current_adjudication_fallout(rehearsal, rows, semester):
+    """Compute feasibility/Fallout for `rehearsal` as currently saved -- no pending edits in play (issue #194).
+
+    Used wherever the adjudication table renders without a submitted
+    Buffer to preview (the initial GET, and a Save POST that failed
+    validation before any Buffer could be built): every row still shows
+    its verdict, computed against the Conflicts' currently saved statuses
+    rather than a hypothetical one.
+    """
+    entries = [AdjudicationEntry(conflict_id=row.conflict.pk, status=row.status, note='') for row in rows]
+    buffer = AdjudicationBuffer(
+        rehearsal_id=rehearsal.pk, semester_id=semester.pk, semester_updated_at=semester.updated_at, entries=entries,
+    )
+    return preview_adjudications(buffer, rehearsal=rehearsal, viewing_semester=semester)
+
+
+def _adjudication_triples(rows, formset, fallout):
+    """Zip each ConflictAdjudicationDetailRow with its formset form and its ConflictFeasibilityRow (or None)."""
+    feasibility_by_id = fallout.feasibility_by_conflict_id if fallout is not None else {}
+    return [
+        (row, form, feasibility_by_id.get(row.conflict.pk))
+        for row, form in zip(rows, formset.forms, strict=True)
+    ]
+
+
 class ConflictAdjudicationDetailView(AdminRequiredMixin, View):
     """`/manage/conflicts/<rehearsal_id>/`: one Rehearsal's Conflicts, decided together under one Save Changes (issue #192).
 
@@ -1984,6 +2390,12 @@ class ConflictAdjudicationDetailView(AdminRequiredMixin, View):
     (an over-long note, a Conflict id from another Rehearsal, a stale or
     mismatched Semester stamp) writes nothing and re-renders with every
     submitted decision and note preserved.
+
+    Every row also carries its feasibility verdict and standing-overlap
+    advisory (issue #194), computed against the currently saved statuses
+    on both GET and an invalid-Save redisplay; `AdjudicationPreviewView` is
+    the live-updating sibling each row's status `<select>` fires on
+    change, recomputed against the in-progress Buffer instead.
     """
 
     template_name = 'scheduling/manage_conflicts_detail.html'
@@ -1993,70 +2405,103 @@ class ConflictAdjudicationDetailView(AdminRequiredMixin, View):
         semester = get_viewing_semester(request)
         rehearsal = get_object_or_404(_scoped_to_viewing_semester(Rehearsal, semester), pk=rehearsal_id)
         rows = conflict_adjudication_rows_for(rehearsal)
-        formset = AdjudicationFormSet(initial=self._initial(rows), prefix='adjudication')
-        return self._render(request, semester, rehearsal, rows, formset)
+        formset = AdjudicationFormSet(
+            initial=_adjudication_initial(rows), prefix='adjudication',
+            form_kwargs={'preview_url': _adjudication_preview_url(rehearsal)},
+        )
+        fallout = _current_adjudication_fallout(rehearsal, rows, semester)
+        return self._render(request, semester, rehearsal, rows, formset, fallout)
 
     def post(self, request, rehearsal_id):
         """Validate and apply the whole adjudication Buffer atomically, or re-render with errors."""
         semester = get_viewing_semester(request)
         rehearsal = get_object_or_404(_scoped_to_viewing_semester(Rehearsal, semester), pk=rehearsal_id)
         rows = conflict_adjudication_rows_for(rehearsal)
-        formset = AdjudicationFormSet(request.POST, prefix='adjudication')
+        formset = AdjudicationFormSet(
+            request.POST, prefix='adjudication', form_kwargs={'preview_url': _adjudication_preview_url(rehearsal)},
+        )
         submitted_semester_id = request.POST.get('semester_id', '')
         submitted_stamp = request.POST.get('semester_updated_at', '')
         if formset.is_valid():
-            buffer = self._build_buffer(rehearsal, formset, submitted_semester_id, submitted_stamp)
+            buffer = _build_adjudication_buffer(rehearsal, formset, submitted_semester_id, submitted_stamp)
             try:
                 apply_adjudications(buffer, viewing_semester=semester)
             except (WrongAdjudicationSemesterError, StaleAdjudicationSemesterError, UnknownConflictError) as error:
                 messages.error(request, str(error))
+                fallout = _current_adjudication_fallout(rehearsal, rows, semester)
                 return self._render(
-                    request, semester, rehearsal, rows, formset,
+                    request, semester, rehearsal, rows, formset, fallout,
                     semester_id=submitted_semester_id, stamp=submitted_stamp, status=200,
                 )
             messages.success(request, 'Conflicts updated.')
             return redirect('scheduling:manage-conflicts-detail', rehearsal_id=rehearsal.pk)
+        fallout = _current_adjudication_fallout(rehearsal, rows, semester)
         return self._render(
-            request, semester, rehearsal, rows, formset,
+            request, semester, rehearsal, rows, formset, fallout,
             semester_id=submitted_semester_id, stamp=submitted_stamp, status=200,
         )
 
-    def _initial(self, rows):
-        """Build the formset's initial data: one row per Conflict, at its current status with an empty note."""
-        return [
-            {'conflict_id': row.conflict.pk, 'status': row.status, 'note': ''}
-            for row in rows
-        ]
 
-    def _build_buffer(self, rehearsal, formset, submitted_semester_id, submitted_stamp):
-        """Turn a valid AdjudicationFormSet into an AdjudicationBuffer, carrying the Semester state it was rendered against.
-
-        `submitted_semester_id`/`submitted_stamp` are the hidden fields
-        stamped at render time, not the live session's viewing Semester —
-        `apply_adjudications()` is the one place that compares them
-        against current state, raising `WrongAdjudicationSemesterError`/
-        `StaleAdjudicationSemesterError` if either has moved since.
-        """
-        entries = [
-            AdjudicationEntry(
-                conflict_id=row['conflict_id'], status=row['status'], note=row['note'],
-            )
-            for row in formset.cleaned_data
-        ]
-        return AdjudicationBuffer(
-            rehearsal_id=rehearsal.pk,
-            semester_id=_parse_roster_int(submitted_semester_id),
-            semester_updated_at=parse_datetime(submitted_stamp) or timezone.now(),
-            entries=entries,
-        )
-
-    def _render(self, request, semester, rehearsal, rows, formset, semester_id=None, stamp=None, status=200):
-        """Render the table, pairing each row with its formset form by shared position."""
+    def _render(self, request, semester, rehearsal, rows, formset, fallout, semester_id=None, stamp=None, status=200):
+        """Render the table, pairing each row with its formset form and feasibility verdict."""
         return render(request, self.template_name, {
             'semester': semester,
             'rehearsal': rehearsal,
-            'pairs': list(zip(rows, formset.forms, strict=True)),
+            'triples': _adjudication_triples(rows, formset, fallout),
+            'fallout': fallout,
+            'formset_errors': [],
             'management_form': formset.management_form,
             'semester_id': semester.pk if semester_id is None else semester_id,
             'stamp': semester.updated_at.isoformat() if stamp is None else stamp,
         }, status=status)
+
+
+class AdjudicationPreviewView(PreviewMixin, AdminRequiredMixin, View):
+    """`/manage/conflicts/<rehearsal_id>/preview/`: feasibility verdicts and Fallout for a candidate Buffer (issue #194).
+
+    A POST-only sibling of the adjudication table's Save endpoint, bound
+    to the exact same `AdjudicationFormSet` and the exact same POST body.
+    Fired by each row's status `<select>` on change — never by typing in
+    the note field — re-rendering the whole table-and-Fallout region in
+    one response, since the verdicts are joint and a partial re-render
+    would be a wrong answer. `PreviewMixin` wraps this in a transaction it
+    always rolls back, though nothing here ever writes:
+    `conflict_feasibility_for()` is a pure read (issue #194).
+    """
+
+    template_name = 'scheduling/_adjudication_table.html'
+
+    def run_preview(self, request, rehearsal_id):
+        """Bind the adjudication formset and render its verdicts/Fallout, or a Validation Error banner if it doesn't bind."""
+        semester = get_viewing_semester(request)
+        if semester is None:
+            return render(request, self.template_name, {
+                'formset_errors': ['No Semester is being edited.'], 'fallout': None, 'triples': [],
+            })
+        rehearsal = get_object_or_404(_scoped_to_viewing_semester(Rehearsal, semester), pk=rehearsal_id)
+        rows = conflict_adjudication_rows_for(rehearsal)
+        formset = AdjudicationFormSet(
+            request.POST, prefix='adjudication', form_kwargs={'preview_url': _adjudication_preview_url(rehearsal)},
+        )
+        if not formset.is_valid():
+            return render(request, self.template_name, {
+                'formset_errors': self._formset_errors(formset), 'fallout': None,
+                'triples': _adjudication_triples(rows, formset, None),
+            })
+        submitted_semester_id = request.POST.get('semester_id', '')
+        submitted_stamp = request.POST.get('semester_updated_at', '')
+        buffer = _build_adjudication_buffer(rehearsal, formset, submitted_semester_id, submitted_stamp)
+        fallout = preview_adjudications(buffer, rehearsal=rehearsal, viewing_semester=semester)
+        return render(request, self.template_name, {
+            'formset_errors': [], 'fallout': fallout, 'triples': _adjudication_triples(rows, formset, fallout),
+        })
+
+    def _formset_errors(self, formset):
+        """Return a flat list of 'Row N (field): message' strings naming an invalid formset's per-row errors."""
+        errors = []
+        for index, form in enumerate(formset.forms):
+            for field, field_errors in form.errors.items():
+                for message in field_errors:
+                    errors.append(f'Row {index + 1} ({field}): {message}')
+        errors.extend(formset.non_form_errors())
+        return errors
