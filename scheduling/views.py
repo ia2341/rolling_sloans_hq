@@ -156,6 +156,13 @@ class SemesterSelectView(AdminRequiredMixin, View):
 
 VIEW_ALL = 'all'
 VIEW_NEXT = 'next'
+"""`/schedule/`'s two views, named once for every place that has to agree on them.
+
+Module-level rather than `ScheduleView` attributes because the declare
+and delete endpoints resolve the same values out of the hidden `view`
+field they post back, to re-render or redirect to the view the member
+submitted from (issue #190).
+"""
 
 
 class ScheduleView(BaseView, TemplateView):
