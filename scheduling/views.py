@@ -3,7 +3,7 @@
 import json
 
 from django.contrib import messages
-from django.db import models, transaction
+from django.db import transaction
 from django.http import (
     Http404,
     HttpResponseBadRequest,
@@ -28,7 +28,6 @@ from scheduling.forms import (
     RosterEditFormSet,
     SetlistEditEmptyFormSet,
     SetlistEditFormSet,
-    SongForm,
     SongRoleAssignmentForm,
 )
 from scheduling.models import (
@@ -1042,123 +1041,6 @@ class RehearsalEditView(AdminRequiredMixin, View):
     def _get_rehearsal(self, pk):
         """Return the viewing Semester's Rehearsal with this id, or 404 (mirrors SongDetailView's scoping)."""
         return get_object_or_404(_scoped_to_viewing_semester(Rehearsal, get_viewing_semester(self.request)), pk=pk)
-
-
-class SongManageView(AdminRequiredMixin, View):
-    """`/manage/setlist/`: an admin lists and adds the viewing Semester's Songs (issue #60, #17 story 11)."""
-
-    template_name = 'scheduling/manage_setlist.html'
-
-    def get(self, request):
-        """Render the viewing Semester's Songs in position order alongside an empty create form."""
-        return render(request, self.template_name, self._build_context())
-
-    def post(self, request):
-        """Validate the create form and append a new Song at the end of the viewing Semester's setlist."""
-        semester = get_viewing_semester(request)
-        if semester is None:
-            messages.error(request, 'Create a Semester before adding Songs.')
-            return redirect('scheduling:manage-setlist')
-        with transaction.atomic():
-            semester = _lock_semester(semester)
-            instance = Song(semester=semester, position=self._next_position(semester))
-            form = SongForm(request.POST, instance=instance)
-            if form.is_valid():
-                form.save()
-                messages.success(request, 'Song added.')
-                return redirect('scheduling:manage-setlist')
-        return render(request, self.template_name, self._build_context(form))
-
-    def _next_position(self, semester):
-        """Return one past the viewing Semester's highest Song position (1 if it has no Songs yet)."""
-        highest = Song.objects.filter(semester=semester).aggregate(highest=models.Max('position'))['highest']
-        return (highest or 0) + 1
-
-    def _build_context(self, form=None):
-        """Build context: the viewing Semester's Songs plus the create form (fresh if none is given)."""
-        semester = get_viewing_semester(self.request)
-        return {
-            'semester': semester,
-            'songs': _scoped_to_viewing_semester(Song, semester),
-            'form': form or SongForm(),
-        }
-
-
-class SongEditView(AdminRequiredMixin, View):
-    """`/manage/setlist/<pk>/edit/`: an admin edits an existing Song's title/artist/length/notes (issue #60, #17 story 11)."""
-
-    template_name = 'scheduling/manage_setlist_edit.html'
-
-    def get(self, request, pk):
-        """Render the edit form pre-filled with the target Song's current values."""
-        song = self._get_song(pk)
-        return render(request, self.template_name, {'song': song, 'form': SongForm(instance=song)})
-
-    def post(self, request, pk):
-        """Validate and save the edit, or re-render with errors."""
-        song = self._get_song(pk)
-        form = SongForm(request.POST, instance=song)
-        if form.is_valid():
-            form.save()
-            messages.success(request, 'Song updated.')
-            return redirect('scheduling:manage-setlist')
-        return render(request, self.template_name, {'song': song, 'form': form})
-
-    def _get_song(self, pk):
-        """Return the viewing Semester's Song with this id, or 404 (mirrors SongDetailView's scoping)."""
-        return get_object_or_404(_scoped_to_viewing_semester(Song, get_viewing_semester(self.request)), pk=pk)
-
-
-class SongDeleteView(AdminRequiredMixin, View):
-    """`/manage/setlist/<pk>/delete/`: an admin removes a Song from the setlist (issue #60, #17 story 11)."""
-
-    def post(self, request, pk):
-        """Delete the viewing Semester's target Song and redirect back to the setlist with a success message."""
-        song = get_object_or_404(_scoped_to_viewing_semester(Song, get_viewing_semester(request)), pk=pk)
-        song.delete()
-        messages.success(request, 'Song removed.')
-        return redirect('scheduling:manage-setlist')
-
-
-class SongMoveView(AdminRequiredMixin, View):
-    """`/manage/setlist/<pk>/move-up|down/`: an admin swaps a Song's position with its neighbor (issue #60, #17 story 11).
-
-    Reuses the deferred `unique_song_position_per_semester` constraint the
-    same way `Song.Meta` already relies on: both rows' positions are
-    swapped inside one atomic transaction, so the transient collision
-    between them is never checked mid-transaction.
-    """
-
-    UP = 'up'
-    DOWN = 'down'
-
-    def post(self, request, pk, direction):
-        """Swap the viewing Semester's target Song's position with its previous/next neighbor, if one exists."""
-        song = get_object_or_404(_scoped_to_viewing_semester(Song, get_viewing_semester(request)), pk=pk)
-        with transaction.atomic():
-            _lock_semester(song.semester)
-            song.refresh_from_db()
-            neighbor = self._neighbor(song, direction)
-            if neighbor is not None:
-                self._swap_positions(song, neighbor)
-                messages.success(request, 'Setlist reordered.')
-        return redirect('scheduling:manage-setlist')
-
-    def _neighbor(self, song, direction):
-        """Return the Song immediately before/after `song` in its Semester's position order, or None at either end."""
-        songs = list(Song.objects.filter(semester=song.semester).order_by('position'))
-        index = songs.index(song)
-        if direction == self.UP and index > 0:
-            return songs[index - 1]
-        if direction == self.DOWN and index < len(songs) - 1:
-            return songs[index + 1]
-        return None
-
-    def _swap_positions(self, song_a, song_b):
-        """Swap two Songs' positions. Must be called within a transaction holding the Semester's row lock."""
-        song_a.position, song_b.position = song_b.position, song_a.position
-        song_a.save(update_fields=['position'])
-        song_b.save(update_fields=['position'])
 
 
 class SongRoleAssignmentManageView(AdminRequiredMixin, View):

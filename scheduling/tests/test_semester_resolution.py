@@ -1,7 +1,6 @@
 """Semester lifecycle resolution: the Live Semester and the per-request viewing Semester (issue #167)."""
 
 from datetime import timedelta
-from typing import ClassVar
 
 from django.contrib.auth.models import AnonymousUser
 from django.test import RequestFactory, TestCase, override_settings
@@ -15,7 +14,6 @@ from scheduling.factories import (
     SemesterFactory,
     SongFactory,
 )
-from scheduling.models import Song
 from scheduling.services import (
     VIEWING_SEMESTER_SESSION_KEY,
     get_live_semester,
@@ -302,63 +300,6 @@ class UnpublishedSiteTests(TestCase):
 
         self.assertEqual(list(setlist.context['songs']), [])
         self.assertEqual(list(members.context['members']), [])
-
-
-@override_settings(SECURE_SSL_REDIRECT=False)
-class AdminSelectionGovernsWritesTests(TestCase):
-    """An admin viewing a draft writes to the draft, and the live Semester is unchanged."""
-
-    SONG_PAYLOAD: ClassVar[dict[str, str]] = {
-        'title': 'Song A', 'artist': 'Some Artist', 'length': '00:03:30', 'notes': '',
-    }
-
-    def setUp(self):
-        """Log in a synthetic admin against one live Semester and one draft."""
-        self.admin = PersonFactory(password=PASSWORD, is_admin=True)
-        self.client.login(username=self.admin.email, password=PASSWORD)
-        self.live = SemesterFactory(published_at=timezone.now())
-        self.draft = SemesterFactory(draft=True)
-
-    def _select(self, semester):
-        """Point the logged-in admin's session at `semester`."""
-        session = self.client.session
-        session[VIEWING_SEMESTER_SESSION_KEY] = semester.pk
-        session.save()
-
-    def test_creating_a_song_writes_to_the_selected_draft(self):
-        """A Song added through /manage/setlist/ while a draft is selected belongs to the draft."""
-        self._select(self.draft)
-
-        self.client.post(reverse('scheduling:manage-setlist'), self.SONG_PAYLOAD)
-
-        self.assertEqual(Song.objects.filter(semester=self.draft).count(), 1)
-        self.assertEqual(Song.objects.filter(semester=self.live).count(), 0)
-
-    def test_editing_a_live_songs_page_404s_while_a_draft_is_selected(self):
-        """The live Semester's Song is out of scope for an admin viewing the draft."""
-        self._select(self.draft)
-        live_song = SongFactory(semester=self.live, position=1)
-
-        response = self.client.get(reverse('scheduling:manage-setlist-edit', args=[live_song.pk]))
-
-        self.assertEqual(response.status_code, 404)
-
-    def test_the_manage_setlist_listing_shows_the_selected_draft(self):
-        """/manage/setlist/ lists the selected draft's Songs, not the live Semester's."""
-        self._select(self.draft)
-        draft_song = SongFactory(semester=self.draft, position=1)
-        SongFactory(semester=self.live, position=1)
-
-        response = self.client.get(reverse('scheduling:manage-setlist'))
-
-        self.assertEqual([song.pk for song in response.context['songs']], [draft_song.pk])
-
-    def test_without_a_selection_an_admin_writes_to_the_live_semester(self):
-        """With no session selection, an admin's writes land on the Live Semester."""
-        self.client.post(reverse('scheduling:manage-setlist'), self.SONG_PAYLOAD)
-
-        self.assertEqual(Song.objects.filter(semester=self.live).count(), 1)
-        self.assertEqual(Song.objects.filter(semester=self.draft).count(), 0)
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)
