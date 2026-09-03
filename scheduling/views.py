@@ -21,13 +21,19 @@ from django.views.generic import DetailView, TemplateView
 
 from config.views import AdminRequiredMixin, BaseView, PreviewMixin
 from identity.models import Person
+from identity.services import invite_person
 from scheduling.forms import (
+    AdjudicationFormSet,
     DeclareConflictForm,
     MembershipRolesForm,
     RecordingUploadForm,
     RehearsalForm,
     RosterAddFormSet,
+    RosterAddRoleForm,
+    RosterAddRowForm,
     RosterEditFormSet,
+    RosterEditRowForm,
+    RosterInviteForm,
     SemesterSetupForm,
     SetlistEditEmptyFormSet,
     SetlistEditFormSet,
@@ -47,14 +53,20 @@ from scheduling.models import (
 from scheduling.services import (
     CONFLICT_EARLY_DEPARTURE,
     CONFLICT_LATE_ARRIVAL,
+    AdjudicationBuffer,
+    AdjudicationEntry,
     InvalidSemesterNameError,
     LiveSemesterDeletionError,
     RecordingUploadError,
     RosterEditBuffer,
     RosterEditEntry,
     SelfRemovalError,
+    StaleAdjudicationSemesterError,
     StaleRosterSemesterError,
+    UnknownConflictError,
+    WrongAdjudicationSemesterError,
     WrongViewingSemesterError,
+    apply_adjudications,
     apply_roster_edits,
     assigned_songs_for,
     assignment_matrix_for,
@@ -62,7 +74,9 @@ from scheduling.services import (
     breaks_for,
     confirm_recording_upload,
     conflict_adjudication_index_for,
+    conflict_adjudication_rows_for,
     conflict_rows_by_rehearsal,
+    create_or_reactivate_role,
     create_recording_playback_url,
     create_semester,
     declare_conflict,
@@ -694,6 +708,74 @@ class SetlistImportView(AdminRequiredMixin, View):
         return form
 
 
+_EDIT_TEMPLATE_NAME = 'scheduling/members_edit.html'
+_EDIT_FRAGMENT_TEMPLATE_NAME = 'scheduling/_members_edit.html'
+
+
+def _edit_initial(semester):
+    """Build the edit formset's initial data: one row per existing Membership, ordered by Person name."""
+    memberships = roster_for(_scoped_to_viewing_semester(Membership, semester))
+    return [
+        {
+            'person_id': membership.person_id,
+            'name': membership.person.name,
+            'roles': [
+                membership_role.role_id for membership_role in membership.membershiprole_set.all()
+            ],
+            'remove': False,
+        }
+        for membership in memberships
+    ]
+
+
+def _edit_rows(formset, semester, requesting_admin_id):
+    """Pair each formset row with its Person id, so a bound-or-not row can flag itself/its mismatch state.
+
+    Reads `person_id`'s raw submitted value rather than `cleaned_data`, so
+    this pairing survives an otherwise-invalid formset — the same
+    every-value-preserved re-render `SetlistEditView` gives a rejected
+    buffer.
+    """
+    mismatched_person_ids = mismatched_person_ids_for(semester)
+    rows = []
+    for form in formset:
+        person_id = _parse_roster_int(form['person_id'].value())
+        rows.append({
+            'form': form,
+            'is_self': person_id == requesting_admin_id,
+            'is_mismatched': person_id in mismatched_person_ids,
+        })
+    return rows
+
+
+def _is_htmx(request):
+    """Return whether `request` is an htmx-driven in-place swap rather than a direct/no-JS navigation."""
+    return request.headers.get('HX-Request') == 'true'
+
+
+def _render_roster_edit(request, semester, formset, add_formset, *, semester_id, stamp, status=200, invite_form=None):
+    """Render Roster edit mode: the bare edit-table-plus-add-list fragment for htmx, the full page otherwise.
+
+    Shared by `MembersView` and `RosterInviteView` (issue #230), so an
+    invalid invite re-renders the exact same edit surface Save's own
+    invalid-formset path does, rather than a second near-duplicate
+    template context.
+    """
+    context = {
+        'semester': semester,
+        'formset': formset,
+        'rows': _edit_rows(formset, semester, request.user.pk),
+        'add_formset': add_formset,
+        'add_rows': _add_rows(add_formset),
+        'import_source_semester': import_roster_from_semester(semester).source_semester,
+        'roster_semester_id': semester_id,
+        'roster_semester_updated_at': stamp,
+        'invite_form': invite_form or RosterInviteForm(),
+    }
+    template = _EDIT_FRAGMENT_TEMPLATE_NAME if _is_htmx(request) else _EDIT_TEMPLATE_NAME
+    return render(request, template, context, status=status)
+
+
 class MembersView(BaseView, View):
     """`/members/`: the Band Members roster, plus an admin's in-place "Edit roster" mode (issues #137, #227).
 
@@ -712,8 +794,8 @@ class MembersView(BaseView, View):
     """
 
     template_name = 'scheduling/members.html'
-    edit_template_name = 'scheduling/members_edit.html'
-    edit_fragment_template_name = 'scheduling/_members_edit.html'
+    edit_template_name = _EDIT_TEMPLATE_NAME
+    edit_fragment_template_name = _EDIT_FRAGMENT_TEMPLATE_NAME
     read_fragment_template_name = 'scheduling/_members_read.html'
 
     def dispatch(self, request, *args, **kwargs):
@@ -726,9 +808,9 @@ class MembersView(BaseView, View):
         """Render the read-mode roster, or an admin's `?mode=edit` edit table plus add list."""
         semester = get_viewing_semester(request)
         if request.user.is_admin and request.GET.get('mode') == 'edit' and semester is not None:
-            formset = RosterEditFormSet(initial=self._edit_initial(semester), prefix='roster')
+            formset = RosterEditFormSet(initial=_edit_initial(semester), prefix='roster')
             add_formset = RosterAddFormSet(initial=_add_initial(semester), prefix='roster_add')
-            return self._render_edit(
+            return _render_roster_edit(
                 request, semester, formset, add_formset,
                 semester_id=semester.pk, stamp=semester.updated_at.isoformat(),
             )
@@ -749,31 +831,16 @@ class MembersView(BaseView, View):
                 apply_roster_edits(buffer, viewing_semester=semester, requesting_admin=request.user)
             except (WrongViewingSemesterError, StaleRosterSemesterError, SelfRemovalError) as error:
                 messages.error(request, str(error))
-                return self._render_edit(
+                return _render_roster_edit(
                     request, semester, formset, add_formset,
                     semester_id=submitted_semester_id, stamp=submitted_stamp, status=200,
                 )
             messages.success(request, 'Roster updated.')
             return redirect('scheduling:members')
-        return self._render_edit(
+        return _render_roster_edit(
             request, semester, formset, add_formset,
             semester_id=submitted_semester_id, stamp=submitted_stamp, status=200,
         )
-
-    def _edit_initial(self, semester):
-        """Build the edit formset's initial data: one row per existing Membership, ordered by Person name."""
-        memberships = roster_for(_scoped_to_viewing_semester(Membership, semester))
-        return [
-            {
-                'person_id': membership.person_id,
-                'name': membership.person.name,
-                'roles': [
-                    membership_role.role_id for membership_role in membership.membershiprole_set.all()
-                ],
-                'remove': False,
-            }
-            for membership in memberships
-        ]
 
     def _build_buffer(self, formset, add_formset, submitted_semester_id, submitted_stamp):
         """Turn the valid edit and add-list formsets into one RosterEditBuffer, carrying the Semester state they were rendered against.
@@ -828,46 +895,87 @@ class MembersView(BaseView, View):
             'semester': semester,
             'members': roster_for(_scoped_to_viewing_semester(Membership, semester)),
         }
-        template = self.read_fragment_template_name if self._is_htmx(request) else self.template_name
+        template = self.read_fragment_template_name if _is_htmx(request) else self.template_name
         return render(request, template, context)
 
-    def _render_edit(self, request, semester, formset, add_formset, semester_id, stamp, status=200):
-        """Render edit mode: the bare edit-table-plus-add-list fragment for htmx, the full page otherwise."""
-        context = {
-            'semester': semester,
-            'formset': formset,
-            'rows': self._edit_rows(formset, semester, request.user.pk),
-            'add_formset': add_formset,
-            'add_rows': _add_rows(add_formset),
-            'import_source_semester': import_roster_from_semester(semester).source_semester,
-            'roster_semester_id': semester_id,
-            'roster_semester_updated_at': stamp,
-        }
-        template = self.edit_fragment_template_name if self._is_htmx(request) else self.edit_template_name
-        return render(request, template, context, status=status)
 
-    def _edit_rows(self, formset, semester, requesting_admin_id):
-        """Pair each formset row with its Person id, so a bound-or-not row can flag itself/its mismatch state.
+class RosterInviteView(AdminRequiredMixin, View):
+    """`/members/invite/`: the Roster editor's "Invite someone new" affordance, one of two writes that escape the Save Buffer (issue #230).
 
-        Reads `person_id`'s raw submitted value rather than `cleaned_data`,
-        so this pairing survives an otherwise-invalid formset — the same
-        every-value-preserved re-render `SetlistEditView` gives a rejected
-        buffer.
-        """
-        mismatched_person_ids = mismatched_person_ids_for(semester)
-        rows = []
-        for form in formset:
-            person_id = _parse_roster_int(form['person_id'].value())
-            rows.append({
-                'form': form,
-                'is_self': person_id == requesting_admin_id,
-                'is_mismatched': person_id in mismatched_person_ids,
-            })
-        return rows
+    Reuses `invite_person()` unchanged, including its atomicity (the
+    set-password email sends *inside* the transaction, so a delivery
+    failure rolls the `Person` row back and leaves the address free for a
+    retry) — then rosters the new Person into the viewing Semester as a
+    second write in the same outer transaction. Both commit and the email
+    sends immediately, independent of the Roster edit Buffer: discarding
+    that Buffer afterward cannot un-invent either write. `RosterInviteForm`
+    rejects an email already belonging to a Person before any write is
+    attempted, so a collision never reaches `invite_person()` and never
+    re-sends a set-password link to somebody who already has one.
+    """
 
-    def _is_htmx(self, request):
-        """Return whether `request` is an htmx-driven in-place swap rather than a direct/no-JS navigation."""
-        return request.headers.get('HX-Request') == 'true'
+    def post(self, request):
+        """Validate the invite form, invite and roster the new Person immediately, and redirect back into edit mode."""
+        semester = get_viewing_semester(request)
+        if semester is None:
+            return redirect('scheduling:members')
+        form = RosterInviteForm(request.POST)
+        if form.is_valid():
+            with transaction.atomic():
+                person = invite_person(name=form.cleaned_data['name'], email=form.cleaned_data['email'])
+                Membership.objects.create(person=person, semester=semester)
+            messages.success(request, f"Invited {form.cleaned_data['email']} and added them to the Roster.")
+            return redirect(f"{reverse('scheduling:members')}?mode=edit")
+        formset = RosterEditFormSet(initial=_edit_initial(semester), prefix='roster')
+        add_formset = RosterAddFormSet(initial=_add_initial(semester), prefix='roster_add')
+        return _render_roster_edit(
+            request, semester, formset, add_formset,
+            semester_id=semester.pk, stamp=semester.updated_at.isoformat(),
+            invite_form=form,
+        )
+
+
+class RosterAddRoleView(AdminRequiredMixin, View):
+    """`/members/roles/add/`: the Roster editor's inline "Add Role" control, the other write that escapes the Save Buffer (issue #230).
+
+    Calls `create_or_reactivate_role()` (issue #225) unchanged — the single
+    Role-creation path — and commits immediately, outside the Buffer:
+    discarding the Buffer afterward must not un-invent a Role a row already
+    ticked. Swaps only the triggering row's Role checkbox group, rebuilt
+    from the same `RosterEditRowForm`/`RosterAddRowForm` the live formset
+    renders (so field names/ids and any htmx wiring on the widget stay
+    identical), never the row's other cells. There is no matching "remove"
+    endpoint here: retiring a Role stays a deliberate act in the Django
+    admin.
+    """
+
+    template_name = 'scheduling/_roster_role_checkboxes.html'
+
+    def post(self, request):
+        """Create/reactivate the named Role, tick it onto the triggering row, and re-render that row's checkbox group."""
+        form = RosterAddRoleForm(request.POST)
+        if not form.is_valid():
+            return HttpResponseBadRequest()
+        kind = form.cleaned_data['kind']
+        prefix = form.cleaned_data['prefix']
+        result = create_or_reactivate_role(form.cleaned_data['role_name'])
+        ticked_ids = {_parse_roster_int(value) for value in request.POST.getlist(f'{prefix}-roles')}
+        ticked_ids.discard(-1)
+        ticked_ids.add(result.role.pk)
+        row_form_class = RosterEditRowForm if kind == 'roster' else RosterAddRowForm
+        row_form = row_form_class(prefix=prefix, initial={'roles': sorted(ticked_ids)})
+        return render(request, self.template_name, {
+            'field': row_form['roles'],
+            'message': self._message_for(result),
+        })
+
+    def _message_for(self, result):
+        """Return the admin-facing message naming how create_or_reactivate_role() resolved the Role."""
+        if result.created:
+            return f'Added "{result.role.name}".'
+        if result.reactivated:
+            return f'Reactivated "{result.role.name}".'
+        return f'Matched existing "{result.role.name}".'
 
 
 class RosterImportView(AdminRequiredMixin, View):
@@ -1759,19 +1867,91 @@ class ConflictAdjudicationIndexView(AdminRequiredMixin, TemplateView):
         return context
 
 
-class ConflictAdjudicationDetailView(AdminRequiredMixin, TemplateView):
-    """`/manage/conflicts/<rehearsal_id>/`: one Rehearsal's adjudication table (issue #191, table itself is issue #192).
+class ConflictAdjudicationDetailView(AdminRequiredMixin, View):
+    """`/manage/conflicts/<rehearsal_id>/`: one Rehearsal's Conflicts, decided together under one Save Changes (issue #192).
 
     Reachable from the index and from an unconditional link on
-    `/schedule/`; this ticket only establishes the route, its Semester
-    scoping and its admin gating. The table that decides each Conflict is
-    #192's.
+    `/schedule/` (issue #191). Every row on the Rehearsal is editable in
+    the same request — including a row already approved or rejected, in
+    either direction — and one Save Changes commits the whole table
+    atomically via `apply_adjudications()`; leaving without saving writes
+    nothing, since GET never touches the database. A validation failure
+    (an over-long note, a Conflict id from another Rehearsal, a stale or
+    mismatched Semester stamp) writes nothing and re-renders with every
+    submitted decision and note preserved.
     """
 
     template_name = 'scheduling/manage_conflicts_detail.html'
 
     def get(self, request, rehearsal_id):
-        """Render the target Rehearsal, scoped to the viewing Semester (404 outside it)."""
+        """Render the target Rehearsal's Conflicts, scoped to the viewing Semester (404 outside it)."""
         semester = get_viewing_semester(request)
         rehearsal = get_object_or_404(_scoped_to_viewing_semester(Rehearsal, semester), pk=rehearsal_id)
-        return render(request, self.template_name, {'semester': semester, 'rehearsal': rehearsal})
+        rows = conflict_adjudication_rows_for(rehearsal)
+        formset = AdjudicationFormSet(initial=self._initial(rows), prefix='adjudication')
+        return self._render(request, semester, rehearsal, rows, formset)
+
+    def post(self, request, rehearsal_id):
+        """Validate and apply the whole adjudication Buffer atomically, or re-render with errors."""
+        semester = get_viewing_semester(request)
+        rehearsal = get_object_or_404(_scoped_to_viewing_semester(Rehearsal, semester), pk=rehearsal_id)
+        rows = conflict_adjudication_rows_for(rehearsal)
+        formset = AdjudicationFormSet(request.POST, prefix='adjudication')
+        submitted_semester_id = request.POST.get('semester_id', '')
+        submitted_stamp = request.POST.get('semester_updated_at', '')
+        if formset.is_valid():
+            buffer = self._build_buffer(rehearsal, formset, submitted_semester_id, submitted_stamp)
+            try:
+                apply_adjudications(buffer, viewing_semester=semester)
+            except (WrongAdjudicationSemesterError, StaleAdjudicationSemesterError, UnknownConflictError) as error:
+                messages.error(request, str(error))
+                return self._render(
+                    request, semester, rehearsal, rows, formset,
+                    semester_id=submitted_semester_id, stamp=submitted_stamp, status=200,
+                )
+            messages.success(request, 'Conflicts updated.')
+            return redirect('scheduling:manage-conflicts-detail', rehearsal_id=rehearsal.pk)
+        return self._render(
+            request, semester, rehearsal, rows, formset,
+            semester_id=submitted_semester_id, stamp=submitted_stamp, status=200,
+        )
+
+    def _initial(self, rows):
+        """Build the formset's initial data: one row per Conflict, at its current status with an empty note."""
+        return [
+            {'conflict_id': row.conflict.pk, 'status': row.status, 'note': ''}
+            for row in rows
+        ]
+
+    def _build_buffer(self, rehearsal, formset, submitted_semester_id, submitted_stamp):
+        """Turn a valid AdjudicationFormSet into an AdjudicationBuffer, carrying the Semester state it was rendered against.
+
+        `submitted_semester_id`/`submitted_stamp` are the hidden fields
+        stamped at render time, not the live session's viewing Semester —
+        `apply_adjudications()` is the one place that compares them
+        against current state, raising `WrongAdjudicationSemesterError`/
+        `StaleAdjudicationSemesterError` if either has moved since.
+        """
+        entries = [
+            AdjudicationEntry(
+                conflict_id=row['conflict_id'], status=row['status'], note=row['note'],
+            )
+            for row in formset.cleaned_data
+        ]
+        return AdjudicationBuffer(
+            rehearsal_id=rehearsal.pk,
+            semester_id=_parse_roster_int(submitted_semester_id),
+            semester_updated_at=parse_datetime(submitted_stamp) or timezone.now(),
+            entries=entries,
+        )
+
+    def _render(self, request, semester, rehearsal, rows, formset, semester_id=None, stamp=None, status=200):
+        """Render the table, pairing each row with its formset form by shared position."""
+        return render(request, self.template_name, {
+            'semester': semester,
+            'rehearsal': rehearsal,
+            'pairs': list(zip(rows, formset.forms, strict=True)),
+            'management_form': formset.management_form,
+            'semester_id': semester.pk if semester_id is None else semester_id,
+            'stamp': semester.updated_at.isoformat() if stamp is None else stamp,
+        }, status=status)

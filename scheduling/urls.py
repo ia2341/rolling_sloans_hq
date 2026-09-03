@@ -22,6 +22,8 @@ urlpatterns = [
     path('songs/<int:pk>/', views.SongDetailView.as_view(), name='song-detail'),
     path('members/', views.MembersView.as_view(), name='members'),
     path('members/import/', views.RosterImportView.as_view(), name='members-roster-import'),
+    path('members/invite/', views.RosterInviteView.as_view(), name='members-roster-invite'),
+    path('members/roles/add/', views.RosterAddRoleView.as_view(), name='members-add-role'),
     path('members/preview/', views.RosterPreviewView.as_view(), name='members-preview'),
     path(
         'members/preview/confirm-removal/',

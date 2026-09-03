@@ -6,8 +6,10 @@ from django import forms
 from django.db import transaction
 from django.urls import reverse_lazy
 
+from identity.models import Person
 from scheduling.fields import SongLengthField
 from scheduling.models import (
+    Conflict,
     Membership,
     MembershipRole,
     Rehearsal,
@@ -279,6 +281,29 @@ class RosterEditRowForm(forms.Form):
 RosterEditFormSet = forms.formset_factory(RosterEditRowForm, extra=0)
 
 
+class AdjudicationRowForm(forms.Form):
+    """One row of a Rehearsal's adjudication table: an existing Conflict's verdict and optional note (issue #192).
+
+    `conflict_id` is hidden so the view can turn a valid row back into an
+    `AdjudicationEntry` without re-deriving which Conflict it belongs to —
+    `apply_adjudications()` is the one place that checks it actually
+    belongs to the target Rehearsal. `status` offers all three verdicts
+    (not just approve/reject) so an untouched pending row round-trips
+    unchanged. `note` is never required — a note is offered on an approval
+    exactly as readily as on a rejection, and an admin deciding a dozen
+    rows in one batch must not be made to type something in every one.
+    """
+
+    conflict_id = forms.IntegerField(widget=forms.HiddenInput)
+    status = forms.ChoiceField(choices=Conflict.STATUS_CHOICES)
+    note = forms.CharField(max_length=255, required=False)
+
+
+# One row per existing Conflict on the target Rehearsal — no add/remove, unlike RosterEditFormSet's
+# sibling shape, since a row here always names a Conflict that already exists (issue #192).
+AdjudicationFormSet = forms.formset_factory(AdjudicationRowForm, extra=0)
+
+
 class RosterAddRowForm(forms.Form):
     """One row of the Roster add list: a not-yet-rostered Person, whether to add them, and the Roles to declare (issue #229).
 
@@ -304,6 +329,58 @@ class RosterAddRowForm(forms.Form):
 
 # The Roster add list's buffer: one `RosterAddRowForm` per Person not yet on the Semester's Roster (issue #229).
 RosterAddFormSet = forms.formset_factory(RosterAddRowForm, extra=0)
+
+
+class RosterInviteForm(forms.Form):
+    """The Roster editor's "Invite someone new" form: name + email, one of the two writes that escape the Save Buffer (issue #230).
+
+    A plain `Form`, not `identity.forms.PersonInviteForm`: that form's
+    default unique-email validation message doesn't tell the admin what to
+    do about the collision, and issue #230 requires a specific message
+    pointing them at the add list instead of silently repurposing the
+    invite as "roster this existing human" — which would muddy
+    `invite_person()`'s rollback-on-send-failure contract and re-send a
+    set-password link to somebody who already has one.
+    """
+
+    name = forms.CharField(max_length=255)
+    email = forms.EmailField()
+
+    def clean_email(self):
+        """Reject an email already belonging to a Person, pointing the admin at the add list instead."""
+        email = self.cleaned_data['email']
+        if Person.objects.filter(email=email).exists():
+            raise forms.ValidationError(
+                'That email already belongs to a Person — tick them in the add list instead of inviting them again.'
+            )
+        return email
+
+
+class RosterAddRoleForm(forms.Form):
+    """The inline "Add Role" control's POST body: which row triggered it, and the Role name to create/reactivate (issue #230).
+
+    `kind` distinguishes a Roster edit-table row from an add-list row —
+    the two live formsets (`RosterEditFormSet`/`RosterAddFormSet`) a row
+    can belong to — so the view can rebuild the row with the same Form
+    class the live formset renders, keeping field names/ids and any htmx
+    wiring on the widget identical after the swap. `prefix` is that row's
+    own formset prefix (e.g. `"roster-0"`), carried so the rebuilt
+    checkbox group binds to the exact field name the rest of the row
+    already uses.
+    """
+
+    KIND_CHOICES: ClassVar[list] = [('roster', 'roster'), ('roster_add', 'roster_add')]
+
+    kind = forms.ChoiceField(choices=KIND_CHOICES)
+    prefix = forms.CharField(max_length=255)
+    role_name = forms.CharField(max_length=255)
+
+    def clean_role_name(self):
+        """Strip surrounding whitespace and reject a blank Role name."""
+        name = self.cleaned_data['role_name'].strip()
+        if not name:
+            raise forms.ValidationError('A Role name is required.')
+        return name
 
 
 class SongRoleAssignmentForm(forms.ModelForm):

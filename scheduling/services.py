@@ -1081,6 +1081,129 @@ def conflict_adjudication_index_for(semester) -> list[ConflictAdjudicationRow]:
     ]
 
 
+@dataclass(frozen=True)
+class ConflictAdjudicationDetailRow:
+    """One row of a Rehearsal's adjudication table: a Conflict with its display fields pre-derived (issue #192)."""
+
+    conflict: Conflict
+    person: Person
+    type_label: str
+    declared_time: time | None
+    reason: str
+    status: str
+
+
+def conflict_adjudication_rows_for(rehearsal) -> list[ConflictAdjudicationDetailRow]:
+    """Return every Conflict declared against `rehearsal`, each with its display fields pre-derived (issue #192).
+
+    Ordered by person name for a stable, readable table. Shares
+    `_derive_declaration()` with `conflict_history_for()` rather than
+    re-deriving the type label/declared-time mapping a second time.
+    """
+    conflicts = Conflict.objects.filter(
+        rehearsal=rehearsal,
+    ).select_related('person').prefetch_related('conflictwindow_set').order_by('person__name')
+    rows = []
+    for conflict in conflicts:
+        declaration_type, declared_time = _derive_declaration(conflict)
+        rows.append(ConflictAdjudicationDetailRow(
+            conflict=conflict,
+            person=conflict.person,
+            type_label=CONFLICT_TYPE_LABELS[declaration_type],
+            declared_time=declared_time,
+            reason=conflict.reason,
+            status=conflict.status,
+        ))
+    return rows
+
+
+class WrongAdjudicationSemesterError(ValueError):
+    """Raised when an Adjudication Buffer's Semester id doesn't match the session-scoped viewing Semester (issue #192)."""
+
+
+class StaleAdjudicationSemesterError(ValueError):
+    """Raised when an Adjudication Buffer's Semester changed since the Buffer was loaded (issue #192)."""
+
+
+class UnknownConflictError(ValueError):
+    """Raised when an Adjudication Buffer names a Conflict id that doesn't belong to its target Rehearsal (issue #192)."""
+
+
+@dataclass(frozen=True)
+class AdjudicationEntry:
+    """One Conflict's target verdict and note in an Adjudication Buffer (issue #192)."""
+
+    conflict_id: int
+    status: str
+    note: str
+
+
+@dataclass(frozen=True)
+class AdjudicationBuffer:
+    """The whole diff `apply_adjudications()` commits in one transaction, for one Rehearsal (issue #192).
+
+    `semester_id` and `semester_updated_at` back the two staleness checks,
+    the same shape `RosterEditBuffer` uses: `semester_id` is cross-checked
+    against the caller's session-scoped viewing Semester, and
+    `semester_updated_at` against the Semester row's current stamp.
+    `rehearsal_id` scopes `entries` — every entry's `conflict_id` must
+    belong to this Rehearsal, or the whole save is rejected.
+    """
+
+    rehearsal_id: int
+    semester_id: int
+    semester_updated_at: datetime
+    entries: list[AdjudicationEntry]
+
+
+def apply_adjudications(buffer: AdjudicationBuffer, *, viewing_semester: Semester) -> None:
+    """Apply a whole Rehearsal's Conflict adjudications — every status and note — in one transaction (issue #192).
+
+    Approving or rejecting changes nothing but `status`/`adjudication_note`
+    on the named Conflicts: no `RehearsalSong.order`, `SongRoleAssignment`
+    or Backup is touched, since the model holds no link from a Conflict to
+    the accommodation (if any) an admin makes for it elsewhere (#131,
+    #134). Takes no Semester row lock — like `apply_roster_edits()`, this
+    renumbers no positions, so there is no unique-position constraint to
+    serialise against; the stamp is the guard.
+
+    Raises `WrongAdjudicationSemesterError` if `buffer.semester_id` doesn't
+    match `viewing_semester`, or `UnknownConflictError` if any
+    `buffer.entries` names a Conflict not belonging to
+    `buffer.rehearsal_id` — both checked, and both writing nothing, before
+    any transaction opens. Raises `StaleAdjudicationSemesterError` inside
+    the transaction if the Semester's `updated_at` no longer matches
+    `buffer.semester_updated_at`, rolling back whatever this call had
+    already applied. Makes no external call, so nothing here needs
+    `transaction.on_commit()`.
+    """
+    if viewing_semester is None or buffer.semester_id != viewing_semester.pk:
+        raise WrongAdjudicationSemesterError(
+            "This adjudication Buffer's Semester doesn't match the Semester you're currently viewing."
+        )
+    conflict_ids = {entry.conflict_id for entry in buffer.entries}
+    valid_ids = set(
+        Conflict.objects.filter(pk__in=conflict_ids, rehearsal_id=buffer.rehearsal_id).values_list('pk', flat=True),
+    )
+    if conflict_ids - valid_ids:
+        raise UnknownConflictError(
+            "This adjudication Buffer names a Conflict that doesn't belong to this Rehearsal."
+        )
+
+    with transaction.atomic():
+        semester = Semester.objects.get(pk=buffer.semester_id)
+        if semester.updated_at != buffer.semester_updated_at:
+            raise StaleAdjudicationSemesterError(
+                'The schedule changed while you were deciding — reload and reapply.'
+            )
+        for entry in buffer.entries:
+            Conflict.objects.filter(pk=entry.conflict_id).update(
+                status=entry.status, adjudication_note=entry.note,
+            )
+        semester.updated_at = timezone.now()
+        semester.save(update_fields=['updated_at'])
+
+
 _CLEARED_ADJUDICATION = {'status': Conflict.PENDING, 'adjudication_note': ''}
 """The undecided verdict every declaration is written with (issue #189).
 

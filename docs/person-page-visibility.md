@@ -25,7 +25,8 @@ Both routes are member-facing surfaces for every logged-in Person, admins includ
 | `SongRoleAssignment.is_role_mismatch` | ❌ never | ❌ never | ✅ quiet flag | The admin's queue marker (ADR 0002), surfaced only in edit mode as a per-row completeness flag — never a name, never a Song, never rendered to a Teammate or Self view |
 | Remove-from-Roster control | ❌ never | ❌ never | ✅, except the requesting admin's own row | Absent (with a short reason in its place) from the row belonging to the admin submitting the request — `apply_roster_edits()`'s `SelfRemovalError` backstops a hand-crafted POST |
 | `Conflict`, `ConflictWindow` (any field, `reason` above all) | ❌ never | ❌ never | ❌ never | ADR 0005's boundary is drawn around the surface, not the viewer — nothing about Roster editing needs Conflict data |
-| everything else | ❌ never | ❌ never | ❌ never | Notably `Person.email` and every admin-status field — cross-semester identity stays on the admin-only people-management page, since admin status is not semester-scoped |
+| `Person.email` | ❌ never | ❌ never | ✅, "Invite someone new" form input and removal confirmation only | Issue #230: the invite form is a blank input an admin types into, never a rendering of an existing Person's address; the removal confirmation shows a to-be-removed Person's email so two similarly-named people can be told apart. Nowhere else on this page |
+| everything else | ❌ never | ❌ never | ❌ never | Every admin-status field — cross-semester identity stays on the admin-only people-management page, since admin status is not semester-scoped |
 
 ## `/members/<int:pk>/` — the person page
 
