@@ -175,13 +175,9 @@ def _shifted(date, time_value, minutes):
 class BackupWidensSlotMembershipTests(TestCase):
     """Slot membership is the union of assignment- and Backup-derived slots, across all three reads (issue #175)."""
 
-    def setUp(self):
-        """Build the same three-slot Rehearsal fixture as RehearsalAttendanceForTests, plus an uninvolved Person."""
-        self.rehearsal = RehearsalFactory(is_full_setlist=False)
-        self.role = RoleFactory()
-        self.first_song = SongFactory(semester=self.rehearsal.semester)
-        self.middle_song = SongFactory(semester=self.rehearsal.semester)
-        self.last_song = SongFactory(semester=self.rehearsal.semester)
+        self.first_song = SongFactory(semester=self.rehearsal.semester, position=2)
+        self.middle_song = SongFactory(semester=self.rehearsal.semester, position=3)
+        self.last_song = SongFactory(semester=self.rehearsal.semester, position=4)
         self.first_slot = RehearsalSongFactory(rehearsal=self.rehearsal, song=self.first_song, order=1)
         self.middle_slot = RehearsalSongFactory(rehearsal=self.rehearsal, song=self.middle_song, order=2)
         self.last_slot = RehearsalSongFactory(rehearsal=self.rehearsal, song=self.last_song, order=3)
