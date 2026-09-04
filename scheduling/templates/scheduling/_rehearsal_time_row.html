@@ -1,0 +1,13 @@
+<div class="rehearsal-time-row" data-form-prefix="{{ form.prefix }}">
+  <span class="rehearsal-time-delete-checkbox-wrapper" style="display:none">{{ form.DELETE }}</span>
+  <label for="{{ form.day_of_week.id_for_label }}">Day</label>
+  {{ form.day_of_week }}
+  {{ form.day_of_week.errors }}
+  <label for="{{ form.start_time.id_for_label }}">Start</label>
+  {{ form.start_time }}
+  {{ form.start_time.errors }}
+  <label for="{{ form.end_time.id_for_label }}">End</label>
+  {{ form.end_time }}
+  {{ form.end_time.errors }}
+  <button type="button" class="rehearsal-time-remove" @click="removeRehearsalTimeRow($event)">Remove</button>
+</div>

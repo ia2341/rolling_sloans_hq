@@ -3,6 +3,9 @@
   {% if form.instance.pk %}id="schedule-edit-row-{{ form.instance.pk }}"{% endif %}
   data-rehearsal-id="{{ form.instance.pk|default:'' }}"
   data-form-prefix="{{ form.prefix }}"
+  data-original-date="{{ form.instance.date|date:'Y-m-d' }}"
+  data-original-start-time="{{ form.instance.start_time|time:'H:i' }}"
+  data-original-end-time="{{ form.instance.end_time|time:'H:i' }}"
 >
   {{ form.id }}
   <span class="schedule-edit-delete-checkbox-wrapper" style="display:none">{{ form.DELETE }}</span>

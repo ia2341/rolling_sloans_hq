@@ -22,9 +22,12 @@ from scheduling.models import (
     MembershipRole,
     Recording,
     Rehearsal,
+    RehearsalPattern,
     RehearsalSong,
+    RehearsalTime,
     Role,
     Semester,
+    SkipDate,
     Song,
     SongRoleAssignment,
     SongRoleRequirement,
@@ -493,6 +496,15 @@ def delete_rehearsals_with_recordings(rehearsals) -> None:
     behavior — a storage failure never blocks or rolls back the Save this
     runs inside. Conflict rows destroyed by this cascade are never counted
     or enumerated anywhere (ADR 0005): a bare count would add nothing.
+
+    Deleting a Rehearsal that carries Recordings is deliberately allowed
+    here — unlike `preview_rehearsal_generation()`'s Orphan bucket (issue
+    #222), which disables its delete checkbox outright whenever an orphan
+    carries at least one Recording. That asymmetry is intentional: the
+    generator is blind and bulk, acting on a Pattern re-run an admin didn't
+    review row by row, so it protects itself; this manual per-row path
+    always runs behind the destructive-save confirmation dialog, where an
+    admin has already seen exactly what they're removing.
     """
     ids = [rehearsal.pk for rehearsal in rehearsals]
     if not ids:
@@ -3338,3 +3350,318 @@ def preview_rehearsal_edits(buffer: RehearsalEditBuffer, *, viewing_semester: Se
         is_blocked=False, block_message='', is_stale=is_stale,
         loud=loud, quiet=quiet, doomed_recording_groups=doomed_recording_groups,
     )
+
+
+@dataclass(frozen=True)
+class RehearsalTimeInput:
+    """One Rehearsal Time row as entered in the Pattern editor (issue #222): a day-of-week plus start/end."""
+
+    day_of_week: int
+    start_time: time
+    end_time: time
+
+
+@dataclass(frozen=True)
+class SkipDateInput:
+    """One Skip Date row as entered in the Pattern editor (issue #222): a single date, or an inclusive range."""
+
+    start_date: date
+    end_date: date | None
+
+
+@dataclass(frozen=True)
+class RehearsalPatternInput:
+    """A whole Rehearsal Pattern as entered in the Pattern editor (issue #222), before or instead of being saved.
+
+    Mirrors `RehearsalPattern`/`RehearsalTime`/`SkipDate` field-for-field as
+    plain dataclasses rather than model instances, so `preview_rehearsal_generation()`
+    can diff a Pattern the admin is still editing and hasn't saved yet —
+    per CONTEXT.md, "editing a Pattern changes nothing until it is used to
+    generate," and a Preview must not force a save first to be explorable.
+    """
+
+    start_date: date
+    end_date: date
+    rehearsal_times: list[RehearsalTimeInput] = field(default_factory=list)
+    skip_dates: list[SkipDateInput] = field(default_factory=list)
+
+
+class RehearsalPatternCollisionError(ValueError):
+    """Raised when two Rehearsal Times in a Pattern share a day-of-week (issue #222).
+
+    Two Rehearsal Times on the same day of the week would both try to
+    generate a Rehearsal onto the very same date, which can never coexist
+    under `unique_rehearsal_date_per_semester` — so this is a Pattern-level
+    error, raised by `save_rehearsal_pattern()` before anything is written,
+    rather than left to surface obliquely as a generation-time collision.
+    """
+
+
+def _rehearsal_time_collision_message(day_of_week: int) -> str:
+    """Name which day-of-week two Rehearsal Times collide on, for `RehearsalPatternCollisionError`."""
+    day_name = dict(RehearsalTime.DAY_OF_WEEK_CHOICES).get(day_of_week, day_of_week)
+    return f'Two Rehearsal Times are both set for {day_name} — they would collide on the same generated date.'
+
+
+def _check_no_rehearsal_time_collisions(rehearsal_times: list[RehearsalTimeInput]) -> None:
+    """Raise `RehearsalPatternCollisionError` if two `rehearsal_times` share a `day_of_week` (issue #222).
+
+    Shared by `save_rehearsal_pattern()` and `preview_rehearsal_generation()`
+    so the same Pattern-level error is caught the same way regardless of
+    which one runs first — the acceptance criterion is "caught before
+    generation runs", not "caught only on save".
+    """
+    seen_days = set()
+    for rehearsal_time in rehearsal_times:
+        if rehearsal_time.day_of_week in seen_days:
+            raise RehearsalPatternCollisionError(_rehearsal_time_collision_message(rehearsal_time.day_of_week))
+        seen_days.add(rehearsal_time.day_of_week)
+
+
+def save_rehearsal_pattern(semester: Semester, pattern: RehearsalPatternInput) -> RehearsalPattern:
+    """Persist `pattern` as `semester`'s one RehearsalPattern, replacing its Rehearsal Times and Skip Dates wholesale (issue #222).
+
+    Writes no Rehearsal — this is input history with no downstream
+    authority (CONTEXT.md's "Rehearsal Pattern"); only a Pattern's diff,
+    once hand-applied into the Pending Buffer and saved through
+    `apply_rehearsal_edits()`, ever creates one. Raises
+    `RehearsalPatternCollisionError` before any write if two
+    `rehearsal_times` share a `day_of_week` — both would generate onto the
+    same date, which can never coexist under
+    `unique_rehearsal_date_per_semester`. Replaces the Pattern's Rehearsal
+    Times and Skip Dates wholesale (delete then recreate) rather than
+    diffing row by row: neither carries any other referent, so there is
+    nothing an in-place edit would preserve that a replace loses.
+    """
+    _check_no_rehearsal_time_collisions(pattern.rehearsal_times)
+
+    with transaction.atomic():
+        db_pattern, _ = RehearsalPattern.objects.get_or_create(
+            semester=semester, defaults={'start_date': pattern.start_date, 'end_date': pattern.end_date},
+        )
+        db_pattern.start_date = pattern.start_date
+        db_pattern.end_date = pattern.end_date
+        db_pattern.save()
+        RehearsalTime.objects.filter(pattern=db_pattern).delete()
+        SkipDate.objects.filter(pattern=db_pattern).delete()
+        for rehearsal_time in pattern.rehearsal_times:
+            RehearsalTime.objects.create(
+                pattern=db_pattern,
+                day_of_week=rehearsal_time.day_of_week,
+                start_time=rehearsal_time.start_time,
+                end_time=rehearsal_time.end_time,
+            )
+        for skip_date in pattern.skip_dates:
+            SkipDate.objects.create(
+                pattern=db_pattern, start_date=skip_date.start_date, end_date=skip_date.end_date,
+            )
+    return db_pattern
+
+
+@dataclass(frozen=True)
+class GenerationCreateItem:
+    """One date the Pattern would generate a brand-new Rehearsal for (issue #222)."""
+
+    date: date
+    start_time: time
+    end_time: time
+    is_dress_rehearsal: bool
+
+
+@dataclass(frozen=True)
+class GenerationKeepItem:
+    """One date whose existing Rehearsal already matches the Pattern exactly — a re-run's no-op case (issue #222)."""
+
+    rehearsal_id: int
+    date: date
+    start_time: time
+    end_time: time
+
+
+@dataclass(frozen=True)
+class GenerationRetimeItem:
+    """One date whose existing Rehearsal's hours would change (issue #222). Opt-in; unchecked by default.
+
+    `song_count`/`conflict_count` are this outcome's blast radius — how
+    many scheduled songs and how many members' Conflicts the evening
+    currently carries — surfaced so an admin can judge the mechanical cost
+    (`reorder_rehearsal_songs()` re-deriving every song's persisted slot)
+    before opting in. Conflicts are never shifted or deleted by a re-time
+    (a Conflict Window is a member's statement about real life, not an
+    offset into the rehearsal); the count here is informational only.
+    """
+
+    rehearsal_id: int
+    date: date
+    old_start_time: time
+    old_end_time: time
+    new_start_time: time
+    new_end_time: time
+    song_count: int
+    conflict_count: int
+
+
+@dataclass(frozen=True)
+class GenerationOrphanItem:
+    """One existing Rehearsal the Pattern no longer produces (issue #222). Never auto-deleted; unchecked by default.
+
+    `recording_count` gates the outcome's delete checkbox
+    (`delete_disabled`): the generator is blind and bulk, so — unlike the
+    manual per-row delete `delete_rehearsals_with_recordings()` allows
+    behind the destructive-save dialog — it refuses to offer deleting an
+    orphan that carries at least one Recording at all. That asymmetry is
+    intentional (see the mirrored comment on `delete_rehearsals_with_recordings()`).
+    """
+
+    rehearsal_id: int
+    date: date
+    start_time: time
+    end_time: time
+    song_count: int
+    conflict_count: int
+    recording_count: int
+
+    @property
+    def delete_disabled(self) -> bool:
+        """True when this orphan carries at least one Recording — its delete checkbox must stay unavailable."""
+        return self.recording_count > 0
+
+
+@dataclass(frozen=True)
+class RehearsalGenerationDiff:
+    """The four-bucket diff `preview_rehearsal_generation()` computes: Create, Keep, Re-time, Orphaned (issue #222)."""
+
+    creates: list[GenerationCreateItem]
+    keeps: list[GenerationKeepItem]
+    retimes: list[GenerationRetimeItem]
+    orphans: list[GenerationOrphanItem]
+
+
+def _generated_dates(pattern: RehearsalPatternInput, start_date: date, end_date: date):
+    """Yield (date, RehearsalTimeInput) for every date in the inclusive [start_date, end_date] range whose weekday matches a Rehearsal Time, minus Skip Dates.
+
+    Assumes `pattern.rehearsal_times` carries no two entries sharing a
+    `day_of_week` — `save_rehearsal_pattern()`'s collision check already
+    guarantees that for a persisted Pattern; a Pattern still being edited
+    in the modal and not yet saved is validated by the same check before
+    this function is ever reached (issue #222).
+    """
+    time_by_day = {rehearsal_time.day_of_week: rehearsal_time for rehearsal_time in pattern.rehearsal_times}
+    skipped_dates = set()
+    for skip_date in pattern.skip_dates:
+        skip_end = skip_date.end_date or skip_date.start_date
+        current = skip_date.start_date
+        while current <= skip_end:
+            skipped_dates.add(current)
+            current += timedelta(days=1)
+
+    current = start_date
+    while current <= end_date:
+        rehearsal_time = time_by_day.get(current.weekday())
+        if rehearsal_time is not None and current not in skipped_dates:
+            yield current, rehearsal_time
+        current += timedelta(days=1)
+
+
+def preview_rehearsal_generation(
+    semester: Semester, pattern: RehearsalPatternInput, date_range: tuple[date, date] | None = None,
+) -> RehearsalGenerationDiff:
+    """Compute the four-bucket diff generating `pattern` against `semester`'s current Rehearsals would produce (issue #222).
+
+    A pure read — writes nothing at all, unlike every other `preview_*()`
+    in this module: ADR-0008's run-and-rollback pattern doesn't apply here,
+    since there is no `apply_rehearsal_generation` to run (#127 decided the
+    diff is a staging modal, not a second buffer — see `RehearsalGenerationDiff`'s
+    docstring). `date_range`, when given, narrows the generation range for
+    this one run without touching `pattern` itself (CONTEXT.md's Rehearsal
+    Pattern: "the range can be narrowed for a single run without changing
+    the stored Pattern") — callers pass the admin's typed override; the
+    Pattern's own `(start_date, end_date)` is used otherwise.
+
+    Every date the Pattern would produce (`_generated_dates()`) becomes a
+    Create, a Keep or a Re-time depending on whether `semester` already has
+    a Rehearsal on that date and whether its hours already match. The last
+    `semester.default_dress_rehearsal_count` produced dates (across every
+    bucket, not just Create) are candidates for the Dress flag, but it is
+    only ever attached to a brand-new Create row — a re-run never migrates
+    an existing Rehearsal's flag onto or off of it (CONTEXT.md: a Pattern
+    "records what was asked for, not what exists"). Every existing
+    Rehearsal dated within the run's range that the Pattern does not
+    produce is an Orphan — listed, never deleted here or by the diff's
+    consumer directly; deletion, like every other outcome, happens only
+    once its Buffer entry is saved through `apply_rehearsal_edits()`.
+
+    The first-ever run on a Semester with no Rehearsals goes through this
+    exact same code path: `existing` is simply empty, so every produced
+    date lands in `creates` and neither `retimes` nor `orphans` has
+    anything to report.
+    """
+    _check_no_rehearsal_time_collisions(pattern.rehearsal_times)
+    start_date, end_date = date_range if date_range is not None else (pattern.start_date, pattern.end_date)
+    generated = list(_generated_dates(pattern, start_date, end_date))
+    generated_dates = [generated_date for generated_date, _ in generated]
+    dress_dates = (
+        set(generated_dates[-semester.default_dress_rehearsal_count:])
+        if semester.default_dress_rehearsal_count
+        else set()
+    )
+
+    existing_by_date = {
+        rehearsal.date: rehearsal
+        for rehearsal in Rehearsal.objects.filter(semester=semester, date__range=(start_date, end_date))
+    }
+    existing_ids = [rehearsal.pk for rehearsal in existing_by_date.values()]
+    song_counts = dict(
+        RehearsalSong.objects.filter(rehearsal_id__in=existing_ids)
+        .values('rehearsal_id').annotate(count=Count('pk')).values_list('rehearsal_id', 'count')
+    )
+    conflict_counts = dict(
+        Conflict.objects.filter(rehearsal_id__in=existing_ids)
+        .values('rehearsal_id').annotate(count=Count('pk')).values_list('rehearsal_id', 'count')
+    )
+    recording_counts = dict(
+        Recording.objects.filter(rehearsal_song__rehearsal_id__in=existing_ids)
+        .values('rehearsal_song__rehearsal_id').annotate(count=Count('pk'))
+        .values_list('rehearsal_song__rehearsal_id', 'count')
+    )
+
+    creates: list[GenerationCreateItem] = []
+    keeps: list[GenerationKeepItem] = []
+    retimes: list[GenerationRetimeItem] = []
+    produced_dates = set()
+    for generated_date, rehearsal_time in generated:
+        produced_dates.add(generated_date)
+        rehearsal = existing_by_date.get(generated_date)
+        if rehearsal is None:
+            creates.append(GenerationCreateItem(
+                date=generated_date, start_time=rehearsal_time.start_time, end_time=rehearsal_time.end_time,
+                is_dress_rehearsal=generated_date in dress_dates,
+            ))
+        elif rehearsal.start_time == rehearsal_time.start_time and rehearsal.end_time == rehearsal_time.end_time:
+            keeps.append(GenerationKeepItem(
+                rehearsal_id=rehearsal.pk, date=generated_date,
+                start_time=rehearsal.start_time, end_time=rehearsal.end_time,
+            ))
+        else:
+            retimes.append(GenerationRetimeItem(
+                rehearsal_id=rehearsal.pk, date=generated_date,
+                old_start_time=rehearsal.start_time, old_end_time=rehearsal.end_time,
+                new_start_time=rehearsal_time.start_time, new_end_time=rehearsal_time.end_time,
+                song_count=song_counts.get(rehearsal.pk, 0), conflict_count=conflict_counts.get(rehearsal.pk, 0),
+            ))
+
+    orphans = sorted(
+        (
+            GenerationOrphanItem(
+                rehearsal_id=rehearsal.pk, date=rehearsal_date,
+                start_time=rehearsal.start_time, end_time=rehearsal.end_time,
+                song_count=song_counts.get(rehearsal.pk, 0), conflict_count=conflict_counts.get(rehearsal.pk, 0),
+                recording_count=recording_counts.get(rehearsal.pk, 0),
+            )
+            for rehearsal_date, rehearsal in existing_by_date.items()
+            if rehearsal_date not in produced_dates
+        ),
+        key=lambda orphan: orphan.date,
+    )
+
+    return RehearsalGenerationDiff(creates=creates, keeps=keeps, retimes=retimes, orphans=orphans)

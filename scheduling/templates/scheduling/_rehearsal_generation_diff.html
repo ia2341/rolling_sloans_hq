@@ -1,0 +1,121 @@
+<!-- The Rehearsal generation four-bucket diff (issue #222): Create, Keep, Re-time, Orphaned. Computed
+     server-side against current DB state by preview_rehearsal_generation(); a bare data partial with no
+     enclosing <form> of its own, so the semester-setup wizard (#125/#198) can render it as one step. Each
+     item carries data-* attributes naming exactly what apply_generation() (rehearsal_generation.js) needs
+     to inject a ticked outcome into the page's existing Pending Buffer. -->
+<div id="rehearsal-generation-diff" class="rs-generation-diff">
+  {% if formset_errors %}
+    <div class="rs-fallout-blocked" role="alert" id="rehearsal-generation-errors">
+      <p>This Pattern couldn't be validated:</p>
+      <ul>
+        {% for error in formset_errors %}<li>{{ error }}</li>{% endfor %}
+      </ul>
+    </div>
+  {% elif diff %}
+    <p class="rs-generation-diff-note">
+      Computed against saved rehearsals — any unsaved edit still pending on the grid below is ignored here,
+      and Apply refuses to overwrite a row you've already changed.
+    </p>
+
+    <section class="rs-generation-bucket" id="rehearsal-generation-creates">
+      <h3>Create ({{ diff.creates|length }})</h3>
+      {% if diff.creates %}
+        <ul>
+          {% for item in diff.creates %}
+            <li class="rs-generation-create-item">
+              <label>
+                <input
+                  type="checkbox"
+                  class="rs-generation-create-checkbox"
+                  checked
+                  data-date="{{ item.date|date:'Y-m-d' }}"
+                  data-start-time="{{ item.start_time|time:'H:i' }}"
+                  data-end-time="{{ item.end_time|time:'H:i' }}"
+                  data-is-dress-rehearsal="{{ item.is_dress_rehearsal|yesno:'true,false' }}"
+                >
+                {{ item.date }} {{ item.start_time }}&ndash;{{ item.end_time }}
+                {% if item.is_dress_rehearsal %}<strong>(Dress Rehearsal)</strong>{% endif %}
+              </label>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p>Nothing new to create.</p>
+      {% endif %}
+    </section>
+
+    <section class="rs-generation-bucket" id="rehearsal-generation-keeps">
+      <h3>Keep ({{ diff.keeps|length }})</h3>
+      {% if diff.keeps %}
+        <ul>
+          {% for item in diff.keeps %}
+            <li>{{ item.date }} {{ item.start_time }}&ndash;{{ item.end_time }}</li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p>Nothing unchanged.</p>
+      {% endif %}
+    </section>
+
+    <section class="rs-generation-bucket" id="rehearsal-generation-retimes">
+      <h3>Re-time ({{ diff.retimes|length }})</h3>
+      {% if diff.retimes %}
+        <ul>
+          {% for item in diff.retimes %}
+            <li class="rs-generation-retime-item">
+              <label>
+                <input
+                  type="checkbox"
+                  class="rs-generation-retime-checkbox"
+                  data-rehearsal-id="{{ item.rehearsal_id }}"
+                  data-date="{{ item.date|date:'Y-m-d' }}"
+                  data-start-time="{{ item.new_start_time|time:'H:i' }}"
+                  data-end-time="{{ item.new_end_time|time:'H:i' }}"
+                >
+                {{ item.date }}: {{ item.old_start_time }}&ndash;{{ item.old_end_time }}
+                &rarr; {{ item.new_start_time }}&ndash;{{ item.new_end_time }}
+              </label>
+              <span class="rs-generation-blast-radius">
+                {{ item.song_count }} scheduled song{{ item.song_count|pluralize }},
+                {{ item.conflict_count }} member conflict{{ item.conflict_count|pluralize }}
+              </span>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p>No Rehearsal Time changed hours.</p>
+      {% endif %}
+    </section>
+
+    <section class="rs-generation-bucket" id="rehearsal-generation-orphans">
+      <h3>Orphaned ({{ diff.orphans|length }})</h3>
+      {% if diff.orphans %}
+        <ul>
+          {% for item in diff.orphans %}
+            <li class="rs-generation-orphan-item">
+              <label>
+                <input
+                  type="checkbox"
+                  class="rs-generation-orphan-checkbox"
+                  data-rehearsal-id="{{ item.rehearsal_id }}"
+                  {% if item.delete_disabled %}disabled{% endif %}
+                >
+                {{ item.date }} {{ item.start_time }}&ndash;{{ item.end_time }}
+              </label>
+              <span class="rs-generation-blast-radius">
+                Would lose {{ item.song_count }} scheduled song{{ item.song_count|pluralize }},
+                {{ item.conflict_count }} member conflict{{ item.conflict_count|pluralize }},
+                {{ item.recording_count }} recording{{ item.recording_count|pluralize }}
+                {% if item.delete_disabled %}
+                  <strong>(carries Recordings — delete this by hand from the grid below instead)</strong>
+                {% endif %}
+              </span>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p>Nothing orphaned.</p>
+      {% endif %}
+    </section>
+  {% endif %}
+</div>

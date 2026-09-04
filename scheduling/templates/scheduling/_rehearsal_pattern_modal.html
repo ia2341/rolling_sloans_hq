@@ -1,0 +1,43 @@
+<!-- The "Generate rehearsal dates" staging modal (issue #222): a dialog over /schedule/edit/'s page, never
+     a separate page of its own. Closing it (the "Close" button, or the browser's native Esc/backdrop
+     dismissal of <dialog>) writes nothing -- opening the generator is never a commitment (CONTEXT.md's
+     Rehearsal Pattern). Apply is entirely client-side: it injects the ticked outcomes into the existing
+     #schedule-edit-grid's Pending Buffer as ordinary pending rows, then closes -- it never itself talks to
+     the server (rehearsal_generation.js's applyGeneration()). -->
+<dialog
+  id="rehearsal-pattern-dialog"
+  x-data="rehearsalGeneration(
+    '{% url 'scheduling:schedule-edit-generate-save' %}',
+    '{% url 'scheduling:schedule-edit-generate-preview' %}',
+    {{ semester.default_rehearsal_duration_minutes }}
+  )"
+  x-init="init()"
+  @close="reset()"
+>
+  <h2>Generate rehearsal dates</h2>
+  {# A plain container for FormData, never submitted natively -- runPreview()/its Save-Pattern preflight
+     both read this form's fields and POST them by fetch, exactly like schedule_edit.js's own fetches. #}
+  <form id="rehearsal-pattern-form" @submit.prevent>
+    {% csrf_token %}
+    <div id="rehearsal-pattern-body">
+      {% include "scheduling/_rehearsal_pattern_editor.html" %}
+    </div>
+
+    <fieldset id="rehearsal-generation-narrow-range">
+      <legend>Narrow this run (optional)</legend>
+      <p>Generate only within a sub-range, without changing the stored Pattern above.</p>
+      <label for="{{ narrow_range_form.start_date.id_for_label }}">Start date</label>
+      {{ narrow_range_form.start_date }}
+      <label for="{{ narrow_range_form.end_date.id_for_label }}">End date</label>
+      {{ narrow_range_form.end_date }}
+    </fieldset>
+  </form>
+
+  <button type="button" id="run-generation-preview" @click="runPreview">Preview</button>
+  <p id="rehearsal-generation-preview-error" x-show="previewError" x-text="previewError" role="alert"></p>
+
+  <div id="rehearsal-generation-diff-region" x-html="diffHtml"></div>
+
+  <button type="button" id="apply-generation" x-show="diffHtml" @click="applyGeneration">Apply</button>
+  <button type="button" id="close-generation-modal" @click="close">Close</button>
+</dialog>

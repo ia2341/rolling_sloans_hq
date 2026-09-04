@@ -16,6 +16,7 @@ from scheduling.models import (
     MembershipRole,
     Rehearsal,
     RehearsalSong,
+    RehearsalTime,
     Role,
     Song,
 )
@@ -300,6 +301,115 @@ class RunningOrderRowForm(forms.Form):
 # row's `rehearsal_row_key` naming which Rehearsal it belongs to (issue #220). `extra=0`: rows arrive by
 # the "+ Add song" control bumping TOTAL_FORMS, mirroring `SetlistEditFormSet`.
 RunningOrderFormSet = forms.formset_factory(RunningOrderRowForm, extra=0)
+
+
+class RehearsalPatternRangeForm(forms.Form):
+    """The Rehearsal Pattern's own stored generation range: a start/end date pair (issue #222).
+
+    A plain `Form`, not a `ModelForm` bound to `RehearsalPattern` — the
+    view builds a `RehearsalPatternInput` from every one of the modal's
+    forms together, and `save_rehearsal_pattern()` is the only thing that
+    ever writes a `RehearsalPattern` row.
+    """
+
+    start_date = forms.DateField()
+    end_date = forms.DateField()
+
+    def clean(self):
+        """Reject a reversed range with the same message `RehearsalPattern.clean()` would raise on save."""
+        cleaned_data = super().clean()
+        start_date, end_date = cleaned_data.get('start_date'), cleaned_data.get('end_date')
+        if start_date and end_date and end_date < start_date:
+            message = 'End date must be on or after start date.'
+            self.add_error('start_date', message)
+            self.add_error('end_date', message)
+        return cleaned_data
+
+
+class GenerationRangeForm(forms.Form):
+    """Optionally narrows one generation run's date range without touching the stored Pattern (issue #222).
+
+    Both fields blank (the common case — "just re-run the Pattern as
+    stored") means `preview_rehearsal_generation()` is called with
+    `date_range=None`, so it falls back to the Pattern's own range;
+    CONTEXT.md's Rehearsal Pattern explicitly allows narrowing "for a
+    single run without changing the stored Pattern".
+    """
+
+    start_date = forms.DateField(required=False)
+    end_date = forms.DateField(required=False)
+
+    def clean(self):
+        """Require both dates or neither, and reject a reversed narrowed range."""
+        cleaned_data = super().clean()
+        start_date, end_date = cleaned_data.get('start_date'), cleaned_data.get('end_date')
+        if bool(start_date) != bool(end_date):
+            raise forms.ValidationError('Provide both a start and end date to narrow this run, or leave both blank.')
+        if start_date and end_date and end_date < start_date:
+            message = 'End date must be on or after start date.'
+            self.add_error('start_date', message)
+            self.add_error('end_date', message)
+        return cleaned_data
+
+    def as_date_range(self):
+        """Return (start_date, end_date) if both were submitted, else None (falling back to the Pattern's own range)."""
+        start_date, end_date = self.cleaned_data.get('start_date'), self.cleaned_data.get('end_date')
+        return (start_date, end_date) if start_date and end_date else None
+
+
+class RehearsalTimeRowForm(forms.Form):
+    """One Rehearsal Time row in the Pattern editor: a day-of-week plus start/end (issue #222).
+
+    A plain `Form`, mirroring `RunningOrderRowForm`'s reasoning: the view
+    assembles every row into a `RehearsalPatternInput`, which
+    `save_rehearsal_pattern()` writes as a batch — no individual row here
+    is ever bound to its own `RehearsalTime` instance.
+    """
+
+    day_of_week = forms.TypedChoiceField(choices=RehearsalTime.DAY_OF_WEEK_CHOICES, coerce=int)
+    start_time = forms.TimeField()
+    end_time = forms.TimeField()
+    DELETE = forms.BooleanField(required=False, widget=forms.HiddenInput)
+
+    def clean(self):
+        """Reject an end time at or before start time."""
+        cleaned_data = super().clean()
+        start_time, end_time = cleaned_data.get('start_time'), cleaned_data.get('end_time')
+        if start_time is not None and end_time is not None and end_time <= start_time:
+            self.add_error('end_time', 'End time must be after start time.')
+        return cleaned_data
+
+
+# The Pattern editor's Rehearsal Time rows (issue #222). `extra=0`: rows arrive by the modal's
+# "+ Add Rehearsal Time" control bumping TOTAL_FORMS, mirroring `RunningOrderFormSet`.
+RehearsalTimeFormSet = forms.formset_factory(RehearsalTimeRowForm, extra=0, can_delete=True)
+
+
+class SkipDateRowForm(forms.Form):
+    """One Skip Date row in the Pattern editor: a single date, or an inclusive range (issue #222).
+
+    `end_date` left blank means a single-day Skip Date, mirroring
+    `SkipDate.end_date`'s own null-means-single-day convention.
+    """
+
+    start_date = forms.DateField()
+    end_date = forms.DateField(required=False)
+    DELETE = forms.BooleanField(required=False, widget=forms.HiddenInput)
+
+    def clean(self):
+        """Reject an end date before start date, when given."""
+        cleaned_data = super().clean()
+        start_date, end_date = cleaned_data.get('start_date'), cleaned_data.get('end_date')
+        if start_date and end_date and end_date < start_date:
+            message = 'End date must be on or after start date.'
+            self.add_error('start_date', message)
+            self.add_error('end_date', message)
+        return cleaned_data
+
+
+# The Pattern editor's Skip Date rows (issue #222). `extra=0`: rows arrive by the modal's "+ Add Skip
+# Date" control bumping TOTAL_FORMS, mirroring `RunningOrderFormSet`.
+SkipDateFormSet = forms.formset_factory(SkipDateRowForm, extra=0, can_delete=True)
 
 
 class SongEditForm(forms.ModelForm):
