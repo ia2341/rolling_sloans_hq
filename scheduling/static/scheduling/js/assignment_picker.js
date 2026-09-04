@@ -17,7 +17,7 @@
 document.addEventListener('alpine:init', () => {
   // initialRemoved/initialAdded/initialEditing re-seed the buffer after a blocked Save re-renders the
   // page (issue #212) -- a Validation Error must never cost the rest of an admin's pending edits.
-  Alpine.data('assignmentGrid', (initialRemoved = [], initialAdded = [], initialEditing = false) => ({
+  Alpine.data('assignmentGrid', (pickerUrlTemplate, initialRemoved = [], initialAdded = [], initialEditing = false) => ({
     editing: initialEditing,
     removed: [...initialRemoved],
     added: [...initialAdded],
@@ -29,7 +29,19 @@ document.addEventListener('alpine:init', () => {
     pickerHtml: '',
     pickerError: '',
     cellStandingAssignees: JSON.parse(document.getElementById('cell-standing-assignees-data').textContent),
+    pickerUrlTemplate: pickerUrlTemplate || '',
+    extraRoles: [],
+    selectedRoleToAdd: '',
+    addableRoles: [],
     previewError: '',
+
+    // "+ Add role" (issue #213): every addable Role (active, not already a column),
+    // read once from the json_script the server rendered -- a plain data island, not
+    // an Alpine.data() init arg, since a Role name could contain a quote or apostrophe.
+    init() {
+      const dataEl = document.getElementById('addable-roles-data');
+      this.addableRoles = dataEl ? JSON.parse(dataEl.textContent) : [];
+    },
 
     cancelEditing() {
       this.editing = false;
@@ -37,6 +49,34 @@ document.addEventListener('alpine:init', () => {
       this.added = [];
       this.removedBackups = [];
       this.addedBackups = [];
+      this.extraRoles = [];
+      this.selectedRoleToAdd = '';
+    },
+
+    // Roles offered in the "+ Add role" <select>: every addable Role not already
+    // added as an extra column this view (a Role becomes a real column, sourced
+    // from the server, only after Save Changes re-renders the grid).
+    rolesAvailableToAdd() {
+      const addedIds = new Set(this.extraRoles.map((role) => role.id));
+      return this.addableRoles.filter((role) => !addedIds.has(role.id));
+    },
+
+    // Adds a client-side-only column for this view -- writes no SongRoleRequirement,
+    // and is gone on reload or Cancel (ADR-0009's grid assigns people; #151 owns targets).
+    addRole() {
+      const roleId = Number(this.selectedRoleToAdd);
+      const role = this.addableRoles.find((candidate) => candidate.id === roleId);
+      if (!role) {
+        return;
+      }
+      this.extraRoles.push(role);
+      this.selectedRoleToAdd = '';
+    },
+
+    // Builds the "+" picker's fetch URL for an extra (client-only) column, whose
+    // (song, role) pair the server never rendered a data-picker-url for.
+    pickerUrlFor(songId, roleId) {
+      return this.pickerUrlTemplate.replace(/\/0\/0\/$/, `/${songId}/${roleId}/`);
     },
 
     // Fetched only when a cell's "+" is opened -- an unopened cell issues no request.
