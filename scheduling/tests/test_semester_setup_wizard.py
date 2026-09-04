@@ -7,8 +7,9 @@ from django.urls import reverse
 
 from identity.factories import PersonFactory
 from scheduling.factories import MembershipFactory, SemesterFactory, SongFactory
-from scheduling.models import Semester
+from scheduling.models import Membership, RehearsalPattern, Semester, Song
 from scheduling.services import VIEWING_SEMESTER_SESSION_KEY
+from scheduling.tests.test_setlist_reorder_add_delete import build_post_data
 
 PASSWORD = 'a-strong-test-password-123'
 
@@ -355,3 +356,33 @@ class ModalFragmentTests(TestCase):
 
         self.assertContains(response, '<nav>')
         self.assertContains(response, 'name="name"')
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class AbandonmentTests(TestCase):
+    def test_abandoning_after_step_1_leaves_a_finishable_deletable_draft_and_nothing_else(self):
+        """A wizard closed right after step 1 leaves exactly one bare draft: finishable from the tabs, deletable from the panel."""
+        admin_client(self)
+
+        self.client.post(reverse('scheduling:manage-semester-setup'), VALID_POST_DATA)
+        semester = Semester.objects.get(name='Fall 2026')
+
+        # Nothing beyond the draft itself and its timing defaults was written.
+        self.assertEqual(Semester.objects.count(), 1)
+        self.assertIsNone(semester.published_at)
+        self.assertFalse(Membership.objects.filter(semester=semester).exists())
+        self.assertFalse(Song.objects.filter(semester=semester).exists())
+        self.assertFalse(RehearsalPattern.objects.filter(semester=semester).exists())
+
+        # It's finishable from the ordinary tabs -- e.g. adding a Song through the Setlist tab's own save endpoint.
+        data = build_post_data(semester, rows=[
+            {'title': 'Later Addition', 'artist': 'Someone', 'length': '3:00', 'notes': ''},
+        ])
+        response = self.client.post(reverse('scheduling:setlist-edit'), data)
+        self.assertRedirects(response, reverse('scheduling:setlist'))
+        self.assertTrue(Song.objects.filter(semester=semester, title='Later Addition').exists())
+
+        # It's deletable from the Home panel.
+        response = self.client.post(reverse('scheduling:manage-semesters-delete', args=[semester.pk]))
+        self.assertRedirects(response, reverse('scheduling:manage-semesters'))
+        self.assertFalse(Semester.objects.filter(pk=semester.pk).exists())
