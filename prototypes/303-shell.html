@@ -48,6 +48,13 @@
     --warn-bg:    #f7ecdc;
     --ok:         #2f6b47;   /* semantic: your own slot / confirmed */
     --ok-bg:      #e6f0e9;
+    /* Role hues. Hue = which role; border + marker = state. The two must stay
+       separate encodings or a backup on drums and a conflict on keys collide. */
+    --role-0:     #6d5bd0;   /* Lead Vocals */
+    --role-1:     #12776a;   /* Guitar */
+    --role-2:     #a3417e;   /* Bass */
+    --role-3:     #9c4a37;   /* Drums */
+    --role-4:     #2f5fa8;   /* Keys */
     --radius:     6px;
     --sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
     --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -58,6 +65,8 @@
       --line: #414958; --line-soft: #333a47; --ink: #e7eaf0; --ink-2: #a8b0bf;
       --ink-3: #7d8593; --chrome: #0d1015; --mark: #7f95ee;
       --warn: #e0ac66; --warn-bg: #3a2c1633; --ok: #7fc39b; --ok-bg: #1d3128aa;
+      --role-0: #a99af0; --role-1: #6fc9b6; --role-2: #e08cc0;
+      --role-3: #dd9179; --role-4: #8fb4ec;
     }
   }
   :root[data-theme="dark"] {
@@ -65,6 +74,8 @@
     --line: #414958; --line-soft: #333a47; --ink: #e7eaf0; --ink-2: #a8b0bf;
     --ink-3: #7d8593; --chrome: #0d1015; --mark: #7f95ee;
     --warn: #e0ac66; --warn-bg: #3a2c1633; --ok: #7fc39b; --ok-bg: #1d3128aa;
+    --role-0: #a99af0; --role-1: #6fc9b6; --role-2: #e08cc0;
+    --role-3: #dd9179; --role-4: #8fb4ec;
   }
 
   * { box-sizing: border-box; }
@@ -134,7 +145,17 @@
   .chip.conflict { border-color: var(--warn); background: var(--warn-bg); color: var(--warn); }
   .chip.mismatch { border-style: solid; box-shadow: inset 0 -2px 0 var(--line); }
   .chip.you { border-color: var(--ok); background: var(--ok-bg); color: var(--ok); font-weight: 600; }
-  .legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 11.5px; color: var(--ink-3); }
+  /* Role hue rides on a dot, so it never fights the state colours on the pill itself. */
+  .chip .rdot { width: 7px; height: 7px; border-radius: 50%; background: var(--rc, var(--ink-3));
+    flex-shrink: 0; }
+  .chip.empty .rdot { background: transparent; border: 1px solid var(--rc, var(--line)); }
+  .chip .rcode { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.04em;
+    color: var(--rc, var(--ink-3)); font-weight: 600; }
+  .legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 11.5px; color: var(--ink-3);
+    align-items: center; }
+  .legend .swatch { display: inline-flex; align-items: center; gap: 5px; }
+  .legend .swatch i { width: 8px; height: 8px; border-radius: 50%; background: var(--rc); }
+  .castline { display: flex; gap: 5px; flex-wrap: wrap; align-items: center; }
 
   table.gb { border-collapse: collapse; width: 100%; font-size: 13px; }
   table.gb th, table.gb td { border-bottom: 1px solid var(--line-soft); padding: 7px 10px;
@@ -142,6 +163,10 @@
   table.gb th { font-weight: 600; font-size: 11.5px; color: var(--ink-2); white-space: nowrap; }
   table.gb td.num, table.gb th.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
   table.gb tr.sub td { border-bottom: 1px solid var(--line-soft); padding-top: 0; }
+  /* The Songs table carries the most per row, so it gets the most air. */
+  table.gb.songs td { padding-top: 11px; padding-bottom: 11px; }
+  table.gb.songs tr.sub td { padding-top: 0; }
+  table.gb.songs td:nth-child(3) { min-width: 260px; }
 
   .page { padding: 16px; display: grid; gap: 16px; }
   .frame.desktop .page { padding: 22px 28px; }
@@ -443,21 +468,39 @@ function setDirty(v) { state.dirty = v; syncChrome(); render(); }
 /* ============================================================
    Assignment pill — one place decides how a cell reads.
    ============================================================ */
+const ROLE_CODE = ['LV', 'GTR', 'BASS', 'DRM', 'KEY'];
+
+/* `role` is the index into ROLES. A filled pill shows the hue as a dot and lets fixed
+   position carry the rest; an empty one spells the role out, since there is no name to
+   infer it from. */
 function chip(val, opts = {}) {
-  if (!val) return opts.armed ? '<span class="chip empty">+ assign</span>' : '<span class="muted">—</span>';
+  const r = opts.role;
+  const hue = r == null ? '' : `--rc:var(--role-${r});`;
+  const dot = r == null ? '' : '<span class="rdot"></span>';
+  if (!val) {
+    return opts.armed || opts.showEmpty
+      ? `<span class="chip empty" style="${hue}">${dot}<span class="rcode">${r == null ? '' : ROLE_CODE[r]}</span>
+         <span>${opts.armed ? '+ assign' : 'unfilled'}</span></span>`
+      : '<span class="muted">—</span>';
+  }
   let cls = 'chip', name = val, extra = '';
   if (val[0] === '~') { name = val.slice(1); cls += ' backup'; extra = '<span class="tagm">backup</span>'; }
   else if (val[0] === '!') { name = val.slice(1); cls += ' mismatch'; extra = '<span class="muted" title="Role not on their membership (ADR 0002)">◦</span>'; }
   if (CONFLICTED[name] && opts.rehearsal) { cls += ' conflict'; extra += '<span class="mono" style="font-size:9.5px">⚠</span>'; }
   else if (name === YOU && opts.markYou) { cls += ' you'; }
-  return `<span class="${cls}">${esc(name)}${extra}</span>`;
+  const title = r == null ? '' : ` title="${ROLES[r]}"`;
+  return `<span class="${cls}" style="${hue}"${title}>${dot}${esc(name)}${extra}</span>`;
 }
-const pillLegend = `<div class="legend">
-  <span><span class="chip" style="padding:1px 7px">Assigned</span></span>
+
+/* Role hue is load-bearing once the labels come off, so the key is always on the page. */
+const roleLegend = `<div class="legend">
+  ${ROLES.map((r, i) => `<span class="swatch" style="--rc:var(--role-${i})"><i></i>${r}</span>`).join('')}
+</div>`;
+/* Only the states you cannot guess from a plain pill. */
+const stateLegend = `<div class="legend">
   <span><span class="chip backup" style="padding:1px 7px">Name <span class="tagm">backup</span></span></span>
-  <span><span class="chip conflict" style="padding:1px 7px">Name ⚠</span> has a conflict here</span>
+  <span><span class="chip conflict" style="padding:1px 7px">Name ⚠</span> conflict here</span>
   <span><span class="chip mismatch" style="padding:1px 7px">Name ◦</span> role not on their membership</span>
-  <span><span class="chip empty" style="padding:1px 7px">+ assign</span></span>
 </div>`;
 
 /* ============================================================
@@ -629,7 +672,7 @@ function rehearsalPage() {
           <td class="num">${armed ? '<span class="muted" style="cursor:grab">⠿</span> ' : ''}${o.start}</td>
           <td><b style="font-weight:600">${esc(s.title)}</b>
             ${o.pinned ? '<span class="chip" style="margin-left:6px">pinned</span>' : ''}</td>
-          ${s.cast.map(c => `<td>${chip(c, { armed, rehearsal: true, markYou: true })}</td>`).join('')}
+          ${s.cast.map((c, i) => `<td>${chip(c, { armed, rehearsal: true, markYou: true, role: i })}</td>`).join('')}
         </tr>`;
       }).join('')}</tbody></table></div>`;
   } else {
@@ -641,7 +684,7 @@ function rehearsalPage() {
           <b style="font-weight:600">${esc(s.title)}</b>
           <span class="mono muted" style="font-size:12px">${o.start}</span></div>
         ${ROLES.map((role, i) => `<div class="kv">
-          <span class="muted">${role}</span>${chip(s.cast[i], { armed, rehearsal: true, markYou: true })}</div>`).join('')}
+          <span class="muted">${role}</span>${chip(s.cast[i], { armed, rehearsal: true, markYou: true, role: i })}</div>`).join('')}
       </div>`;
     }).join('')}</div>`;
   }
@@ -655,7 +698,7 @@ function rehearsalPage() {
     <div class="stack" style="gap:8px">
       <div class="row-between"><h2 class="section-head">Running order &amp; assignments</h2>
         ${armed ? '<div class="hstack"><button class="btn sm">Deal</button><button class="btn sm">Shuffle</button></div>' : ''}</div>
-      ${pillLegend}
+      ${stateLegend}
       ${grid}
     </div>`;
 }
@@ -708,11 +751,11 @@ function songsPage() {
   const armed = state.editing && isAdmin();
   const list = state.myOnly ? SONGS.filter(s => s.cast.some(c => c && c.replace(/^[~!]/, '') === YOU)) : SONGS;
 
-  /* The cast line: every role always shown, empty ones included, so the shape is constant. */
-  const castLine = s => `<div class="hstack" style="gap:5px">
-    ${ROLES.map((role, i) => `<span class="hstack" style="gap:4px">
-      <span class="gb-label">${role.split(' ')[0]}</span>${chip(s.cast[i], { armed, markYou: true })}
-    </span>`).join('')}</div>`;
+  /* Every role always rendered in ROLES order, empty ones included: fixed position plus
+     hue identifies the role, so no pill has to carry its own label. */
+  const castLine = s => `<div class="castline">
+    ${ROLES.map((role, i) => chip(s.cast[i], { armed, markYou: true, role: i, showEmpty: true })).join('')}
+  </div>`;
 
   const body = isPhone() ? `
     <div class="songcards">${list.map(s => `
@@ -726,29 +769,33 @@ function songsPage() {
           <button class="btn sm icon">+</button><button class="btn sm icon">▶</button>
           <span class="muted" style="font-size:12px">${s.recs} recordings</span></div>
       </div>`).join('')}</div>`
-    : `<div class="scroll-x"><table class="gb">
-      <thead><tr><th class="num">#</th><th>Song</th><th>Artist</th><th class="num">Length</th>
-        <th>Recordings</th><th>Latest note</th><th></th></tr></thead>
+    /* Desktop: cast moves up into a column of its own, and the note takes the full-width
+       row underneath where prose has somewhere to go. Songs with no note get no row. */
+    : `<div class="scroll-x"><table class="gb songs">
+      <thead><tr><th class="num">#</th><th>Song</th><th>Cast</th>
+        <th class="num">Length</th><th>Recordings</th><th></th></tr></thead>
       <tbody>${list.map(s => `
-        <tr style="border-bottom:0">
+        <tr ${s.note ? 'style="border-bottom:0"' : ''}>
           <td class="num">${armed ? '⠿ ' : ''}${s.pos}</td>
-          <td><b style="font-weight:600">${esc(s.title)}</b></td>
-          <td class="muted">${esc(s.artist)}</td>
+          <td><b style="font-weight:600">${esc(s.title)}</b>
+            <div class="muted" style="font-size:12px">${esc(s.artist)}</div></td>
+          <td>${castLine(s)}</td>
           <td class="num">${s.len}</td>
           <td><span class="hstack"><button class="btn sm icon" title="Add recording">+</button>
             <button class="btn sm icon" title="View recordings">▶</button>
             <span class="mono muted" style="font-size:11.5px">${s.recs}</span></span></td>
-          <td class="muted" style="font-size:12px;max-width:220px">${esc(s.note) || '—'}</td>
           <td><button class="btn sm" onclick="go('song')">Open</button></td>
         </tr>
-        <tr class="sub"><td></td><td colspan="6">${castLine(s)}</td></tr>`).join('')}
+        ${s.note ? `<tr class="sub"><td></td><td colspan="5">
+          <span class="gb-label">Note</span>
+          <span class="muted" style="font-size:12.5px">${esc(s.note)}</span></td></tr>` : ''}`).join('')}
       </tbody></table></div>`;
 
   return `
     ${pageHead('Songs', isAdmin() ? [{ label: state.editing ? 'Done' : 'Edit setlist' }] : null,
       `${state.semester} · ${SONGS.length} songs · 33:30`)}
     <div class="row-between">
-      ${pillLegend}
+      ${roleLegend}
       <button class="toggle" aria-pressed="${state.myOnly}" onclick="toggleMyOnly()">
         <span class="track"><span class="knob"></span></span> My songs only</button>
     </div>
@@ -771,7 +818,7 @@ function songPage() {
         ${isAdmin() ? '<span class="muted" style="font-size:11.5px">Edit assignments from a rehearsal (ADR 0009)</span>' : ''}</div>
       <div class="songlist">
         ${ROLES.map((role, i) => `<div class="item">
-          <div class="muted">${role}</div>${chip(s.cast[i], { markYou: true })}</div>`).join('')}
+          <div class="muted">${role}</div>${chip(s.cast[i], { markYou: true, role: i, showEmpty: true })}</div>`).join('')}
       </div>
       ${armed ? '<div><button class="btn sm">+ Add role requirement</button></div>' : ''}
     </div>
