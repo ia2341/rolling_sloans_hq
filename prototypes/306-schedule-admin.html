@@ -6,24 +6,28 @@
   file:// there is no Content-Type header, so without it the browser guesses windows-1252
   and every en dash and middle dot below renders as mojibake.
 
-  PROTOTYPE - throwaway. Ticket #306 on map #302.
+  PROTOTYPE v2 - throwaway. Ticket #306 on map #302.
 
-  The schedule family of admin surfaces, inside the shell #303 settled (collapsible left
-  sidebar, bottom tab bar on phone, edit-in-place, semester control in the sidebar):
+  v1 offered three variants that disagreed about where ADR 0008's Preview Fallout lives.
+  Review closed it, so v2 is a single converged build rather than an A/B/C:
 
-    - Rehearsal schedule editor   /schedule/edit/   - 9 routes, 622 lines of JS today
-    - Running Order sub-grid                        - drag reorder + slot counts
-    - Assignment grid edit mode                     - ADR 0009 scope, ADR 0007 backups
+    Fallout     NO ambient rail and NO full-page review step. The grid stays clean while
+                you edit; Save opens ONE popup that summarises what changes and what it
+                costs, and you confirm there. The rail was rejected outright ("a running
+                track of the warnings is not necessary"); the full page was rejected in
+                favour of a popup.
+    Grid        shows WHAT YOU CHANGED (struck doomed rows, re-timed badges). The popup
+                shows WHAT IT COSTS. That split is the organising rule of this build.
+    Blocked     a stale Semester is not a fallout line - it is a fact about the Semester
+                you are editing, so it renders in the LEFT SIDEBAR directly above the
+                semester panel (a strip above the semester strip on phone).
+    Phone rows  rebuilt. v1 stacked date / times / flags / actions into four full-width
+                bands per rehearsal, whether or not you were touching that row, so six
+                rehearsals took several screens. v2 is an accordion: a two-line summary
+                row that expands, one at a time.
 
-  THREE VARIANTS, and they disagree about ONE thing: where ADR 0008's Preview Fallout
-  goes. That choice drags the rest of the layout behind it, so it is the switch.
-
-    A  Live fallout rail     ambient, always visible, recomputes on every change
-    B  Review before commit  no ambient fallout; Save opens a full Review step
-    C  Fallout on the row     no central region; each consequence sits on its cause
-
-  Whichever wins also sets the EDIT-MODE CHROME every other admin surface reuses,
-  which is why #310 and #311 are blocked by this ticket.
+  Surfaces: the rehearsal schedule editor, the Running Order sub-grid, the four-bucket
+  generation diff, the assignment grid edit mode and its two-section picker.
 
   Greybox: structure only. No colour, type or theme is being proposed.
   All data synthesized - no real member data (CONTRIBUTING.md).
@@ -318,35 +322,55 @@
 
 <style>
   /* ============================================================
-     #306 additions. Everything above is #303's shell, verbatim.
+     #306 v2 additions. Everything above is #303's shell, verbatim.
      ============================================================ */
 
-  /* ---- the editor grid: one row per Rehearsal ---- */
+  /* ---- desktop: one dense row per Rehearsal ---- */
   .redit { display: grid; gap: 8px; }
   .rrow { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
-  .rrow.pastrow { background: var(--surface-2); opacity: 0.72; }
   .rrow.doomed { border-color: var(--warn); background: var(--warn-bg); }
-  .rrow.doomed .rhead > * { text-decoration: line-through; text-decoration-color: var(--warn); }
-  .rrow.doomed .rhead .btn, .rrow.doomed .rhead .rgrip { text-decoration: none; }
+  .rrow.doomed .rhead .rdate, .rrow.doomed .rhead .rtime { text-decoration: line-through;
+    text-decoration-color: var(--warn); }
   .rhead { display: grid; align-items: center; gap: 8px; padding: 9px 11px;
     grid-template-columns: 18px 118px 92px 12px 92px 1fr auto; }
   .rhead .rgrip { font-family: var(--mono); color: var(--ink-3); cursor: grab; }
   .rhead .dash { text-align: center; color: var(--ink-3); }
   .rhead .flags { display: flex; gap: 10px; align-items: center; font-size: 12.5px; color: var(--ink-2); }
   .rhead .acts { display: flex; gap: 5px; }
-  /* Phone: the seven-column head becomes a card. Date owns its own line; the two
-     times sit side by side because they are read as a pair. */
-  .frame.phone .rhead { grid-template-columns: 1fr 12px 1fr; grid-auto-rows: min-content; }
-  .frame.phone .rhead .rgrip { display: none; }
-  .frame.phone .rhead .rdate { grid-column: 1 / -1; }
-  .frame.phone .rhead .flags { grid-column: 1 / -1; }
-  .frame.phone .rhead .acts { grid-column: 1 / -1; justify-content: flex-end; }
-
   .rbody { border-top: 1px solid var(--line-soft); padding: 9px 11px; display: grid; gap: 9px; }
-  .rmeta { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--ink-3); }
   .disclose { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px;
-    color: var(--ink-2); background: none; border: 0; padding: 0; cursor: pointer; }
+    color: var(--ink-2); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: none; }
   .disclose .caret { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+
+  /* ---- phone: an accordion of two-line summary rows (v1's four stacked bands are gone) ----
+     A collapsed row states everything you scan for - when, how long, how many songs, and
+     whether you have edited it - in two lines. Editing opens one row at a time. */
+  .pcard { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+  .pcard.doomed { border-color: var(--warn); background: var(--warn-bg); }
+  .pcard.open { box-shadow: 0 1px 0 var(--line); }
+  .psum { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; align-items: center;
+    width: 100%; border: 0; background: none; padding: 9px 11px; text-align: left; cursor: pointer; }
+  .psum .pdate { font-weight: 600; font-size: 13.5px; }
+  .pcard.doomed .psum .pdate { text-decoration: line-through; text-decoration-color: var(--warn); }
+  .psum .pmeta { grid-column: 1; font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); }
+  .psum .pright { grid-row: 1 / span 2; grid-column: 2; display: flex; align-items: center; gap: 7px; }
+  .psum .caret { font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+  .pbody { border-top: 1px solid var(--line-soft); padding: 10px 11px; display: grid; gap: 10px; }
+  .pfields { display: grid; gap: 7px; }
+  .pfields .times { display: grid; grid-template-columns: 1fr 12px 1fr; gap: 6px; align-items: center; }
+  .pfields .dash { text-align: center; color: var(--ink-3); }
+  .plinks { display: grid; }
+  .plinks button, .plinks a { display: flex; align-items: center; gap: 8px; width: 100%;
+    border: 0; border-top: 1px solid var(--line-soft); background: none; padding: 9px 0;
+    font-size: 13px; cursor: pointer; color: var(--ink); text-decoration: none; }
+  .plinks .grow { flex: 1; }
+  .plinks .n { font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); }
+
+  /* a compact marker for an edited row, in both layouts */
+  .opflag { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--ink-2); border: 1px solid var(--line);
+    border-radius: 99px; padding: 0 6px; white-space: nowrap; }
+  .opflag.warn { color: var(--warn); border-color: var(--warn); }
 
   /* ---- Running Order sub-grid ---- */
   .rogrid { display: grid; gap: 3px; }
@@ -363,65 +387,48 @@
     text-transform: uppercase; color: var(--ink-3); border: 1px solid var(--line);
     border-radius: 99px; padding: 0 6px; }
   .rorow .slots { display: flex; align-items: center; gap: 4px; }
-  .rorow .stepper { display: inline-flex; border: 1px solid var(--line); border-radius: 4px;
+  .stepper { display: inline-flex; border: 1px solid var(--line); border-radius: 4px;
     overflow: hidden; background: var(--surface); }
-  .rorow .stepper button { border: 0; background: transparent; padding: 1px 7px; cursor: pointer;
+  .stepper button { border: 0; background: transparent; padding: 1px 8px; cursor: pointer;
     font-family: var(--mono); font-size: 12px; color: var(--ink-2); }
-  .rorow .stepper span { padding: 1px 8px; font-family: var(--mono); border-left: 1px solid var(--line-soft);
+  .stepper span { padding: 1px 9px; font-family: var(--mono); border-left: 1px solid var(--line-soft);
     border-right: 1px solid var(--line-soft); }
-  /* Phone: drag is unreliable enough that the move buttons are the primary affordance,
-     not a fallback. The grip stays for pointer devices only. */
-  .frame.phone .rorow { grid-template-columns: 18px 1fr auto; row-gap: 3px; }
-  .frame.phone .rorow .rgrip { display: none; }
-  .frame.phone .rorow .win { grid-column: 2 / -1; }
-  .frame.phone .rorow .slots { grid-column: 1 / -1; justify-content: flex-end; }
+  /* Phone running order: two lines, and the move buttons are the PRIMARY affordance -
+     the drag grip is hidden, since native drag does not fire on mobile at all. */
+  .frame.phone .rorow { grid-template-columns: 20px 1fr auto; row-gap: 4px; padding: 7px 8px; }
+  .frame.phone .rorow .rgrip, .frame.phone .rorow .pin { display: none; }
+  .frame.phone .rorow .win { grid-column: 2 / -1; grid-row: 2; }
+  .frame.phone .rorow .slots { grid-column: 1 / -1; grid-row: 3; justify-content: space-between; }
+  .frame.phone .rorow .pinnote { grid-column: 1 / -1; grid-row: 4; }
 
-  /* ---- fallout, in its three homes ---- */
-  .fo { display: grid; gap: 7px; }
-  .fo h4 { margin: 0; font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em;
+  /* ---- fallout: it lives in the Save popup and nowhere else ---- */
+  .fo { display: grid; gap: 11px; }
+  .fo h4 { margin: 0 0 5px; font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em;
     text-transform: uppercase; color: var(--ink-3); font-weight: 600; }
-  .fo ul { margin: 0; padding-left: 16px; display: grid; gap: 4px; font-size: 12.5px; color: var(--ink-2); }
+  .fo ul { margin: 0; padding-left: 16px; display: grid; gap: 5px; font-size: 12.5px; color: var(--ink-2); }
   .fo .loud li { color: var(--warn); }
-  .fo-block { border: 1px solid var(--warn); background: var(--warn-bg); color: var(--warn);
-    border-radius: var(--radius); padding: 9px 11px; font-size: 12.5px; display: grid; gap: 5px; }
   .fo-doom { border: 1px solid var(--warn); border-radius: var(--radius); padding: 9px 11px;
     display: grid; gap: 5px; font-size: 12.5px; }
   .fo-empty { font-size: 12.5px; color: var(--ink-3); }
+  .changelist { display: grid; }
+  .changelist li { list-style: none; display: flex; gap: 9px; align-items: baseline;
+    padding: 6px 0; border-bottom: 1px solid var(--line-soft); font-size: 12.5px; }
+  .changelist li:last-child { border-bottom: 0; }
+  .changelist .op { font-family: var(--mono); font-size: 10px; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--ink-3); width: 56px; flex-shrink: 0; }
+  .changelist .why { color: var(--ink-3); font-size: 11.5px; }
+  .modal .m-body.tall { max-height: 52vh; overflow-y: auto; }
+  .frame.phone .modal .m-body.tall { max-height: 400px; }
 
-  /* A: the rail */
-  .withrail { display: grid; grid-template-columns: 1fr 292px; gap: 18px; align-items: start; }
-  .rail-fo { position: sticky; top: 0; border: 1px solid var(--line); border-radius: var(--radius);
-    background: var(--surface-2); padding: 12px 13px; display: grid; gap: 11px; }
-  .rail-fo .stamp { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
-  /* A on phone: the rail cannot survive 390px, so it becomes a pull-up drawer whose
-     handle always states the headline count. */
-  .fo-drawer { border-top: 1px solid var(--line); background: var(--surface-2); flex-shrink: 0; }
-  .fo-drawer .handle { display: flex; align-items: center; gap: 8px; padding: 9px 13px;
-    font-size: 12.5px; cursor: pointer; width: 100%; border: 0; background: none; text-align: left; }
-  .fo-drawer .handle .grow { flex: 1; }
-  .fo-drawer .drawer-body { padding: 0 13px 13px; display: grid; gap: 11px;
-    max-height: 258px; overflow-y: auto; }
-
-  /* B: the review step */
-  .review { display: grid; gap: 16px; max-width: 720px; }
-  .diffgroup { border: 1px solid var(--line-soft); border-radius: var(--radius); overflow: hidden; }
-  .diffgroup h4 { margin: 0; padding: 8px 12px; background: var(--surface-2);
-    border-bottom: 1px solid var(--line-soft); font-size: 12px; font-weight: 600; color: var(--ink-2);
-    font-family: var(--sans); letter-spacing: 0; text-transform: none; }
-  .diffgroup ul { list-style: none; margin: 0; padding: 0; }
-  .diffgroup li { padding: 8px 12px; border-bottom: 1px solid var(--line-soft); font-size: 12.5px;
-    display: flex; gap: 9px; align-items: baseline; }
-  .diffgroup li:last-child { border-bottom: 0; }
-  .diffgroup .op { font-family: var(--mono); font-size: 10px; letter-spacing: 0.06em;
-    text-transform: uppercase; color: var(--ink-3); width: 52px; flex-shrink: 0; }
-  .diffgroup li .why { color: var(--ink-3); font-size: 11.5px; }
-
-  /* C: fallout annotated onto the row that causes it */
-  .rnote { display: flex; gap: 7px; align-items: baseline; font-size: 12px; padding: 6px 11px;
-    border-top: 1px dashed var(--line-soft); color: var(--ink-2); }
-  .rnote.loud { color: var(--warn); background: var(--warn-bg); border-top-color: var(--warn); }
-  .rnote .kind { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.06em;
-    text-transform: uppercase; flex-shrink: 0; padding-top: 1px; }
+  /* ---- the stale-Semester notice: a fact about the Semester, so it sits with it ---- */
+  .blocknote { border-top: 1px solid var(--warn); background: var(--warn-bg); color: var(--warn);
+    padding: 10px 14px; display: grid; gap: 6px; font-size: 12px; }
+  .blocknote b { font-size: 12.5px; }
+  .sidebar.rail .blocknote { padding: 10px 6px; justify-items: center; }
+  .sidebar.rail .blocknote .hide-rail { display: none; }
+  .blocknote .bang { font-family: var(--mono); font-size: 15px; }
+  .block-strip { padding: 8px 12px; font-size: 12px; display: flex; align-items: center; gap: 8px;
+    border-bottom: 1px solid var(--warn); background: var(--warn-bg); color: var(--warn); flex-shrink: 0; }
 
   /* ---- the four-bucket generation diff (#222) ---- */
   .buckets { display: grid; gap: 10px; }
@@ -453,7 +460,6 @@
     border-radius: var(--radius); background: var(--surface-2); padding: 9px 12px;
     font-size: 12.5px; color: var(--ink-2); display: grid; gap: 3px; }
   .scopebar b { color: var(--ink); }
-  /* The picker's two sections are structural, never a dismissible notice (ADR 0009). */
   .pick-sec { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
   .pick-sec > .ph { padding: 8px 12px; background: var(--surface-2);
     border-bottom: 1px solid var(--line-soft); display: grid; gap: 2px; }
@@ -467,21 +473,19 @@
   .pick-sec .plist .mm { margin-left: auto; font-size: 11px; color: var(--ink-3); }
   .pick-sec .plist .busy { margin-left: auto; font-size: 11px; color: var(--warn); }
 
-  /* misc */
   .adminonly { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.06em;
     text-transform: uppercase; color: var(--ink-3); border: 1px solid var(--line);
     border-radius: 99px; padding: 0 6px; }
   .toolstrip { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
-  .frame.phone .withrail { grid-template-columns: 1fr; }
 </style>
 
 <div class="chrome-head">
-  <h1>Rolling Sloans &mdash; schedule admin greybox</h1>
+  <h1>Rolling Sloans &mdash; schedule admin greybox v2</h1>
   <span class="tag">Prototype &middot; #306</span>
-  <p>Three variants that disagree about <b>where ADR 0008&rsquo;s Preview Fallout lives</b> &mdash;
-  the choice that drags the rest of the editor layout behind it, and the one that sets the
-  edit-mode chrome #310 and #311 will reuse. Inside #303&rsquo;s shell. Structure only.
-  All data synthesized.</p>
+  <p>One converged build, not variants: review closed the structural question. <b>No fallout rail
+  and no review page</b> &mdash; the grid stays clean while you edit and <b>Save opens one popup</b>
+  that says what changes and what it costs. The stale-Semester notice moved into the sidebar, and the
+  phone rehearsal rows were rebuilt as a condensed accordion. Structure only. All data synthesized.</p>
 </div>
 
 <div class="stage" id="stage"></div>
@@ -493,13 +497,9 @@
     <button data-vp="phone">Phone</button>
   </span>
   <span class="divider"></span>
-  <span class="seg" id="variantseg">
-    <button data-v="A">A rail</button>
-    <button data-v="B">B review</button>
-    <button data-v="C">C on-row</button>
-  </span>
-  <span class="divider"></span>
   <select id="bufsel" aria-label="Buffer state"></select>
+  <span class="divider"></span>
+  <button id="savebtn">Open the Save popup</button>
   <select id="pagesel" aria-label="Surface"></select>
 </div>
 <script>
@@ -641,17 +641,15 @@ const DIFF = {
    ============================================================ */
 const LIVE = 'Fall 2026';
 const state = {
-  page: 'sched-edit', viewport: 'desktop', variant: 'A', buffer: 'edits',
+  page: 'sched-edit', viewport: 'desktop', buffer: 'edits',
   rail: false, semester: 'Spring 2027',
-  openRow: 2, drawer: false, sheet: false,
-  modal: null,            /* 'generate' | 'destroy' | 'picker' | null */
-  reviewing: false,       /* variant B's second step */
+  openRow: -1,            /* phone accordion + desktop running-order disclosure */
+  modal: null,            /* 'save' | 'generate' | 'picker' | null */
   pickCell: null,
 };
-
 const PAGES = [
   ['sched-edit', 'Rehearsal schedule editor  /schedule/edit/'],
-  ['generate',   'Generate rehearsal dates  (modal + 4-bucket diff)'],
+  ['generate',   'Generate rehearsal dates  (staging modal)'],
   ['assign',     'Assignment grid edit mode  /schedule/<id>/assignments/'],
 ];
 const BUFFERS = [
@@ -663,45 +661,53 @@ const BUFFERS = [
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const isPhone = () => state.viewport === 'phone';
 const isDraft = () => state.semester !== LIVE;
-const V = () => state.variant;
 const dirty = () => state.buffer !== 'clean';
 const blocked = () => state.buffer === 'blocked';
 const editCount = () => dirty() ? 4 : 0;
+const doomedTakes = () => FALLOUT.doomed.reduce((a, d) => a + d.recs, 0);
 const rows = () => dirty() ? BUFFER_ROWS
   : BUFFER_ROWS.filter(r => r.op !== 'new').map(r => ({ ...r, op: 'keep', notes: [] }));
 
 function go(p) {
-  state.page = p; state.reviewing = false; state.drawer = false;
-  /* The generate surface IS the editor with its staging modal open. */
+  state.page = p; state.openRow = -1;
   state.modal = p === 'generate' ? 'generate' : null;
   render();
 }
-function setVariant(v) { state.variant = v; state.reviewing = false; render(); }
-function setBuffer(b) { state.buffer = b; if (!dirty()) state.reviewing = false; render(); }
+function setBuffer(b) { state.buffer = b; render(); }
 function toggleRail() { state.rail = !state.rail; render(); }
 function openRow(i) { state.openRow = state.openRow === i ? -1 : i; render(); }
 function openModal(m) { state.modal = m; render(); }
 function closeModal() { state.modal = null; render(); }
-function toggleDrawer() { state.drawer = !state.drawer; render(); }
-function toggleSheet() { state.sheet = !state.sheet; render(); }
-function review() { state.reviewing = true; render(); }
-function unreview() { state.reviewing = false; render(); }
 function pick(song, role) { state.pickCell = { song, role }; state.modal = 'picker'; render(); }
+/* Save never commits straight from the toolbar: it opens the popup, always. */
+function trySave() { if (!blocked() && dirty()) openModal('save'); }
 
 /* ============================================================
-   The shell, unchanged from #303 - reproduced so this file runs
-   standalone, not re-decided here.
+   The shell, from #303. The only change v2 makes to it is where
+   the stale-Semester notice lands.
    ============================================================ */
+function blockNote() {
+  /* ADR 0008 keeps a Validation Error visually separate from Fallout. A stale stamp is
+     not a consequence of your edit at all - it is a fact about the Semester you are
+     editing - so it sits with the semester control rather than anywhere near the grid. */
+  return `<div class="blocknote" role="alert">
+    <div class="hstack" style="gap:7px"><span class="bang">&#9888;</span>
+      <b class="hide-rail">Can&rsquo;t save</b></div>
+    <span class="hide-rail">Someone else saved ${esc(state.semester)} while you were editing.
+      Your edits are still here and nothing has been written.</span>
+    <div class="hide-rail"><button class="btn sm">Reload and re-apply</button></div>
+  </div>`;
+}
 function semesterPanel() {
   const draft = isDraft();
   return `<div class="sem-panel ${draft ? 'draft' : ''}">
     <div class="hide-rail stack" style="gap:6px">
       <span class="gb-label">Viewing</span>
-      <span class="field">${state.semester} &#9662;</span>
+      <span class="field">${esc(state.semester)} &#9662;</span>
       ${draft ? `<span class="warnline">Not what members see &mdash; they see ${LIVE}.</span>` : ''}
       <div class="hstack" style="gap:6px">
-        <button class="btn sm" ${dirty() ? '' : 'disabled'}>Save changes</button>
-        <button class="btn sm ${draft ? 'primary' : ''}" ${draft ? '' : 'disabled'}>Publish</button>
+        <button class="btn sm" ${dirty() && !blocked() ? '' : 'disabled'} onclick="trySave()">Save changes</button>
+        <button class="btn sm ${draft ? 'primary' : ''}" ${draft && !blocked() ? '' : 'disabled'}>Publish</button>
       </div>
     </div>
   </div>`;
@@ -721,56 +727,42 @@ function sidebar() {
       <div class="group"><span class="gb-label">Admin</span></div>
       <a href="#" onclick="return false" title="Semesters"><span class="glyph"></span><span class="label">Semesters</span></a>
     </nav>
+    ${blocked() ? blockNote() : ''}
     ${semesterPanel()}
     <div class="sem-panel"><button class="btn sm hide-rail">Log out</button></div>
   </aside>`;
 }
-
-/* ------------------------------------------------------------
-   The edit toolbar - the piece #310 and #311 inherit. It is the
-   one place the three variants differ in chrome.
-   ------------------------------------------------------------ */
 function editToolbar(what) {
   const n = editCount();
-  const label = n ? `${n} unsaved change${n === 1 ? '' : 's'}` : 'no changes yet';
-  let right;
-  if (V() === 'B') {
-    right = `<button class="btn sm">Discard</button>
-      <button class="btn sm primary" ${n ? '' : 'disabled'} onclick="review()">Review ${n || ''} change${n === 1 ? '' : 's'} &rarr;</button>`;
-  } else {
-    const dangerous = dirty() && FALLOUT.doomed.length;
-    right = `${V() === 'C' && dirty()
-      ? `<button class="btn sm" onclick="openRow(1)">&#9888; ${FALLOUT.loud.length} warnings</button>` : ''}
-      <button class="btn sm">Discard</button>
-      <button class="btn sm primary" ${n ? '' : 'disabled'}
-        onclick="${dangerous ? "openModal('destroy')" : 'void 0'}">Save changes</button>`;
-  }
   return `<div class="edit-toolbar">
-    <span class="grow">Editing ${what} &mdash; ${label}</span>${right}</div>`;
+    <span class="grow">Editing ${what} &mdash; ${n ? `${n} unsaved change${n === 1 ? '' : 's'}` : 'no changes yet'}</span>
+    <button class="btn sm">Discard</button>
+    <button class="btn sm primary" ${n && !blocked() ? '' : 'disabled'} onclick="trySave()">Save changes</button>
+  </div>`;
 }
-
 function desktopShell(body, toolbar) {
   return `<div class="framewrap"><div class="shell">
     ${sidebar()}
-    <div class="framewrap">
-      ${toolbar || ''}
+    <div class="framewrap">${toolbar || ''}
       <div class="frame-scroll"><div class="page">${body}</div></div>
     </div>
   </div>${modalLayer()}</div>`;
 }
-function phoneShell(body, toolbar, footer) {
+function phoneShell(body, toolbar) {
   return `<div class="framewrap">
     <div class="phonebar">
       <span class="title">${esc(phoneTitle())}</span>
-      <button class="btn sm" ${dirty() ? '' : 'disabled'}>Save</button>
-      <button class="btn sm ${isDraft() ? 'primary' : ''}" ${isDraft() ? '' : 'disabled'}>Publish</button>
+      <button class="btn sm" ${dirty() && !blocked() ? '' : 'disabled'} onclick="trySave()">Save</button>
+      <button class="btn sm ${isDraft() ? 'primary' : ''}" ${isDraft() && !blocked() ? '' : 'disabled'}>Publish</button>
     </div>
+    ${blocked() ? `<div class="block-strip"><span>&#9888;</span>
+      <span><b>Can&rsquo;t save</b> &mdash; someone else saved ${esc(state.semester)} while you were editing.</span>
+      <span style="flex:1"></span><button class="btn sm">Reload</button></div>` : ''}
     ${isDraft() ? `<div class="sem-strip">
-      <span>Viewing <b>${state.semester}</b> &mdash; not what members see</span>
+      <span>Viewing <b>${esc(state.semester)}</b> &mdash; not what members see</span>
       <span style="flex:1"></span><button class="btn sm">Switch</button></div>` : ''}
     ${toolbar || ''}
     <div class="frame-scroll"><div class="page">${body}</div></div>
-    ${footer || ''}
     <nav class="tabbar">
       ${[['Home', 0], ['Schedule', 1], ['Songs', 0], ['Band', 0], ['More', 0]].map(([l, cur]) =>
         `<a href="#" onclick="return false" ${cur ? 'aria-current="page"' : ''}><span class="glyph"></span>${l}</a>`).join('')}
@@ -779,41 +771,25 @@ function phoneShell(body, toolbar, footer) {
   </div>`;
 }
 function phoneTitle() {
-  if (state.reviewing) return 'Review changes';
   return ({ 'sched-edit': 'Edit schedule', generate: 'Edit schedule', assign: 'Tue 15 Sep' })[state.page];
 }
 
 /* ============================================================
-   Fallout, rendered once - three homes, one model.
-   ============================================================ */
-function blockRegion() {
-  /* ADR 0008: a Validation Error is its own region, never blended with Fallout. */
-  return `<div class="fo-block" role="alert">
-    <b>Can&rsquo;t save</b><span>${BLOCK_MSG}</span>
-    <div class="hstack"><button class="btn sm">Reload</button></div></div>`;
-}
-function falloutBody(compact) {
-  if (blocked()) return blockRegion();
-  if (!dirty()) return `<p class="fo-empty">No unsaved edits. Change something and the fallout appears here.</p>`;
-  return `<div class="fo">
-    <div class="loud"><h4>Needs your attention &middot; ${FALLOUT.loud.length}</h4>
-      <ul>${FALLOUT.loud.map(l => `<li>${esc(l)}</li>`).join('')}</ul></div>
-    <div><h4>Also true &middot; ${FALLOUT.quiet.length}</h4>
-      <ul>${FALLOUT.quiet.map(l => `<li>${esc(l)}</li>`).join('')}</ul></div>
-    ${FALLOUT.doomed.length ? `<div class="fo-doom">
-      <b>${FALLOUT.doomed.reduce((a, d) => a + d.recs, 0)} Recordings would be destroyed</b>
-      <ul style="margin:0;padding-left:16px">${FALLOUT.doomed.map(d =>
-        `<li>${esc(d.what)} &mdash; ${d.recs} take${d.recs === 1 ? '' : 's'} from ${d.uploaders} uploader${d.uploaders === 1 ? '' : 's'}</li>`).join('')}</ul>
-      <span class="muted" style="font-size:11.5px">Confirmed again on Save. Deletion happens on commit, never on preview.</span>
-    </div>` : ''}
-    ${compact ? '' : `<span class="stamp">Recomputed against saved data 2s ago &middot; nothing has been written</span>`}
-  </div>`;
-}
+   Surface 1 - the rehearsal schedule editor.
 
-/* ============================================================
-   Surface 1 - the rehearsal schedule editor
+   The organising rule of v2: the GRID shows what you changed;
+   the SAVE POPUP shows what it costs. Nothing on the grid tracks
+   warnings while you type.
    ============================================================ */
-const OPLABEL = { keep: '', retime: 'Re-timed', remove: 'Removing', new: 'New', dress: 'Dress' };
+const OPFLAG = {
+  keep: null, new: ['New', false], retime: ['Re-timed', false],
+  remove: ['Removing', true], dress: ['Dress', false],
+};
+function opFlag(r) {
+  const f = OPFLAG[r.op];
+  if (!f) return '';
+  return `<span class="opflag ${f[1] ? 'warn' : ''}">${f[0]}${r.was ? ' from ' + r.was : ''}</span>`;
+}
 
 function runningOrder(r) {
   if (r.dress) {
@@ -821,8 +797,7 @@ function runningOrder(r) {
       of its own (ADR 0003). Nothing to order here, and no Backup can be anchored to it (ADR 0007).</p>`;
   }
   if (!r.songs) {
-    return `<div class="stack" style="gap:8px">
-      <p class="fo-empty">No songs yet.</p>
+    return `<div class="stack" style="gap:8px"><p class="fo-empty">No songs yet.</p>
       <div class="toolstrip"><span class="field" style="width:170px">+ Add song&hellip; &#9662;</span></div></div>`;
   }
   const struck = r.op === 'remove';
@@ -836,44 +811,41 @@ function runningOrder(r) {
           <span class="idx">${i + 1}</span>
           <span class="win">${o.start}&ndash;${o.end}</span>
           <span>${esc(s.title)}</span>
-          <span>${pinned ? '<span class="pin">Pinned &middot; recording</span>' : ''}</span>
+          <span class="pin">${pinned ? 'Pinned &middot; recording' : ''}</span>
           <span class="slots"><span class="gb-label">Slots</span>
             <span class="stepper"><button>&minus;</button><span>${pinned ? 2 : 1}</span><button>+</button></span></span>
           <span class="hstack" style="gap:3px">
-            <button class="btn sm icon">&uarr;</button><button class="btn sm icon">&darr;</button>
+            <button class="btn sm icon" aria-label="Move up">&uarr;</button>
+            <button class="btn sm icon" aria-label="Move down">&darr;</button>
             <button class="btn sm">Remove</button></span>
+          ${pinned && isPhone() ? '<span class="pinnote"><span class="opflag">Pinned &middot; carries a recording</span></span>' : ''}
         </div>`;
       }).join('')}
     </div>
     <div class="toolstrip">
       <span class="field" style="width:170px">+ Add song&hellip; &#9662;</span>
-      <button class="btn sm">Shuffle this rehearsal</button>
+      <button class="btn sm">Shuffle</button>
       <span class="muted" style="font-size:11.5px">Pinned rows hold their slot; the dealer fills around them.</span>
     </div>
   </div>`;
 }
 
-function rehearsalRow(r, i) {
+/* ---- desktop row: the dense seven-column grid, which works at this width ---- */
+function desktopRow(r, i) {
   const open = state.openRow === i;
-  const doomed = r.op === 'remove';
-  const notes = V() === 'C' && dirty() ? r.notes : [];
-  return `<div class="rrow ${doomed ? 'doomed' : ''}">
+  return `<div class="rrow ${r.op === 'remove' ? 'doomed' : ''}">
     <div class="rhead">
       <span class="rgrip">&#10287;</span>
       <span class="rdate"><span class="field mono">${r.date}</span></span>
-      <span class="field mono">${r.start}</span>
+      <span class="rtime field mono">${r.start}</span>
       <span class="dash">&ndash;</span>
-      <span class="field mono">${r.end}</span>
+      <span class="rtime field mono">${r.end}</span>
       <span class="flags">
-        <label class="toggle" aria-pressed="${r.dress}"><span class="track"><span class="knob"></span></span>Dress</label>
-        ${r.op !== 'keep' ? `<span class="adminonly">${OPLABEL[r.op]}${r.was ? ' from ' + r.was : ''}</span>` : ''}
+        <span class="toggle" aria-pressed="${r.dress}"><span class="track"><span class="knob"></span></span>Dress</span>
+        ${opFlag(r)}
       </span>
-      <span class="acts">
-        <button class="btn sm">${doomed ? 'Undo remove' : 'Remove'}</button>
-      </span>
+      <span class="acts"><button class="btn sm">${r.op === 'remove' ? 'Undo remove' : 'Remove'}</button></span>
     </div>
-    ${notes.map(([kind, text]) => `<div class="rnote ${kind}">
-      <span class="kind">${kind === 'loud' ? 'Warning' : 'Note'}</span><span>${esc(text)}</span></div>`).join('')}
     <div class="rbody">
       <div class="hstack" style="gap:14px">
         <button class="disclose" onclick="openRow(${i})">
@@ -887,9 +859,49 @@ function rehearsalRow(r, i) {
   </div>`;
 }
 
+/* ---- phone row: a two-line summary that expands. v1 stacked four full-width bands per
+       rehearsal whether or not you were touching it, so six rehearsals ran several
+       screens; here everything you scan for is on two lines and the fields are behind
+       a tap. Only one row opens at a time. ---- */
+function phoneRow(r, i) {
+  const open = state.openRow === i;
+  const meta = r.dress
+    ? `${r.start}&ndash;${r.end} &middot; Dress &middot; full setlist`
+    : `${r.start}&ndash;${r.end} &middot; ${r.songs} song${r.songs === 1 ? '' : 's'}`;
+  return `<div class="pcard ${r.op === 'remove' ? 'doomed' : ''} ${open ? 'open' : ''}">
+    <button class="psum" onclick="openRow(${i})" aria-expanded="${open}">
+      <span class="pdate">${r.dow}</span>
+      <span class="pmeta">${meta}</span>
+      <span class="pright">${opFlag(r)}<span class="caret">${open ? '&#9650;' : '&#9660;'}</span></span>
+    </button>
+    ${open ? `<div class="pbody">
+      <div class="pfields">
+        <span class="field mono">${r.date}</span>
+        <div class="times"><span class="field mono">${r.start}</span>
+          <span class="dash">&ndash;</span><span class="field mono">${r.end}</span></div>
+        <span class="toggle" aria-pressed="${r.dress}"><span class="track"><span class="knob"></span></span>Dress rehearsal</span>
+      </div>
+      <div class="plinks">
+        <button onclick="openRow(${i})"><span class="grow">Running Order</span>
+          <span class="n">${r.dress ? 'derived' : r.songs}</span><span class="caret">&#8250;</span></button>
+        <button><span class="grow">Advanced timing</span><span class="caret">&#8250;</span></button>
+        <a href="#" onclick="go('assign');return false"><span class="grow">Assignments</span><span class="caret">&#8250;</span></a>
+        <button><span class="grow" style="color:var(--warn)">${r.op === 'remove' ? 'Undo remove' : 'Remove this rehearsal'}</span></button>
+      </div>
+      ${r.dress || !r.songs ? runningOrder(r) : ''}
+    </div>` : ''}
+  </div>`;
+}
+
 function editorGrid() {
+  const list = rows();
   return `<div class="stack">
-    <div class="redit">${rows().map(rehearsalRow).join('')}</div>
+    <div class="redit">${list.map((r, i) => isPhone() ? phoneRow(r, i) : desktopRow(r, i)).join('')}</div>
+    ${isPhone() && state.openRow >= 0 && list[state.openRow] && !list[state.openRow].dress
+        && list[state.openRow].songs ? `<div class="card stack" style="gap:8px">
+      <div class="row-between"><b style="font-size:13px">Running Order &mdash; ${list[state.openRow].dow}</b>
+        <button class="btn sm" onclick="openRow(${state.openRow})">Done</button></div>
+      ${runningOrder(list[state.openRow])}</div>` : ''}
     <div class="toolstrip">
       <button class="btn">+ Add rehearsal</button>
       <button class="btn" onclick="openModal('generate')">Generate rehearsal dates&hellip;</button>
@@ -900,67 +912,68 @@ function editorGrid() {
     <details class="card" style="padding:9px 12px">
       <summary style="cursor:pointer;font-size:12.5px;color:var(--ink-2)">Past rehearsals (1) &mdash; not editable</summary>
       <ul style="margin:8px 0 0;padding-left:18px;font-size:12.5px;color:var(--ink-3)">
-        ${PAST.map(p => `<li>${p.dow} ${p.start}&ndash;${p.end}</li>`).join('')}
-      </ul>
+        ${PAST.map(p => `<li>${p.dow} ${p.start}&ndash;${p.end}</li>`).join('')}</ul>
       <p class="muted" style="font-size:11.5px;margin:6px 0 0">Generation never rewrites history, and the
       dealer never re-deals a past Rehearsal.</p>
     </details>
   </div>`;
 }
 
-/* ---- B's second step: the Review destination ---- */
-function reviewStep() {
-  const groups = [
-    ['Rehearsals', [
-      ['Re-time', 'Thu 17 Sep', '19:00&ndash;21:00 &rarr; 19:30&ndash;21:00'],
-      ['Remove', 'Tue 22 Sep', 'whole Rehearsal, with its 6 songs'],
-      ['Add', 'Sat 3 Oct', '19:00&ndash;21:00, empty Running Order'],
-    ]],
-    ['Running Order', [
-      ['Remove', 'Static Bloom on Tue 15 Sep', 'position 4'],
-    ]],
-  ];
-  return `<div class="review">
-    <div class="page-head"><h1>Review changes</h1>
-      <div class="actions"><button class="btn" onclick="unreview()">Back to editing</button></div></div>
-    <p class="muted" style="font-size:12.5px;margin:0">Nothing has been written. This ran the real save
-    inside a transaction and rolled it back (ADR 0008).</p>
-    ${blocked() ? blockRegion() : ''}
-    ${groups.map(([title, items]) => `<div class="diffgroup"><h4>${title}</h4><ul>
-      ${items.map(([op, what, why]) => `<li><span class="op">${op}</span>
-        <span><b>${esc(what)}</b> <span class="why">${why}</span></span></li>`).join('')}
-    </ul></div>`).join('')}
-    <div class="card">${falloutBody(true)}</div>
-    <div class="hstack" style="justify-content:flex-end">
-      <button class="btn" onclick="unreview()">Back</button>
-      <button class="btn primary" ${blocked() ? 'disabled' : ''}
-        onclick="openModal('destroy')">Commit 4 changes</button>
-    </div>
-  </div>`;
-}
-
 function schedEditPage() {
-  const head = `<div class="page-head">
-    <h1>Edit schedule</h1>
-    <div class="actions"><span class="muted" style="font-size:12.5px">${state.semester}</span></div>
-  </div>`;
-  if (V() === 'A') {
-    return isPhone()
-      ? head + editorGrid()
-      : head + `<div class="withrail">
-          <div>${editorGrid()}</div>
-          <aside class="rail-fo"><span class="gb-label">If you save this</span>${falloutBody()}</aside>
-        </div>`;
-  }
-  if (V() === 'B') return head + editorGrid();
-  /* C */
-  return head + `${blocked() ? blockRegion() : ''}` + editorGrid();
+  return `<div class="page-head">
+      <h1>Edit schedule</h1>
+      <div class="actions"><span class="muted" style="font-size:12.5px">${esc(state.semester)}</span></div>
+    </div>${editorGrid()}`;
 }
 
 /* ============================================================
-   Surface 2 - Generate rehearsal dates: the saved Pattern, then
-   the four-bucket diff. Applying it fills the SAME Pending
-   Buffer a hand-edit fills; it commits nothing.
+   The Save popup - the ONE place fallout appears.
+   Same shape whether or not anything is wrong; the content
+   escalates, so there is no second dialog to learn.
+   ============================================================ */
+const CHANGES = [
+  ['Re-time', 'Thu 17 Sep', '19:00&ndash;21:00 &rarr; 19:30&ndash;21:00'],
+  ['Remove', 'Tue 22 Sep', 'the whole Rehearsal, with its 6 songs'],
+  ['Add', 'Sat 3 Oct', '19:00&ndash;21:00, empty Running Order'],
+  ['Remove', 'Static Bloom', 'from Tue 15 Sep, position 4'],
+];
+function saveModal() {
+  const takes = doomedTakes();
+  return `<div class="backdrop ${isPhone() ? 'bottom' : ''}" onclick="closeModal()">
+    <div class="modal" style="${isPhone() ? '' : 'max-width:560px'}" onclick="event.stopPropagation()">
+      <div class="m-head"><h3>Save ${editCount()} changes to ${esc(state.semester)}?</h3>
+        <button class="btn sm ghost" onclick="closeModal()" aria-label="Close">&times;</button></div>
+      <div class="m-body tall">
+        <div><h4 class="gb-label" style="margin-bottom:6px">What changes</h4>
+          <ul class="changelist">${CHANGES.map(([op, what, why]) =>
+            `<li><span class="op">${op}</span><span><b>${esc(what)}</b>
+              <span class="why">${why}</span></span></li>`).join('')}</ul></div>
+        <div class="fo">
+          <div class="loud"><h4>Needs your attention &middot; ${FALLOUT.loud.length}</h4>
+            <ul>${FALLOUT.loud.map(l => `<li>${esc(l)}</li>`).join('')}</ul></div>
+          <div><h4>Also true &middot; ${FALLOUT.quiet.length}</h4>
+            <ul>${FALLOUT.quiet.map(l => `<li>${esc(l)}</li>`).join('')}</ul></div>
+          ${takes ? `<div class="fo-doom">
+            <b>${takes} Recordings are destroyed by this save</b>
+            <ul style="margin:0;padding-left:16px">${FALLOUT.doomed.map(d =>
+              `<li>${esc(d.what)} &mdash; ${d.recs} take${d.recs === 1 ? '' : 's'} from ${d.uploaders} uploader${d.uploaders === 1 ? '' : 's'}</li>`).join('')}</ul>
+            <span class="muted" style="font-size:11.5px">The files leave storage when this commits.
+            There is no undo and no export.</span></div>` : ''}
+        </div>
+        <p class="privacy">Computed by running the real save and rolling it back (ADR 0008).
+        Nothing has been written, and no file has been deleted, by opening this.</p>
+      </div>
+      <div class="m-foot">
+        <button class="btn" onclick="closeModal()">Keep editing</button>
+        <button class="btn primary" onclick="closeModal()">${takes ? 'Save anyway' : 'Save changes'}</button>
+      </div>
+    </div></div>`;
+}
+
+/* ============================================================
+   Surface 2 - Generate rehearsal dates. Applying the diff fills
+   the SAME Pending Buffer a hand-edit fills; it commits nothing,
+   so it still passes through the Save popup afterwards.
    ============================================================ */
 function patternEditor() {
   return `<div class="stack" style="gap:10px">
@@ -970,8 +983,7 @@ function patternEditor() {
         <div class="hstack" style="gap:6px">
           <span class="field" style="flex:1">${d} &#9662;</span>
           <span class="field mono">${s}</span><span class="muted">&ndash;</span>
-          <span class="field mono">${e}</span>
-          <button class="btn sm">&times;</button></div>`).join('')}
+          <span class="field mono">${e}</span><button class="btn sm">&times;</button></div>`).join('')}
       <div><button class="btn sm">+ Add a weekly time</button></div>
     </div>
     <div class="hstack" style="gap:6px">
@@ -986,19 +998,17 @@ function patternEditor() {
   </div>`;
 }
 function bucketList() {
-  const b = (title, n, inner) => `<div class="bucket"><div class="bh">${title} <span class="n">${n}</span></div>${inner}</div>`;
+  const b = (t, n, inner) => `<div class="bucket"><div class="bh">${t} <span class="n">${n}</span></div>${inner}</div>`;
   return `<div class="buckets">
     ${b('Create', DIFF.creates.length, `<ul>${DIFF.creates.map(c =>
       `<li><span class="box ${c.on ? 'on' : ''}"></span><span>${c.when}</span></li>`).join('')}</ul>`)}
     ${b('Keep', DIFF.keeps.length, `<ul>${DIFF.keeps.map(k =>
       `<li><span class="box off"></span><span class="muted">${k}</span></li>`).join('')}</ul>`)}
     ${b('Re-time', DIFF.retimes.length, `<ul>${DIFF.retimes.map(r =>
-      `<li><span class="box ${r.on ? 'on' : ''}"></span>
-        <span>${r.when}: ${r.from} &rarr; ${r.to}</span>
+      `<li><span class="box ${r.on ? 'on' : ''}"></span><span>${r.when}: ${r.from} &rarr; ${r.to}</span>
         <span class="blast">${r.songs} scheduled songs, ${r.conflicts} member conflict</span></li>`).join('')}</ul>`)}
     ${b('Orphaned', DIFF.orphans.length, `<ul>${DIFF.orphans.map(o =>
-      `<li class="${o.locked ? 'locked' : ''}"><span class="box ${o.on ? 'on' : ''}"></span>
-        <span>${o.when}</span>
+      `<li class="${o.locked ? 'locked' : ''}"><span class="box ${o.on ? 'on' : ''}"></span><span>${o.when}</span>
         <span class="blast">Would lose ${o.songs} songs, ${o.conflicts} conflict, ${o.recs} recording${o.recs === 1 ? '' : 's'}${
           o.locked ? ' &mdash; <b>carries Recordings, remove it by hand from the grid instead</b>' : ''}</span></li>`).join('')}</ul>`)}
     <p class="muted" style="font-size:11.5px;margin:0">Computed against <b>saved</b> rehearsals. Any unsaved
@@ -1009,43 +1019,30 @@ function generateModal() {
   return `<div class="backdrop ${isPhone() ? 'bottom' : ''}" onclick="closeModal()">
     <div class="modal" style="${isPhone() ? '' : 'max-width:640px'}" onclick="event.stopPropagation()">
       <div class="m-head"><h3>Generate rehearsal dates</h3>
-        <button class="btn sm ghost" onclick="closeModal()">&times;</button></div>
-      <div class="m-body">
-        ${patternEditor()}
+        <button class="btn sm ghost" onclick="closeModal()" aria-label="Close">&times;</button></div>
+      <div class="m-body tall">${patternEditor()}
         <hr style="border:0;border-top:1px solid var(--line-soft);margin:2px 0">
-        <span class="gb-label">What this would do</span>
-        ${bucketList()}
-      </div>
-      <div class="m-foot">
-        <button class="btn" onclick="closeModal()">Cancel</button>
-        <button class="btn primary" onclick="closeModal()">Apply ticked to the grid</button>
-      </div>
+        <span class="gb-label">What this would do</span>${bucketList()}</div>
+      <div class="m-foot"><button class="btn" onclick="closeModal()">Cancel</button>
+        <button class="btn primary" onclick="closeModal()">Apply ticked to the grid</button></div>
     </div></div>`;
 }
 
 /* ============================================================
    Surface 3 - assignment grid edit mode, for ONE Rehearsal.
-   Running order and assignments were merged into one table for
-   reading (#303). Under editing they cannot both be live: a
-   reorder moves start times, which moves which ConflictWindows
-   overlap, which is exactly what the loud tier is computed from.
-   So the order column is read-only here and links back.
    ============================================================ */
 function scopeBar() {
-  return `<div class="scopebar">
-    <b>Editing standing assignments.</b>
+  return `<div class="scopebar"><b>Editing standing assignments.</b>
     <span>A change here applies to <b>every rehearsal and the concert</b>, not just this evening
-    (ADR 0009). To cover one evening only, add a <b>Backup</b> from the same picker.</span>
-  </div>`;
+    (ADR 0009). To cover one evening only, add a <b>Backup</b> from the same picker.</span></div>`;
 }
 function assignChip(name, kind) {
   const cls = kind === 'backup' ? 'chip backup' : kind === 'conflict' ? 'chip conflict'
     : kind === 'mismatch' ? 'chip mismatch' : 'chip';
   return `<span class="${cls}"><span class="rdot"></span>${esc(name)}${
     kind === 'backup' ? ' <span class="tagm">backup</span>' : ''}${
-    kind === 'conflict' ? ' <span class="tagm">away</span>' : ''}<button class="x">&times;</button></span>`;
+    kind === 'conflict' ? ' <span class="tagm">away</span>' : ''}<button class="x" aria-label="Remove">&times;</button></span>`;
 }
-/* kinds: '' assigned | 'backup' | 'conflict' | 'mismatch' | null unfilled */
 const AGRID = [
   { start: '19:00', song: 0, cells: [['Avery Cho', ''], ['Marcus Vale', ''], ['Priya Raman', ''], ['Dani Okafor', ''], ['Nina Restrepo', '']] },
   { start: '19:24', song: 1, cells: [['Sam Aterlay', ''], ['Theo Lindqvist', ''], null, ['Dani Okafor', ''], ['Nina Restrepo', 'conflict']] },
@@ -1058,15 +1055,13 @@ function assignDesktop() {
     <thead><tr><th class="num">Start</th><th>Song</th>
       ${ROLES.map((r, i) => `<th class="rolecol" style="--rc:var(--role-${i})">${r}</th>`).join('')}</tr></thead>
     <tbody>${AGRID.map((row, ri) => `<tr>
-      <td class="num muted">${row.start}</td>
-      <td><b>${esc(SONGS[row.song].title)}</b></td>
+      <td class="num muted">${row.start}</td><td><b>${esc(SONGS[row.song].title)}</b></td>
       ${row.cells.map((c, ci) => `<td class="cell" style="--rc:var(--role-${ci})"><div class="cellwrap">
         ${c ? assignChip(c[0], c[1]) : ''}
         <button class="addcell" onclick="pick(${ri},${ci})">+</button></div></td>`).join('')}
     </tr>`).join('')}</tbody></table></div>`;
 }
 function assignPhone() {
-  /* #303's per-song cards, with roles as rows - the only shape that survives 390px. */
   return `<div class="songcards">${AGRID.map((row, ri) => `<div class="card">
     <div class="row-between"><b>${esc(SONGS[row.song].title)}</b>
       <span class="mono muted" style="font-size:11.5px">${row.start}</span></div>
@@ -1080,7 +1075,7 @@ function assignPhone() {
 function assignPage() {
   return `<div class="stack">
     <div class="page-head"><h1>Tue 15 Sep &mdash; assignments</h1>
-      <div class="actions"><button class="btn sm">19:00&ndash;21:00</button></div></div>
+      <div class="actions"><span class="btn sm">19:00&ndash;21:00</span></div></div>
     ${scopeBar()}
     <div class="row-between">
       <span class="legend">${ROLES.map((r, i) =>
@@ -1089,13 +1084,6 @@ function assignPage() {
         <span class="caret">&rarr;</span>Reorder in the schedule editor</a>
     </div>
     ${isPhone() ? assignPhone() : assignDesktop()}
-    ${V() === 'A' && !isPhone() ? `<aside class="rail-fo" style="position:static">
-        <span class="gb-label">If you save this</span>${falloutBody(true)}</aside>` : ''}
-    ${V() === 'C' ? `<div class="card"><div class="fo"><div class="loud">
-      <h4>On this grid</h4><ul>
-        <li>Nina Restrepo is assigned Keys on Riverbend and is away for its 19:24 slot.</li>
-        <li>Avery Cho is assigned Keys on Marigold but has not declared Keys.</li>
-      </ul></div></div></div>` : ''}
     <p class="muted" style="font-size:11.5px;margin:0">A past Rehearsal&rsquo;s grid is read-only, and the
     Dress Rehearsal is the backstop. Adding a Role column here writes no Role Requirement.</p>
   </div>`;
@@ -1113,8 +1101,8 @@ function pickerModal() {
   return `<div class="backdrop ${isPhone() ? 'bottom' : ''}" onclick="closeModal()">
     <div class="modal" onclick="event.stopPropagation()">
       <div class="m-head"><h3>${esc(roleName)} on ${esc(songName)}</h3>
-        <button class="btn sm ghost" onclick="closeModal()">&times;</button></div>
-      <div class="m-body">
+        <button class="btn sm ghost" onclick="closeModal()" aria-label="Close">&times;</button></div>
+      <div class="m-body tall">
         <div class="pick-sec">
           <div class="ph"><b>Assigned</b><span class="scope">Every rehearsal + concert</span></div>
           ${list(declared, false)}
@@ -1130,150 +1118,87 @@ function pickerModal() {
     </div></div>`;
 }
 
-/* ---- the one destructive confirmation, fired only when Recordings would die ---- */
-function destroyModal() {
-  const n = FALLOUT.doomed.reduce((a, d) => a + d.recs, 0);
-  return `<div class="backdrop ${isPhone() ? 'bottom' : ''}" onclick="closeModal()">
-    <div class="modal" onclick="event.stopPropagation()">
-      <div class="m-head"><h3>Save destroys ${n} Recordings</h3></div>
-      <div class="m-body">
-        <div class="fo-doom">${FALLOUT.doomed.map(d =>
-          `<div><b>${esc(d.what)}</b> &mdash; ${d.recs} take${d.recs === 1 ? '' : 's'} from ${d.uploaders} uploader${d.uploaders === 1 ? '' : 's'}</div>`).join('')}</div>
-        <p style="margin:0;font-size:12.5px;color:var(--ink-2)">The files are deleted from storage when this
-        commits. There is no undo and no export.</p>
-      </div>
-      <div class="m-foot">
-        <button class="btn" onclick="closeModal()">Cancel</button>
-        <button class="btn primary" onclick="closeModal()">Save anyway</button>
-      </div>
-    </div></div>`;
-}
 function modalLayer() {
+  if (state.modal === 'save') return saveModal();
   if (state.modal === 'generate') return generateModal();
   if (state.modal === 'picker') return pickerModal();
-  if (state.modal === 'destroy') return destroyModal();
   return '';
-}
-
-/* ---- A on phone: the rail becomes a pull-up drawer ---- */
-function falloutDrawer() {
-  if (V() !== 'A' || !isPhone()) return '';
-  const n = blocked() ? 0 : FALLOUT.loud.length;
-  const head = blocked() ? 'Can&rsquo;t save &mdash; stale' : dirty()
-    ? `${n} thing${n === 1 ? '' : 's'} need${n === 1 ? 's' : ''} attention` : 'No unsaved edits';
-  return `<div class="fo-drawer">
-    <button class="handle" onclick="toggleDrawer()">
-      <span class="caret mono">${state.drawer ? '&#9662;' : '&#9652;'}</span>
-      <span class="grow"><b>If you save this</b> &middot; ${head}</span></button>
-    ${state.drawer ? `<div class="drawer-body">${falloutBody(true)}</div>` : ''}</div>`;
 }
 
 /* ============================================================
    Render
    ============================================================ */
-const BODIES = {
-  'sched-edit': schedEditPage,
-  generate: schedEditPage,
-  assign: assignPage,
-};
-
+const BODIES = { 'sched-edit': schedEditPage, generate: schedEditPage, assign: assignPage };
 function render() {
   const what = state.page === 'assign' ? 'assignments' : 'schedule';
-  const body = (V() === 'B' && state.reviewing) ? reviewStep() : BODIES[state.page]();
-  const toolbar = (V() === 'B' && state.reviewing) ? '' : editToolbar(what);
+  const body = BODIES[state.page]();
+  const toolbar = editToolbar(what);
   document.getElementById('stage').innerHTML =
-    `<div class="frame ${state.viewport}">${isPhone()
-      ? phoneShell(body, toolbar, falloutDrawer())
-      : desktopShell(body, toolbar)}</div>`;
+    `<div class="frame ${state.viewport}">${isPhone() ? phoneShell(body, toolbar) : desktopShell(body, toolbar)}</div>`;
   renderVerdict();
   syncChrome();
 }
 
-const NOTES = {
-  A: {
-    name: 'Live fallout rail',
-    what: 'Fallout is ambient: a sticky rail beside the grid that recomputes on every change. On phone it becomes a pull-up drawer whose handle always states the headline count.',
-    for: ['You never save blind - the consequences are on screen the whole time you are editing.',
-          'Matches what the code already does: a debounced POST to the preview sibling, rendering the same partial.',
-          'The Validation Error region sits in the rail too, but visually separate from Fallout, as ADR 0008 requires.'],
-    against: ['Costs ~290px of a dense grid on desktop, on a surface that is already the widest in the app.',
-              'A list of 6 lines with no anchor to the row that caused them - you read "Nina leaves early" and then hunt.',
-              'On phone the drawer is collapsed by default, so the guarantee quietly weakens to "one tap away".'],
-  },
-  B: {
-    name: 'Review before commit',
-    what: 'No ambient fallout at all. The toolbar’s primary button is Review, which opens a full-screen step: a diff of what you changed, then the fallout, then Commit.',
-    for: ['The grid keeps its full width - the densest surface in the app gets all of it.',
-          'Identical on phone and desktop: it is a full screen either way, so there is no second layout to design.',
-          'A deliberate gate before an irreversible save, which is what the destructive-recording case actually wants.'],
-    against: ['You edit blind. A change that breaks something is only visible after you stop editing, which is the moment you have lost the context for fixing it.',
-              'Two-step saves get muscle-memoried into Review-Commit-Review-Commit without reading.',
-              '#310 and #311 inherit a two-step save on surfaces where nothing irreversible ever happens.',
-              'A stale Semester - someone else saved while you were editing - has nowhere to appear until you reach Review. A and C say so on the grid. Flip the buffer to blocked in B and the editor looks fine.'],
-  },
-  C: {
-    name: 'Fallout on the row',
-    what: 'No central region. Each consequence is attached to the row that causes it; the toolbar carries only a count that jumps you to the first one.',
-    for: ['The one shape where a consequence and its cause are in the same place.',
-          'Costs no layout - it works at 390px and 1400px with the same markup.',
-          'Removal is legible: a doomed row is struck through and carries its own recording warning.'],
-    against: ['Fallout that belongs to no single row has nowhere to go - "11 scheduled songs change start time" is a property of the whole buffer.',
-              'A collapsed row hides its own warning. The dealer can fill a rehearsal nobody expanded, so it can warn about one nobody expanded either.',
-              'The count in the toolbar is the only global view, so "is this safe to save" needs a scroll.'],
-  },
-};
 function renderVerdict() {
-  const n = NOTES[V()];
   document.getElementById('verdict').innerHTML = `
-    <h2>Variant ${V()} &mdash; ${n.name}</h2>
-    <p style="margin:0 0 12px;color:var(--ink-2);font-size:13px">${n.what}</p>
     <div class="cols">
-      <div><h2>Argues for</h2><ul>${n.for.map(x => `<li>${x}</li>`).join('')}</ul></div>
-      <div><h2>Argues against</h2><ul>${n.against.map(x => `<li>${x}</li>`).join('')}</ul></div>
-      <div><h2>Same in all three</h2><ul>
-        <li><b>Edit-in-place</b> - the sticky dark toolbar states what is being edited and how many changes are pending. This is the chrome #310 and #311 inherit.</li>
-        <li><b>Validation Error is its own region</b>, never blended with Fallout (ADR 0008). Flip the buffer to <i>blocked</i> to see it.</li>
-        <li><b>One destructive confirmation</b>, fired only when Recordings would die - never as a generic "are you sure".</li>
-        <li><b>Generation is staged</b>: the four-bucket diff fills the same Pending Buffer a hand-edit fills and commits nothing. An orphan carrying Recordings cannot be ticked.</li>
-        <li><b>Pinned running-order rows</b> are marked and hold their slot; the dealer fills around them.</li>
-        <li><b>The picker&rsquo;s two sections are structural</b> - Assigned (every rehearsal + concert) and Backup (this rehearsal only) - not a dismissible notice.</li>
+      <div><h2>Settled by this review</h2><ul>
+        <li><b>No fallout rail.</b> A running track of the warnings beside the grid was rejected as
+        unnecessary, and it cost ~290px of the widest surface in the app.</li>
+        <li><b>A popup, not a page.</b> Save opens one dialog that names what changes and what it costs,
+        then commits. The full-page review step is gone.</li>
+        <li><b>One dialog, escalating content.</b> The same popup covers a harmless save and a save that
+        destroys Recordings &mdash; the doomed block appears and the button becomes <i>Save anyway</i>.
+        There is no separate destructive dialog to learn.</li>
+        <li><b>The stale-Semester notice moved to the sidebar</b>, above the semester panel. It is not a
+        consequence of your edit; it is a fact about the Semester you are editing, so it belongs with the
+        control that names it. On phone it is a strip above the semester strip.</li>
+        <li><b>Phone rehearsal rows rebuilt.</b> v1 stacked date, times, flags and actions into four
+        full-width bands per rehearsal whether or not you were touching that row, so six rehearsals took
+        several screens. Now a collapsed row is two lines &mdash; when, how long, how many songs, and
+        whether you have edited it &mdash; with the fields one tap away and one row open at a time.</li>
+      </ul></div>
+      <div><h2>The rule that fell out of it</h2><ul>
+        <li><b>The grid shows what you changed. The popup shows what it costs.</b> That is the whole
+        division, and it is what #310 and #311 inherit. A struck-through row and a <i>Re-timed</i> badge are
+        the edit itself, so they stay on the grid; &ldquo;Nina leaves before Riverbend now starts&rdquo; is a
+        consequence, so it waits for Save.</li>
+        <li><b>The debounced preview fetch goes away.</b> With no ambient region to feed, the preview endpoint
+        is called once, when the popup opens, rather than on every keystroke. Same endpoint, far less traffic.</li>
+        <li><b>Everything still holds:</b> Validation Error stays a separate region from Fallout (ADR 0008);
+        generation is staged into the same Pending Buffer and commits nothing; an orphan carrying Recordings
+        cannot be ticked; pinned rows hold their slot (#223); the picker keeps its two labelled sections
+        (ADR 0009); the Dress Rehearsal has no Running Order and no Backup anchor (ADR 0003, 0007).</li>
+        <li><b>Nothing needs SortableJS to function.</b> Every reorder has explicit up/down buttons, and on
+        phone those are the primary affordance with the drag grip hidden.</li>
       </ul></div>
     </div>
-    <h2 style="margin-top:6px">The finding this build forced</h2>
+    <h2 style="margin-top:6px">Still open &mdash; one call left on this ticket</h2>
     <ul>
       <li><b>Running order and assignments cannot both be editable at once.</b> #303 merged them into one
       table for reading, keyed by start time. But a reorder moves start times, which moves which
-      ConflictWindows overlap a slot - and that overlap is exactly what the loud tier is computed from. Editing
-      both live would compute availability against a moving target. So each surface shows the other read-only
-      and links across: the assignment grid states the order it is reasoning about, the schedule editor links out
-      to assignments.</li>
-      <li><b>Nothing here needs SortableJS to function.</b> Every reorder has explicit up/down buttons, and on
-      phone those are the primary affordance with the drag grip hidden. Drag is the accelerator, not the mechanism.</li>
+      <code>ConflictWindow</code>s overlap a slot &mdash; and that overlap is exactly what the loud tier is
+      computed from, so editing both live would compute availability against a moving target. This build
+      keeps them separate, each linking to the other. That is a revision to #303&rsquo;s merge, scoped to
+      edit mode, and it needs your nod before this ticket closes.</li>
     </ul>`;
 }
-
 function syncChrome() {
   document.querySelectorAll('#viewportseg button').forEach(b =>
     b.setAttribute('aria-pressed', String(b.dataset.vp === state.viewport)));
-  document.querySelectorAll('#variantseg button').forEach(b =>
-    b.setAttribute('aria-pressed', String(b.dataset.v === state.variant)));
   document.getElementById('pagesel').value = state.page;
   document.getElementById('bufsel').value = state.buffer;
+  document.getElementById('savebtn').disabled = !dirty() || blocked();
 }
 
 document.getElementById('pagesel').innerHTML = PAGES.map(([k, l]) => `<option value="${k}">${l}</option>`).join('');
 document.getElementById('bufsel').innerHTML = BUFFERS.map(([k, l]) => `<option value="${k}">${l}</option>`).join('');
 document.getElementById('pagesel').onchange = e => go(e.target.value);
 document.getElementById('bufsel').onchange = e => setBuffer(e.target.value);
+document.getElementById('savebtn').onclick = () => trySave();
 document.querySelectorAll('#viewportseg button').forEach(b =>
-  b.onclick = () => { state.viewport = b.dataset.vp; state.drawer = false; render(); });
-document.querySelectorAll('#variantseg button').forEach(b => b.onclick = () => setVariant(b.dataset.v));
-document.addEventListener('keydown', e => {
-  if (/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName) || document.activeElement.isContentEditable) return;
-  const ks = ['A', 'B', 'C'];
-  if (e.key === 'ArrowRight') setVariant(ks[(ks.indexOf(V()) + 1) % 3]);
-  if (e.key === 'ArrowLeft') setVariant(ks[(ks.indexOf(V()) + 2) % 3]);
-});
+  b.onclick = () => { state.viewport = b.dataset.vp; state.openRow = -1; render(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && state.modal) closeModal(); });
 
 render();
 </script>
