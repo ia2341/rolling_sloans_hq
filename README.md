@@ -38,6 +38,15 @@ python manage.py migrate
 python manage.py runserver
 ```
 
+Local dev does not need a live Resend key. With `DJANGO_DEBUG=True`, outbound
+email defaults to Django's console backend, so inviting a member prints the
+message — set-password link included — to the runserver terminal, and the
+invite → set password → profile flow can be walked end to end offline. Set
+`DJANGO_EMAIL_BACKEND` to override that locally (`.env.example` has the
+Resend value commented out ready to uncomment). With `DJANGO_DEBUG=False` the
+Resend backend is pinned and `DJANGO_EMAIL_BACKEND` is ignored, so nothing
+can quietly divert a real member's invite in production.
+
 ## Tests
 
 ```bash

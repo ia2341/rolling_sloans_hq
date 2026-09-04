@@ -16,6 +16,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 BASE_ENV = {
     'DJANGO_SECRET_KEY': 'test-secret-key-not-used-anywhere-real',
+    # DEBUG is pinned rather than inherited: EMAIL_BACKEND now depends on it,
+    # so a developer's own DJANGO_DEBUG=True must not leak in and change what
+    # these production-facing assertions are actually checking. SITE_URL comes
+    # along because DEBUG=False requires it.
+    'DJANGO_DEBUG': 'False',
+    'SITE_URL': 'https://example.com',
     'DJANGO_ALLOWED_HOSTS': 'example.com',
     'DATABASE_URL': 'postgres://user:password@dbhost:5432/rolling_sloans?sslmode=require',
     'AWS_ACCESS_KEY_ID': 'test-access-key-id',
@@ -47,18 +53,37 @@ print(json.dumps({
 """
 
 
-def run_settings():
+def run_settings_subprocess(env_overrides=None):
+    """
+    Load the settings module in a fresh process and capture the printed settings.
+
+    Parameters:
+        env_overrides: Optional environment values that override the shared
+            test environment. Pass an empty string to model an unconfigured
+            variable — popping the key instead would let django-environ
+            backfill it from the developer's own .env.
+
+    Returns:
+        The completed subprocess result, including exit status, stdout and stderr.
+    """
     env = os.environ.copy()
     env.update(BASE_ENV)
+    env.update(env_overrides or {})
     env['DJANGO_SETTINGS_MODULE'] = 'config.settings'
-    result = subprocess.run(
+    return subprocess.run(
         [sys.executable, '-c', PRINT_SETTINGS_SCRIPT],
         cwd=BASE_DIR,
         env=env,
         capture_output=True,
         text=True,
-        check=True,
+        check=False,
     )
+
+
+def run_settings(env_overrides=None):
+    """Load settings in a subprocess that must succeed, and return the printed values."""
+    result = run_settings_subprocess(env_overrides)
+    result.check_returncode()
     return json.loads(result.stdout)
 
 
@@ -119,6 +144,53 @@ class EmailBackendTests(unittest.TestCase):
         self.assertEqual(self.values['DEFAULT_FROM_EMAIL'], 'noreply@example.com')
 
 
+class DevEmailBackendTests(unittest.TestCase):
+    """The local-dev escape from a live Resend key (issue #299)."""
+
+    def test_console_backend_is_the_default_when_debug(self):
+        """With DEBUG=True the invite email prints to the runserver terminal rather than calling Resend."""
+        values = run_settings({'DJANGO_DEBUG': 'True'})
+
+        self.assertEqual(
+            values['EMAIL_BACKEND'],
+            'django.core.mail.backends.console.EmailBackend',
+        )
+
+    def test_settings_load_when_debug_and_no_resend_key(self):
+        """A fresh dev checkout with no RESEND_API_KEY at all must still boot."""
+        values = run_settings({'DJANGO_DEBUG': 'True', 'RESEND_API_KEY': ''})
+
+        self.assertEqual(
+            values['EMAIL_BACKEND'],
+            'django.core.mail.backends.console.EmailBackend',
+        )
+
+    def test_env_var_overrides_the_dev_default(self):
+        """A dev holding a real key can opt back into sending for real."""
+        values = run_settings({
+            'DJANGO_DEBUG': 'True',
+            'DJANGO_EMAIL_BACKEND': 'anymail.backends.resend.EmailBackend',
+        })
+
+        self.assertEqual(values['EMAIL_BACKEND'], 'anymail.backends.resend.EmailBackend')
+
+    def test_env_var_cannot_override_production(self):
+        """DJANGO_EMAIL_BACKEND is ignored when DEBUG=False, so a stray host env var can't swallow a real invite."""
+        values = run_settings({
+            'DJANGO_DEBUG': 'False',
+            'DJANGO_EMAIL_BACKEND': 'django.core.mail.backends.console.EmailBackend',
+        })
+
+        self.assertEqual(values['EMAIL_BACKEND'], 'anymail.backends.resend.EmailBackend')
+
+    def test_startup_fails_without_resend_key_when_not_debug(self):
+        """Production must fail loudly rather than boot with no way to send an invite."""
+        result = run_settings_subprocess({'DJANGO_DEBUG': 'False', 'RESEND_API_KEY': ''})
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('RESEND_API_KEY', result.stderr)
+
+
 class StorageEmailEnvExampleTests(unittest.TestCase):
     def test_declares_club_email_from(self):
         content = (BASE_DIR / '.env.example').read_text()
@@ -133,3 +205,8 @@ class StorageEmailEnvExampleTests(unittest.TestCase):
                 self.assertNotIn('@rollingsloans', value)
                 return
         self.fail('CLUB_EMAIL_FROM not found in .env.example')
+
+    def test_documents_the_dev_email_backend_override(self):
+        """.env.example must tell a developer the local-dev email option exists (issue #299)."""
+        content = (BASE_DIR / '.env.example').read_text()
+        self.assertIn('DJANGO_EMAIL_BACKEND', content)

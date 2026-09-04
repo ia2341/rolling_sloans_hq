@@ -214,12 +214,37 @@ AWS_S3_ENDPOINT_URL = env('AWS_S3_ENDPOINT_URL')
 
 # Outbound email (Resend), via django-anymail. CLUB_EMAIL_FROM is the one
 # address the club sends from; it's an env var so it's never hardcoded.
-
-EMAIL_BACKEND = 'anymail.backends.resend.EmailBackend'
+#
+# The key is required in production and optional in dev, for the same reason
+# SITE_URL is: booting without it would mean an invite that silently can't be
+# delivered, whereas a dev checkout has no business holding a live key at all.
+RESEND_API_KEY = env('RESEND_API_KEY', default=None)
+if not DEBUG and not RESEND_API_KEY:
+    raise ImproperlyConfigured(
+        'RESEND_API_KEY must be set via the environment when DJANGO_DEBUG is False.'
+    )
 ANYMAIL = {
-    'RESEND_API_KEY': env('RESEND_API_KEY'),
+    'RESEND_API_KEY': RESEND_API_KEY,
 }
 DEFAULT_FROM_EMAIL = env('CLUB_EMAIL_FROM')
+
+# Which backend actually sends (issue #299). In dev the default is Django's
+# console backend: it prints the message — set-password link included — to the
+# runserver terminal, so the invite → set password → profile flow can be
+# walked end to end without a live Resend key, which would otherwise 401 the
+# invite view. Point DJANGO_EMAIL_BACKEND at another backend to change that,
+# e.g. back to Resend on a dev machine that does hold a real key.
+#
+# Production is deliberately not overridable: EMAIL_BACKEND is pinned to
+# Resend whenever DEBUG is False, so a stray DJANGO_EMAIL_BACKEND in the host
+# environment can never turn a real member's invite into a log line.
+if DEBUG:
+    EMAIL_BACKEND = env(
+        'DJANGO_EMAIL_BACKEND',
+        default='django.core.mail.backends.console.EmailBackend',
+    )
+else:
+    EMAIL_BACKEND = 'anymail.backends.resend.EmailBackend'
 
 # Base URL used to build absolute links (e.g. invite set-password links) in
 # contexts with no request object, like a signal or admin action. The

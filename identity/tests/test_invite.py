@@ -1,6 +1,8 @@
 """The invite flow: service function + set-password confirm view (issue #24)."""
 
 import re
+import sys
+from io import StringIO
 from unittest.mock import patch
 from urllib.parse import urlsplit
 
@@ -65,6 +67,30 @@ class InvitePersonTests(TestCase):
             invite_person(**args)
 
         self.assertFalse(Person.objects.filter(email=args['email']).exists())
+
+
+@override_settings(EMAIL_BACKEND='django.core.mail.backends.console.EmailBackend')
+class ConsoleBackendInviteTests(TestCase):
+    """The local-dev path (issue #299): the console backend a DEBUG=True checkout gets by default.
+
+    Django's test runner swaps in the locmem backend, so the backend a
+    developer actually runs against is never otherwise exercised. These pin
+    that an invite through it succeeds — no Resend call, so no 401 — and that
+    the set-password link reaches the terminal, which is the whole point of
+    the fallback.
+    """
+
+    def test_invite_succeeds_and_prints_the_set_password_link(self):
+        """An invite under the console backend commits the Person and writes the link to stdout."""
+        args = invite_args()
+
+        with patch.object(sys, 'stdout', new=StringIO()) as captured:
+            person = invite_person(**args)
+            printed = captured.getvalue()
+
+        self.assertTrue(Person.objects.filter(pk=person.pk).exists())
+        self.assertIn(args['email'], printed)
+        self.assertIn('set-password', extract_set_password_path(printed))
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)
