@@ -75,9 +75,10 @@ class ApplyRunningOrderTests(TestCase):
         apply_rehearsal_edits(buffer, viewing_semester=self.semester)
 
         rehearsal_song = RehearsalSong.objects.get(rehearsal=self.rehearsal, song=self.song_a)
-        # Rehearsal window is 18:00-20:00 (120 min) over 5 slots => 24 min/slot; 2 slots => 48 min.
-        self.assertEqual(rehearsal_song.start_time, time(18, 0))
-        self.assertEqual(rehearsal_song.end_time, time(18, 48))
+        # Rehearsal window is 18:00-20:00 (120 min), minus 15+15 min grace = 90 min over 5 slots
+        # => 18 min/slot, starting 15 min (setup grace) after 18:00; 2 slots => 36 min.
+        self.assertEqual(rehearsal_song.start_time, time(18, 15))
+        self.assertEqual(rehearsal_song.end_time, time(18, 51))
 
     def test_reorders_existing_rows_and_re_derives_their_times(self):
         """Submitting existing rows in a new order renumbers them contiguously and recomputes every affected row's times."""
@@ -94,8 +95,8 @@ class ApplyRunningOrderTests(TestCase):
         first.refresh_from_db()
         self.assertEqual(second.order, 1)
         self.assertEqual(first.order, 2)
-        self.assertEqual(second.start_time, time(18, 0))
-        self.assertEqual(first.start_time, time(18, 24))
+        self.assertEqual(second.start_time, time(18, 15))
+        self.assertEqual(first.start_time, time(18, 33))
 
     def test_removes_a_row_not_named_in_the_buffer(self):
         """An existing RehearsalSong the Buffer no longer names is deleted."""

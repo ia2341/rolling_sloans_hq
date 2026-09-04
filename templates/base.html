@@ -9,6 +9,10 @@
   <link rel="stylesheet" href="{% static 'vendor/pico-2.1.1.min.css' %}">
   <link rel="stylesheet" href="{% static 'css/app.css' %}">
   <script src="{% static 'vendor/htmx-2.0.10.min.js' %}" defer></script>
+  {# Alpine fires `alpine:init` in a microtask right after its own deferred script runs — before #}
+  {# any *later* deferred script executes — so an Alpine.data() registration loaded after this tag #}
+  {# never registers. Every page's component script therefore goes in this block, ahead of Alpine. #}
+  {% block alpine_components %}{% endblock %}
   <script src="{% static 'vendor/alpine-3.17.1.min.js' %}" defer></script>
   {% block head %}{% endblock %}
 </head>
