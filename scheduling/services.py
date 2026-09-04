@@ -3296,7 +3296,8 @@ def preview_rehearsal_edits(buffer: RehearsalEditBuffer, *, viewing_semester: Se
         count = len(recording_ids)
         new_start, new_end = new_times
         loud.append(
-            f"{count} recording{'' if count == 1 else 's'} on {song_title} were made against "
+            f"{count} recording{'' if count == 1 else 's'} on {song_title} "
+            f"{'was' if count == 1 else 'were'} made against "
             f'{_format_slot(old_start, old_end)}, now {_format_slot(new_start, new_end)}.'
         )
 

@@ -767,6 +767,23 @@ class ScheduleEditPreviewViewTests(TestCase):
             models_to_check=[Rehearsal, Recording], semester=semester,
         )
 
+    def test_an_invalid_running_order_row_surfaces_its_own_field_error(self):
+        """A songs-formset row with an invalid field (slot_count below its min_value) reports that row's own error, not just non-form errors."""
+        semester = SemesterFactory(default_song_slot_count=5)
+        rehearsal = RehearsalFactory(semester=semester, date=TOMORROW, start_time=time(18, 0), end_time=time(20, 0))
+        song = SongFactory(semester=semester, position=1)
+        admin_client(self)
+        data = formset_data([rehearsal], running_order=[
+            {'rehearsal_row_key': 'rehearsal-0', 'song_id': song.pk, 'slot_count': 0},
+        ])
+
+        response = self.client.post(reverse('scheduling:schedule-edit-preview'), data)
+
+        self.assertIsNone(response.context['fallout'])
+        self.assertTrue(
+            any('Running Order row 1' in error for error in response.context['formset_errors']),
+        )
+
     def test_is_forbidden_for_a_non_admin(self):
         """A logged-in non-admin's POST to the preview endpoint returns 403."""
         member_client(self)

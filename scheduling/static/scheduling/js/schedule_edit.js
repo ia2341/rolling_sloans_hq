@@ -14,6 +14,7 @@ document.addEventListener('alpine:init', () => {
     deleteError: '',
     sortables: [],
     falloutTimer: null,
+    falloutRequestId: 0,
 
     init() {
       this.sortables.forEach((sortable) => sortable.destroy());
@@ -88,6 +89,7 @@ document.addEventListener('alpine:init', () => {
       const checkbox = row.querySelector('.schedule-edit-delete-checkbox-wrapper input');
       checkbox.checked = !checkbox.checked;
       this.reindexRehearsalRow(row);
+      this.requestFallout();
     },
 
     reindexRehearsalRow(row) {
@@ -102,24 +104,31 @@ document.addEventListener('alpine:init', () => {
 
     // A pending Dress flag (issue #221) strikes every Running Order row this Rehearsal currently shows
     // and collapses the sub-grid to a read-only ADR-0003 note naming how many it removes -- un-checking
-    // the flag only un-collapses the note; it never restores the struck rows (Un-flagging simply leaves
-    // the rehearsal empty, per the spec -- reversing the toggle needs no ceremony beyond that).
+    // the flag restores only the rows this same toggle struck (tagged `running-order-row-dress-struck`),
+    // leaving any row the admin had already, separately struck by hand exactly as they left it.
     toggleDressCollapse(event) {
       const checkbox = event.target.closest('.schedule-edit-field-dress').querySelector('input[type=checkbox]');
       const row = event.target.closest('.schedule-edit-row');
       const subGrid = row.querySelector('.running-order-sub-grid');
       const note = row.querySelector('.running-order-dress-note');
+      const rowsContainer = subGrid.querySelector('.running-order-rows');
       if (!checkbox.checked) {
+        Array.from(rowsContainer.querySelectorAll('.running-order-row.running-order-row-dress-struck')).forEach((songRow) => {
+          songRow.classList.remove('running-order-row-dress-struck');
+          songRow.querySelector('.running-order-delete-checkbox-wrapper input').checked = false;
+        });
+        this.reindex(rowsContainer);
         subGrid.hidden = false;
         note.style.display = 'none';
+        this.requestFallout();
         return;
       }
-      const rowsContainer = subGrid.querySelector('.running-order-rows');
       let removedCount = 0;
       Array.from(rowsContainer.querySelectorAll('.running-order-row')).forEach((songRow) => {
         const songCheckbox = songRow.querySelector('.running-order-delete-checkbox-wrapper input');
         if (!songCheckbox.checked) {
           songCheckbox.checked = true;
+          songRow.classList.add('running-order-row-dress-struck');
           removedCount += 1;
         }
       });
@@ -127,6 +136,7 @@ document.addEventListener('alpine:init', () => {
       note.textContent = `Songs derive from the Setlist (ADR 0003) — this removes ${removedCount} scheduled song${removedCount === 1 ? '' : 's'}.`;
       note.style.display = '';
       subGrid.hidden = true;
+      this.requestFallout();
     },
 
     // Appends a brand-new Running Order row at the next never-before-used formset slot, into the
@@ -185,8 +195,10 @@ document.addEventListener('alpine:init', () => {
       const row = event.target.closest('.running-order-row');
       const checkbox = row.querySelector('.running-order-delete-checkbox-wrapper input');
       checkbox.checked = !checkbox.checked;
+      row.classList.remove('running-order-row-dress-struck');
       this.reindex(row.parentElement);
       this.refreshAddSongOptions(row.parentElement);
+      this.requestFallout();
     },
 
     // Recomputes one Rehearsal's Running Order '#' column from its own rows container's current DOM
@@ -248,7 +260,11 @@ document.addEventListener('alpine:init', () => {
       this.falloutTimer = setTimeout(() => this.fetchFallout(), 400);
     },
 
+    // Guards against an older request's response overwriting a newer one -- fetches race under a 400ms
+    // debounce whenever the network is slow, so only the response matching the latest requestId that was
+    // still current when it started may render (a superseded request's response is simply dropped).
     async fetchFallout() {
+      const requestId = ++this.falloutRequestId;
       const form = document.getElementById('schedule-edit-form');
       const csrfToken = form.querySelector('[name=csrfmiddlewaretoken]').value;
       const body = new FormData(form);
@@ -261,7 +277,21 @@ document.addEventListener('alpine:init', () => {
       if (!response.ok) {
         return;
       }
-      document.getElementById('schedule-fallout').innerHTML = await response.text();
+      const html = await response.text();
+      if (requestId !== this.falloutRequestId) {
+        return;
+      }
+      document.getElementById('schedule-fallout').innerHTML = html;
+    },
+
+    // Disables (or re-enables) every field in the form -- used to freeze the buffer for the span between
+    // requesting the destructive-save confirmation and the admin acting on it, so the payload the real
+    // Save submits can never drift from the one the confirmation's counts were computed against. A
+    // disabled field is excluded from FormData/a native submit, so callers must always re-enable
+    // synchronously, in the same tick as the submit that follows, never leaving an await in between.
+    setFormFieldsDisabled(disabled) {
+      document.getElementById('schedule-edit-form').querySelectorAll('input, select, textarea, button')
+        .forEach((field) => { field.disabled = disabled; });
     },
 
     // Fetches the destructive-save confirmation (the same Preview call, rendered into a different
@@ -269,7 +299,9 @@ document.addEventListener('alpine:init', () => {
     // doomed Recording -- a failed request must never let 'Save Anyway' submit the destructive Save
     // without the admin having seen the counts, so it surfaces a retryable error instead. The dialog
     // fires once for the whole buffer, across all three destructive causes (mirrors setlist_edit.js
-    // and roster_edit.js's own confirmation gates).
+    // and roster_edit.js's own confirmation gates). The form is frozen for the whole span from here
+    // until the admin cancels or confirms, so a slow response's counts can never go stale against a
+    // buffer the admin kept editing underneath it.
     async onSubmit(event) {
       if (!this.hasPendingDeletions()) {
         return;
@@ -279,20 +311,24 @@ document.addEventListener('alpine:init', () => {
       const form = document.getElementById('schedule-edit-form');
       const csrfToken = form.querySelector('[name=csrfmiddlewaretoken]').value;
       const body = new FormData(form);
+      this.setFormFieldsDisabled(true);
       let response;
       try {
         response = await fetch(this.confirmUrl, { method: 'POST', headers: { 'X-CSRFToken': csrfToken }, body });
       } catch (error) {
+        this.setFormFieldsDisabled(false);
         this.deleteError = 'Could not reach the server to confirm this Save. Check your connection and click Save Changes again.';
         return;
       }
       if (!response.ok) {
+        this.setFormFieldsDisabled(false);
         this.deleteError = 'Could not load the Save confirmation. Click Save Changes again to retry.';
         return;
       }
       if (response.status === 204) {
         // No Recording is doomed after all -- the DOM's struck rows destroy nothing that has actual
         // audio, so the second (real) submit should proceed without a dialog the admin doesn't need.
+        this.setFormFieldsDisabled(false);
         document.getElementById('schedule-edit-form').submit();
         return;
       }
@@ -302,13 +338,16 @@ document.addEventListener('alpine:init', () => {
 
     confirmDelete() {
       this.$refs.deleteDialog.close();
-      // .submit() (unlike .requestSubmit()) fires no 'submit' event, so this bypasses onSubmit's
-      // confirmation gate on the second pass -- the admin already saw and accepted the counts.
+      // Re-enabling and submitting in the same synchronous call leaves no gap for the admin to touch
+      // the (visibly frozen) form in between -- .submit() (unlike .requestSubmit()) also fires no
+      // 'submit' event, so this bypasses onSubmit's confirmation gate on the second pass.
+      this.setFormFieldsDisabled(false);
       document.getElementById('schedule-edit-form').submit();
     },
 
     cancelDelete() {
       this.$refs.deleteDialog.close();
+      this.setFormFieldsDisabled(false);
     },
   }));
 });

@@ -595,6 +595,10 @@ class ScheduleEditPreviewView(PreviewMixin, AdminRequiredMixin, View):
             for field, field_errors in form.errors.items():
                 for message in field_errors:
                     errors.append(f'Row {index + 1} ({field}): {message}')
+        for index, form in enumerate(songs_formset.forms):
+            for field, field_errors in form.errors.items():
+                for message in field_errors:
+                    errors.append(f'Running Order row {index + 1} ({field}): {message}')
         errors.extend(formset.non_form_errors())
         errors.extend(songs_formset.non_form_errors())
         return errors

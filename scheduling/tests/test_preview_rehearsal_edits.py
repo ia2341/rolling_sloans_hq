@@ -158,7 +158,7 @@ class RehearsalEditFalloutTests(TestCase):
         fallout = self._preview(buffer)
 
         self.assertFalse(fallout.doomed_recording_groups)
-        self.assertTrue(any('Song A' in line and 'now' in line for line in fallout.loud))
+        self.assertTrue(any('1 recording on Song A was made against' in line and 'now' in line for line in fallout.loud))
 
     @mock.patch('scheduling.services._recording_storage')
     def test_a_non_dress_rehearsal_left_with_zero_songs_is_quiet_fallout(self, recording_storage):
