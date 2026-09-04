@@ -198,6 +198,22 @@ class DealRunningOrdersTests(TestCase):
                     counts[row.song_id] += 1
         self.assertLessEqual(max(counts.values()) - min(counts.values()), 1)
 
+    def test_hand_raised_slot_count_is_pinned_even_without_a_recording(self):
+        """A row with no Recording but a hand-raised slot_count is left untouched, exactly like a pinned Recording row."""
+        semester = SemesterFactory(default_song_slot_count=4)
+        songs = [SongFactory(semester=semester) for _ in range(5)]
+        rehearsal = _future_rehearsal(semester, days_out=1)
+        raised = RehearsalSongFactory(rehearsal=rehearsal, song=songs[0], order=3, slot_count=2)
+
+        for _ in range(10):
+            deal = deal_running_orders(semester)
+            dealt = next(d for d in deal.rehearsals if d.rehearsal_id == rehearsal.pk)
+            pinned_index = next(i for i, row in enumerate(dealt.rows) if row.rehearsal_song_id == raised.pk)
+            pinned_row = dealt.rows[pinned_index]
+            self.assertEqual(pinned_index, 2)  # order=3 is 1-indexed -> DOM index 2
+            self.assertEqual(pinned_row.song_id, raised.song_id)
+            self.assertEqual(pinned_row.slot_count, 2)
+
 
 class ShuffleRehearsalRunningOrderTests(TestCase):
     def test_empty_rehearsal_returns_no_rows(self):
@@ -249,3 +265,20 @@ class ShuffleRehearsalRunningOrderTests(TestCase):
             rows = shuffle_rehearsal_running_order(rehearsal)
             pinned_index = next(i for i, row in enumerate(rows) if row.rehearsal_song_id == pinned.pk)
             self.assertEqual(pinned_index, 2)
+
+    def test_hand_raised_slot_count_row_stays_at_its_own_order_without_a_recording(self):
+        """A row with no Recording but a hand-raised slot_count never moves, across repeated shuffles."""
+        semester = SemesterFactory(default_song_slot_count=6)
+        rehearsal = RehearsalFactory(semester=semester)
+        rehearsal_songs = [
+            RehearsalSongFactory(rehearsal=rehearsal, song=SongFactory(semester=semester), order=i + 1)
+            for i in range(5)
+        ]
+        raised = rehearsal_songs[3]
+        raised.slot_count = 2
+        raised.save()
+
+        for _ in range(10):
+            rows = shuffle_rehearsal_running_order(rehearsal)
+            pinned_index = next(i for i, row in enumerate(rows) if row.rehearsal_song_id == raised.pk)
+            self.assertEqual(pinned_index, 3)

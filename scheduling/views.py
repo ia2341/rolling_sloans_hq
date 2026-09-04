@@ -6,6 +6,7 @@ from collections import defaultdict
 
 from django.contrib import messages
 from django.db import transaction
+from django.db.models import Q
 from django.http import (
     Http404,
     HttpResponse,
@@ -545,7 +546,8 @@ class ScheduleEditView(AdminRequiredMixin, View):
         setlist_songs = _scoped_to_viewing_semester(Song, semester).order_by('position')
         songs_by_id = setlist_songs.in_bulk()
         pinned_rehearsal_song_ids = frozenset(
-            RehearsalSong.objects.filter(rehearsal__semester=semester, recording__isnull=False)
+            RehearsalSong.objects.filter(rehearsal__semester=semester)
+            .filter(Q(recording__isnull=False) | Q(slot_count__gt=1))
             .distinct().values_list('pk', flat=True)
         )
         songs_by_rehearsal_key = _group_running_order_forms(songs_formset, songs_by_id, pinned_rehearsal_song_ids)
@@ -968,15 +970,17 @@ def _group_running_order_forms(songs_formset, songs_by_id, pinned_rehearsal_song
     back to `initial` when the formset is unbound — so this works
     identically for a fresh GET and for a rejected POST re-render with
     every submitted value preserved. `pinned_rehearsal_song_ids` (issue
-    #223) marks a form's `has_recording` — Shuffle's client-side JS reads
-    this off the rendered row to know which it must never move.
+    #223 — Recording-bearing or hand-raised above `slot_count=1`, per
+    `_pinned_rows_by_rehearsal()`'s docstring) marks a form's `is_pinned`
+    — Shuffle's client-side JS reads this off the rendered row to know
+    which it must never move.
     """
     grouped = defaultdict(list)
     for form in songs_formset.forms:
         song_id = _parse_roster_int(form['song_id'].value())
         form.song = songs_by_id.get(song_id)
         rehearsal_song_id = _parse_roster_int(form['rehearsal_song_id'].value())
-        form.has_recording = rehearsal_song_id in pinned_rehearsal_song_ids
+        form.is_pinned = rehearsal_song_id in pinned_rehearsal_song_ids
         grouped[form['rehearsal_row_key'].value()].append(form)
     return grouped
 

@@ -3117,6 +3117,11 @@ def _apply_running_order(rehearsal: Rehearsal, rows: list[RunningOrderRow]) -> N
     """
     existing_by_id = {rehearsal_song.pk: rehearsal_song for rehearsal_song in RehearsalSong.objects.filter(rehearsal=rehearsal)}
     submitted_ids = {row.rehearsal_song_id for row in rows if row.rehearsal_song_id is not None}
+    # A row here can be Recording-bearing or manually re-slotted -- unlike `deal_running_orders()`/
+    # `shuffle_rehearsal_running_order()` (issue #223), which refuse to ever move or delete such a row,
+    # this manual path (a hand-typed Buffer, saved through apply_rehearsal_edits()) allows exactly that.
+    # That asymmetry is intentional: an admin editing the grid by hand is making a deliberate, reviewable
+    # choice a bulk generator never gets to make blind.
     removed = [rehearsal_song for pk, rehearsal_song in existing_by_id.items() if pk not in submitted_ids]
     if removed:
         delete_rehearsal_songs_with_recordings(removed)
@@ -3745,16 +3750,22 @@ def _eligible_rehearsals_for_deal(semester: Semester) -> list[Rehearsal]:
 
 
 def _pinned_rows_by_rehearsal(rehearsals: list[Rehearsal]) -> dict[int, list[RehearsalSong]]:
-    """Return `{rehearsal_id: [RehearsalSong, ...]}` for every row across `rehearsals` that carries at least one Recording (issue #223).
+    """Return `{rehearsal_id: [RehearsalSong, ...]}` for every row across `rehearsals` the dealer must leave alone (issue #223).
 
-    These are the rows the dealer refuses to delete, move or re-slot — "the
-    manual path deliberately allows what the generator refuses" over a
-    Recording-bearing row, so a bulk run can never invalidate an upload's
-    timing.
+    Two independent reasons pin a row: it carries at least one Recording
+    (so a bulk run can never invalidate an upload's timing), or its
+    `slot_count` has been hand-raised above the dealt default of 1 (a
+    dealt row is *always* `slot_count=1`, so any row that isn't is
+    necessarily a deliberate admin edit — "the generator never raises and
+    never clobbers" it, per this issue's spec). Either way, "the manual
+    path deliberately allows what the generator refuses" — an admin can
+    still delete, move or re-slot this exact row by hand through the
+    Running Order sub-grid; only the dealer treats it as untouchable.
     """
     by_rehearsal = defaultdict(list)
     rehearsal_songs = (
-        RehearsalSong.objects.filter(rehearsal__in=rehearsals, recording__isnull=False)
+        RehearsalSong.objects.filter(rehearsal__in=rehearsals)
+        .filter(Q(recording__isnull=False) | Q(slot_count__gt=1))
         .distinct().order_by('rehearsal_id', 'order')
     )
     for rehearsal_song in rehearsal_songs:
@@ -3803,12 +3814,13 @@ def deal_running_orders(semester: Semester) -> RehearsalDeal:
     and aren't already dealt into that particular slot's Rehearsal. This
     keeps every Song's final appearance count within one of every other's
     (a classic property of greedy-least-used selection) while still
-    randomizing which Song lands where. A Recording-bearing row is never a
-    candidate for this greedy fill at all — `_pinned_rows_by_rehearsal()`
-    excludes it up front, counts it toward its Song's running total from
-    the start (so the balance target already accounts for it), and
-    `_pin_and_fill()` parks it back at its own current order afterward, so
-    "the deal fills around it" rather than through it.
+    randomizing which Song lands where. A pinned row (Recording-bearing, or
+    hand-raised above `slot_count=1` — `_pinned_rows_by_rehearsal()`'s
+    docstring explains why both count) is never a candidate for this greedy
+    fill at all — it's excluded up front, counted toward its Song's running
+    total from the start (so the balance target already accounts for it),
+    and `_pin_and_fill()` parks it back at its own current order afterward,
+    so "the deal fills around it" rather than through it.
 
     Each Rehearsal's target song count is `min(remaining_slots, available_songs)`
     where `remaining_slots` is the Semester's `default_song_slot_count` minus
@@ -3890,14 +3902,18 @@ def shuffle_rehearsal_running_order(rehearsal: Rehearsal) -> list[DealtRow]:
     which is exactly why calling it can never unbalance the ±1 spread
     `deal_running_orders()` established. Returns `[]` for a Rehearsal with
     no Running Order rows at all — a no-op, not a refusal, since there is
-    nothing to shuffle and nothing an admin could be trying to fix.
+    nothing to shuffle and nothing an admin could be trying to fix. A row
+    is pinned (held at its current order, never moved) for the same two
+    reasons `_pinned_rows_by_rehearsal()` names: it carries a Recording, or
+    its `slot_count` was hand-raised above 1.
     """
     rehearsal_songs = list(RehearsalSong.objects.filter(rehearsal=rehearsal).order_by('order'))
     if not rehearsal_songs:
         return []
 
     pinned_ids = frozenset(
-        RehearsalSong.objects.filter(rehearsal=rehearsal, recording__isnull=False)
+        RehearsalSong.objects.filter(rehearsal=rehearsal)
+        .filter(Q(recording__isnull=False) | Q(slot_count__gt=1))
         .distinct().values_list('pk', flat=True)
     )
     pinned = []
