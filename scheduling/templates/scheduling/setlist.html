@@ -1,6 +1,12 @@
 {% extends "base.html" %}
 {% load static %}
 {% block title %}Setlist{% endblock %}
+{% block alpine_components %}
+{% if semester and request.user.is_admin %}
+  <script src="{% static 'vendor/sortable-1.15.7.min.js' %}" defer></script>
+  <script src="{% static 'scheduling/js/setlist_edit.js' %}" defer></script>
+{% endif %}
+{% endblock %}
 {% block content %}
 <h1>{% if semester %}{{ semester }} Setlist{% else %}Setlist{% endif %}</h1>
 
@@ -23,8 +29,4 @@
 </div>
 
 <script src="{% static 'scheduling/js/songs.js' %}" defer></script>
-{% if semester and request.user.is_admin %}
-  <script src="{% static 'vendor/sortable-1.15.7.min.js' %}" defer></script>
-  <script src="{% static 'scheduling/js/setlist_edit.js' %}" defer></script>
-{% endif %}
 {% endblock %}

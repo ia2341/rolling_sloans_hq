@@ -1,6 +1,11 @@
 {% extends "base.html" %}
 {% load static %}
 {% block title %}Band Members{% endblock %}
+{% block alpine_components %}
+{% if semester and request.user.is_admin %}
+  <script src="{% static 'scheduling/js/roster_edit.js' %}" defer></script>
+{% endif %}
+{% endblock %}
 {% block content %}
 {% for message in messages %}
   <p>{{ message }}</p>
@@ -9,7 +14,4 @@
 {% include "scheduling/_members_read.html" %}
 </div>
 
-{% if semester and request.user.is_admin %}
-  <script src="{% static 'scheduling/js/roster_edit.js' %}" defer></script>
-{% endif %}
 {% endblock %}

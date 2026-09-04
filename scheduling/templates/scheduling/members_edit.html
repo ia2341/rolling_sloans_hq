@@ -1,6 +1,9 @@
 {% extends "base.html" %}
 {% load static %}
 {% block title %}Edit Roster{% endblock %}
+{% block alpine_components %}
+  <script src="{% static 'scheduling/js/roster_edit.js' %}" defer></script>
+{% endblock %}
 {% block content %}
 {% for message in messages %}
   <p>{{ message }}</p>
@@ -9,5 +12,4 @@
 {% include "scheduling/_members_edit.html" %}
 </div>
 
-<script src="{% static 'scheduling/js/roster_edit.js' %}" defer></script>
 {% endblock %}
