@@ -7,11 +7,14 @@
 // (this file is loaded outside the htmx-swapped fragment), so Alpine's own mutation observer picks up and
 // initializes the grid whether it arrives as a full page or an htmx swap.
 document.addEventListener('alpine:init', () => {
-  Alpine.data('scheduleEdit', (confirmUrl, previewUrl, generateModalUrl) => ({
+  Alpine.data('scheduleEdit', (confirmUrl, previewUrl, generateModalUrl, dealUrl, shuffleUrlTemplate) => ({
     confirmHtml: '',
     confirmUrl,
     previewUrl,
     generateModalUrl,
+    dealUrl,
+    shuffleUrlTemplate,
+    dealError: '',
     deleteError: '',
     sortables: [],
     falloutTimer: null,
@@ -181,6 +184,152 @@ document.addEventListener('alpine:init', () => {
     afterApplyGeneration() {
       this.init();
       this.requestFallout();
+    },
+
+    // "Generate schedule" and "Re-roll" (issue #223): both call this exact same endpoint -- a fresh POST is a
+    // fresh random deal, and nothing about a deal is ever persisted between runs, so a "re-roll" needs no
+    // endpoint of its own. Fills every eligible Rehearsal's Running Order sub-grid (including one nobody has
+    // expanded) straight from the server's proposed deal; a refusal (empty setlist, no eligible Rehearsal)
+    // renders its reason in #schedule-deal-error rather than touching the buffer at all.
+    async dealSchedule() {
+      this.dealError = '';
+      const form = document.getElementById('schedule-edit-form');
+      const csrfToken = form.querySelector('[name=csrfmiddlewaretoken]').value;
+      let response;
+      try {
+        response = await fetch(this.dealUrl, { method: 'POST', headers: { 'X-CSRFToken': csrfToken } });
+      } catch (error) {
+        this.dealError = 'Could not reach the server to generate a schedule. Check your connection and try again.';
+        return;
+      }
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        this.dealError = (body && body.error) || 'Could not generate a schedule. Try again.';
+        return;
+      }
+      const body = await response.json();
+      body.rehearsals.forEach(({ rehearsal_id: rehearsalId, rows }) => {
+        const row = document.querySelector(`.schedule-edit-row[data-rehearsal-id="${rehearsalId}"]`);
+        if (!row) {
+          return;
+        }
+        this._applyRowsToSubGrid(row.querySelector('.running-order-sub-grid'), rows, { supersedeExisting: true });
+        row.querySelector('.running-order-expander').open = true;
+      });
+      this.requestFallout();
+    },
+
+    // Per-Rehearsal Shuffle (issue #223): reorders that one Rehearsal's own already-saved Running Order --
+    // never adds, removes or redeals a Song, so term-wide ±1 balance is preserved by construction. Only
+    // rendered for an already-saved Rehearsal (see _schedule_edit_row.html): a brand-new row has no saved
+    // Running Order yet for shuffle_rehearsal_running_order() to read.
+    async shuffleRehearsal(event) {
+      const row = event.target.closest('.schedule-edit-row');
+      const rehearsalId = row.dataset.rehearsalId;
+      if (!rehearsalId) {
+        return;
+      }
+      const form = document.getElementById('schedule-edit-form');
+      const csrfToken = form.querySelector('[name=csrfmiddlewaretoken]').value;
+      const url = this.shuffleUrlTemplate.replace('/0/shuffle/', `/${rehearsalId}/shuffle/`);
+      let response;
+      try {
+        response = await fetch(url, { method: 'POST', headers: { 'X-CSRFToken': csrfToken } });
+      } catch (error) {
+        return;
+      }
+      if (!response.ok) {
+        return;
+      }
+      const body = await response.json();
+      if (!body.rows.length) {
+        return;
+      }
+      this._applyRowsToSubGrid(row.querySelector('.running-order-sub-grid'), body.rows, { supersedeExisting: false });
+      this.requestFallout();
+    },
+
+    // Shared innards of dealSchedule() and shuffleRehearsal() (issue #223): walks `targetRows` (each either an
+    // existing RehearsalSong's identity to reuse, or a brand-new Song to deal in) in its exact target order,
+    // moving/inserting each row's element into that sequence -- physical DOM order is what song_slot_order's
+    // sequence saves as the final Running Order, so this is the one place that order is actually produced.
+    // `supersedeExisting` (true only for a deal, never a shuffle) marks every currently-present row this
+    // target list does NOT keep as a pending removal first, mirroring the grid's other undoable strike-through
+    // deletes -- a shuffle never marks anything, since every row it's handed is already exactly the set on
+    // screen, just reordered.
+    //
+    // A `data-pinned="true"` row (recording-bearing or hand-raised slot_count -- see _running_order_row.html)
+    // is never physically moved here, even though the server's returned position for it matches where it
+    // already sits in the saved Running Order: an admin can have dragged it somewhere else in the *unsaved*
+    // Pending Buffer before clicking Deal/Shuffle, and physically relocating it on the server's say-so would
+    // silently discard that unsaved move. It's still used as the anchor the surrounding free rows are inserted
+    // around, so the rest of the sequence still lands correctly -- only the pinned row itself stays put.
+    _applyRowsToSubGrid(subGrid, targetRows, { supersedeExisting }) {
+      const rowsContainer = subGrid.querySelector('.running-order-rows');
+      if (supersedeExisting) {
+        const keptIds = new Set(targetRows.map((row) => row.rehearsal_song_id).filter((id) => id !== null));
+        Array.from(rowsContainer.querySelectorAll('.running-order-row')).forEach((rowEl) => {
+          const rehearsalSongId = rowEl.dataset.rehearsalSongId ? Number(rowEl.dataset.rehearsalSongId) : null;
+          if (rehearsalSongId !== null && keptIds.has(rehearsalSongId)) {
+            return;
+          }
+          const checkbox = rowEl.querySelector('.running-order-delete-checkbox-wrapper input');
+          if (!checkbox.checked) {
+            checkbox.checked = true;
+            rowEl.classList.remove('running-order-row-dress-struck');
+          }
+        });
+      }
+      let insertionPoint = null;
+      targetRows.forEach((target) => {
+        const rowEl = target.rehearsal_song_id !== null
+          ? rowsContainer.querySelector(`.running-order-row[data-rehearsal-song-id="${target.rehearsal_song_id}"]`)
+          : this._createRunningOrderRow(subGrid, target.song_id, target.slot_count);
+        if (!rowEl) {
+          return;
+        }
+        if (rowEl.dataset.pinned !== 'true') {
+          if (insertionPoint) {
+            insertionPoint.after(rowEl);
+          } else {
+            rowsContainer.prepend(rowEl);
+          }
+        }
+        insertionPoint = rowEl;
+      });
+      this.reindex(rowsContainer);
+      this.refreshAddSongOptions(rowsContainer);
+    },
+
+    // Builds one brand-new (detached) Running Order row for a dealt Song at `slotCount` -- the same
+    // <template>-clone-and-reindex shape as addRunningOrderSong(), generalized to take its Song/slot_count as
+    // arguments instead of reading them off a picker <select> event (issue #223).
+    _createRunningOrderRow(subGrid, songId, slotCount) {
+      const rehearsalKey = subGrid.dataset.runningOrderFor;
+      const select = subGrid.querySelector('.running-order-add-song-select');
+      const option = select
+        ? Array.from(select.options).find((candidate) => candidate.value === String(songId))
+        : null;
+      const template = document.getElementById('running-order-empty-form-template');
+      const totalForms = this.$el.querySelector('[name="songs-TOTAL_FORMS"]');
+      const nextIndex = Number(totalForms.value);
+      const clone = template.content.cloneNode(true);
+      clone.querySelectorAll('[name]').forEach((field) => {
+        field.name = field.name.replace('__prefix__', String(nextIndex));
+      });
+      const row = clone.querySelector('.running-order-row');
+      row.dataset.songId = String(songId);
+      row.dataset.formPrefix = `songs-${nextIndex}`;
+      row.querySelector('input[name$="-rehearsal_row_key"]').value = rehearsalKey;
+      row.querySelector('input[name$="-song_id"]').value = songId;
+      row.querySelector('.running-order-order-field').value = `songs-${nextIndex}`;
+      const slotInput = row.querySelector('input[name$="-slot_count"]');
+      if (slotInput) {
+        slotInput.value = slotCount;
+      }
+      row.querySelector('.running-order-song-title').textContent = option ? (option.dataset.title || option.textContent) : '';
+      totalForms.value = String(nextIndex + 1);
+      return row;
     },
 
     toggleRehearsalDelete(event) {

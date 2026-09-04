@@ -1,4 +1,4 @@
-<div class="running-order-row" data-rehearsal-song-id="{{ form.rehearsal_song_id.value|default:'' }}" data-song-id="{{ form.song_id.value|default:'' }}" data-form-prefix="{{ form.prefix }}">
+<div class="running-order-row" data-rehearsal-song-id="{{ form.rehearsal_song_id.value|default:'' }}" data-song-id="{{ form.song_id.value|default:'' }}" data-form-prefix="{{ form.prefix }}" data-pinned="{% if form.is_pinned %}true{% else %}false{% endif %}">
   {{ form.rehearsal_song_id }}
   {{ form.rehearsal_row_key }}
   {{ form.song_id }}

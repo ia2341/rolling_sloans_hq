@@ -6,6 +6,7 @@ from collections import defaultdict
 
 from django.contrib import messages
 from django.db import transaction
+from django.db.models import Q
 from django.http import (
     Http404,
     HttpResponse,
@@ -71,8 +72,11 @@ from scheduling.services import (
     AdjudicationBuffer,
     AdjudicationEntry,
     AssignmentEditBuffer,
+    DealInfeasibleError,
+    EmptySetlistError,
     InvalidSemesterNameError,
     LiveSemesterDeletionError,
+    NoEligibleRehearsalsError,
     PastRehearsalEditError,
     RecordingUploadError,
     RehearsalEditBuffer,
@@ -115,6 +119,7 @@ from scheduling.services import (
     create_or_reactivate_role,
     create_recording_playback_url,
     create_semester,
+    deal_running_orders,
     declare_conflict,
     declared_roles_for,
     delete_semester,
@@ -146,6 +151,7 @@ from scheduling.services import (
     semester_deletion_summary,
     semester_options_for,
     set_viewing_semester,
+    shuffle_rehearsal_running_order,
     song_deletion_summaries,
     song_rehearsal_progress,
     songs_with_progress_for,
@@ -540,7 +546,12 @@ class ScheduleEditView(AdminRequiredMixin, View):
         """
         setlist_songs = _scoped_to_viewing_semester(Song, semester).order_by('position')
         songs_by_id = setlist_songs.in_bulk()
-        songs_by_rehearsal_key = _group_running_order_forms(songs_formset, songs_by_id)
+        pinned_rehearsal_song_ids = frozenset(
+            RehearsalSong.objects.filter(rehearsal__semester=semester)
+            .filter(Q(recording__isnull=False) | Q(slot_count__gt=1))
+            .distinct().values_list('pk', flat=True)
+        )
+        songs_by_rehearsal_key = _group_running_order_forms(songs_formset, songs_by_id, pinned_rehearsal_song_ids)
         for form in formset.forms:
             form.running_order_forms = songs_by_rehearsal_key.get(form.prefix, [])
         context = {
@@ -830,6 +841,73 @@ class RehearsalGenerationPreviewView(AdminRequiredMixin, View):
         return render(request, 'scheduling/_rehearsal_generation_diff.html', {'diff': diff, 'formset_errors': []})
 
 
+def _dealt_rehearsal_json(dealt_rehearsal):
+    """Serialize one `DealtRehearsal` to the JSON shape schedule_deal.js expects: {rehearsal_id, rows: [...]}."""
+    return {
+        'rehearsal_id': dealt_rehearsal.rehearsal_id,
+        'rows': [
+            {'rehearsal_song_id': row.rehearsal_song_id, 'song_id': row.song_id, 'slot_count': row.slot_count}
+            for row in dealt_rehearsal.rows
+        ],
+    }
+
+
+class ScheduleEditDealView(AdminRequiredMixin, View):
+    """`/schedule/edit/deal/`: proposes a fresh balanced Running Order deal for the viewing Semester (issue #223).
+
+    POST-only, mirroring every other Pending-Buffer-filling action on this
+    page. `deal_running_orders()` is a pure read against the *database*'s
+    current Rehearsals and setlist — not the admin's on-screen, possibly
+    unsaved Pending Buffer, exactly like `preview_rehearsal_generation()`
+    already reads the database rather than the buffer. Backs both the
+    "Generate schedule" and the whole-run "Re-roll" buttons: a re-roll is
+    simply calling this endpoint again, since a fresh call is a fresh random
+    deal and nothing here is ever persisted between runs (see
+    `RehearsalDeal`'s docstring). Renders no template — the JS applies the
+    JSON deal directly onto the existing Running Order sub-grids, including
+    ones nobody has expanded.
+    """
+
+    def post(self, request):
+        """Return the fresh deal as JSON, or a 400 naming why it was refused."""
+        semester = get_viewing_semester(request)
+        if semester is None:
+            return JsonResponse({'error': 'No Semester is being edited.'}, status=400)
+        try:
+            deal = deal_running_orders(semester)
+        except (EmptySetlistError, NoEligibleRehearsalsError, DealInfeasibleError) as error:
+            return JsonResponse({'error': str(error)}, status=400)
+        return JsonResponse({'rehearsals': [_dealt_rehearsal_json(dealt) for dealt in deal.rehearsals]})
+
+
+class ScheduleEditShuffleView(AdminRequiredMixin, View):
+    """`/schedule/edit/rehearsal/<rehearsal_id>/shuffle/`: proposes a reorder of one Rehearsal's own Running Order (issue #223).
+
+    POST-only. `rehearsal_id` is scoped to the viewing Semester exactly like
+    every other per-Rehearsal endpoint on this page (`_lock_rehearsal()`'s
+    siblings), returning 404 for a Rehearsal outside it rather than a
+    Validation Error, since there is no submitted Buffer here to reject.
+    `shuffle_rehearsal_running_order()` reads the Rehearsal's *saved*
+    RehearsalSong rows — a Rehearsal with none yet (never scheduled, or
+    dealt but not yet saved) simply gets back an empty rows list, which the
+    JS treats as a no-op rather than an error.
+    """
+
+    def post(self, request, rehearsal_id):
+        """Return the reordered rows as JSON for the named Rehearsal."""
+        semester = get_viewing_semester(request)
+        if semester is None:
+            return JsonResponse({'error': 'No Semester is being edited.'}, status=400)
+        rehearsal = get_object_or_404(Rehearsal, pk=rehearsal_id, semester=semester)
+        rows = shuffle_rehearsal_running_order(rehearsal)
+        return JsonResponse({
+            'rows': [
+                {'rehearsal_song_id': row.rehearsal_song_id, 'song_id': row.song_id, 'slot_count': row.slot_count}
+                for row in rows
+            ],
+        })
+
+
 def _running_order_initial(formset, future_rehearsals):
     """Build `RunningOrderFormSet`'s initial rows: one per existing RehearsalSong, keyed to its owning row's formset prefix (issue #220).
 
@@ -886,18 +964,24 @@ def _running_order_by_rehearsal_key(songs_formset):
     return grouped
 
 
-def _group_running_order_forms(songs_formset, songs_by_id):
+def _group_running_order_forms(songs_formset, songs_by_id, pinned_rehearsal_song_ids=frozenset()):
     """Group `songs_formset`'s forms by owning `rehearsal_row_key`, attaching each form's Song for read-only display (issue #220).
 
     Reads each field's *bound value* (`BoundField.value()`), which falls
     back to `initial` when the formset is unbound — so this works
     identically for a fresh GET and for a rejected POST re-render with
-    every submitted value preserved.
+    every submitted value preserved. `pinned_rehearsal_song_ids` (issue
+    #223 — Recording-bearing or hand-raised above `slot_count=1`, per
+    `_pinned_rows_by_rehearsal()`'s docstring) marks a form's `is_pinned`
+    — Shuffle's client-side JS reads this off the rendered row to know
+    which it must never move.
     """
     grouped = defaultdict(list)
     for form in songs_formset.forms:
         song_id = _parse_roster_int(form['song_id'].value())
         form.song = songs_by_id.get(song_id)
+        rehearsal_song_id = _parse_roster_int(form['rehearsal_song_id'].value())
+        form.is_pinned = rehearsal_song_id in pinned_rehearsal_song_ids
         grouped[form['rehearsal_row_key'].value()].append(form)
     return grouped
 
