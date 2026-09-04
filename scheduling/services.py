@@ -1372,7 +1372,7 @@ def preview_song_role_assignments(buffer: AssignmentEditBuffer, *, rehearsal, vi
     except (WrongViewingSemesterError, StaleAssignmentSemesterError) as error:
         return _blocked_assignment_fallout(str(error), is_stale=is_stale)
 
-    songs, _ = _matrix_songs(rehearsal)
+    songs, _, _ = _matrix_songs(rehearsal)
     loud, quiet = _assignment_fallout_lines(rehearsal, songs)
     return AssignmentEditFallout(is_blocked=False, block_message='', is_stale=is_stale, loud=loud, quiet=quiet)
 
