@@ -318,6 +318,7 @@ class AddRoleColumnTests(TestCase):
         self.assertEqual(SongRoleRequirement.objects.count(), requirement_count_before)
 
 
+@override_settings(SECURE_SSL_REDIRECT=False)
 class SaveAssignmentEditsViewTests(TestCase):
     @classmethod
     def setUpTestData(cls):
