@@ -53,11 +53,11 @@ class ReorderRehearsalSongsServiceTests(TestCase):
         second.refresh_from_db()
         first.refresh_from_db()
         self.assertEqual(second.order, 1)
-        self.assertEqual(second.start_time, time(18, 0))
-        self.assertEqual(second.end_time, time(18, 18))
+        self.assertEqual(second.start_time, time(18, 15))
+        self.assertEqual(second.end_time, time(18, 27))
         self.assertEqual(first.order, 2)
-        self.assertEqual(first.start_time, time(18, 18))
-        self.assertEqual(first.end_time, time(18, 54))
+        self.assertEqual(first.start_time, time(18, 27))
+        self.assertEqual(first.end_time, time(18, 51))
 
     def test_an_identity_reorder_re_derives_times_without_touching_order(self):
         """Passing the current order back re-derives times (e.g. after a Rehearsal window move) but leaves order put."""
@@ -75,8 +75,8 @@ class ReorderRehearsalSongsServiceTests(TestCase):
         second.refresh_from_db()
         self.assertEqual(first.order, 1)
         self.assertEqual(second.order, 2)
-        self.assertEqual(first.start_time, time(19, 0))
-        self.assertEqual(second.start_time, time(19, 18))
+        self.assertEqual(first.start_time, time(19, 15))
+        self.assertEqual(second.start_time, time(19, 27))
 
     def test_a_full_reversal_does_not_collide_with_the_rehearsal_order_uniqueness_constraint(self):
         """Reversing every row (the case most likely to collide mid-run) succeeds without an IntegrityError."""

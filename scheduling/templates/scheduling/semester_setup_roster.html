@@ -1,6 +1,9 @@
 {% extends "base.html" %}
 {% load static %}
 {% block title %}Import roster{% endblock %}
+{% block alpine_components %}
+  <script src="{% static 'scheduling/js/roster_import_step.js' %}" defer></script>
+{% endblock %}
 {% block content %}
 <h1>Import roster</h1>
 <p>Step 3 of 5 &mdash; bring {{ source_semester.name }}'s roster into {{ semester.name }}. Everyone is ticked
@@ -39,5 +42,4 @@
 </form>
 <a href="{% url 'scheduling:manage-semester-setup-setlist' pk=semester.pk %}">Skip this step</a>
 
-<script src="{% static 'scheduling/js/roster_import_step.js' %}" defer></script>
 {% endblock %}

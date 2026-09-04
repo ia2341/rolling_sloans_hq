@@ -1,6 +1,11 @@
 {% extends "base.html" %}
 {% load static %}
 {% block title %}{{ song.title }}{% endblock %}
+{% block alpine_components %}
+{% if semester and request.user.is_admin %}
+  <script src="{% static 'scheduling/js/song_requirements_edit.js' %}" defer></script>
+{% endif %}
+{% endblock %}
 {% block content %}
 <h1>{{ song.title }} — {{ song.artist }}</h1>
 <p>Rehearsed {{ rehearsal_count_actual }} of {{ rehearsal_count_target }} rehearsals.</p>
@@ -47,7 +52,4 @@
   <p>No recordings yet.</p>
 {% endfor %}
 
-{% if semester and request.user.is_admin %}
-  <script src="{% static 'scheduling/js/song_requirements_edit.js' %}" defer></script>
-{% endif %}
 {% endblock %}
