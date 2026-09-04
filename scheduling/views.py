@@ -3050,15 +3050,9 @@ class SemesterSetupRehearsalsView(AdminRequiredMixin, View):
             range_form = RehearsalPatternRangeForm(prefix='range', initial=range_initial)
         if time_formset is None:
             if existing_pattern is not None:
-                time_initial = [
-                    {'day_of_week': t.day_of_week, 'start_time': t.start_time, 'end_time': t.end_time}
-                    for t in existing_pattern.rehearsal_times.all()
-                ]
+                time_initial = self._time_initial(existing_pattern.rehearsal_times.all())
             elif use_prior_times:
-                time_initial = [
-                    {'day_of_week': t.day_of_week, 'start_time': t.start_time, 'end_time': t.end_time}
-                    for t in proposal.rehearsal_times
-                ]
+                time_initial = self._time_initial(proposal.rehearsal_times)
             else:
                 time_initial = []
             time_formset = RehearsalTimeFormSet(initial=time_initial, prefix='rehearsal-time')
@@ -3071,6 +3065,13 @@ class SemesterSetupRehearsalsView(AdminRequiredMixin, View):
             'default_duration_minutes': semester.default_rehearsal_duration_minutes,
             'save_error': save_error,
         }
+
+    def _time_initial(self, rehearsal_times):
+        """Return `rehearsal_times` (RehearsalTime rows or RehearsalTimeInputs) as RehearsalTimeFormSet initial data."""
+        return [
+            {'day_of_week': rehearsal_time.day_of_week, 'start_time': rehearsal_time.start_time, 'end_time': rehearsal_time.end_time}
+            for rehearsal_time in rehearsal_times
+        ]
 
 
 class SemesterSetupFinishView(AdminRequiredMixin, View):
