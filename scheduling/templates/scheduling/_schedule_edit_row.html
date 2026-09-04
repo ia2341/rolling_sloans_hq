@@ -5,6 +5,7 @@
   data-form-prefix="{{ form.prefix }}"
 >
   {{ form.id }}
+  <span class="schedule-edit-delete-checkbox-wrapper" style="display:none">{{ form.DELETE }}</span>
   <span class="schedule-edit-field">
     <label for="{{ form.date.id_for_label }}">Date</label>
     {{ form.date }}
@@ -20,11 +21,12 @@
     {{ form.end_time }}
     {{ form.end_time.errors }}
   </span>
-  <span class="schedule-edit-field schedule-edit-field-dress">
+  <span class="schedule-edit-field schedule-edit-field-dress" @change="toggleDressCollapse($event)">
     <label for="{{ form.is_full_setlist.id_for_label }}">Dress Rehearsal</label>
     {{ form.is_full_setlist }}
     {{ form.is_full_setlist.errors }}
   </span>
+  <button type="button" class="schedule-edit-delete-toggle" @click="toggleRehearsalDelete($event)">Remove</button>
   <details class="schedule-edit-overrides-expander"{% if form.setup_grace_minutes.errors or form.teardown_grace_minutes.errors or form.arrival_buffer_minutes.errors or form.departure_buffer_minutes.errors %} open{% endif %}>
     <summary>Advanced timing</summary>
     <span class="schedule-edit-field">
@@ -50,9 +52,15 @@
   </details>
 
   {# The Running Order sub-grid (issue #220): collapsed by default, but every input stays in the DOM regardless of
-     whether an admin ever opens it -- a whole-run re-roll must be able to fill a rehearsal nobody expanded. #}
+     whether an admin ever opens it -- a whole-run re-roll must be able to fill a rehearsal nobody expanded.
+     A pending Dress flag (issue #221) auto-strikes every row here (JS's toggleDressCollapse) and switches the
+     sub-grid to the read-only ADR-0003 note below -- the struck rows themselves are never removed from the DOM,
+     so un-flagging the toggle is a plain visibility flip with no ceremony. #}
   <details class="running-order-expander">
     <summary>Running Order ({{ form.running_order_forms|length }} song{{ form.running_order_forms|length|pluralize }})</summary>
+    <p class="running-order-dress-note" style="display:none">
+      Songs derive from the Setlist (ADR 0003) — this Rehearsal's own Running Order rows below are removed on Save.
+    </p>
     <div class="running-order-sub-grid" data-running-order-for="{{ form.prefix }}">
       <div class="running-order-header">
         <span></span>

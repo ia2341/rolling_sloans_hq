@@ -128,9 +128,10 @@ body > nav [aria-current='page'] {
   color: var(--rs-danger-color);
 }
 
-/* The Roster Preview's Fallout regions (issue #228, ADR 0008): a Validation Error and the two
-   Fallout tiers are deliberately separate boxes, never blended into one "warnings" list, so an
-   admin can't learn to treat a blocking error as skippable the way loud/quiet Fallout is. */
+/* Fallout regions shared by every ADR-0008 Preview surface (Roster's issue #228, Schedule's issue
+   #221): a Validation Error and the two Fallout tiers are deliberately separate boxes, never
+   blended into one "warnings" list, so an admin can't learn to treat a blocking error as skippable
+   the way loud/quiet Fallout is. */
 .rs-fallout-blocked,
 .rs-fallout-stale,
 .rs-fallout-loud,
@@ -323,6 +324,13 @@ body > nav [aria-current='page'] {
 
 /* A row struck for removal: undoable up to Save, mirrors .setlist-row-deleted. */
 .running-order-row-deleted {
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+
+/* A Rehearsal row struck for a hard delete (issue #221): undoable up to Save, same treatment as
+   .running-order-row-deleted. */
+.schedule-edit-row-deleted {
   text-decoration: line-through;
   opacity: 0.6;
 }

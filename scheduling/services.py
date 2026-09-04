@@ -458,32 +458,6 @@ def delete_songs_with_recordings(songs) -> None:
         transaction.on_commit(lambda: _delete_recording_objects(object_keys))
 
 
-@dataclass(frozen=True)
-class RehearsalSongDeletionSummary:
-    """One doomed RehearsalSong row's recording/uploader counts, for the Running Order sub-grid's delete confirmation (issue #220)."""
-
-    rehearsal_song: RehearsalSong
-    recording_count: int
-    uploader_count: int
-
-
-def rehearsal_song_deletion_summaries(rehearsal_songs) -> list['RehearsalSongDeletionSummary']:
-    """Return each of `rehearsal_songs`' recording count and distinct-uploader count, for the Running Order delete confirmation dialog.
-
-    Mirrors `song_deletion_summaries()`'s shape (issue #179): a pure counts
-    read, no locking, no transaction, nothing written.
-    """
-    summaries = []
-    for rehearsal_song in rehearsal_songs:
-        recordings = Recording.objects.filter(rehearsal_song=rehearsal_song)
-        summaries.append(RehearsalSongDeletionSummary(
-            rehearsal_song=rehearsal_song,
-            recording_count=recordings.count(),
-            uploader_count=recordings.values('uploaded_by').distinct().count(),
-        ))
-    return summaries
-
-
 def delete_rehearsal_songs_with_recordings(rehearsal_songs) -> None:
     """Hard-delete `rehearsal_songs`, cleaning up their Recordings' storage objects (issue #220).
 
@@ -502,6 +476,31 @@ def delete_rehearsal_songs_with_recordings(rehearsal_songs) -> None:
         return
     object_keys = list(Recording.objects.filter(rehearsal_song_id__in=ids).values_list('file', flat=True))
     RehearsalSong.objects.filter(pk__in=ids).delete()
+    if object_keys:
+        transaction.on_commit(lambda: _delete_recording_objects(object_keys))
+
+
+def delete_rehearsals_with_recordings(rehearsals) -> None:
+    """Hard-delete `rehearsals`, cleaning up their Recordings' storage objects (issue #221).
+
+    Mirrors `delete_songs_with_recordings()`/`delete_rehearsal_songs_with_recordings()`'s
+    shape: the cascade (`RehearsalSong.rehearsal` and `Conflict.rehearsal`
+    both `on_delete=CASCADE`) destroys every RehearsalSong, Recording,
+    Conflict and ConflictWindow row scoped to these Rehearsals, so
+    Recording object keys are collected first, while they're still
+    reachable. Storage deletion is registered with `transaction.on_commit()`
+    and reuses `_delete_recording_objects`'s best-effort, log-don't-raise
+    behavior — a storage failure never blocks or rolls back the Save this
+    runs inside. Conflict rows destroyed by this cascade are never counted
+    or enumerated anywhere (ADR 0005): a bare count would add nothing.
+    """
+    ids = [rehearsal.pk for rehearsal in rehearsals]
+    if not ids:
+        return
+    object_keys = list(
+        Recording.objects.filter(rehearsal_song__rehearsal_id__in=ids).values_list('file', flat=True)
+    )
+    Rehearsal.objects.filter(pk__in=ids).delete()
     if object_keys:
         transaction.on_commit(lambda: _delete_recording_objects(object_keys))
 
@@ -2931,13 +2930,18 @@ class RehearsalEditBuffer:
     `semester_id`/`semester_updated_at` back the same two staleness checks
     `RosterEditBuffer` and `AssignmentEditBuffer` use. `rows` carries every
     Rehearsal the grid wants saved — existing or newly added — in no
-    particular order; a Rehearsal the buffer doesn't mention is left
-    untouched (there is no delete on this surface yet — issue #221).
+    particular order; a Rehearsal the buffer doesn't mention (and that
+    doesn't appear in `deleted_rehearsal_ids` either) is left untouched.
+    `deleted_rehearsal_ids` names every Rehearsal the grid's "Remove" row
+    control marked for a hard delete (issue #221) — never a flag, since a
+    Rehearsal's whole Semester is already hard-deletable (ADR 0001's
+    reasoning generalized).
     """
 
     semester_id: int
     semester_updated_at: datetime
     rows: list[RehearsalEditRow]
+    deleted_rehearsal_ids: list[int] = field(default_factory=list)
 
 
 # Rehearsal override field name -> Semester default field name. Shared by RehearsalEditRowForm's
@@ -2964,7 +2968,12 @@ def apply_rehearsal_edits(buffer: RehearsalEditBuffer, *, viewing_semester: Seme
     `StaleRehearsalSemesterError` inside the transaction if the Semester's
     `updated_at` no longer matches `buffer.semester_updated_at`. Raises
     `PastRehearsalEditError` for any row that is, or has become, past-dated
-    — see that error's docstring for the three cases. Raises
+    — see that error's docstring for the three cases — and for any id in
+    `deleted_rehearsal_ids` whose Rehearsal has slipped into the past under
+    a different edit. `deleted_rehearsal_ids` (issue #221) are hard-deleted
+    via `delete_rehearsals_with_recordings()` before any row is saved, so a
+    deleted Rehearsal's date can never collide with a surviving or new
+    row's. Raises
     `RunningOrderValidationError` (issue #220) for a row whose Running Order
     slot_counts sum past the Semester's `default_song_slot_count`, whose
     Running Order is non-empty while `is_full_setlist=True`, or whose
@@ -2984,7 +2993,9 @@ def apply_rehearsal_edits(buffer: RehearsalEditBuffer, *, viewing_semester: Seme
         today = timezone.localdate()
         existing_ids = [row.rehearsal_id for row in buffer.rows if row.rehearsal_id is not None]
         current_dates_by_id = dict(
-            Rehearsal.objects.filter(semester=semester, pk__in=existing_ids).values_list('pk', 'date')
+            Rehearsal.objects.filter(
+                semester=semester, pk__in=[*existing_ids, *buffer.deleted_rehearsal_ids],
+            ).values_list('pk', 'date')
         )
         for row in buffer.rows:
             if row.date < today:
@@ -2997,6 +3008,17 @@ def apply_rehearsal_edits(buffer: RehearsalEditBuffer, *, viewing_semester: Seme
                     raise PastRehearsalEditError(
                         'A Rehearsal in this Buffer is dated in the past — reload and reapply.'
                     )
+        for deleted_id in buffer.deleted_rehearsal_ids:
+            current_date = current_dates_by_id.get(deleted_id)
+            if current_date is None or current_date < today:
+                raise PastRehearsalEditError(
+                    'A Rehearsal in this Buffer is dated in the past — reload and reapply.'
+                )
+
+        if buffer.deleted_rehearsal_ids:
+            delete_rehearsals_with_recordings(
+                Rehearsal.objects.filter(semester=semester, pk__in=buffer.deleted_rehearsal_ids)
+            )
 
         valid_song_ids = set(
             Song.objects.filter(
@@ -3105,16 +3127,214 @@ def _apply_running_order(rehearsal: Rehearsal, rows: list[RunningOrderRow]) -> N
     reorder_rehearsal_songs(rehearsal, ordered_ids)
 
 
-def preview_rehearsal_edits(buffer: RehearsalEditBuffer, *, viewing_semester: Semester) -> None:
-    """Run the real `apply_rehearsal_edits()` for `buffer`, without committing it (ADR-0008, issue #219).
+@dataclass(frozen=True)
+class DoomedRecordingGroup:
+    """One Rehearsal's destroyed-Recording tally for the destructive-save confirmation dialog (issue #221).
 
-    This function's write is real — it must be called inside a
-    transaction the *caller* rolls back, exactly like `preview_roster_edits()`.
-    Called outside such a transaction, this function corrupts the
-    database. Reports nothing beyond whatever `apply_rehearsal_edits()`
-    raises: this surface has no Fallout to compute yet (adds/deletes and
-    their consequences land in issue #221), so today this is a thin,
-    real-write wrapper that exists so the surface's Preview and Save can
-    never disagree about whether a Buffer is saveable.
+    Captured from *before* `apply_rehearsal_edits()` runs: a whole-Rehearsal
+    delete leaves nothing to look display fields up from afterward, so
+    `label` (its date) travels here instead of a live FK. Per ADR 0005 this
+    never names who declared a Conflict, and a Conflict destroyed alongside
+    a deleted Rehearsal is never counted here at all — only Recordings are.
     """
-    apply_rehearsal_edits(buffer, viewing_semester=viewing_semester)
+
+    label: str
+    recording_count: int
+    uploader_count: int
+
+
+@dataclass(frozen=True)
+class RehearsalEditFallout:
+    """Every observable consequence of a Rehearsal edit Buffer, computed without committing it (issue #221, ADR 0008).
+
+    `is_blocked` mirrors `apply_rehearsal_edits()`'s Validation Errors
+    (wrong Semester, stale stamp, a past-dated row, a malformed Running
+    Order) with no Fallout computed at all — a Validation Error in ADR
+    0008's terms, rendered in a region kept visually separate from Fallout.
+    `loud`/`quiet` are the two ADR-0002 tiers; neither ever blocks a save.
+    `is_stale` flags a `Semester.updated_at` mismatch, reported never
+    refused, per ADR 0008. `doomed_recording_groups` is non-empty exactly
+    when the buffer would destroy at least one Recording — across all
+    three destructive causes (a deleted Rehearsal, a removed recorded
+    Running Order row, or a Rehearsal flipped to Dress, which removes its
+    Running Order per ADR 0003) — the one condition that fires the single
+    destructive-save confirmation dialog on Save.
+    """
+
+    is_blocked: bool
+    block_message: str
+    is_stale: bool
+    loud: list[str]
+    quiet: list[str]
+    doomed_recording_groups: list[DoomedRecordingGroup]
+
+
+def _blocked_rehearsal_fallout(block_message: str, *, is_stale: bool = False) -> RehearsalEditFallout:
+    """Return a RehearsalEditFallout reporting a hard block, with every Fallout/doomed list empty."""
+    return RehearsalEditFallout(
+        is_blocked=True, block_message=block_message, is_stale=is_stale,
+        loud=[], quiet=[], doomed_recording_groups=[],
+    )
+
+
+def _format_slot(start_time, end_time) -> str:
+    """Return a "H:MM–H:MM" rendering of one RehearsalSong slot, for a Fallout line naming an old/new time."""
+    return f'{start_time:%-I:%M}–{end_time:%-I:%M}'
+
+
+def preview_rehearsal_edits(buffer: RehearsalEditBuffer, *, viewing_semester: Semester) -> RehearsalEditFallout:
+    """Run the real `apply_rehearsal_edits()` for `buffer` and report every observable consequence, without committing it (issue #221, ADR-0008).
+
+    This function's write is real — it must be called inside a transaction
+    the *caller* rolls back, exactly like `preview_roster_edits()`. Called
+    outside such a transaction, this function corrupts the database.
+
+    Snapshots, for every Rehearsal the buffer touches (edited or deleted),
+    its Recordings' object identities/uploaders and each surviving
+    RehearsalSong's persisted slot *before* calling `apply_rehearsal_edits()`
+    (with a copy of `buffer` whose `semester_updated_at` is swapped for the
+    Semester's current value, so the real function's own staleness check
+    always passes and the write actually runs), then re-reads the same
+    state *after* and diffs the two: a Recording present before and gone
+    after is destroyed (grouped by its original Rehearsal, for the
+    destructive-save dialog); a RehearsalSong that survives but whose slot
+    moved is a re-timed Recording, named old-slot-to-new. Every other
+    edited-or-new Rehearsal's post-apply Running Order is handed to
+    `_assignment_fallout_lines()` (issue #212) for the loud Conflict/Conflict
+    Window overlap and quiet unfilled-Requirement/mismatch tiers ADR-0009
+    built that function to raise, plus this issue's own checks: a non-Dress
+    Rehearsal left with zero songs, and a partial Conflict Window that used
+    to overlap the Rehearsal's window and no longer does (an inert
+    notification, never a call to act — the window itself is untouched).
+    A `WrongViewingSemesterError`, `StaleRehearsalSemesterError`,
+    `PastRehearsalEditError` or `RunningOrderValidationError` from
+    `apply_rehearsal_edits()` is reported as `is_blocked` with no Fallout
+    computed at all, rather than re-implementing any of those checks here.
+    """
+    if viewing_semester is None or buffer.semester_id != viewing_semester.pk:
+        return _blocked_rehearsal_fallout(
+            "This Rehearsal edit Buffer's Semester doesn't match the Semester you're currently viewing."
+        )
+
+    current_semester = Semester.objects.get(pk=viewing_semester.pk)
+    is_stale = buffer.semester_updated_at != current_semester.updated_at
+
+    touched_ids = [
+        *(row.rehearsal_id for row in buffer.rows if row.rehearsal_id is not None),
+        *buffer.deleted_rehearsal_ids,
+    ]
+    rehearsals_before = {
+        rehearsal.pk: rehearsal
+        for rehearsal in Rehearsal.objects.filter(semester=current_semester, pk__in=touched_ids)
+    }
+    conflicts_before = {
+        rehearsal_id: [
+            (window.unavailable_start, window.unavailable_end)
+            for conflict in Conflict.objects.filter(rehearsal_id=rehearsal_id, type=Conflict.PARTIAL)
+            .prefetch_related('conflictwindow_set')
+            for window in conflict.conflictwindow_set.all()
+        ]
+        for rehearsal_id in touched_ids
+    }
+
+    recordings_before = list(
+        Recording.objects.filter(rehearsal_song__rehearsal_id__in=touched_ids)
+        .select_related('rehearsal_song__song')
+    )
+    rehearsal_id_by_recording_id = {
+        recording.pk: recording.rehearsal_song.rehearsal_id for recording in recordings_before
+    }
+    uploader_id_by_recording_id = {recording.pk: recording.uploaded_by_id for recording in recordings_before}
+    recording_ids_by_rehearsal_song_id = defaultdict(set)
+    for recording in recordings_before:
+        recording_ids_by_rehearsal_song_id[recording.rehearsal_song_id].add(recording.pk)
+    rehearsal_song_before_by_id = {
+        rehearsal_song.pk: (rehearsal_song.start_time, rehearsal_song.end_time, rehearsal_song.song.title)
+        for rehearsal_song in RehearsalSong.objects.filter(rehearsal_id__in=touched_ids).select_related('song')
+    }
+
+    apply_buffer = replace(buffer, semester_updated_at=current_semester.updated_at)
+    try:
+        apply_rehearsal_edits(apply_buffer, viewing_semester=viewing_semester)
+    except (
+        WrongViewingSemesterError, StaleRehearsalSemesterError,
+        PastRehearsalEditError, RunningOrderValidationError,
+    ) as error:
+        return _blocked_rehearsal_fallout(str(error), is_stale=is_stale)
+
+    surviving_recording_ids = frozenset(
+        Recording.objects.filter(pk__in=rehearsal_id_by_recording_id).values_list('pk', flat=True)
+    )
+    destroyed_by_rehearsal_id = defaultdict(list)
+    for recording_id, rehearsal_id in rehearsal_id_by_recording_id.items():
+        if recording_id not in surviving_recording_ids:
+            destroyed_by_rehearsal_id[rehearsal_id].append(recording_id)
+
+    doomed_recording_groups = []
+    loud = []
+    for rehearsal_id, recording_ids in destroyed_by_rehearsal_id.items():
+        rehearsal = rehearsals_before[rehearsal_id]
+        uploader_count = len({uploader_id_by_recording_id[recording_id] for recording_id in recording_ids})
+        count = len(recording_ids)
+        doomed_recording_groups.append(DoomedRecordingGroup(
+            label=str(rehearsal.date), recording_count=count, uploader_count=uploader_count,
+        ))
+        loud.append(f"{count} recording{'' if count == 1 else 's'} on {rehearsal.date} will be destroyed.")
+
+    surviving_rehearsal_song_times = {
+        pk: (start_time, end_time)
+        for pk, start_time, end_time
+        in RehearsalSong.objects.filter(pk__in=rehearsal_song_before_by_id).values_list('pk', 'start_time', 'end_time')
+    }
+    for rehearsal_song_id, (old_start, old_end, song_title) in rehearsal_song_before_by_id.items():
+        new_times = surviving_rehearsal_song_times.get(rehearsal_song_id)
+        if new_times is None or new_times == (old_start, old_end):
+            continue
+        recording_ids = recording_ids_by_rehearsal_song_id.get(rehearsal_song_id) or set()
+        if not recording_ids:
+            continue
+        count = len(recording_ids)
+        new_start, new_end = new_times
+        loud.append(
+            f"{count} recording{'' if count == 1 else 's'} on {song_title} "
+            f"{'was' if count == 1 else 'were'} made against "
+            f'{_format_slot(old_start, old_end)}, now {_format_slot(new_start, new_end)}.'
+        )
+
+    quiet = []
+    surviving_rehearsals = Rehearsal.objects.filter(
+        semester=current_semester, date__in={row.date for row in buffer.rows},
+    )
+    for rehearsal in surviving_rehearsals:
+        songs, _, _ = _matrix_songs(rehearsal)
+        assignment_loud, assignment_quiet = _assignment_fallout_lines(rehearsal, songs)
+        loud.extend(assignment_loud)
+        quiet.extend(assignment_quiet)
+
+        if not rehearsal.is_full_setlist and not songs:
+            quiet.append(f'{rehearsal.date} has no songs scheduled.')
+
+        old_windows = conflicts_before.get(rehearsal.pk, [])
+        if old_windows and (rehearsal.pk not in rehearsals_before or (
+            rehearsals_before[rehearsal.pk].start_time != rehearsal.start_time
+            or rehearsals_before[rehearsal.pk].end_time != rehearsal.end_time
+        )):
+            old_rehearsal = rehearsals_before.get(rehearsal.pk)
+            if old_rehearsal is not None:
+                for window_start, window_end in old_windows:
+                    was_overlapping = _windows_overlap(
+                        window_start, window_end, old_rehearsal.start_time, old_rehearsal.end_time,
+                    )
+                    still_overlapping = _windows_overlap(
+                        window_start, window_end, rehearsal.start_time, rehearsal.end_time,
+                    )
+                    if was_overlapping and not still_overlapping:
+                        quiet.append(
+                            f"A declared Conflict Window no longer overlaps {rehearsal.date}'s rehearsal time "
+                            'after this re-time.'
+                        )
+
+    return RehearsalEditFallout(
+        is_blocked=False, block_message='', is_stale=is_stale,
+        loud=loud, quiet=quiet, doomed_recording_groups=doomed_recording_groups,
+    )

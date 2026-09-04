@@ -1,0 +1,9 @@
+<p>Saving will destroy Recordings, grouped by Rehearsal:</p>
+<ul id="schedule-destroy-confirm-groups">
+  {% for group in groups %}
+    <li>
+      {{ group.label }}: {{ group.recording_count }} recording{{ group.recording_count|pluralize }}
+      from {{ group.uploader_count }} uploader{{ group.uploader_count|pluralize }}
+    </li>
+  {% endfor %}
+</ul>

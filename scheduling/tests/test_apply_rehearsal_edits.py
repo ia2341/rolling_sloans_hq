@@ -45,13 +45,14 @@ class ApplyRehearsalEditsTests(TestCase):
         defaults.update(overrides)
         return RehearsalEditRow(**defaults)
 
-    def _buffer(self, rows, semester=None, updated_at=None):
+    def _buffer(self, rows, semester=None, updated_at=None, deleted_rehearsal_ids=()):
         """Build a RehearsalEditBuffer against self.semester unless overridden."""
         semester = semester or self.semester
         return RehearsalEditBuffer(
             semester_id=semester.pk,
             semester_updated_at=updated_at if updated_at is not None else semester.updated_at,
             rows=list(rows),
+            deleted_rehearsal_ids=list(deleted_rehearsal_ids),
         )
 
     def test_creates_a_new_row(self):
@@ -264,3 +265,61 @@ class ApplyRehearsalEditsTests(TestCase):
 
         self.rehearsal.refresh_from_db()
         self.assertFalse(self.rehearsal.is_full_setlist)
+
+
+class ApplyRehearsalEditsDeletionTests(TestCase):
+    """A Rehearsal named in `deleted_rehearsal_ids` is hard-deleted, not flagged (issue #221)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        """Build a Semester with one future Rehearsal to delete."""
+        cls.semester = SemesterFactory()
+        cls.rehearsal = RehearsalFactory(semester=cls.semester, date=TOMORROW, start_time=time(18, 0))
+
+    def _buffer(self, rows=(), deleted_rehearsal_ids=(), updated_at=None):
+        """Build a RehearsalEditBuffer against self.semester unless overridden."""
+        return RehearsalEditBuffer(
+            semester_id=self.semester.pk,
+            semester_updated_at=updated_at if updated_at is not None else self.semester.updated_at,
+            rows=list(rows),
+            deleted_rehearsal_ids=list(deleted_rehearsal_ids),
+        )
+
+    @mock.patch('scheduling.services._recording_storage')
+    def test_a_deleted_rehearsal_is_hard_deleted(self, recording_storage):
+        """A Rehearsal named in deleted_rehearsal_ids is gone afterward — no flag, no filtering."""
+        buffer = self._buffer(deleted_rehearsal_ids=[self.rehearsal.pk])
+
+        with self.captureOnCommitCallbacks(execute=True):
+            apply_rehearsal_edits(buffer, viewing_semester=self.semester)
+
+        self.assertFalse(Rehearsal.objects.filter(pk=self.rehearsal.pk).exists())
+
+    @mock.patch('scheduling.services._recording_storage')
+    def test_deletion_and_a_new_row_together_write_both(self, recording_storage):
+        """A Buffer mixing a deletion and a brand-new row applies both in the same call."""
+        buffer = self._buffer(
+            rows=[RehearsalEditRow(
+                rehearsal_id=None, date=NEXT_WEEK, start_time=time(19, 0), end_time=time(21, 0),
+                is_full_setlist=False, setup_grace_minutes=None, teardown_grace_minutes=None,
+                arrival_buffer_minutes=None, departure_buffer_minutes=None,
+            )],
+            deleted_rehearsal_ids=[self.rehearsal.pk],
+        )
+
+        with self.captureOnCommitCallbacks(execute=True):
+            apply_rehearsal_edits(buffer, viewing_semester=self.semester)
+
+        self.assertFalse(Rehearsal.objects.filter(pk=self.rehearsal.pk).exists())
+        self.assertTrue(Rehearsal.objects.filter(semester=self.semester, date=NEXT_WEEK).exists())
+
+    @mock.patch('scheduling.services._recording_storage')
+    def test_a_past_slipped_deletion_hard_fails_and_deletes_nothing(self, recording_storage):
+        """A deleted_rehearsal_ids entry whose Rehearsal has slipped into the past is a hard failure, writing nothing."""
+        Rehearsal.objects.filter(pk=self.rehearsal.pk).update(date=YESTERDAY)
+        buffer = self._buffer(deleted_rehearsal_ids=[self.rehearsal.pk])
+
+        with self.assertRaises(PastRehearsalEditError):
+            apply_rehearsal_edits(buffer, viewing_semester=self.semester)
+
+        self.assertTrue(Rehearsal.objects.filter(pk=self.rehearsal.pk).exists())

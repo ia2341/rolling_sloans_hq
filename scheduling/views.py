@@ -128,7 +128,6 @@ from scheduling.services import (
     recording_groups_for,
     rehearsal_count_target,
     rehearsal_schedule_for,
-    rehearsal_song_deletion_summaries,
     reorder_rehearsal_songs,
     reorder_songs,
     reserve_recording_upload,
@@ -551,18 +550,80 @@ class ScheduleEditView(AdminRequiredMixin, View):
 
 
 class ScheduleEditPreviewView(PreviewMixin, AdminRequiredMixin, View):
-    """`/schedule/edit/preview/`: runs the real Rehearsal edit Buffer save and rolls it back (issue #220, ADR-0008).
+    """`/schedule/edit/preview/`: runs the real Rehearsal edit Buffer save and rolls it back, rendering its Fallout (issue #221, ADR-0008).
 
     A POST-only sibling of `ScheduleEditView`'s Save, bound to the exact
     same POST body, per ADR-0008's "one parsing and validation path" rule.
-    This surface has no Fallout to compute yet (unlike `AssignmentPreviewView`)
-    — today this exists so Preview and Save can never disagree about
-    whether a Buffer (rows *and* Running Orders together) is saveable, per
-    `preview_rehearsal_edits()`'s own docstring.
+    Renders the Fallout region (loud/quiet, visually separate from
+    Validation Errors) `preview_rehearsal_edits()` computes — issue #219's
+    original "no Fallout to compute yet" note is resolved by this issue.
     """
 
+    template_name = 'scheduling/_schedule_edit_fallout.html'
+
     def run_preview(self, request):
-        """Build the submitted Rehearsal edit Buffer and run `preview_rehearsal_edits()` for it, or 204 on a malformed/invalid submission."""
+        """Build the submitted Rehearsal edit Buffer and render `preview_rehearsal_edits()`'s Fallout, or a Validation Error banner."""
+        semester = get_viewing_semester(request)
+        if semester is None:
+            return render(request, self.template_name, {'formset_errors': ['No Semester is being edited.'], 'fallout': None})
+        today = timezone.localdate()
+        future_rehearsals = _scoped_to_viewing_semester(Rehearsal, semester).filter(date__gte=today)
+        formset = RehearsalEditFormSet(
+            request.POST, queryset=future_rehearsals, prefix='rehearsal', form_kwargs={'semester': semester},
+        )
+        songs_formset = RunningOrderFormSet(request.POST, prefix='songs')
+        if not formset.is_valid() or not songs_formset.is_valid():
+            return render(request, self.template_name, {
+                'formset_errors': self._formset_errors(formset, songs_formset), 'fallout': None,
+            })
+        running_order_by_key = _running_order_by_rehearsal_key(songs_formset)
+        if running_order_by_key is None:
+            return render(request, self.template_name, {
+                'formset_errors': [ScheduleEditView.MALFORMED_ORDER_MESSAGE], 'fallout': None,
+            })
+        buffer = _build_rehearsal_edit_buffer(
+            formset, running_order_by_key,
+            request.POST.get('schedule_semester_id', ''), request.POST.get('schedule_semester_updated_at', ''),
+        )
+        fallout = preview_rehearsal_edits(buffer, viewing_semester=semester)
+        return render(request, self.template_name, {'formset_errors': [], 'fallout': fallout})
+
+    def _formset_errors(self, formset, songs_formset):
+        """Return a flat list of 'Row N (field): message' strings naming either formset's per-row errors."""
+        errors = []
+        for index, form in enumerate(formset.forms):
+            for field, field_errors in form.errors.items():
+                for message in field_errors:
+                    errors.append(f'Row {index + 1} ({field}): {message}')
+        for index, form in enumerate(songs_formset.forms):
+            for field, field_errors in form.errors.items():
+                for message in field_errors:
+                    errors.append(f'Running Order row {index + 1} ({field}): {message}')
+        errors.extend(formset.non_form_errors())
+        errors.extend(songs_formset.non_form_errors())
+        return errors
+
+
+class ScheduleEditDestroyConfirmView(PreviewMixin, AdminRequiredMixin, View):
+    """`/schedule/edit/confirm-destroy/`: the one destructive-save confirmation, computed via the same Preview call (issue #221, ADR-0008).
+
+    A POST-only sibling of `ScheduleEditView`'s Save, bound to the exact
+    same POST body. Fetched by the grid's JS on Save whenever the DOM
+    already shows at least one pending deletion (a struck Rehearsal row, or
+    a struck Running Order row — including every row a pending Dress flag
+    auto-struck), so the fetch itself is a cheap optimization, never the
+    source of truth: `preview_rehearsal_edits()`'s `doomed_recording_groups`
+    is. Renders nothing (204) when the buffer would destroy no Recording at
+    all, so the dialog fires exactly once and only when warranted, never
+    three times for three buttons. Per ADR 0005 the rendered dialog never
+    names who declared a Conflict or why, and a Conflict destroyed alongside
+    a deleted Rehearsal is never enumerated — only Recordings are.
+    """
+
+    template_name = 'scheduling/_schedule_edit_destroy_confirm.html'
+
+    def run_preview(self, request):
+        """Build the submitted Rehearsal edit Buffer and render its doomed-Recording groups, or 204 if there are none."""
         semester = get_viewing_semester(request)
         if semester is None:
             return HttpResponse(status=204)
@@ -581,33 +642,10 @@ class ScheduleEditPreviewView(PreviewMixin, AdminRequiredMixin, View):
             formset, running_order_by_key,
             request.POST.get('schedule_semester_id', ''), request.POST.get('schedule_semester_updated_at', ''),
         )
-        try:
-            preview_rehearsal_edits(buffer, viewing_semester=semester)
-        except (WrongViewingSemesterError, StaleRehearsalSemesterError, PastRehearsalEditError, RunningOrderValidationError):
-            pass
-        return HttpResponse(status=204)
-
-
-class RunningOrderDeleteConfirmView(AdminRequiredMixin, View):
-    """`/schedule/edit/confirm-remove-song/`: names a doomed RehearsalSong row's recording/uploader counts before a Save (issue #220).
-
-    Mirrors `SetlistDeleteConfirmView`'s shape: fetched by the sub-grid's
-    JS only when the buffer contains at least one removed row that carries
-    Recordings, keyed by `rehearsal_song_id` POST values. A pure counts
-    read — it writes nothing and rolls nothing back.
-    """
-
-    template_name = 'scheduling/_running_order_delete_confirm.html'
-
-    def post(self, request):
-        """Render the confirmation fragment naming each requested RehearsalSong row's recording/uploader counts."""
-        semester = get_viewing_semester(request)
-        rehearsal_song_ids = request.POST.getlist('rehearsal_song_id')
-        rehearsal_songs = RehearsalSong.objects.filter(
-            rehearsal__semester=semester, pk__in=rehearsal_song_ids,
-        ).select_related('song').order_by('rehearsal__date', 'order')
-        summaries = rehearsal_song_deletion_summaries(rehearsal_songs)
-        return render(request, self.template_name, {'summaries': summaries})
+        fallout = preview_rehearsal_edits(buffer, viewing_semester=semester)
+        if fallout.is_blocked or not fallout.doomed_recording_groups:
+            return HttpResponse(status=204)
+        return render(request, self.template_name, {'groups': fallout.doomed_recording_groups})
 
 
 def _running_order_initial(formset, future_rehearsals):
@@ -685,14 +723,25 @@ def _group_running_order_forms(songs_formset, songs_by_id):
 def _build_rehearsal_edit_buffer(formset, running_order_by_key, submitted_semester_id, submitted_stamp):
     """Turn a valid RehearsalEditFormSet (plus its grouped Running Order rows) into a RehearsalEditBuffer.
 
-    Shared by `ScheduleEditView.post()` and `ScheduleEditPreviewView.run_preview()`
-    (ADR-0008) — the Preview and Save endpoints must parse the exact same
-    POST body into the exact same Buffer shape.
+    Shared by `ScheduleEditView.post()`, `ScheduleEditPreviewView.run_preview()`
+    and `ScheduleEditDestroyConfirmView.run_preview()` (ADR-0008) — every
+    Preview and Save endpoint must parse the exact same POST body into the
+    exact same Buffer shape. A row whose `DELETE` field was checked (issue
+    #221) contributes no `RehearsalEditRow` at all — its pk lands in
+    `deleted_rehearsal_ids` instead, and its Running Order rows (already
+    excluded from `running_order_by_key` by `_running_order_by_rehearsal_key()`,
+    which skips deleted Running Order rows the same way) are simply never
+    looked up.
     """
     rows = []
+    deleted_rehearsal_ids = []
     for form in formset.forms:
         cleaned_data = form.cleaned_data
         if not cleaned_data:
+            continue
+        if cleaned_data.get('DELETE'):
+            if form.instance.pk:
+                deleted_rehearsal_ids.append(form.instance.pk)
             continue
         rows.append(RehearsalEditRow(
             rehearsal_id=form.instance.pk,
@@ -710,6 +759,7 @@ def _build_rehearsal_edit_buffer(formset, running_order_by_key, submitted_semest
         semester_id=_parse_roster_int(submitted_semester_id),
         semester_updated_at=parse_datetime(submitted_stamp) or timezone.now(),
         rows=rows,
+        deleted_rehearsal_ids=deleted_rehearsal_ids,
     )
 
 
