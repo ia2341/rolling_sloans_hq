@@ -2842,23 +2842,25 @@ def _apply_rehearsal_edit_row(row: RehearsalEditRow, semester: Semester) -> Rehe
 
 
 def _apply_running_order(rehearsal: Rehearsal, rows: list[RunningOrderRow]) -> None:
-    """Save one Rehearsal's Running Order buffer — adds, edits, removals and reorder — in one pass (issue #220).
+    """Save one Rehearsal's Running Order buffer — adds, edits and removals — then hand the final order to `reorder_rehearsal_songs()` (issue #220).
 
-    Mirrors `reorder_rehearsal_songs()`'s placeholder-then-final two-pass
-    shape (see its docstring for why a permutation can't be written in one
-    pass), extended to create brand-new rows and delete removed ones in the
-    same call. A row named in `rows` with no `rehearsal_song_id` is a
-    brand-new RehearsalSong; an existing row this Rehearsal currently has
-    but `rows` no longer names is removed via
-    `delete_rehearsal_songs_with_recordings()`. The placeholder pass only
-    touches already-existing rows' `order` (not their `slot_count`) — a
-    brand-new row has no prior `order` to collide with, so it's created
-    straight at its final position in the second pass. Slot-count overflow
-    is pre-validated by the caller against the *sum* of every row's
-    slot_count, which holds at every intermediate arrangement this
-    function produces (a row's `_prior_slots()` can only sum a subset of
-    the other rows' slot_counts, whatever their current `order`), so no
-    individual `.save()` here can spuriously trip
+    `reorder_rehearsal_songs()` is the single place the reorder/re-derive
+    logic exists (issue #220's spec), so this function's job is only to
+    make every row it names *exist* with the right `slot_count` first:
+    removed rows are deleted via `delete_rehearsal_songs_with_recordings()`;
+    a surviving existing row's `slot_count` is updated with a bulk
+    `.update()` (bypassing `RehearsalSong.save()`'s own validation, which
+    is redundant here — see below); a brand-new row (no `rehearsal_song_id`)
+    is created at a throwaway placeholder `order` clear of every other
+    row's current or soon-to-be-placeholder value, purely so its `INSERT`
+    doesn't collide with `unique_order_per_rehearsal` before
+    `reorder_rehearsal_songs()` moves everything to its final position.
+    Slot-count overflow is pre-validated by the caller against the *sum*
+    of every row's slot_count, which holds at every intermediate
+    arrangement this function and `reorder_rehearsal_songs()` produce (a
+    row's `_prior_slots()` can only sum a subset of the other rows'
+    slot_counts, whatever their current `order`), so no individual
+    `.save()` anywhere in this sequence can spuriously trip
     `RehearsalSong._overruns_rehearsal_window()`. Must run inside the
     caller's `transaction.atomic()`, same as `reorder_rehearsal_songs()`.
     """
@@ -2868,21 +2870,23 @@ def _apply_running_order(rehearsal: Rehearsal, rows: list[RunningOrderRow]) -> N
     if removed:
         delete_rehearsal_songs_with_recordings(removed)
 
-    surviving_existing_rows = [row for row in rows if row.rehearsal_song_id is not None]
-    placeholder_base = max([len(rows), *(rehearsal_song.order for rehearsal_song in existing_by_id.values())], default=len(rows))
-    for offset, row in enumerate(surviving_existing_rows, start=1):
-        rehearsal_song = existing_by_id[row.rehearsal_song_id]
-        rehearsal_song.order = placeholder_base + offset
-        rehearsal_song.save()
-
-    for position, row in enumerate(rows, start=1):
+    for row in rows:
         if row.rehearsal_song_id is not None:
-            rehearsal_song = existing_by_id[row.rehearsal_song_id]
+            RehearsalSong.objects.filter(pk=row.rehearsal_song_id).update(slot_count=row.slot_count)
+
+    placeholder_base = max([len(rows), *(rehearsal_song.order for rehearsal_song in existing_by_id.values())], default=len(rows))
+    ordered_ids = []
+    for offset, row in enumerate(rows, start=1):
+        if row.rehearsal_song_id is not None:
+            ordered_ids.append(row.rehearsal_song_id)
         else:
-            rehearsal_song = RehearsalSong(rehearsal=rehearsal, song_id=row.song_id)
-        rehearsal_song.slot_count = row.slot_count
-        rehearsal_song.order = position
-        rehearsal_song.save()
+            new_rehearsal_song = RehearsalSong(
+                rehearsal=rehearsal, song_id=row.song_id, slot_count=row.slot_count, order=placeholder_base + offset,
+            )
+            new_rehearsal_song.save()
+            ordered_ids.append(new_rehearsal_song.pk)
+
+    reorder_rehearsal_songs(rehearsal, ordered_ids)
 
 
 def preview_rehearsal_edits(buffer: RehearsalEditBuffer, *, viewing_semester: Semester) -> None:
