@@ -28,6 +28,24 @@ document.addEventListener('alpine:init', () => {
         this.refreshAddSongOptions(rows);
       });
       this.$el.querySelectorAll('.schedule-edit-row').forEach((row) => this.reindexRehearsalRow(row));
+      this.openTargetedRunningOrder();
+    },
+
+    // Opens and scrolls to a #schedule-edit-row-<id> Rehearsal's Running Order sub-grid on arrival
+    // (issue #195's door from the adjudication table) -- a no-op for a plain visit with no hash.
+    openTargetedRunningOrder() {
+      if (!window.location.hash) {
+        return;
+      }
+      const target = document.querySelector(window.location.hash);
+      if (!target) {
+        return;
+      }
+      const expander = target.querySelector('.running-order-expander');
+      if (expander) {
+        expander.open = true;
+      }
+      target.scrollIntoView();
     },
 
     // Appends a brand-new Rehearsal row at the next never-before-used formset slot -- unlike drag/move

@@ -28,6 +28,7 @@ document.addEventListener('alpine:init', () => {
     initialRemovedBackups = [],
     initialAddedBackups = [],
     initialBackupCoveringFor = {},
+    initialPrefillBackup = null,
   ) => ({
     editing: initialEditing,
     removed: [...initialRemoved],
@@ -35,6 +36,7 @@ document.addEventListener('alpine:init', () => {
     removedBackups: [...initialRemovedBackups],
     addedBackups: [...initialAddedBackups],
     pendingBackupCoveringFor: { ...initialBackupCoveringFor },
+    prefillBackup: initialPrefillBackup,
     pickerSongId: null,
     pickerRoleId: null,
     pickerRehearsalSongId: null,
@@ -65,6 +67,23 @@ document.addEventListener('alpine:init', () => {
           select.value = personId;
         }
       });
+      this.openPrefilledBackupCell();
+    },
+
+    // Arriving from the adjudication table's advisory door (issue #195): opens the targeted
+    // cell's picker straight away, so the Backup section is right there rather than making the
+    // admin re-find the (Song, Role) the overlap named.
+    openPrefilledBackupCell() {
+      if (!this.prefillBackup) {
+        return;
+      }
+      this.editing = true;
+      const button = this.$el.querySelector(
+        `.assignment-cell-add[data-song-id="${this.prefillBackup.songId}"][data-role-id="${this.prefillBackup.roleId}"]`,
+      );
+      if (button) {
+        button.click();
+      }
     },
 
     cancelEditing() {
@@ -149,6 +168,9 @@ document.addEventListener('alpine:init', () => {
         const personName = backupRow.dataset.backupPickerPersonName;
         const key = `${this.pickerRehearsalSongId}-${this.pickerRoleId}-${personId}`;
         if (!this.addedBackups.some((item) => item.key === key)) {
+          const matchesPrefill = this.prefillBackup
+            && this.prefillBackup.songId === this.pickerSongId
+            && this.prefillBackup.roleId === this.pickerRoleId;
           this.addedBackups.push({
             key,
             rehearsalSongId: this.pickerRehearsalSongId,
@@ -156,7 +178,7 @@ document.addEventListener('alpine:init', () => {
             roleId: this.pickerRoleId,
             personId,
             personName,
-            coveringForId: '',
+            coveringForId: matchesPrefill ? this.prefillBackup.coveringForId : '',
           });
         }
         this.$refs.assignmentPickerDialog.close();

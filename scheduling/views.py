@@ -311,6 +311,31 @@ def _resolve_view_mode(raw_value):
     return VIEW_ALL if raw_value == VIEW_ALL else VIEW_NEXT
 
 
+def _backup_prefill_from_request(request):
+    """Return the `?backup_song_id=&backup_role_id=&covering_for_id=` prefill dict for the assignment grid, or None.
+
+    Arrives from the adjudication table's advisory door (issue #195): a
+    standing-overlap row's link to the assignment grid names the (Song,
+    Role) cell the overlap sits in and the covered Person, so picking a
+    Backup there needs no retyping. Only ever built behind the
+    `can_edit_assignments` gate the caller already checked (ADR 0005: the
+    covered Person's name stays admin-only, and isn't carried here at all
+    -- the grid's own "covering for" `<select>` already renders it once
+    `coveringForId` is applied). Any malformed id, or a `covering_for_id`
+    naming no real Person, silently drops the prefill rather than
+    erroring the whole page.
+    """
+    try:
+        song_id = int(request.GET['backup_song_id'])
+        role_id = int(request.GET['backup_role_id'])
+        covering_for_id = int(request.GET['covering_for_id'])
+    except (KeyError, ValueError):
+        return None
+    if not Person.objects.filter(pk=covering_for_id).exists():
+        return None
+    return {'songId': song_id, 'roleId': role_id, 'coveringForId': covering_for_id}
+
+
 def _build_schedule_context(request, semester, view_mode, rehearsal, error_rehearsal=None, error_form=None):
     """Build `/schedule/`'s context for a GET and for every declare/edit failure re-render (issue #190).
 
@@ -341,6 +366,7 @@ def _build_schedule_context(request, semester, view_mode, rehearsal, error_rehea
         'pending_removed_backups_json': '[]',
         'pending_added_backups_json': '[]',
         'pending_backup_covering_for_json': '{}',
+        'prefill_backup_json': 'null',
     }
     if semester is None:
         return context
@@ -379,6 +405,9 @@ def _build_schedule_context(request, semester, view_mode, rehearsal, error_rehea
         context['addable_roles'] = [
             {'id': role.pk, 'name': role.name} for role in addable_roles_for(matrix)
         ]
+        prefill_backup = _backup_prefill_from_request(request)
+        if prefill_backup is not None:
+            context['prefill_backup_json'] = json.dumps(prefill_backup)
     context['my_song_ids'] = set(
         SongRoleAssignment.objects.filter(
             person=request.user, song__in=[row.song for row in matrix.rows],

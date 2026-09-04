@@ -1,4 +1,9 @@
-<div class="schedule-edit-row" data-rehearsal-id="{{ form.instance.pk|default:'' }}" data-form-prefix="{{ form.prefix }}">
+<div
+  class="schedule-edit-row"
+  {% if form.instance.pk %}id="schedule-edit-row-{{ form.instance.pk }}"{% endif %}
+  data-rehearsal-id="{{ form.instance.pk|default:'' }}"
+  data-form-prefix="{{ form.prefix }}"
+>
   {{ form.id }}
   <span class="schedule-edit-delete-checkbox-wrapper" style="display:none">{{ form.DELETE }}</span>
   <span class="schedule-edit-field">
