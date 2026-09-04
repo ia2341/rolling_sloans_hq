@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}Set the rehearsal pattern{% endblock %}
+{% block content %}
+<h1>Set the rehearsal pattern</h1>
+<p>Step 5 of 5 &mdash; capture the shape of {{ semester.name }}'s rehearsal calendar: a date range and the
+  recurring day/time(s) rehearsals happen. <strong>Saving here records this Pattern only &mdash; it creates
+  no rehearsals.</strong> The next screen, the Rehearsals surface, is where you actually generate rehearsal
+  dates from this Pattern and review them before anything is scheduled.</p>
+
+{% for message in messages %}
+  <p>{{ message }}</p>
+{% endfor %}
+
+{% if save_error %}
+  <div class="rs-fallout-blocked" role="alert" id="rehearsal-pattern-step-save-error"><p>{{ save_error }}</p></div>
+{% endif %}
+
+{% if prior_semester %}
+  <p>
+    <a href="?use_prior_times=1" id="use-prior-rehearsal-times">Use {{ prior_semester.name }}'s Rehearsal Times</a>
+    &mdash; its Skip Dates and its date range are not copied.
+  </p>
+{% endif %}
+
+<form
+  method="post" action="{% url 'scheduling:manage-semester-setup-rehearsals' pk=semester.pk %}"
+  x-data="rehearsalPatternStep({{ default_duration_minutes }})"
+>
+  {% csrf_token %}
+  <fieldset>
+    <legend>Date range</legend>
+    {{ range_form.non_field_errors }}
+    <label for="{{ range_form.start_date.id_for_label }}">Start date</label>
+    {{ range_form.start_date }}
+    {{ range_form.start_date.errors }}
+    <label for="{{ range_form.end_date.id_for_label }}">End date</label>
+    {{ range_form.end_date }}
+    {{ range_form.end_date.errors }}
+  </fieldset>
+
+  <fieldset id="rehearsal-time-rows">
+    <legend>Rehearsal Times</legend>
+    {{ time_formset.management_form }}
+    {{ time_formset.non_form_errors }}
+    <div id="rehearsal-time-rows-list">
+      {% for form in time_formset %}
+        {% include "scheduling/_rehearsal_time_row.html" %}
+      {% endfor %}
+    </div>
+    <button type="button" id="add-rehearsal-time-row" @click="addRehearsalTimeRow">+ Add Rehearsal Time</button>
+    <template id="rehearsal-time-empty-row-template">
+      {% include "scheduling/_rehearsal_time_row.html" with form=time_formset.empty_form %}
+    </template>
+  </fieldset>
+
+  <button type="submit" id="save-rehearsal-pattern">Save Rehearsal Pattern</button>
+</form>
+<a href="{% url 'scheduling:manage-semester-setup-finish' pk=semester.pk %}" id="skip-rehearsal-pattern">Skip this step</a>
+
+<script src="{% static 'scheduling/js/rehearsal_pattern_step.js' %}" defer></script>
+{% endblock %}

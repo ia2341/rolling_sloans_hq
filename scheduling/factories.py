@@ -146,7 +146,11 @@ class RehearsalFactory(factory.django.DjangoModelFactory):
         model = Rehearsal
 
     semester = factory.SubFactory(SemesterFactory)
-    date = factory.LazyFunction(lambda: fake.date_between(start_date='+1d', end_date='+120d'))
+    # A monotonically increasing offset, not a random one: `unique_rehearsal_date_per_semester`
+    # means two Rehearsals built for the same Semester in one test must never land on the same day,
+    # and a random `fake.date_between()` draw from a bounded window collides often enough over a
+    # full suite run to flake (~1/120 chance per pair, seen in practice on issue #122's CI run).
+    date = factory.Sequence(lambda n: timezone.now().date() + timedelta(days=1 + n))
     start_time = time(18, 0)
     end_time = None
     setup_grace_minutes = None

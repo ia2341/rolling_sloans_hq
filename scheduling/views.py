@@ -3,6 +3,7 @@
 import json
 import re
 from collections import defaultdict
+from datetime import date
 
 from django.contrib import messages
 from django.db import transaction
@@ -137,6 +138,7 @@ from scheduling.services import (
     preview_rehearsal_generation,
     preview_roster_edits,
     preview_song_role_assignments,
+    prior_rehearsal_times_for,
     publish_semester,
     recording_count_for,
     recording_groups_for,
@@ -2771,6 +2773,24 @@ def _suggested_semester_name(prior_semester):
     return f'Fall {year}'
 
 
+def _suggested_rehearsal_date_range(semester):
+    """Return a (start_date, end_date) pair parsed from `semester`'s name, or (None, None) when it can't be inferred.
+
+    A two-line UI convenience with zero downstream authority (issue #203):
+    "Fall <year>" suggests Sep 1-Dec 31 and "Spring <year>" suggests Feb
+    1-May 31 of that same year. `Semester` gains no `start_date`/`end_date`
+    of its own from this — the range is a Pattern field the admin still
+    confirms (or changes) before it is ever saved.
+    """
+    match = _SEMESTER_NAME_PATTERN.match(semester.name.strip())
+    if not match:
+        return None, None
+    season, year = match.group(1).capitalize(), int(match.group(2))
+    if season == 'Fall':
+        return date(year, 9, 1), date(year, 12, 31)
+    return date(year, 2, 1), date(year, 5, 31)
+
+
 class SemesterSetupView(AdminRequiredMixin, View):
     """`/manage/semesters/setup/`: Semester setup steps 1-2, the wizard's only required screen (issue #200).
 
@@ -2921,10 +2941,10 @@ class SemesterSetupSetlistView(AdminRequiredMixin, View):
     and no new preview/apply pair (issue #198 §8).
 
     Saving lands the admin on the Setlist tab, same as it would from
-    there directly. A Skip link moves straight to the finish screen
-    without writing anything — this step, like every step after 1-2,
-    must never trap the admin: a bad or abandoned import is finished
-    later from the Setlist tab, not from here.
+    there directly. A Skip link moves on to step 5 (the Rehearsal
+    Pattern, issue #203) without writing anything — this step, like every
+    step after 1-2, must never trap the admin: a bad or abandoned import
+    is finished later from the Setlist tab, not from here.
     """
 
     template_name = 'scheduling/semester_setup_setlist.html'
@@ -2942,6 +2962,134 @@ class SemesterSetupSetlistView(AdminRequiredMixin, View):
             'formset': formset,
             'stamp': semester.updated_at.isoformat(),
         })
+
+
+class SemesterSetupRehearsalsView(AdminRequiredMixin, View):
+    """`/manage/semesters/setup/<pk>/rehearsals/`: Semester setup step 5, capturing the Rehearsal Pattern (issue #203).
+
+    Captures only a date range and a list of Rehearsal Times — no Skip
+    Dates form, which stay a Rehearsals-surface-only concern (CONTEXT.md's
+    Skip Date is calendar-specific, not something a fresh draft needs
+    before it can be scheduled). The range is soft-prefilled by parsing
+    the Semester's name (`_suggested_rehearsal_date_range()`); the prior
+    Semester's Rehearsal Times are offered as an opt-in prefill
+    (`prior_rehearsal_times_for()`) but never its range or Skip Dates,
+    since those are calendar-specific to that term.
+
+    This step is reachable even for a draft that already has a saved
+    Pattern (revisiting after a Skip Date was later added on the
+    Rehearsals surface, e.g. spring break) — so `post()` reads that
+    Pattern's existing Skip Dates and threads them back into the
+    `RehearsalPatternInput` unchanged. `save_rehearsal_pattern()` replaces
+    a Pattern's children wholesale, so leaving `skip_dates` at its default
+    empty list would silently delete every Skip Date on every re-save.
+
+    Saving calls `save_rehearsal_pattern()` and nothing else — no
+    Rehearsal row is ever created here. THIS IS DELIBERATE: #196 §3
+    settled that `apply_rehearsal_edits()` (a bound formset over
+    `/schedule/edit/`'s own POST body) is the sole writer of Rehearsal
+    rows, precisely so a fresh draft's empty Pending Buffer never becomes
+    a second write path that "happens to work" only because there's
+    nothing yet to conflict with. Do not wire the generation diff modal
+    or a Rehearsal formset into this step to make it "finish the job in
+    one screen" — that is the second writer #196 §3 forbids, and it will
+    only misbehave the day this step runs against a Semester that already
+    has real Rehearsals. A successful save instead hands the admin
+    straight to `/schedule/edit/` to run generation there, for real,
+    against the actual Pending Buffer.
+    """
+
+    template_name = 'scheduling/semester_setup_rehearsals.html'
+
+    def get(self, request, pk):
+        """Render the Pattern step, prefilled from this draft's own saved Pattern if one exists."""
+        semester = get_object_or_404(Semester, pk=pk)
+        if get_viewing_semester(request) != semester:
+            set_viewing_semester(request, semester)
+        return render(request, self.template_name, self._context(request, semester))
+
+    def post(self, request, pk):
+        """Validate and save the submitted Pattern, then redirect to `/schedule/edit/` to run generation."""
+        semester = get_object_or_404(Semester, pk=pk)
+        range_form = RehearsalPatternRangeForm(request.POST, prefix='range')
+        time_formset = RehearsalTimeFormSet(request.POST, prefix='rehearsal-time')
+        if not (range_form.is_valid() and time_formset.is_valid()):
+            context = self._context(request, semester, range_form=range_form, time_formset=time_formset)
+            return render(request, self.template_name, context)
+        rehearsal_times = [
+            RehearsalTimeInput(
+                day_of_week=cleaned_data['day_of_week'],
+                start_time=cleaned_data['start_time'],
+                end_time=cleaned_data['end_time'],
+            )
+            for form in time_formset.forms
+            if (cleaned_data := form.cleaned_data) and not cleaned_data.get('DELETE')
+        ]
+        existing_pattern = RehearsalPattern.objects.filter(semester=semester).prefetch_related('skip_dates').first()
+        skip_dates = (
+            [
+                SkipDateInput(start_date=skip_date.start_date, end_date=skip_date.end_date)
+                for skip_date in existing_pattern.skip_dates.all()
+            ]
+            if existing_pattern is not None
+            else []
+        )
+        pattern_input = RehearsalPatternInput(
+            start_date=range_form.cleaned_data['start_date'],
+            end_date=range_form.cleaned_data['end_date'],
+            rehearsal_times=rehearsal_times,
+            skip_dates=skip_dates,
+        )
+        try:
+            save_rehearsal_pattern(semester, pattern_input)
+        except RehearsalPatternCollisionError as error:
+            context = self._context(
+                request, semester, range_form=range_form, time_formset=time_formset, save_error=str(error),
+            )
+            return render(request, self.template_name, context)
+        messages.success(
+            request,
+            'Rehearsal Pattern saved. Nothing has been scheduled yet -- generate actual rehearsal dates from '
+            'the Rehearsals surface.',
+        )
+        return redirect('scheduling:schedule-edit')
+
+    def _context(self, request, semester, range_form=None, time_formset=None, save_error=''):
+        """Build the step's render context, prefilling the range/time forms when they weren't already bound and rejected."""
+        existing_pattern = RehearsalPattern.objects.filter(semester=semester).prefetch_related('rehearsal_times').first()
+        proposal = prior_rehearsal_times_for(semester)
+        use_prior_times = existing_pattern is None and request.GET.get('use_prior_times') == '1'
+        if range_form is None:
+            if existing_pattern is not None:
+                range_initial = {'start_date': existing_pattern.start_date, 'end_date': existing_pattern.end_date}
+            else:
+                start_date, end_date = _suggested_rehearsal_date_range(semester)
+                range_initial = {'start_date': start_date, 'end_date': end_date}
+            range_form = RehearsalPatternRangeForm(prefix='range', initial=range_initial)
+        if time_formset is None:
+            if existing_pattern is not None:
+                time_initial = self._time_initial(existing_pattern.rehearsal_times.all())
+            elif use_prior_times:
+                time_initial = self._time_initial(proposal.rehearsal_times)
+            else:
+                time_initial = []
+            time_formset = RehearsalTimeFormSet(initial=time_initial, prefix='rehearsal-time')
+        return {
+            'semester': semester,
+            'range_form': range_form,
+            'time_formset': time_formset,
+            'prior_semester': proposal.source_semester,
+            'use_prior_times': use_prior_times,
+            'default_duration_minutes': semester.default_rehearsal_duration_minutes,
+            'save_error': save_error,
+        }
+
+    def _time_initial(self, rehearsal_times):
+        """Return `rehearsal_times` (RehearsalTime rows or RehearsalTimeInputs) as RehearsalTimeFormSet initial data."""
+        return [
+            {'day_of_week': rehearsal_time.day_of_week, 'start_time': rehearsal_time.start_time, 'end_time': rehearsal_time.end_time}
+            for rehearsal_time in rehearsal_times
+        ]
 
 
 class SemesterSetupFinishView(AdminRequiredMixin, View):

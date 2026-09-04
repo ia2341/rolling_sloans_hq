@@ -3465,6 +3465,44 @@ def save_rehearsal_pattern(semester: Semester, pattern: RehearsalPatternInput) -
 
 
 @dataclass(frozen=True)
+class PriorRehearsalTimesProposal:
+    """The prior Semester's Rehearsal Times, offered as an opt-in prefill for the setup wizard's Pattern step (issue #203).
+
+    Only Rehearsal Times are proposed — the prior Pattern's generation
+    range and Skip Dates are deliberately excluded, since both are
+    calendar-specific to that term and copying them would plant last
+    year's spring break into this one. `source_semester` is None when
+    there is nothing to offer (no prior Semester, or one with no saved
+    Rehearsal Times), in which case `rehearsal_times` is empty.
+    """
+
+    source_semester: Semester | None
+    rehearsal_times: list[RehearsalTimeInput]
+
+
+def prior_rehearsal_times_for(semester: Semester) -> PriorRehearsalTimesProposal:
+    """Propose `semester`'s prior Semester's Rehearsal Times as an opt-in wizard prefill (issue #203).
+
+    A read, not a write: nothing here is saved, mirroring
+    `import_roster_from_semester()`'s shape for the same wizard.
+    """
+    source = _prior_semester(semester)
+    if source is not None:
+        prior_pattern = RehearsalPattern.objects.filter(semester=source).prefetch_related('rehearsal_times').first()
+        if prior_pattern is not None and prior_pattern.rehearsal_times.exists():
+            rehearsal_times = [
+                RehearsalTimeInput(
+                    day_of_week=rehearsal_time.day_of_week,
+                    start_time=rehearsal_time.start_time,
+                    end_time=rehearsal_time.end_time,
+                )
+                for rehearsal_time in prior_pattern.rehearsal_times.all()
+            ]
+            return PriorRehearsalTimesProposal(source_semester=source, rehearsal_times=rehearsal_times)
+    return PriorRehearsalTimesProposal(source_semester=None, rehearsal_times=[])
+
+
+@dataclass(frozen=True)
 class GenerationCreateItem:
     """One date the Pattern would generate a brand-new Rehearsal for (issue #222)."""
 
