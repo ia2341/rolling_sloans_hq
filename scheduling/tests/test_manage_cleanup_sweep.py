@@ -15,8 +15,12 @@ exception to the `manage/*` retirement, not a missed migration.
 from pathlib import Path
 
 from django.conf import settings
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import NoReverseMatch, reverse
+
+from identity.factories import PersonFactory
+
+PASSWORD = 'a-strong-test-password-123'
 
 # Every URL name retired outright across #182 (/manage/setlist/*),
 # #196/#224 (/manage/schedule/*) and #197/#213 (/manage/assignments/*).
@@ -40,15 +44,30 @@ REMOVED_PATH_PREFIXES = (
     '/manage/assignments/',
 )
 
-# The `/manage/*` routes that survive the retirement, per #204's acceptance
-# criteria: conflict adjudication (scheduling) and people management (identity).
+# Every `/manage/*` route left in the URLConf after the retirement: semester
+# setup/select/publish/delete (untouched by #204), and the two surfaces #204
+# is actually about — conflict adjudication (scheduling) and people
+# management (identity), the deliberate exception per ADR 0005/#191.
 SURVIVING_ROUTE_NAMES = (
     'scheduling:manage-semester-select',
     'scheduling:manage-semester-setup',
     'scheduling:manage-semesters',
+    'scheduling:manage-semesters-publish',
+    'scheduling:manage-semesters-delete',
     'scheduling:manage-conflicts',
+    'scheduling:manage-conflicts-detail',
     'identity:people',
+    'identity:people-toggle-admin',
 )
+
+# (name, args) for the surviving routes that take a positional pk/rehearsal_id,
+# so the reverse-test below can resolve them too.
+SURVIVING_ROUTE_ARGS = {
+    'scheduling:manage-semesters-publish': [1],
+    'scheduling:manage-semesters-delete': [1],
+    'scheduling:manage-conflicts-detail': [1],
+    'identity:people-toggle-admin': [1],
+}
 
 
 def _all_template_sources():
@@ -87,10 +106,11 @@ class RemovedRouteNamesDoNotReverseTests(TestCase):
 
 class SurvivingRouteNamesReverseTests(TestCase):
     def test_surviving_manage_routes_reverse(self):
-        """`/manage/conflicts/` and `/manage/people/` (and the semester-setup doors) still resolve."""
+        """`/manage/conflicts/` and `/manage/people/` (and the semester-management doors) still resolve."""
         for name in SURVIVING_ROUTE_NAMES:
             with self.subTest(name=name):
-                self.assertTrue(reverse(name).startswith('/'))
+                args = SURVIVING_ROUTE_ARGS.get(name, [])
+                self.assertTrue(reverse(name, args=args).startswith('/'))
 
 
 class NoTemplateReferencesARetiredRouteTests(TestCase):
@@ -112,6 +132,24 @@ class NoTemplateReferencesARetiredRouteTests(TestCase):
                     offenders.append(f'{path}: hardcodes removed path prefix {prefix!r}')
 
         self.assertEqual(offenders, [], '\n'.join(offenders))
+
+    @override_settings(SECURE_SSL_REDIRECT=False)
+    def test_home_admin_panel_links_both_surviving_doors(self):
+        """The Home admin panel (`/`) renders a door to `/manage/conflicts/` and `/manage/people/` (#204).
+
+        The retirement must not strand the two surfaces that stay; this
+        renders the real page an admin lands on rather than trusting the
+        route-name checks above to stand in for "and it's linked".
+        """
+        admin = PersonFactory(password=PASSWORD, is_admin=True)
+        self.client.login(username=admin.email, password=PASSWORD)
+
+        response = self.client.get('/')
+        content = response.content.decode()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(reverse('scheduling:manage-conflicts'), content)
+        self.assertIn(reverse('identity:people'), content)
 
     def test_no_orphaned_manage_templates_remain_in_the_tree(self):
         """The templates the retired screens used to render are deleted, not left dangling unreferenced."""
