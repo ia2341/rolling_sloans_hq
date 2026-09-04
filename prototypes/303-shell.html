@@ -1,15 +1,23 @@
 <!doctype html>
 <!--
-  PROTOTYPE — throwaway. Ticket #303 on map #302.
-  Question: what is the global shell (nav, phone included), where does admin work live,
-  and what does the Overview look like in whichever shell wins?
+  PROTOTYPE v2 — throwaway. Ticket #303 on map #302.
 
-  Three variants, switchable via #<variant>/<page> and the bottom bar:
-    A  Edit in place   — member pages flip into edit mode; /manage/ shrinks to two doors
-    B  Admin section   — /manage/* absorbs the editors; member pages read-only for everyone
-    C  Mode switch     — one set of pages, a global Member/Admin mode arms every editor at once
+  v1 offered three variants. Review closed the structural question, so v2 is a single
+  converged build rather than an A/B/C:
 
-  Greybox: structure only. No colour, type or theme decisions are being proposed here.
+    Nav        collapsible LEFT sidebar on desktop (v1 had a top bar); bottom tab bar on phone
+    Admin      edit-in-place (v1's A) — member pages carry Edit; no separate /manage/ app
+    Semester   the control lives in the sidebar (v1's B side panel), with Save changes /
+               Publish beneath it; the top-right dropdown and the Overview admin card are gone
+    Overview   v1's A layout on desktop; v1's B two-line list on phone
+    Schedule   v1's B per-song cards on phone; running order and assignments MERGED into
+               one table with a start-time column
+
+  First drafts of four surfaces v1 never showed — All rehearsals, Song detail, the
+  Declare-a-conflict flow, and the fuller Songs table. Those are formally #305's to
+  resolve; they are here so the nav model can be judged against real destinations.
+
+  Greybox: structure only. No colour, type or theme is being proposed.
   All data synthesized — no real member data (CONTRIBUTING.md).
 -->
 <title>Shell Greybox</title>
@@ -17,7 +25,6 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
 <style>
-  /* ---- tokens: cool-biased greys, blueprint register ---- */
   :root {
     --paper:      #eef0f4;
     --surface:    #ffffff;
@@ -31,300 +38,241 @@
     --chrome:     #1d2430;
     --chrome-ink: #e9ecf2;
     --mark:       #2f4fd0;   /* prototype chrome only, never inside a frame */
-    --draft:      #8a5a10;   /* the draft-semester state the shell must carry */
-    --draft-bg:   #f6ecd8;
+    --warn:       #9a5a12;   /* semantic: a declared conflict */
+    --warn-bg:    #f7ecdc;
+    --ok:         #2f6b47;   /* semantic: your own slot / confirmed */
+    --ok-bg:      #e6f0e9;
     --radius:     6px;
     --sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
     --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   }
-  :root:not([data-theme="light"]) { }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
-      --paper:      #14171d;
-      --surface:    #1c2029;
-      --surface-2:  #232833;
-      --box:        #2b313d;
-      --line:       #414958;
-      --line-soft:  #333a47;
-      --ink:        #e7eaf0;
-      --ink-2:      #a8b0bf;
-      --ink-3:      #7d8593;
-      --chrome:     #0d1015;
-      --chrome-ink: #e9ecf2;
-      --mark:       #7f95ee;
-      --draft:      #e0b566;
-      --draft-bg:   #33291339;
+      --paper: #14171d; --surface: #1c2029; --surface-2: #232833; --box: #2b313d;
+      --line: #414958; --line-soft: #333a47; --ink: #e7eaf0; --ink-2: #a8b0bf;
+      --ink-3: #7d8593; --chrome: #0d1015; --mark: #7f95ee;
+      --warn: #e0ac66; --warn-bg: #3a2c1633; --ok: #7fc39b; --ok-bg: #1d3128aa;
     }
   }
   :root[data-theme="dark"] {
-    --paper:      #14171d;
-    --surface:    #1c2029;
-    --surface-2:  #232833;
-    --box:        #2b313d;
-    --line:       #414958;
-    --line-soft:  #333a47;
-    --ink:        #e7eaf0;
-    --ink-2:      #a8b0bf;
-    --ink-3:      #7d8593;
-    --chrome:     #0d1015;
-    --chrome-ink: #e9ecf2;
-    --mark:       #7f95ee;
-    --draft:      #e0b566;
-    --draft-bg:   #33291339;
+    --paper: #14171d; --surface: #1c2029; --surface-2: #232833; --box: #2b313d;
+    --line: #414958; --line-soft: #333a47; --ink: #e7eaf0; --ink-2: #a8b0bf;
+    --ink-3: #7d8593; --chrome: #0d1015; --mark: #7f95ee;
+    --warn: #e0ac66; --warn-bg: #3a2c1633; --ok: #7fc39b; --ok-bg: #1d3128aa;
   }
 
   * { box-sizing: border-box; }
   body {
     margin: 0; background: var(--paper); color: var(--ink);
     font-family: var(--sans); font-size: 14px; line-height: 1.45;
-    padding: 18px 18px 108px;
+    padding: 18px 18px 104px;
   }
-  h1, h2, h3, h4 { margin: 0; text-wrap: balance; font-weight: 600; }
+  h1, h2, h3 { margin: 0; text-wrap: balance; font-weight: 600; }
   button { font: inherit; color: inherit; }
-  a { color: inherit; }
 
-  /* ---- prototype chrome (outside the frame) ---- */
-  .chrome-head {
-    max-width: 1180px; margin: 0 auto 14px; display: flex; flex-wrap: wrap;
-    align-items: baseline; gap: 10px 16px;
-  }
+  /* ---- prototype chrome ---- */
+  .chrome-head { max-width: 1180px; margin: 0 auto 14px; display: flex; flex-wrap: wrap;
+    align-items: baseline; gap: 10px 16px; }
   .chrome-head h1 { font-size: 15px; letter-spacing: -0.01em; }
-  .chrome-head .tag {
-    font-family: var(--mono); font-size: 10px; letter-spacing: 0.09em;
-    text-transform: uppercase; color: var(--ink-3);
-    border: 1px solid var(--line); border-radius: 99px; padding: 2px 8px;
-  }
+  .chrome-head .tag { font-family: var(--mono); font-size: 10px; letter-spacing: 0.09em;
+    text-transform: uppercase; color: var(--ink-3); border: 1px solid var(--line);
+    border-radius: 99px; padding: 2px 8px; }
   .chrome-head p { margin: 0; color: var(--ink-2); font-size: 12.5px; max-width: 62ch; }
-
   .stage { max-width: 1180px; margin: 0 auto; }
 
-  /* the device frame */
-  .frame {
-    background: var(--surface); color: var(--ink);
-    border: 1px solid var(--line); border-radius: 10px;
-    overflow: hidden; display: flex; flex-direction: column;
-    margin: 0 auto;
-  }
-  .frame.desktop { width: 100%; min-height: 660px; }
-  .frame.phone {
-    width: 390px; height: 780px; border-radius: 26px; border-width: 8px;
-    border-color: var(--chrome); box-shadow: 0 10px 34px rgb(0 0 0 / 0.18);
-  }
+  .frame { background: var(--surface); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; margin: 0 auto; }
+  .frame.desktop { width: 100%; min-height: 680px; }
+  .frame.phone { width: 390px; height: 780px; border-radius: 26px; border-width: 8px;
+    border-color: var(--chrome); box-shadow: 0 10px 34px rgb(0 0 0 / 0.18); }
   .frame-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; }
+  .framewrap { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; }
 
-  /* the tradeoff note, deliberately outside the frame */
-  .verdict {
-    max-width: 1180px; margin: 16px auto 0; border: 1px solid var(--line-soft);
-    border-radius: var(--radius); background: var(--surface); padding: 14px 16px;
-  }
+  .verdict { max-width: 1180px; margin: 16px auto 0; border: 1px solid var(--line-soft);
+    border-radius: var(--radius); background: var(--surface); padding: 14px 16px; }
   .verdict h2 { font-size: 12px; font-family: var(--mono); letter-spacing: 0.08em;
     text-transform: uppercase; color: var(--ink-3); margin-bottom: 8px; }
-  .verdict ul { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
+  .verdict ul { margin: 0 0 12px; padding-left: 18px; display: grid; gap: 6px; }
   .verdict li { color: var(--ink-2); font-size: 13px; }
   .verdict li b { color: var(--ink); font-weight: 600; }
+  .verdict .cols { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
 
-  /* ---- greybox primitives (inside the frame) ---- */
-  .gb-label {
-    font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em;
-    text-transform: uppercase; color: var(--ink-3);
-  }
-  .bar { height: 8px; border-radius: 2px; background: var(--box); display: block; }
-  .prose { display: grid; gap: 6px; }
-  .btn {
-    border: 1px solid var(--line); background: var(--surface-2); color: var(--ink);
-    border-radius: var(--radius); padding: 6px 11px; font-size: 13px; cursor: pointer;
-    white-space: nowrap;
-  }
+  /* ---- greybox primitives ---- */
+  .gb-label { font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--ink-3); }
+  .btn { border: 1px solid var(--line); background: var(--surface-2); color: var(--ink);
+    border-radius: var(--radius); padding: 6px 11px; font-size: 13px; cursor: pointer; white-space: nowrap; }
   .btn.primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
   .btn.ghost { background: transparent; border-color: transparent; color: var(--ink-2); }
   .btn.sm { padding: 3px 8px; font-size: 12px; }
-  .field {
-    border: 1px solid var(--line); border-radius: 4px; background: var(--surface);
-    padding: 4px 7px; font-size: 13px; min-height: 28px; display: flex; align-items: center;
-    color: var(--ink-2);
-  }
-  .chip {
-    display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line);
-    background: var(--surface-2); border-radius: 99px; padding: 2px 9px; font-size: 12px;
-  }
-  .chip.empty { border-style: dashed; color: var(--ink-3); }
-  .chip.backup { border-style: dotted; }
+  .btn[disabled] { opacity: 0.4; cursor: not-allowed; }
+  .btn.icon { padding: 3px 7px; font-family: var(--mono); }
+  .field { border: 1px solid var(--line); border-radius: 4px; background: var(--surface);
+    padding: 4px 7px; font-size: 13px; min-height: 28px; display: flex; align-items: center; color: var(--ink-2); }
   .muted { color: var(--ink-3); }
   .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
-  .card {
-    border: 1px solid var(--line-soft); border-radius: var(--radius);
-    background: var(--surface); padding: 12px 14px;
-  }
+  .card { border: 1px solid var(--line-soft); border-radius: var(--radius);
+    background: var(--surface); padding: 12px 14px; }
   .stack { display: grid; gap: 12px; }
   .row-between { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
   .scroll-x { overflow-x: auto; }
+  .hstack { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+
+  /* assignment pills — styled by state (review item 6) */
+  .chip { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line);
+    background: var(--surface-2); border-radius: 99px; padding: 2px 9px; font-size: 12px; white-space: nowrap; }
+  .chip.empty { border-style: dashed; color: var(--ink-3); background: transparent; }
+  .chip.backup { border-style: dashed; background: transparent; }
+  .chip.backup .tagm { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--ink-3); }
+  .chip.conflict { border-color: var(--warn); background: var(--warn-bg); color: var(--warn); }
+  .chip.mismatch { border-style: solid; box-shadow: inset 0 -2px 0 var(--line); }
+  .chip.you { border-color: var(--ok); background: var(--ok-bg); color: var(--ok); font-weight: 600; }
+  .legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 11.5px; color: var(--ink-3); }
 
   table.gb { border-collapse: collapse; width: 100%; font-size: 13px; }
-  table.gb th, table.gb td {
-    border-bottom: 1px solid var(--line-soft); padding: 7px 10px; text-align: left;
-    vertical-align: middle;
-  }
+  table.gb th, table.gb td { border-bottom: 1px solid var(--line-soft); padding: 7px 10px;
+    text-align: left; vertical-align: middle; }
   table.gb th { font-weight: 600; font-size: 11.5px; color: var(--ink-2); white-space: nowrap; }
-  table.gb td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  table.gb td.num, table.gb th.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  table.gb tr.sub td { border-bottom: 1px solid var(--line-soft); padding-top: 0; }
 
-  /* page body */
   .page { padding: 16px; display: grid; gap: 16px; }
-  .frame.desktop .page { padding: 22px 28px; max-width: 1000px; }
+  .frame.desktop .page { padding: 22px 28px; }
   .page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
   .page-head h1 { font-size: 20px; letter-spacing: -0.015em; }
   .frame.phone .page-head h1 { font-size: 17px; }
   .page-head .actions { display: flex; gap: 6px; flex-shrink: 0; }
   .section-head { font-size: 13px; color: var(--ink-2); font-weight: 600; }
 
-  /* ---- shared shell chrome (inside the frame) ---- */
-  .topbar {
-    display: flex; align-items: center; gap: 18px; padding: 0 20px; height: 52px;
-    border-bottom: 1px solid var(--line); background: var(--surface); flex-shrink: 0;
-  }
-  .brand { font-weight: 700; font-size: 14px; letter-spacing: -0.01em; white-space: nowrap; }
-  .topnav { display: flex; gap: 2px; flex: 1; }
-  .topnav a {
-    text-decoration: none; color: var(--ink-2); padding: 6px 10px; border-radius: 5px;
-    font-size: 13px; white-space: nowrap;
-  }
-  .topnav a[aria-current] { color: var(--ink); background: var(--surface-2); font-weight: 600; }
-  .topbar .right { display: flex; align-items: center; gap: 8px; }
+  /* toggle (review item 8) */
+  .toggle { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px;
+    color: var(--ink-2); cursor: pointer; }
+  .toggle .track { width: 30px; height: 17px; border-radius: 99px; background: var(--box);
+    border: 1px solid var(--line); position: relative; flex-shrink: 0; }
+  .toggle .knob { position: absolute; top: 1px; left: 1px; width: 13px; height: 13px;
+    border-radius: 50%; background: var(--surface); border: 1px solid var(--line); }
+  .toggle[aria-pressed="true"] .track { background: var(--ink); border-color: var(--ink); }
+  .toggle[aria-pressed="true"] .knob { left: auto; right: 1px; background: var(--surface); border-color: var(--ink); }
 
-  .phonebar {
-    display: flex; align-items: center; gap: 10px; padding: 0 14px; height: 50px;
-    border-bottom: 1px solid var(--line); background: var(--surface); flex-shrink: 0;
-  }
-  .phonebar .title { font-weight: 600; font-size: 15px; flex: 1; }
+  /* segmented sub-view control */
+  .seg2 { display: inline-flex; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+  .seg2 button { border: 0; background: transparent; padding: 5px 12px; font-size: 12.5px; cursor: pointer; color: var(--ink-3); }
+  .seg2 button[aria-pressed="true"] { background: var(--ink); color: var(--surface); font-weight: 600; }
 
-  .tabbar {
-    display: grid; grid-auto-flow: column; grid-auto-columns: 1fr;
-    border-top: 1px solid var(--line); background: var(--surface); flex-shrink: 0;
-    padding-bottom: 6px;
-  }
-  .tabbar a {
-    text-decoration: none; color: var(--ink-3); display: grid; justify-items: center;
-    gap: 3px; padding: 7px 2px 3px; font-size: 10.5px;
-  }
+  /* ---- the shell: collapsible left sidebar (review item 1) ---- */
+  .shell { display: flex; flex: 1; min-height: 0; }
+  .sidebar { flex-shrink: 0; border-right: 1px solid var(--line); background: var(--surface-2);
+    display: flex; flex-direction: column; width: 236px; }
+  .sidebar.rail { width: 60px; }
+  .sidebar .head { display: flex; align-items: center; gap: 8px; padding: 12px 14px; height: 52px; }
+  .sidebar .brand { font-weight: 700; font-size: 14px; letter-spacing: -0.01em; white-space: nowrap;
+    overflow: hidden; flex: 1; }
+  .sidebar nav { flex: 1; overflow-y: auto; padding: 4px 0; }
+  .sidebar .group { padding: 12px 14px 4px; }
+  .sidebar a { display: flex; align-items: center; gap: 10px; text-decoration: none;
+    color: var(--ink-2); padding: 7px 14px; font-size: 13px; white-space: nowrap; }
+  .sidebar a[aria-current] { color: var(--ink); font-weight: 600; background: var(--surface);
+    box-shadow: inset 2px 0 0 var(--ink); }
+  .sidebar .glyph { width: 18px; height: 18px; border: 1.5px solid currentColor;
+    border-radius: 5px; flex-shrink: 0; }
+  .sidebar .count { margin-left: auto; font-family: var(--mono); font-size: 11px;
+    border: 1px solid var(--line); border-radius: 99px; padding: 0 6px; }
+  .sidebar.rail a { justify-content: center; padding: 8px 0; }
+  .sidebar.rail .label, .sidebar.rail .count, .sidebar.rail .group, .sidebar.rail .brand { display: none; }
+
+  /* the semester control — the shell's one home for it (review item 13) */
+  .sem-panel { border-top: 1px solid var(--line); padding: 12px 14px; display: grid; gap: 8px; }
+  .sem-panel.draft { background: var(--warn-bg); }
+  .sem-panel .warnline { font-size: 11.5px; color: var(--warn); }
+  .sidebar.rail .sem-panel { padding: 10px 6px; justify-items: center; }
+  .sidebar.rail .sem-panel .hide-rail { display: none; }
+
+  .topline { display: flex; align-items: center; gap: 10px; padding: 0 20px; height: 52px;
+    border-bottom: 1px solid var(--line); background: var(--surface); flex-shrink: 0; }
+  .topline .title { font-weight: 600; flex: 1; }
+
+  /* phone */
+  .phonebar { display: flex; align-items: center; gap: 8px; padding: 0 12px; height: 50px;
+    border-bottom: 1px solid var(--line); background: var(--surface); flex-shrink: 0; }
+  .phonebar .title { font-weight: 600; font-size: 15px; flex: 1; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  .tabbar { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr;
+    border-top: 1px solid var(--line); background: var(--surface); flex-shrink: 0; padding-bottom: 6px; }
+  .tabbar a { text-decoration: none; color: var(--ink-3); display: grid; justify-items: center;
+    gap: 3px; padding: 7px 2px 3px; font-size: 10.5px; position: relative; }
   .tabbar a[aria-current] { color: var(--ink); font-weight: 600; }
-  .tabbar .glyph {
-    width: 20px; height: 20px; border: 1.5px solid currentColor; border-radius: 5px;
-  }
+  .tabbar .glyph { width: 20px; height: 20px; border: 1.5px solid currentColor; border-radius: 5px; }
+  .tabbar .dot { position: absolute; top: 5px; right: 50%; margin-right: -14px; width: 6px;
+    height: 6px; border-radius: 50%; background: var(--warn); }
+  .sem-strip { padding: 7px 12px; font-size: 12px; display: flex; align-items: center; gap: 8px;
+    border-bottom: 1px solid var(--line); background: var(--warn-bg); color: var(--warn); flex-shrink: 0; }
 
-  /* the draft-semester strip the shell must always have a home for */
-  .draft-strip {
-    background: var(--draft-bg); color: var(--draft); border-bottom: 1px solid var(--line);
-    padding: 7px 16px; font-size: 12.5px; display: flex; align-items: center;
-    gap: 10px; flex-shrink: 0;
-  }
-  .draft-strip b { font-weight: 600; }
-  .draft-strip .btn { border-color: currentColor; color: inherit; background: transparent; }
-
-  /* edit-mode toolbar (variant A) */
-  .edit-toolbar {
-    background: var(--ink); color: var(--surface); padding: 8px 16px;
-    display: flex; align-items: center; gap: 8px; flex-shrink: 0; font-size: 13px;
-  }
+  /* edit toolbar */
+  .edit-toolbar { background: var(--ink); color: var(--surface); padding: 8px 16px;
+    display: flex; align-items: center; gap: 8px; flex-shrink: 0; font-size: 13px; }
   .edit-toolbar .grow { flex: 1; font-weight: 600; }
   .edit-toolbar .btn { background: transparent; border-color: rgb(255 255 255 / 0.35); color: inherit; }
   .edit-toolbar .btn.primary { background: var(--surface); color: var(--ink); border-color: var(--surface); }
 
-  /* admin section (variant B) */
-  .adminshell { display: flex; flex: 1; min-height: 0; }
-  .sidebar {
-    width: 232px; flex-shrink: 0; border-right: 1px solid var(--line);
-    background: var(--surface-2); padding: 14px 0; overflow-y: auto;
-  }
-  .sidebar .group { padding: 10px 16px 4px; }
-  .sidebar .group .gb-label { display: block; }
-  .sidebar a {
-    display: block; text-decoration: none; color: var(--ink-2); padding: 6px 16px; font-size: 13px;
-  }
-  .sidebar a[aria-current] {
-    color: var(--ink); font-weight: 600; background: var(--surface);
-    box-shadow: inset 2px 0 0 var(--ink);
-  }
-  .sidebar .semester-pick { padding: 0 16px 10px; display: grid; gap: 6px; }
-  .adminbar {
-    display: flex; align-items: center; gap: 10px; padding: 0 20px; height: 48px;
-    border-bottom: 1px solid var(--line); background: var(--surface); flex-shrink: 0;
-  }
-  .adminbar .title { font-weight: 600; flex: 1; }
-  .admin-tag {
-    font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
-    border: 1px solid var(--line); border-radius: 3px; padding: 2px 6px; color: var(--ink-2);
-  }
-  .drawer-backdrop {
-    position: absolute; inset: 0; background: rgb(0 0 0 / 0.35); display: flex;
-  }
-  .drawer {
-    width: 252px; background: var(--surface); border-right: 1px solid var(--line);
-    overflow-y: auto; padding: 12px 0;
-  }
-  .framewrap { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; }
+  /* the rehearsal-window timeline (review item 3) */
+  .timeline { display: grid; gap: 5px; }
+  .timeline .track { display: flex; height: 26px; border: 1px solid var(--line);
+    border-radius: 4px; overflow: hidden; background: var(--surface-2); }
+  .timeline .slot { border-right: 1px solid var(--line-soft); display: flex; align-items: center;
+    justify-content: center; font-size: 9.5px; overflow: hidden; padding: 0 2px;
+    font-family: var(--mono); color: var(--ink-3); }
+  .timeline .slot:last-child { border-right: 0; }
+  .timeline .slot.mine { background: var(--ok-bg); color: var(--ok); font-weight: 600; }
+  .timeline .slot.brk { background: repeating-linear-gradient(45deg,
+      transparent, transparent 3px, var(--box) 3px, var(--box) 6px); }
+  .timeline .ends { display: flex; justify-content: space-between; font-size: 11px; }
 
-  /* mode switch (variant C) */
-  .modeswitch {
-    display: inline-flex; border: 1px solid var(--line); border-radius: 99px;
-    overflow: hidden; background: var(--surface-2);
-  }
-  .modeswitch button {
-    border: 0; background: transparent; padding: 4px 12px; font-size: 12.5px;
-    cursor: pointer; color: var(--ink-3);
-  }
-  .modeswitch button[aria-pressed="true"] { background: var(--ink); color: var(--surface); font-weight: 600; }
-  .mode-context {
-    display: flex; align-items: center; gap: 8px; padding: 6px 16px; font-size: 12.5px;
-    border-bottom: 1px solid var(--line); background: var(--surface-2); flex-shrink: 0;
-  }
-  .mode-context.draft { background: var(--draft-bg); color: var(--draft); }
-  .mode-context .grow { flex: 1; }
+  /* modal / sheet */
+  .backdrop { position: absolute; inset: 0; background: rgb(0 0 0 / 0.38); display: flex;
+    align-items: center; justify-content: center; padding: 20px; }
+  .backdrop.bottom { align-items: flex-end; padding: 0; }
+  .modal { background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+    width: 100%; max-width: 440px; max-height: 100%; overflow-y: auto; }
+  .backdrop.bottom .modal { border-radius: 14px 14px 0 0; max-width: none; border-bottom: 0; }
+  .modal .m-head { padding: 14px 16px; border-bottom: 1px solid var(--line-soft);
+    display: flex; align-items: center; gap: 10px; }
+  .modal .m-head h3 { font-size: 15px; flex: 1; }
+  .modal .m-body { padding: 14px 16px; display: grid; gap: 12px; }
+  .modal .m-foot { padding: 12px 16px; border-top: 1px solid var(--line-soft);
+    display: flex; gap: 8px; justify-content: flex-end; }
+  .radio { display: flex; gap: 9px; align-items: flex-start; padding: 8px 10px;
+    border: 1px solid var(--line); border-radius: var(--radius); cursor: pointer; }
+  .radio[aria-checked="true"] { border-color: var(--ink); background: var(--surface-2); }
+  .radio .dot { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--line);
+    flex-shrink: 0; margin-top: 2px; }
+  .radio[aria-checked="true"] .dot { border-color: var(--ink); box-shadow: inset 0 0 0 3px var(--surface),
+    inset 0 0 0 8px var(--ink); }
+  .radio .sub { font-size: 11.5px; color: var(--ink-3); }
+  .privacy { font-size: 11.5px; color: var(--ink-3); border-left: 2px solid var(--line);
+    padding-left: 8px; }
 
-  .sheet {
-    position: absolute; left: 0; right: 0; bottom: 0; background: var(--surface);
-    border-top: 1px solid var(--line); border-radius: 14px 14px 0 0; padding: 14px 16px 20px;
-    box-shadow: 0 -8px 24px rgb(0 0 0 / 0.16);
-  }
-  .sheet a { display: block; text-decoration: none; padding: 9px 4px; border-bottom: 1px solid var(--line-soft); }
-
-  /* overview song-progress treatments */
+  .songlist { display: grid; }
+  .songlist .item { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px;
+    align-items: center; padding: 9px 0; border-bottom: 1px solid var(--line-soft); }
+  .songlist .item .sub { grid-column: 1 / -1; }
   .prog { display: flex; align-items: center; gap: 8px; }
-  .prog .track { flex: 1; height: 5px; background: var(--box); border-radius: 99px; min-width: 60px; }
+  .prog .track { flex: 1; height: 5px; background: var(--box); border-radius: 99px; min-width: 50px; }
   .prog .fill { height: 100%; background: var(--ink-2); border-radius: 99px; }
   .songcards { display: grid; gap: 8px; }
-  .songcards .kv { display: flex; justify-content: space-between; gap: 10px; font-size: 12.5px; }
-  .songlist { display: grid; }
-  .songlist .item {
-    display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; align-items: center;
-    padding: 9px 0; border-bottom: 1px solid var(--line-soft);
-  }
-  .songlist .item .sub { grid-column: 1 / -1; }
+  .songcards .kv { display: flex; justify-content: space-between; gap: 10px; font-size: 12.5px; padding: 3px 0; }
+  .matrix th:first-child, .matrix td:first-child { position: sticky; left: 0; background: var(--surface); z-index: 1; }
+  .matrix th:nth-child(2), .matrix td:nth-child(2) { position: sticky; left: 62px; background: var(--surface); z-index: 1; }
 
-  /* assignment grid treatments */
-  .matrix th:first-child, .matrix td:first-child {
-    position: sticky; left: 0; background: var(--surface); z-index: 1;
-  }
-  .accordion .acc-head {
-    display: flex; justify-content: space-between; align-items: center; gap: 8px;
-    padding: 9px 0; border-bottom: 1px solid var(--line-soft); font-weight: 600; font-size: 13px;
-  }
-
-  /* ---- bottom switcher (prototype chrome) ---- */
-  .switcher {
-    position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 50;
+  /* ---- bottom switcher ---- */
+  .switcher { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 50;
     display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: center;
-    background: var(--chrome); color: var(--chrome-ink); border-radius: 99px;
-    padding: 7px 9px; box-shadow: 0 6px 26px rgb(0 0 0 / 0.3); max-width: calc(100vw - 24px);
-  }
-  .switcher button, .switcher select {
-    font: inherit; font-size: 12.5px; border: 1px solid rgb(255 255 255 / 0.22);
-    background: rgb(255 255 255 / 0.06); color: inherit; border-radius: 99px;
-    padding: 4px 11px; cursor: pointer;
-  }
+    background: var(--chrome); color: var(--chrome-ink); border-radius: 99px; padding: 7px 9px;
+    box-shadow: 0 6px 26px rgb(0 0 0 / 0.3); max-width: calc(100vw - 24px); }
+  .switcher button, .switcher select { font: inherit; font-size: 12.5px;
+    border: 1px solid rgb(255 255 255 / 0.22); background: rgb(255 255 255 / 0.06);
+    color: inherit; border-radius: 99px; padding: 4px 11px; cursor: pointer; }
   .switcher select { padding: 4px 8px; }
-  .switcher .vname {
-    font-family: var(--mono); font-size: 12px; padding: 0 6px; min-width: 168px;
-    text-align: center; letter-spacing: -0.01em;
-  }
   .switcher .seg { display: inline-flex; border-radius: 99px; overflow: hidden;
     border: 1px solid rgb(255 255 255 / 0.22); }
   .switcher .seg button { border: 0; border-radius: 0; }
@@ -336,21 +284,17 @@
 </style>
 
 <div class="chrome-head">
-  <h1>Rolling Sloans — shell greybox</h1>
+  <h1>Rolling Sloans — shell greybox v2</h1>
   <span class="tag">Prototype · #303</span>
-  <p>Three structurally different answers to “where does admin work live”, each carrying the nav
-  model and Overview layout that follow from it. Structure only — no colour, type or theme is being
-  proposed. All names, songs and dates are synthesized.</p>
+  <p>One converged build, not variants: the structural question closed in review. Collapsible
+  left sidebar, edit-in-place admin, and the semester control living in the sidebar. Structure
+  only — no colour, type or theme is proposed. All data synthesized.</p>
 </div>
 
 <div class="stage" id="stage"></div>
 <div class="verdict" id="verdict"></div>
 
 <div class="switcher" role="group" aria-label="Prototype controls">
-  <button id="prev" aria-label="Previous variant">←</button>
-  <span class="vname" id="vname"></span>
-  <button id="next" aria-label="Next variant">→</button>
-  <span class="divider"></span>
   <span class="seg" id="viewportseg">
     <button data-vp="desktop">Desktop</button>
     <button data-vp="phone">Phone</button>
@@ -360,457 +304,556 @@
     <button data-role="admin">Admin</button>
   </span>
   <span class="divider"></span>
+  <button id="dirty">Unsaved edits: off</button>
+  <span class="divider"></span>
   <select id="pagesel" aria-label="Page"></select>
 </div>
 
 <script>
 /* ============================================================
-   Synthesized data — nothing here corresponds to a real person.
+   Synthesized data — nothing here is a real person or setlist.
    ============================================================ */
-const SEMESTERS = [
-  { name: 'Fall 2026', status: 'Live' },
-  { name: 'Spring 2027', status: 'Draft' },
-];
-
-const SONGS = [
-  { pos: 1, title: 'Paper Lanterns',      len: '3:42', done: 5, total: 5, mine: true  },
-  { pos: 2, title: 'Riverbend',           len: '4:15', done: 3, total: 6, mine: true  },
-  { pos: 3, title: 'Static Bloom',        len: '2:58', done: 6, total: 6, mine: false },
-  { pos: 4, title: 'Two Weeks in June',   len: '5:07', done: 0, total: 5, mine: false },
-  { pos: 5, title: 'Marigold',            len: '3:20', done: 4, total: 5, mine: true  },
-  { pos: 6, title: 'Cold Open',           len: '3:55', done: 2, total: 6, mine: false },
-  { pos: 7, title: 'The Long Way Down',   len: '6:12', done: 5, total: 5, mine: true  },
-  { pos: 8, title: 'Ninety-Nine Summers', len: '4:01', done: 1, total: 6, mine: false },
-];
-
 const ROLES = ['Lead Vocals', 'Guitar', 'Bass', 'Drums', 'Keys'];
+const YOU = 'Avery Cho';
+
 const PEOPLE = [
-  { name: 'Avery Cho',      roles: 'Lead Vocals, Keys' },
-  { name: 'Dani Okafor',    roles: 'Drums' },
-  { name: 'Priya Raman',    roles: 'Bass, Backing Vocals' },
-  { name: 'Marcus Vale',    roles: 'Guitar' },
-  { name: 'Nina Restrepo',  roles: 'Keys, Backing Vocals' },
-  { name: 'Theo Lindqvist', roles: 'Guitar, Bass' },
-  { name: 'Sam Aterlay',    roles: 'Lead Vocals' },
+  { name: 'Avery Cho',      roles: 'Lead Vocals, Keys',     active: true },
+  { name: 'Dani Okafor',    roles: 'Drums',                 active: true },
+  { name: 'Priya Raman',    roles: 'Bass, Backing Vocals',  active: true },
+  { name: 'Marcus Vale',    roles: 'Guitar',                active: true },
+  { name: 'Nina Restrepo',  roles: 'Keys, Backing Vocals',  active: true },
+  { name: 'Theo Lindqvist', roles: 'Guitar, Bass',          active: true },
+  { name: 'Sam Aterlay',    roles: 'Lead Vocals',           active: true },
+  { name: 'Jules Marchetti', roles: 'Guitar',               active: false },
 ];
 
-/* Song × Role assignment cells. '' = unfilled, '~' prefix = backup, '!' = role mismatch (ADR 0002) */
-const GRID = {
-  'Paper Lanterns':    ['Avery Cho', 'Marcus Vale', 'Priya Raman', 'Dani Okafor', 'Nina Restrepo'],
-  'Riverbend':         ['Sam Aterlay', 'Theo Lindqvist', '', 'Dani Okafor', ''],
-  'Static Bloom':      ['Avery Cho', 'Marcus Vale', 'Theo Lindqvist', 'Dani Okafor', 'Nina Restrepo'],
-  'Two Weeks in June': ['', '', '', '', ''],
-  'Marigold':          ['Sam Aterlay', 'Marcus Vale', 'Priya Raman', '~Dani Okafor', '!Avery Cho'],
-};
+/* Cell forms: 'Name' | '~Name' backup | '!Name' role mismatch (ADR 0002) | '' unfilled */
+const SONGS = [
+  { pos: 1, title: 'Paper Lanterns',      artist: 'The Hollow Coast', len: '3:42', recs: 3,
+    note: 'Tighten the last chorus — come in a bar early.',
+    cast: ['Avery Cho', 'Marcus Vale', 'Priya Raman', 'Dani Okafor', 'Nina Restrepo'] },
+  { pos: 2, title: 'Riverbend',           artist: 'Junia Wolfe',      len: '4:15', recs: 1,
+    note: 'Key change still unsettled.',
+    cast: ['Sam Aterlay', 'Theo Lindqvist', '', 'Dani Okafor', ''] },
+  { pos: 3, title: 'Static Bloom',        artist: 'Ferris & Doe',     len: '2:58', recs: 4,
+    note: '',
+    cast: ['Avery Cho', 'Marcus Vale', 'Theo Lindqvist', 'Dani Okafor', 'Nina Restrepo'] },
+  { pos: 4, title: 'Two Weeks in June',   artist: 'Colma Park',       len: '5:07', recs: 0,
+    note: 'Not started — cast this first.',
+    cast: ['', '', '', '', ''] },
+  { pos: 5, title: 'Marigold',            artist: 'The Hollow Coast', len: '3:20', recs: 2,
+    note: 'Backup on drums while Dani is out.',
+    cast: ['Sam Aterlay', 'Marcus Vale', 'Priya Raman', '~Dani Okafor', '!Avery Cho'] },
+  { pos: 6, title: 'Cold Open',           artist: 'Nightjar',         len: '3:55', recs: 0,
+    note: '',
+    cast: ['Avery Cho', '', 'Priya Raman', '', 'Nina Restrepo'] },
+  { pos: 7, title: 'The Long Way Down',   artist: 'Junia Wolfe',      len: '6:12', recs: 5,
+    note: 'Locked. Recording is the reference take.',
+    cast: ['Sam Aterlay', 'Marcus Vale', 'Priya Raman', 'Dani Okafor', 'Avery Cho'] },
+  { pos: 8, title: 'Ninety-Nine Summers', artist: 'Colma Park',       len: '4:01', recs: 0,
+    note: '',
+    cast: ['', 'Theo Lindqvist', '', '', ''] },
+];
+const cast = s => s.cast.filter(Boolean).length;
 
 const REHEARSALS = [
-  { date: 'Tue 15 Sep', time: '19:00–21:00', mine: '19:00–20:10', label: '' },
-  { date: 'Thu 17 Sep', time: '19:00–21:00', mine: null,          label: '' },
-  { date: 'Tue 22 Sep', time: '19:00–21:00', mine: '19:40–21:00', label: '' },
-  { date: 'Sat 26 Sep', time: '14:00–18:00', mine: '14:00–18:00', label: 'Dress rehearsal' },
+  { id: 1, date: 'Tue 15 Sep', time: '19:00–21:00', mine: '19:00–20:10', dress: false, conflicts: 2, songs: 5, past: false },
+  { id: 2, date: 'Thu 17 Sep', time: '19:00–21:00', mine: null,          dress: false, conflicts: 0, songs: 5, past: false },
+  { id: 3, date: 'Tue 22 Sep', time: '19:00–21:00', mine: '19:40–21:00', dress: false, conflicts: 1, songs: 6, past: false },
+  { id: 4, date: 'Thu 24 Sep', time: '19:00–21:00', mine: '19:00–21:00', dress: false, conflicts: 0, songs: 5, past: false },
+  { id: 5, date: 'Sat 26 Sep', time: '14:00–18:00', mine: '14:00–18:00', dress: true,  conflicts: 0, songs: 8, past: false },
+];
+
+/* Who has a declared conflict at rehearsal 1, and which slots it eats. */
+const CONFLICTED = { 'Nina Restrepo': 'arrives 19:40', 'Theo Lindqvist': 'leaves 20:15' };
+
+/* The next rehearsal's running order: song index + start time. */
+const ORDER1 = [
+  { song: 0, start: '19:00', end: '19:24' },
+  { song: 1, start: '19:24', end: '19:48' },
+  { song: 4, start: '19:48', end: '20:12' },
+  { song: 2, start: '20:12', end: '20:36', pinned: true },
+  { song: 5, start: '20:36', end: '21:00' },
 ];
 
 /* ============================================================
-   Variants
+   State
    ============================================================ */
-const VARIANTS = {
-  a: {
-    key: 'a', name: 'Edit in place',
-    blurb: 'Member pages flip into edit mode. /manage/ shrinks to two doors on the Overview.',
-    verdict: [
-      ['Nav stays five tabs', 'no admin destination competes for tab-bar space — the bar works unchanged on a phone.'],
-      ['Editing is where the thing is', 'you edit the setlist on the page that shows the setlist; nothing is duplicated.'],
-      ['The cost: admin destinations are homeless', 'Conflicts and Semesters have no nav entry, so they live in an Overview panel an admin has to go back to Home to reach.'],
-      ['The cost: every page carries a mode', 'each surface needs its own edit route, toolbar and preview — 36 gated views stay spread across the app, which is today’s problem unresolved.'],
-      ['Banner home', 'a strip under the nav, on every page. Survives unchanged from the context processor (#169).'],
-    ],
-  },
-  b: {
-    key: 'b', name: 'Admin section',
-    blurb: '/manage/* absorbs the editors and grows its own nav. Member pages read-only for everyone.',
-    verdict: [
-      ['One place that is “the admin app”', 'all 36 gated views sit behind one door with a sidebar that lists them — the thing today’s split lacks.'],
-      ['Member pages get simpler', 'no modes, no toolbars, no admin branches in member templates.'],
-      ['The cost: ADR 0009 forces a shadow schedule', 'assignment editing is only computable inside a Rehearsal, so /manage/ needs its own rehearsal picker and grid — a second copy of the page members already read.'],
-      ['The cost: context switching', 'fixing one wrong assignment means leaving the member view, finding the rehearsal again, editing, and coming back.'],
-      ['Banner home', 'the member app keeps the strip; inside the admin app the sidebar’s semester picker <em>is</em> the banner, so the strip would be redundant there — the context processor needs an opinion about that.'],
-    ],
-  },
-  c: {
-    key: 'c', name: 'Mode switch',
-    blurb: 'One set of pages. A global Member/Admin switch arms every editor at once and reveals admin-only tabs.',
-    verdict: [
-      ['No second copy of anything', 'one Schedule page, one Setlist page; admin mode makes the fields on them editable in place.'],
-      ['Admin destinations get nav entries', 'Conflicts and Semesters appear as real tabs, but only in admin mode — on a phone they land behind “More”.'],
-      ['Banner and switcher become one control', 'the mode bar states which semester you are editing, so the draft warning and the semester picker stop being two separate things.'],
-      ['The cost: mode is global, hidden state', 'a deep link has to encode it, and “why can’t I edit this” becomes a real support question.'],
-      ['The cost: read and write share a template', 'every surface renders both states, so the member view is only ever one bug away from showing an editor.'],
-    ],
-  },
+const state = {
+  page: 'overview', viewport: 'desktop', role: 'admin',
+  rail: false, editing: false, dirty: false,
+  scheduleView: 'next', myOnly: false, sheet: false,
+  conflictModal: false, conflictType: 'late_arrival', conflictDeclared: false,
+  semester: 'Spring 2027',
 };
-const ORDER = ['a', 'b', 'c'];
+const LIVE = 'Fall 2026';
 
 const PAGES = [
-  ['overview',  'Overview'],
-  ['schedule',  'Schedule — rehearsal'],
-  ['songs',     'Songs / setlist'],
-  ['members',   'Band members'],
-  ['profile',   'Profile'],
-  ['conflicts', 'Conflicts (admin)'],
-  ['semesters', 'Semesters (admin)'],
+  ['overview',    'Home'],
+  ['schedule',    'Schedule — next rehearsal'],
+  ['schedule-all','Schedule — all rehearsals'],
+  ['songs',       'Songs'],
+  ['song',        'Song detail'],
+  ['members',     'Band'],
+  ['profile',     'You'],
+  ['conflicts',   'Manage conflicts (admin)'],
+  ['semesters',   'Semesters (admin)'],
 ];
-
-/* ============================================================
-   State + routing
-   ============================================================ */
-const state = { variant: 'a', page: 'overview', viewport: 'desktop', role: 'admin',
-                editing: false, drawer: false, sheet: false };
-
-function readHash() {
-  const m = (location.hash || '').replace(/^#\/?/, '').split('/');
-  if (ORDER.includes(m[0])) state.variant = m[0];
-  if (PAGES.some(p => p[0] === m[1])) state.page = m[1];
-}
-function writeHash() { location.hash = `#${state.variant}/${state.page}`; }
-function go(page) { state.page = page; state.editing = false; state.drawer = false; state.sheet = false; writeHash(); render(); }
-function setVariant(v) { state.variant = v; state.editing = false; state.drawer = false; state.sheet = false; writeHash(); render(); }
 
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const isPhone = () => state.viewport === 'phone';
 const isAdmin = () => state.role === 'admin';
-const pageTitle = () => (PAGES.find(p => p[0] === state.page) || [, 'Overview'])[1].replace(/ —.*| \(admin\)/, '');
-const bars = n => `<span class="prose">${'<span class="bar"></span>'.repeat(n)}</span>`;
+const isDraft = () => state.semester !== LIVE;
 
-/* Admin pages are unreachable as a member — fall back so the frame is never blank. */
+function go(page) {
+  if (page === 'schedule-all') { state.page = 'schedule'; state.scheduleView = 'all'; }
+  else { state.page = page; if (page === 'schedule') state.scheduleView = 'next'; }
+  state.editing = false; state.sheet = false; state.conflictModal = false;
+  render();
+}
 function effectivePage() {
   if (!isAdmin() && (state.page === 'conflicts' || state.page === 'semesters')) return 'overview';
   return state.page;
 }
+function pageTitle() {
+  const p = effectivePage();
+  if (p === 'schedule') return state.scheduleView === 'all' ? 'All rehearsals' : REHEARSALS[0].date;
+  return ({ overview: 'Home', songs: 'Songs', song: 'Paper Lanterns', members: 'Band',
+            profile: 'You', conflicts: 'Conflicts', semesters: 'Semesters' })[p] || 'Home';
+}
+
+function toggleEdit() { state.editing = !state.editing; if (!state.editing) state.dirty = false; render(); }
+function toggleRail() { state.rail = !state.rail; render(); }
+function toggleMyOnly() { state.myOnly = !state.myOnly; render(); }
+function setScheduleView(v) { state.scheduleView = v; render(); }
+function openConflict() { state.conflictModal = true; render(); }
+function closeConflict() { state.conflictModal = false; render(); }
+function setConflictType(t) { state.conflictType = t; render(); }
+function submitConflict() { state.conflictDeclared = true; state.conflictModal = false; render(); }
+function clearConflict() { state.conflictDeclared = false; render(); }
+function toggleSheet() { state.sheet = !state.sheet; render(); }
+function setDirty(v) { state.dirty = v; syncChrome(); render(); }
 
 /* ============================================================
-   Page bodies — shared across variants; the shell differs, and
-   each variant answers the phone-table question its own way.
+   Assignment pill — one place decides how a cell reads.
+   ============================================================ */
+function chip(val, opts = {}) {
+  if (!val) return opts.armed ? '<span class="chip empty">+ assign</span>' : '<span class="muted">—</span>';
+  let cls = 'chip', name = val, extra = '';
+  if (val[0] === '~') { name = val.slice(1); cls += ' backup'; extra = '<span class="tagm">backup</span>'; }
+  else if (val[0] === '!') { name = val.slice(1); cls += ' mismatch'; extra = '<span class="muted" title="Role not on their membership (ADR 0002)">◦</span>'; }
+  if (CONFLICTED[name] && opts.rehearsal) { cls += ' conflict'; extra += '<span class="mono" style="font-size:9.5px">⚠</span>'; }
+  else if (name === YOU && opts.markYou) { cls += ' you'; }
+  return `<span class="${cls}">${esc(name)}${extra}</span>`;
+}
+const pillLegend = `<div class="legend">
+  <span><span class="chip" style="padding:1px 7px">Assigned</span></span>
+  <span><span class="chip backup" style="padding:1px 7px">Name <span class="tagm">backup</span></span></span>
+  <span><span class="chip conflict" style="padding:1px 7px">Name ⚠</span> has a conflict here</span>
+  <span><span class="chip mismatch" style="padding:1px 7px">Name ◦</span> role not on their membership</span>
+  <span><span class="chip empty" style="padding:1px 7px">+ assign</span></span>
+</div>`;
+
+/* ============================================================
+   Pages
    ============================================================ */
 
-/* --- Overview --------------------------------------------- */
-function overviewPage(v) {
-  const next = REHEARSALS[0];
-  const editable = v === 'c' && isAdmin();
+/* --- Home ------------------------------------------------- */
+function overviewPage() {
+  const r = REHEARSALS[0];
+  const list = state.myOnly ? SONGS.filter(s => s.cast.some(c => c && c.replace(/^[~!]/, '') === YOU)) : SONGS;
+
+  /* Review item 3: the bar now shows the rehearsal window with your slots filled in. */
+  const timeline = `
+    <div class="timeline">
+      <div class="track">
+        ${ORDER1.map((o, i) => {
+          const s = SONGS[o.song];
+          const mine = s.cast.some(c => c && c.replace(/^[~!]/, '') === YOU);
+          return `<div class="slot ${mine ? 'mine' : ''}" style="flex:1" title="${esc(s.title)} · ${o.start}">
+            ${mine ? esc(s.title.split(' ')[0]) : ''}</div>`;
+        }).join('')}
+      </div>
+      <div class="ends mono muted"><span>19:00</span><span>You: 3 of 5 songs</span><span>21:00</span></div>
+    </div>`;
 
   const nextCard = `
-    <div class="card stack" style="gap:8px">
-      <span class="gb-label">Next rehearsal</span>
+    <div class="card stack" style="gap:10px">
       <div class="row-between">
-        <div>
-          <div style="font-size:16px;font-weight:600">${next.date} · ${next.time}</div>
-          <div class="muted" style="font-size:12.5px">Arrive around 19:00, free to leave around 20:10</div>
-        </div>
-        <a class="btn sm" href="#${v}/schedule" onclick="go('schedule');return false">Open</a>
+        <span class="gb-label">Next rehearsal</span>
+        <button class="btn sm" onclick="go('schedule')">Open</button>
       </div>
-      <div class="prog"><span class="gb-label">Your slots</span>
-        <span class="track"><span class="fill" style="width:58%"></span></span>
-        <span class="mono muted" style="font-size:11.5px">3 of 5 songs</span></div>
+      <div>
+        <div style="font-size:16px;font-weight:600">${r.date} · ${r.time}</div>
+        <div class="muted" style="font-size:12.5px">Arrive around <b class="mono">19:00</b>,
+          free to leave around <b class="mono">20:10</b></div>
+      </div>
+      ${timeline}
     </div>`;
 
   const upcoming = `
     <div class="stack" style="gap:8px">
       <div class="row-between"><h2 class="section-head">Upcoming rehearsals</h2>
-        <a class="btn sm ghost" href="#${v}/schedule" onclick="go('schedule');return false">All →</a></div>
+        <button class="btn sm ghost" onclick="go('schedule-all')">All rehearsals →</button></div>
       <div class="songlist">
-        ${REHEARSALS.map(r => `
+        ${REHEARSALS.slice(0, 4).map(x => `
           <div class="item">
-            <div><b style="font-weight:600">${r.date}</b> <span class="mono muted">${r.time}</span>
-              ${r.label ? `<span class="chip" style="margin-left:6px">${r.label}</span>` : ''}</div>
-            <div class="mono" style="font-size:12px;${r.mine ? '' : 'color:var(--ink-3)'}">
-              ${r.mine ? r.mine : 'not needed'}</div>
+            <div><b style="font-weight:600">${x.date}</b> <span class="mono muted">${x.time}</span>
+              ${x.dress ? '<span class="chip" style="margin-left:6px">Dress</span>' : ''}</div>
+            <div class="mono" style="font-size:12px;${x.mine ? '' : 'color:var(--ink-3)'}">
+              ${x.mine || 'not needed'}</div>
           </div>`).join('')}
       </div>
     </div>`;
 
-  /* Each variant answers "the Overview table has no phone layout" differently. */
-  let progress;
-  if (v === 'a') {
-    /* A — the repo's existing .rs-stack-table card pattern, one card per song. */
-    progress = isPhone() ? `
-      <div class="songcards">
-        ${SONGS.map(s => `
-          <div class="card" style="padding:10px 12px">
-            <div class="row-between"><b style="font-weight:600">${s.title}</b>
-              <span class="mono muted" style="font-size:12px">#${s.pos}</span></div>
-            <div class="kv"><span class="muted">Cast</span><span class="mono">${s.done} of ${s.total}</span></div>
-            <div class="prog" style="margin-top:6px"><span class="track">
-              <span class="fill" style="width:${(s.done / s.total) * 100}%"></span></span></div>
-          </div>`).join('')}
-      </div>` : progressTable();
-  } else if (v === 'b') {
-    /* B — a two-line list row that needs no phone/desktop fork at all. */
-    progress = `<div class="songlist">
-      ${SONGS.map(s => `
+  const progress = isPhone()
+    /* phone: v1's B two-line list, per review */
+    ? `<div class="songlist">${list.map(s => `
         <div class="item">
-          <div><b style="font-weight:600">${s.title}</b></div>
-          <div class="mono" style="font-size:12px">${s.done}/${s.total}</div>
-          <div class="sub prog"><span class="mono muted" style="font-size:11px;min-width:22px">#${s.pos}</span>
-            <span class="track"><span class="fill" style="width:${(s.done / s.total) * 100}%"></span></span></div>
-        </div>`).join('')}
-    </div>`;
-  } else {
-    /* C — regrouped by casting state: the hierarchy an admin actually scans for. */
-    const groups = [
-      ['Needs casting', SONGS.filter(s => s.done === 0)],
-      ['Partly cast',   SONGS.filter(s => s.done > 0 && s.done < s.total)],
-      ['Fully cast',    SONGS.filter(s => s.done === s.total)],
-    ];
-    progress = `<div class="stack" style="gap:14px">
-      ${groups.map(([label, list]) => `
-        <div>
-          <div class="row-between" style="margin-bottom:4px">
-            <span class="gb-label">${label}</span><span class="mono muted" style="font-size:11px">${list.length}</span>
-          </div>
-          <div class="songlist">
-            ${list.map(s => `<div class="item">
-              <div><b style="font-weight:600">${s.title}</b>
-                <span class="mono muted" style="font-size:11.5px">· #${s.pos}</span></div>
-              <div class="mono" style="font-size:12px">${s.done}/${s.total}</div>
-            </div>`).join('') || '<div class="item"><span class="muted">None</span></div>'}
-          </div>
-        </div>`).join('')}
-    </div>`;
-  }
-
-  /* Variant A alone has to park the admin doors on this page. */
-  const adminPanel = (v === 'a' && isAdmin()) ? `
-    <div class="card stack" style="gap:10px;border-style:dashed">
-      <div class="row-between"><span class="gb-label">Admin</span>
-        <span class="mono muted" style="font-size:11px">only entry point</span></div>
-      <div class="row-between" style="flex-wrap:wrap;gap:8px">
-        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-          <span class="muted" style="font-size:12.5px">Viewing</span>
-          <span class="field" style="min-width:150px">Fall 2026 — Live ▾</span>
-          <button class="btn sm">Switch</button>
-        </div>
-        <div style="display:flex;gap:6px"><button class="btn sm">Publish</button>
-          <button class="btn sm primary">Create semester</button></div>
-      </div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <a class="btn sm" href="#a/conflicts" onclick="go('conflicts');return false">Conflicts <b>3</b></a>
-        <a class="btn sm" href="#a/semesters" onclick="go('semesters');return false">Semesters</a>
-        <a class="btn sm" href="#a/members" onclick="go('members');return false">People</a>
-      </div>
-    </div>` : '';
+          <div><b style="font-weight:600">${esc(s.title)}</b></div>
+          <div class="mono" style="font-size:12px">${cast(s)}/${s.cast.length}</div>
+          <div class="sub prog"><span class="mono muted" style="font-size:11px;min-width:20px">#${s.pos}</span>
+            <span class="track"><span class="fill" style="width:${cast(s) / s.cast.length * 100}%"></span></span></div>
+        </div>`).join('')}</div>`
+    /* desktop: v1's A table */
+    : `<div class="scroll-x"><table class="gb">
+        <thead><tr><th class="num">#</th><th>Song</th><th>Artist</th><th class="num">Length</th><th>Cast</th></tr></thead>
+        <tbody>${list.map(s => `<tr>
+          <td class="num">${s.pos}</td><td>${esc(s.title)}</td>
+          <td class="muted">${esc(s.artist)}</td><td class="num">${s.len}</td>
+          <td><span class="prog"><span class="track" style="max-width:90px">
+            <span class="fill" style="width:${cast(s) / s.cast.length * 100}%"></span></span>
+            <span class="mono" style="font-size:12px">${cast(s)}/${s.cast.length}</span></span></td>
+        </tr>`).join('')}</tbody></table></div>`;
 
   return `
-    ${pageHead(v, 'Overview', v === 'a' && isAdmin() ? [] : null)}
-    ${adminPanel}
+    ${pageHead('Home', null, isAdmin() ? `Editing ${state.semester}` : 'Fall 2026')}
     ${nextCard}
     ${upcoming}
     <div class="stack" style="gap:8px">
       <div class="row-between">
         <h2 class="section-head">Song progress</h2>
-        <div style="display:flex;gap:6px;align-items:center">
-          ${editable ? '<span class="chip">editable</span>' : ''}
-          <button class="btn sm">My songs only</button>
-        </div>
+        <button class="toggle" aria-pressed="${state.myOnly}" onclick="toggleMyOnly()">
+          <span class="track"><span class="knob"></span></span> My songs only</button>
       </div>
       ${progress}
     </div>`;
 }
 
-function progressTable() {
-  return `<div class="scroll-x"><table class="gb">
-    <thead><tr><th>Song</th><th>Position</th><th>Length</th><th>Cast</th></tr></thead>
-    <tbody>${SONGS.map(s => `<tr>
-      <td>${s.title}</td><td class="num">${s.pos}</td><td class="num">${s.len}</td>
-      <td><span class="prog"><span class="track" style="max-width:90px">
-        <span class="fill" style="width:${(s.done / s.total) * 100}%"></span></span>
-        <span class="mono" style="font-size:12px">${s.done}/${s.total}</span></span></td>
-    </tr>`).join('')}</tbody></table></div>`;
-}
-
-/* --- Schedule (the densest surface; the real stress test) --- */
-function schedulePage(v) {
-  const armed = (v === 'a' && state.editing) || (v === 'c' && isAdmin()) || (v === 'b' && false);
-  const r = REHEARSALS[0];
-
-  const head = pageHead(v, `${r.date}`,
-    (v === 'a' && isAdmin()) ? [{ label: state.editing ? 'Done' : 'Edit assignments', act: 'toggleEdit' }] : null,
-    `${r.time} · Rehearsal 1 of 12`);
-
-  const mine = `
-    <div class="card stack" style="gap:8px">
-      <span class="gb-label">You at this rehearsal</span>
-      <div style="font-size:15px">Arrive around <b class="mono">19:00</b>, free to leave around <b class="mono">20:10</b></div>
-      <div class="muted" style="font-size:12.5px">Break: 19:25–19:40</div>
-      <div class="row-between" style="border-top:1px solid var(--line-soft);padding-top:8px">
-        <div><span class="gb-label">Your availability</span>
-          <div style="font-size:13px">Available all evening</div></div>
-        <button class="btn sm">Declare a conflict</button>
+/* --- Schedule: all rehearsals (review item 7, new) --------- */
+function allRehearsalsPage() {
+  const rows = REHEARSALS.map(r => isPhone() ? `
+    <div class="card" style="padding:10px 12px" onclick="go('schedule')">
+      <div class="row-between"><b style="font-weight:600">${r.date}</b>
+        <span class="mono muted" style="font-size:12px">${r.time}</span></div>
+      <div class="hstack" style="margin-top:5px">
+        ${r.dress ? '<span class="chip">Dress · attendance required</span>' : ''}
+        <span class="chip ${r.mine ? 'you' : 'empty'}">${r.mine ? 'You: ' + r.mine : 'Not needed'}</span>
+        <span class="muted" style="font-size:12px">${r.songs} songs</span>
+        ${isAdmin() && r.conflicts ? `<span class="chip conflict">${r.conflicts} conflicts</span>` : ''}
       </div>
-    </div>`;
-
-  /* Running order — the same in every variant; only who can drag it differs. */
-  const order = `
-    <div class="stack" style="gap:8px">
-      <div class="row-between"><h2 class="section-head">Running order</h2>
-        ${armed ? '<div style="display:flex;gap:6px"><button class="btn sm">Deal</button><button class="btn sm">Shuffle</button></div>' : ''}</div>
-      <div class="songlist">
-        ${Object.keys(GRID).map((t, i) => `
-          <div class="item">
-            <div style="display:flex;gap:8px;align-items:center">
-              ${armed ? '<span class="mono muted" style="cursor:grab">⠿</span>' : ''}
-              <b style="font-weight:600">${t}</b>
-              ${i === 4 ? '<span class="chip">pinned · recording</span>' : ''}
-            </div>
-            <div class="mono muted" style="font-size:12px">${19 + Math.floor(i * 24 / 60)}:${String((i * 24) % 60).padStart(2, '0')}</div>
-          </div>`).join('')}
-      </div>
-    </div>`;
-
-  /* The Song × Role matrix — each variant takes a different line on phone. */
-  let grid;
-  const cell = val => {
-    if (!val) return armed ? '<span class="chip empty">+ assign</span>' : '<span class="muted">—</span>';
-    if (val[0] === '~') return `<span class="chip backup">${val.slice(1)} <span class="muted">bk</span></span>`;
-    if (val[0] === '!') return `<span class="chip">${val.slice(1)} <span class="muted">⚠</span></span>`;
-    return `<span class="chip">${val}</span>`;
-  };
-
-  if (!isPhone()) {
-    grid = `<div class="scroll-x"><table class="gb matrix">
-      <thead><tr><th>Song</th>${ROLES.map(x => `<th>${x}</th>`).join('')}</tr></thead>
-      <tbody>${Object.entries(GRID).map(([song, cells]) => `<tr>
-        <td><b style="font-weight:600">${song}</b></td>
-        ${cells.map(c => `<td>${cell(c)}</td>`).join('')}</tr>`).join('')}
-      </tbody></table></div>`;
-  } else if (v === 'a') {
-    /* A — keep the matrix, scroll it sideways with the song column frozen. */
-    grid = `<div class="scroll-x"><table class="gb matrix" style="min-width:640px">
-      <thead><tr><th>Song</th>${ROLES.map(x => `<th>${x}</th>`).join('')}</tr></thead>
-      <tbody>${Object.entries(GRID).map(([song, cells]) => `<tr>
-        <td><b style="font-weight:600">${song}</b></td>
-        ${cells.map(c => `<td>${cell(c)}</td>`).join('')}</tr>`).join('')}
-      </tbody></table>
-      <div class="gb-label" style="margin-top:6px">↔ scrolls · song column frozen</div></div>`;
-  } else if (v === 'b') {
-    /* B — one card per song, roles as rows inside it. */
-    grid = `<div class="songcards">
-      ${Object.entries(GRID).map(([song, cells]) => `
-        <div class="card" style="padding:10px 12px">
-          <div class="row-between" style="margin-bottom:6px"><b style="font-weight:600">${song}</b></div>
-          ${ROLES.map((role, i) => `<div class="kv" style="padding:3px 0">
-            <span class="muted">${role}</span>${cell(cells[i])}</div>`).join('')}
-        </div>`).join('')}
-    </div>`;
-  } else {
-    /* C — collapse by role: the axis an admin fills one at a time. */
-    grid = `<div class="accordion">
-      ${ROLES.map((role, i) => `
-        <div>
-          <div class="acc-head"><span>${role}</span>
-            <span class="mono muted" style="font-size:12px">
-              ${Object.values(GRID).filter(c => c[i]).length}/${Object.keys(GRID).length} ${i === 0 ? '▾' : '▸'}</span></div>
-          ${i === 0 ? `<div class="songlist" style="padding-left:10px">
-            ${Object.entries(GRID).map(([song, cells]) => `<div class="item">
-              <div class="muted">${song}</div>${cell(cells[i])}</div>`).join('')}</div>` : ''}
-        </div>`).join('')}
-    </div>`;
-  }
-
-  const gridHead = `
-    <div class="row-between">
-      <h2 class="section-head">Assignments</h2>
-      ${v === 'b' && isAdmin()
-        ? '<span class="chip empty">read-only · edit in Admin → Assignments</span>'
-        : armed ? '<span class="chip">editing</span>' : ''}
-    </div>`;
-
-  return `${head}${mine}${order}<div class="stack" style="gap:8px">${gridHead}${grid}</div>`;
-}
-
-/* --- Songs / setlist -------------------------------------- */
-function songsPage(v) {
-  const armed = (v === 'a' && state.editing) || (v === 'c' && isAdmin());
-  const head = pageHead(v, 'Songs',
-    (v === 'a' && isAdmin()) ? [{ label: state.editing ? 'Done' : 'Edit setlist', act: 'toggleEdit' }] : null,
-    'Fall 2026 · 8 songs · 31:30');
-
-  const rows = SONGS.map(s => isPhone() ? `
-    <div class="item">
-      <div style="display:flex;gap:8px;align-items:center">
-        ${armed ? '<span class="mono muted">⠿</span>' : `<span class="mono muted" style="font-size:12px">${s.pos}</span>`}
-        ${armed ? `<span class="field" style="flex:1">${s.title}</span>` : `<b style="font-weight:600">${s.title}</b>`}
-      </div>
-      <div class="mono" style="font-size:12px">${s.len}</div>
     </div>` : `
     <tr>
-      <td class="num">${armed ? '⠿ ' : ''}${s.pos}</td>
-      <td>${armed ? `<span class="field">${s.title}</span>` : s.title}</td>
-      <td class="num">${armed ? `<span class="field" style="width:70px">${s.len}</span>` : s.len}</td>
-      <td class="num">${s.total} roles</td>
-      <td>${armed ? '<button class="btn sm">Remove</button>' : `<a href="#${v}/songs">Open</a>`}</td>
+      <td><b style="font-weight:600">${r.date}</b>
+        ${r.dress ? '<span class="chip" style="margin-left:6px">Dress</span>' : ''}</td>
+      <td class="num">${r.time}</td>
+      <td>${r.mine ? `<span class="chip you">${r.mine}</span>` : '<span class="muted">Not needed</span>'}</td>
+      <td class="num">${r.songs}</td>
+      ${isAdmin() ? `<td>${r.conflicts ? `<span class="chip conflict">${r.conflicts} ⚠</span>` : '<span class="muted">—</span>'}</td>` : ''}
+      <td><button class="btn sm" onclick="go('schedule')">Open</button></td>
     </tr>`).join('');
 
-  const body = isPhone()
-    ? `<div class="songlist">${rows}</div>`
-    : `<div class="scroll-x"><table class="gb"><thead><tr>
-        <th>#</th><th>Song</th><th>Length</th><th>Roles</th><th></th></tr></thead>
-       <tbody>${rows}</tbody></table></div>`;
-
-  const addRow = armed ? `
-    <div style="display:flex;gap:6px;flex-wrap:wrap">
-      <button class="btn sm">+ Add song</button>
-      <button class="btn sm">Import from Spotify</button>
-    </div>` : '';
-
-  return `${head}${body}${addRow}`;
+  return `
+    ${pageHead('Schedule', isAdmin() ? [{ label: state.editing ? 'Done' : 'Edit rehearsals' }] : null,
+      `${state.semester} · ${REHEARSALS.length} rehearsals`)}
+    ${scheduleSeg()}
+    ${isPhone() ? `<div class="songcards">${rows}</div>` : `<div class="scroll-x"><table class="gb">
+      <thead><tr><th>Date</th><th>Time</th><th>You</th><th class="num">Songs</th>
+        ${isAdmin() ? '<th>Conflicts</th>' : ''}<th></th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`}
+    ${state.editing ? `<div class="hstack"><button class="btn sm">+ Add rehearsal</button>
+      <button class="btn sm">Generate from pattern</button><button class="btn sm">Deal running orders</button></div>` : ''}`;
+}
+function scheduleSeg() {
+  return `<div class="seg2">
+    <button aria-pressed="${state.scheduleView === 'next'}" onclick="setScheduleView('next')">Next rehearsal</button>
+    <button aria-pressed="${state.scheduleView === 'all'}" onclick="setScheduleView('all')">All rehearsals</button>
+  </div>`;
 }
 
-/* --- Band members ----------------------------------------- */
-function membersPage(v) {
-  const armed = (v === 'a' && state.editing) || (v === 'c' && isAdmin());
-  const head = pageHead(v, 'Band members',
-    (v === 'a' && isAdmin()) ? [{ label: state.editing ? 'Done' : 'Edit roster', act: 'toggleEdit' }] : null,
-    `Fall 2026 · ${PEOPLE.length} members`);
+/* --- Schedule: one rehearsal ------------------------------ */
+function rehearsalPage() {
+  const r = REHEARSALS[0];
+  const armed = state.editing && isAdmin();
+
+  /* Review item 4: the declared state, and the flow that produces it. */
+  const availability = state.conflictDeclared ? `
+    <div class="card stack" style="gap:8px;border-color:var(--warn)">
+      <div class="row-between">
+        <div><span class="gb-label" style="color:var(--warn)">Your availability</span>
+          <div style="font-size:14px"><b>Arriving late — 19:40</b></div>
+          <div class="muted" style="font-size:12px">Awaiting an admin verdict</div></div>
+        <div class="hstack"><button class="btn sm" onclick="openConflict()">Edit</button>
+          <button class="btn sm" onclick="clearConflict()">Withdraw</button></div>
+      </div>
+      <div class="privacy">Only admins can see the reason you gave (ADR 0005).</div>
+    </div>` : `
+    <div class="card row-between">
+      <div><span class="gb-label">Your availability</span>
+        <div style="font-size:14px">Available for the whole rehearsal</div></div>
+      <button class="btn sm" onclick="openConflict()">Declare a conflict</button>
+    </div>`;
+
+  const mine = `
+    <div class="card stack" style="gap:10px">
+      <span class="gb-label">You at this rehearsal</span>
+      <div style="font-size:15px">Arrive around <b class="mono">${state.conflictDeclared ? '19:40' : '19:00'}</b>,
+        free to leave around <b class="mono">20:10</b></div>
+      <div class="muted" style="font-size:12.5px">Break: 19:25–19:40</div>
+    </div>`;
+
+  /* Review item 5: running order + assignments merged into one table. */
+  let grid;
+  if (!isPhone()) {
+    grid = `<div class="scroll-x"><table class="gb matrix">
+      <thead><tr><th class="num">Start</th><th>Song</th>${ROLES.map(x => `<th>${x}</th>`).join('')}</tr></thead>
+      <tbody>${ORDER1.map((o, i) => {
+        const s = SONGS[o.song];
+        return `<tr>
+          <td class="num">${armed ? '<span class="muted" style="cursor:grab">⠿</span> ' : ''}${o.start}</td>
+          <td><b style="font-weight:600">${esc(s.title)}</b>
+            ${o.pinned ? '<span class="chip" style="margin-left:6px">pinned</span>' : ''}</td>
+          ${s.cast.map(c => `<td>${chip(c, { armed, rehearsal: true, markYou: true })}</td>`).join('')}
+        </tr>`;
+      }).join('')}</tbody></table></div>`;
+  } else {
+    /* phone: v1's B per-song cards, per review */
+    grid = `<div class="songcards">${ORDER1.map(o => {
+      const s = SONGS[o.song];
+      return `<div class="card" style="padding:10px 12px">
+        <div class="row-between" style="margin-bottom:4px">
+          <b style="font-weight:600">${esc(s.title)}</b>
+          <span class="mono muted" style="font-size:12px">${o.start}</span></div>
+        ${ROLES.map((role, i) => `<div class="kv">
+          <span class="muted">${role}</span>${chip(s.cast[i], { armed, rehearsal: true, markYou: true })}</div>`).join('')}
+      </div>`;
+    }).join('')}</div>`;
+  }
+
+  return `
+    ${pageHead(r.date, isAdmin() ? [{ label: state.editing ? 'Done' : 'Edit assignments' }] : null,
+      `${r.time} · rehearsal 1 of ${REHEARSALS.length}`)}
+    ${scheduleSeg()}
+    ${mine}
+    ${availability}
+    <div class="stack" style="gap:8px">
+      <div class="row-between"><h2 class="section-head">Running order &amp; assignments</h2>
+        ${armed ? '<div class="hstack"><button class="btn sm">Deal</button><button class="btn sm">Shuffle</button></div>' : ''}</div>
+      ${pillLegend}
+      ${grid}
+    </div>`;
+}
+
+/* Declare-a-conflict flow (review item 4) */
+function conflictModal() {
+  const types = [
+    ['late_arrival',    'Arriving late',    'You will miss the start of the rehearsal.'],
+    ['early_departure', 'Leaving early',    'You will miss the end of the rehearsal.'],
+    ['full_absence',    'Missing entirely', 'You cannot attend at all.'],
+  ];
+  const needsTime = state.conflictType !== 'full_absence';
+  return `<div class="backdrop ${isPhone() ? 'bottom' : ''}" onclick="closeConflict()">
+    <div class="modal" onclick="event.stopPropagation()">
+      <div class="m-head"><h3>Declare a conflict</h3>
+        <button class="btn sm ghost" onclick="closeConflict()">✕</button></div>
+      <div class="m-body">
+        <div class="muted" style="font-size:12.5px">Tue 15 Sep · 19:00–21:00</div>
+        <div class="stack" style="gap:6px">
+          ${types.map(([k, label, sub]) => `
+            <div class="radio" role="radio" aria-checked="${state.conflictType === k}" onclick="setConflictType('${k}')">
+              <span class="dot"></span>
+              <span><div style="font-weight:600;font-size:13px">${label}</div>
+                <div class="sub">${sub}</div></span>
+            </div>`).join('')}
+        </div>
+        ${needsTime ? `<div class="stack" style="gap:4px">
+          <span class="gb-label">${state.conflictType === 'late_arrival' ? 'Arriving at' : 'Leaving at'}</span>
+          <span class="field mono" style="max-width:120px">19:40</span>
+          <span class="muted" style="font-size:11.5px">Must fall inside 19:00–21:00.</span>
+        </div>` : ''}
+        <div class="stack" style="gap:4px">
+          <span class="gb-label">Reason (optional)</span>
+          <span class="field" style="min-height:56px;align-items:flex-start">Lab section runs until 19:30.</span>
+        </div>
+        <div class="privacy">Only admins ever see this reason — it never appears on a page
+          other members can read, including for admins browsing as members (ADR 0005).</div>
+        <div class="privacy">The dress rehearsal on Sat 26 Sep cannot take a conflict:
+          attendance there is mandatory (ADR 0006).</div>
+      </div>
+      <div class="m-foot">
+        <button class="btn" onclick="closeConflict()">Cancel</button>
+        <button class="btn primary" onclick="submitConflict()">Declare conflict</button>
+      </div>
+    </div></div>`;
+}
+
+/* --- Songs (review items 8, 9, 10) ------------------------- */
+function songsPage() {
+  const armed = state.editing && isAdmin();
+  const list = state.myOnly ? SONGS.filter(s => s.cast.some(c => c && c.replace(/^[~!]/, '') === YOU)) : SONGS;
+
+  /* The cast line: every role always shown, empty ones included, so the shape is constant. */
+  const castLine = s => `<div class="hstack" style="gap:5px">
+    ${ROLES.map((role, i) => `<span class="hstack" style="gap:4px">
+      <span class="gb-label">${role.split(' ')[0]}</span>${chip(s.cast[i], { armed, markYou: true })}
+    </span>`).join('')}</div>`;
 
   const body = isPhone() ? `
-    <div class="songcards">${PEOPLE.map(p => `
-      <div class="card" style="padding:10px 12px">
-        <div class="row-between"><b style="font-weight:600">${p.name}</b>
-          ${armed ? '<button class="btn sm">Remove</button>' : '<a href="#' + v + '/profile" onclick="go(\'profile\');return false">View</a>'}</div>
-        <div class="muted" style="font-size:12.5px">${p.roles}</div>
-      </div>`).join('')}</div>` : `
-    <div class="scroll-x"><table class="gb"><thead><tr>
-      <th>Name</th><th>Roles</th><th>Status</th><th></th></tr></thead>
-      <tbody>${PEOPLE.map((p, i) => `<tr>
-        <td><b style="font-weight:600">${p.name}</b></td>
-        <td>${armed ? `<span class="field">${p.roles} +</span>` : p.roles}</td>
-        <td>${i === 5 ? '<span class="chip empty">invited</span>' : '<span class="chip">active</span>'}</td>
-        <td>${armed ? '<button class="btn sm">Remove</button>'
-          : `<a href="#${v}/profile" onclick="go('profile');return false">View</a>`}</td>
-      </tr>`).join('')}</tbody></table></div>`;
+    <div class="songcards">${list.map(s => `
+      <div class="card" style="padding:10px 12px" onclick="go('song')">
+        <div class="row-between"><b style="font-weight:600">${esc(s.title)}</b>
+          <span class="mono muted" style="font-size:12px">${s.len}</span></div>
+        <div class="muted" style="font-size:12.5px">${esc(s.artist)}</div>
+        <div style="margin-top:6px">${castLine(s)}</div>
+        ${s.note ? `<div class="privacy" style="margin-top:6px">${esc(s.note)}</div>` : ''}
+        <div class="hstack" style="margin-top:6px">
+          <button class="btn sm icon">+</button><button class="btn sm icon">▶</button>
+          <span class="muted" style="font-size:12px">${s.recs} recordings</span></div>
+      </div>`).join('')}</div>`
+    : `<div class="scroll-x"><table class="gb">
+      <thead><tr><th class="num">#</th><th>Song</th><th>Artist</th><th class="num">Length</th>
+        <th>Recordings</th><th>Latest note</th><th></th></tr></thead>
+      <tbody>${list.map(s => `
+        <tr style="border-bottom:0">
+          <td class="num">${armed ? '⠿ ' : ''}${s.pos}</td>
+          <td><b style="font-weight:600">${esc(s.title)}</b></td>
+          <td class="muted">${esc(s.artist)}</td>
+          <td class="num">${s.len}</td>
+          <td><span class="hstack"><button class="btn sm icon" title="Add recording">+</button>
+            <button class="btn sm icon" title="View recordings">▶</button>
+            <span class="mono muted" style="font-size:11.5px">${s.recs}</span></span></td>
+          <td class="muted" style="font-size:12px;max-width:220px">${esc(s.note) || '—'}</td>
+          <td><button class="btn sm" onclick="go('song')">Open</button></td>
+        </tr>
+        <tr class="sub"><td></td><td colspan="6">${castLine(s)}</td></tr>`).join('')}
+      </tbody></table></div>`;
 
-  const add = armed ? `<div style="display:flex;gap:6px;flex-wrap:wrap">
-    <button class="btn sm">+ Add member</button><button class="btn sm">Import roster</button>
-    <button class="btn sm">Send invites</button></div>` : '';
-
-  return `${head}${body}${add}`;
+  return `
+    ${pageHead('Songs', isAdmin() ? [{ label: state.editing ? 'Done' : 'Edit setlist' }] : null,
+      `${state.semester} · ${SONGS.length} songs · 33:30`)}
+    <div class="row-between">
+      ${pillLegend}
+      <button class="toggle" aria-pressed="${state.myOnly}" onclick="toggleMyOnly()">
+        <span class="track"><span class="knob"></span></span> My songs only</button>
+    </div>
+    ${body}
+    ${armed ? `<div class="hstack"><button class="btn sm">+ Add song</button>
+      <button class="btn sm">Import from Spotify</button></div>` : ''}`;
 }
 
-/* --- Profile ---------------------------------------------- */
-function profilePage(v) {
+/* --- Song detail (review item 10, new) --------------------- */
+function songPage() {
+  const s = SONGS[0];
+  const armed = state.editing && isAdmin();
   return `
-    ${pageHead(v, 'Avery Cho', null, 'Your profile · Fall 2026')}
+    ${pageHead(s.title, isAdmin() ? [{ label: state.editing ? 'Done' : 'Edit song' }] : null,
+      `${esc(s.artist)} · ${s.len} · position ${s.pos}`)}
+    <button class="btn sm ghost" onclick="go('songs')">← All songs</button>
+
     <div class="card stack" style="gap:10px">
-      <div class="row-between"><span class="gb-label">Roles this semester</span>
+      <div class="row-between"><span class="gb-label">Cast</span>
+        ${isAdmin() ? '<span class="muted" style="font-size:11.5px">Edit assignments from a rehearsal (ADR 0009)</span>' : ''}</div>
+      <div class="songlist">
+        ${ROLES.map((role, i) => `<div class="item">
+          <div class="muted">${role}</div>${chip(s.cast[i], { markYou: true })}</div>`).join('')}
+      </div>
+      ${armed ? '<div><button class="btn sm">+ Add role requirement</button></div>' : ''}
+    </div>
+
+    <div class="stack" style="gap:8px">
+      <div class="row-between"><h2 class="section-head">Notes</h2>
+        ${isAdmin() ? '<button class="btn sm">Add note</button>' : ''}</div>
+      <div class="songlist">
+        <div class="item"><div><b style="font-weight:600">${esc(s.note)}</b>
+          <div class="muted" style="font-size:12px">Posted by an admin · Tue 15 Sep</div></div></div>
+        <div class="item"><div>Intro is four bars, not two.
+          <div class="muted" style="font-size:12px">Posted by an admin · Thu 10 Sep</div></div></div>
+      </div>
+    </div>
+
+    <div class="stack" style="gap:8px">
+      <div class="row-between"><h2 class="section-head">Recordings</h2>
+        <button class="btn sm primary">+ Add recording</button></div>
+      <div class="songlist">
+        ${[['Tue 15 Sep', 'Avery Cho', '2.4 MB'], ['Thu 10 Sep', 'Marcus Vale', '3.1 MB'],
+           ['Tue 8 Sep', 'Dani Okafor', '1.9 MB']].map(([d, who, size]) => `
+          <div class="item">
+            <div><b style="font-weight:600">${d}</b>
+              <span class="muted" style="font-size:12.5px">· ${who}</span></div>
+            <div class="hstack"><span class="mono muted" style="font-size:11.5px">${size}</span>
+              <button class="btn sm icon" title="Play">▶</button></div>
+          </div>`).join('')}
+      </div>
+    </div>
+
+    <div class="stack" style="gap:8px">
+      <h2 class="section-head">Rehearsed at</h2>
+      <div class="songlist">
+        ${REHEARSALS.slice(0, 3).map(r => `<div class="item">
+          <div>${r.date} <span class="mono muted">${r.time}</span></div>
+          <div class="mono muted" style="font-size:12px">19:00–19:24</div></div>`).join('')}
+      </div>
+    </div>`;
+}
+
+/* --- Band (review item 11: active members only) ------------ */
+function membersPage() {
+  const armed = state.editing && isAdmin();
+  const active = PEOPLE.filter(p => p.active);
+  const body = isPhone() ? `
+    <div class="songcards">${active.map(p => `
+      <div class="card" style="padding:10px 12px">
+        <div class="row-between"><b style="font-weight:600">${esc(p.name)}</b>
+          ${armed ? '<button class="btn sm">Remove</button>'
+            : '<button class="btn sm ghost" onclick="go(\'profile\')">View</button>'}</div>
+        <div class="muted" style="font-size:12.5px">${esc(p.roles)}</div>
+      </div>`).join('')}</div>`
+    : `<div class="scroll-x"><table class="gb">
+      <thead><tr><th>Name</th><th>Roles</th><th></th></tr></thead>
+      <tbody>${active.map(p => `<tr>
+        <td><b style="font-weight:600">${esc(p.name)}</b></td>
+        <td>${armed ? `<span class="field">${esc(p.roles)} +</span>` : esc(p.roles)}</td>
+        <td>${armed ? '<button class="btn sm">Remove</button>'
+          : `<button class="btn sm" onclick="go('profile')">View</button>`}</td>
+      </tr>`).join('')}</tbody></table></div>`;
+
+  return `
+    ${pageHead('Band', isAdmin() ? [{ label: state.editing ? 'Done' : 'Edit roster' }] : null,
+      `${state.semester} · ${active.length} members`)}
+    ${body}
+    ${armed ? `<div class="hstack"><button class="btn sm">+ Add member</button>
+      <button class="btn sm">Import roster</button><button class="btn sm">Send invites</button>
+      <span class="muted" style="font-size:12px">1 invited member not yet active — shown only while editing.</span></div>` : ''}`;
+}
+
+/* --- You --------------------------------------------------- */
+function profilePage() {
+  const mine = SONGS.filter(s => s.cast.some(c => c && c.replace(/^[~!]/, '') === YOU));
+  return `
+    ${pageHead(YOU, null, 'Your profile · Fall 2026')}
+    <div class="card stack" style="gap:10px">
+      <div class="row-between"><span class="gb-label">Your roles this semester</span>
         <button class="btn sm">Edit</button></div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap">
-        <span class="chip">Lead Vocals</span><span class="chip">Keys</span>
+      <div class="hstack"><span class="chip">Lead Vocals</span><span class="chip">Keys</span>
         <span class="chip empty">+ add</span></div>
     </div>
     <div class="stack" style="gap:8px">
       <h2 class="section-head">Songs you're on</h2>
-      <div class="songlist">${SONGS.filter(s => s.mine).map(s => `
-        <div class="item"><div><b style="font-weight:600">${s.title}</b></div>
-        <div class="mono muted" style="font-size:12px">Lead Vocals</div></div>`).join('')}</div>
+      <div class="songlist">${mine.map(s => `
+        <div class="item"><div><b style="font-weight:600">${esc(s.title)}</b>
+          <span class="muted" style="font-size:12.5px">· ${esc(s.artist)}</span></div>
+          <div class="mono muted" style="font-size:12px">${
+            ROLES[s.cast.findIndex(c => c && c.replace(/^[~!]/, '') === YOU)]}</div></div>`).join('')}</div>
     </div>
     <div class="stack" style="gap:8px">
       <div class="row-between"><h2 class="section-head">Your recordings</h2>
@@ -824,312 +867,218 @@ function profilePage(v) {
     </div>`;
 }
 
-/* --- Conflicts (admin only; ADR 0005 — never member-facing) - */
-function conflictsPage(v) {
+/* --- Manage conflicts -------------------------------------- */
+function conflictsPage() {
   return `
-    ${pageHead(v, 'Conflicts', null, '3 awaiting a verdict')}
-    <div class="card" style="border-style:dashed">
-      <span class="gb-label">Admin-only surface</span>
-      <p style="margin:4px 0 0;font-size:12.5px" class="muted">
-        Reasons and verdicts never render on a member-facing page (ADR 0005).</p>
-    </div>
-    ${REHEARSALS.slice(0, 3).map((r, i) => `
-      <div class="card stack" style="gap:8px">
+    ${pageHead('Conflicts', null, '3 awaiting a verdict')}
+    <div class="privacy">Reasons and verdicts never render on a member-facing page (ADR 0005).</div>
+    ${REHEARSALS.filter(r => r.conflicts).map(r => `
+      <div class="card stack" style="gap:10px">
         <div class="row-between"><b style="font-weight:600">${r.date} · ${r.time}</b>
-          <span class="chip">${i + 1} pending</span></div>
+          <span class="chip conflict">${r.conflicts} pending</span></div>
         <div class="scroll-x"><table class="gb">
-          <thead><tr><th>Person</th><th>Window</th><th>Reason</th><th>Verdict</th></tr></thead>
-          <tbody><tr>
-            <td>${PEOPLE[i].name}</td><td class="num">arrives 19:40</td>
-            <td>${bars(1)}</td>
-            <td><span class="field" style="min-width:110px">Undecided ▾</span></td>
-          </tr></tbody></table></div>
-        <div style="display:flex;gap:6px"><button class="btn sm">Preview fallout</button>
+          <thead><tr><th>Person</th><th>Declared</th><th>Reason</th><th>Verdict</th></tr></thead>
+          <tbody>${Object.entries(CONFLICTED).slice(0, r.conflicts).map(([who, what]) => `
+            <tr><td>${esc(who)}</td><td class="num">${what}</td>
+              <td class="muted" style="font-size:12px">Lab section runs late</td>
+              <td><span class="field" style="min-width:120px">Undecided ▾</span></td></tr>`).join('')}
+          </tbody></table></div>
+        <div class="hstack"><button class="btn sm">Preview fallout</button>
           <button class="btn sm primary">Save verdicts</button></div>
       </div>`).join('')}`;
 }
 
-/* --- Semesters (admin only) -------------------------------- */
-function semestersPage(v) {
+/* --- Semesters --------------------------------------------- */
+function semestersPage() {
   return `
-    ${pageHead(v, 'Semesters', null, 'Publish, create, delete')}
-    <div class="songlist">${SEMESTERS.map(s => `
-      <div class="item">
-        <div><b style="font-weight:600">${s.name}</b>
-          <span class="chip" style="margin-left:6px">${s.status}</span></div>
-        <div style="display:flex;gap:6px">
-          <button class="btn sm">${s.status === 'Live' ? 'Republish' : 'Publish'}</button>
-          ${s.status === 'Live' ? '' : '<button class="btn sm">Delete</button>'}</div>
-      </div>`).join('')}</div>
+    ${pageHead('Semesters', null, 'Create, publish, set up')}
+    <div class="songlist">
+      ${[[LIVE, 'Published'], ['Spring 2027', 'Draft']].map(([n, st]) => `
+        <div class="item">
+          <div><b style="font-weight:600">${n}</b>
+            <span class="chip ${st === 'Published' ? 'you' : ''}" style="margin-left:6px">${st}</span></div>
+          <div class="hstack">
+            <button class="btn sm">${st === 'Published' ? 'Republish' : 'Publish'}</button>
+            ${st === 'Published' ? '' : '<button class="btn sm">Delete</button>'}</div>
+        </div>`).join('')}
+    </div>
     <div class="card stack" style="gap:10px">
       <span class="gb-label">Set up Spring 2027</span>
-      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
-        ${['Roster', 'Setlist', 'Rehearsals', 'Finish'].map((s, i) => `
-          <span class="chip" ${i === 0 ? 'style="border-color:var(--ink)"' : ''}>${i + 1}. ${s}</span>
-          ${i < 3 ? '<span class="muted">→</span>' : ''}`).join('')}
-      </div>
+      <div class="hstack">${['Roster', 'Setlist', 'Rehearsals', 'Finish'].map((s, i) => `
+        <span class="chip" ${i === 0 ? 'style="border-color:var(--ink)"' : ''}>${i + 1}. ${s}</span>
+        ${i < 3 ? '<span class="muted">→</span>' : ''}`).join('')}</div>
       <div><button class="btn primary">Continue setup</button></div>
     </div>`;
 }
 
-const BODIES = { overview: overviewPage, schedule: schedulePage, songs: songsPage,
-                 members: membersPage, profile: profilePage, conflicts: conflictsPage,
-                 semesters: semestersPage };
-
-/* Page header. `actions` non-null renders variant A's per-page edit affordance. */
-function pageHead(v, title, actions, sub) {
+function pageHead(title, actions, sub) {
   return `<div class="page-head">
     <div><h1>${esc(title)}</h1>
-      ${sub ? `<div class="muted" style="font-size:12.5px">${sub}</div>` : ''}</div>
-    ${actions && actions.length ? `<div class="actions">${actions.map(a =>
-      `<button class="btn ${state.editing ? '' : 'primary'}" onclick="${a.act}()">${a.label}</button>`).join('')}</div>` : ''}
+      ${sub ? `<div class="muted" style="font-size:12.5px">${esc(sub)}</div>` : ''}</div>
+    ${actions ? `<div class="actions">${actions.map(a =>
+      `<button class="btn ${state.editing ? '' : 'primary'}" onclick="toggleEdit()">${a.label}</button>`).join('')}</div>` : ''}
   </div>`;
 }
-
-function toggleEdit() { state.editing = !state.editing; render(); }
-function toggleDrawer() { state.drawer = !state.drawer; render(); }
-function toggleSheet() { state.sheet = !state.sheet; render(); }
-function setMode(m) { state.role = m; syncSegs(); render(); }
 
 /* ============================================================
-   Shells — one per variant. This is the actual proposal.
+   Shell
    ============================================================ */
-const MEMBER_TABS = [
-  ['overview', 'Home'], ['schedule', 'Schedule'], ['songs', 'Songs'],
-  ['members', 'Band'], ['profile', 'You'],
+const NAV = [
+  ['overview',  'Home',      false],
+  ['conflicts', 'Conflicts', true],   /* review item 13: admin quick access, next to Home */
+  ['schedule',  'Schedule',  false],
+  ['songs',     'Songs',     false],
+  ['members',   'Band',      false],
+  ['profile',   'You',       false],
 ];
 
-function draftStrip(v, withSwitcher = true) {
-  /* Only shown while an admin has a draft selected — the state #169 exists for. */
-  if (!isAdmin()) return '';
-  return `<div class="draft-strip">
-    <b>Viewing Spring 2027</b><span>— not what members see.</span>
-    <span style="flex:1"></span>
-    ${withSwitcher ? '<button class="btn sm">Back to Fall 2026</button>' : ''}
+/* The semester control — one place, sidebar-resident (review item 13). */
+function semesterPanel() {
+  const draft = isDraft();
+  return `<div class="sem-panel ${draft ? 'draft' : ''}">
+    <div class="hide-rail stack" style="gap:6px">
+      <span class="gb-label">Viewing</span>
+      <span class="field">${state.semester} ▾</span>
+      ${draft ? '<span class="warnline">Not what members see — they see Fall 2026.</span>' : ''}
+      <div class="hstack" style="gap:6px">
+        <button class="btn sm" ${state.dirty ? '' : 'disabled'}>Save changes</button>
+        <button class="btn sm ${draft ? 'primary' : ''}" ${draft ? '' : 'disabled'}>Publish</button>
+      </div>
+    </div>
+    <div class="glyph" style="display:none"></div>
   </div>`;
 }
 
-/* --- Variant A: edit in place ------------------------------ */
-function shellA(body) {
+function sidebar() {
   const p = effectivePage();
-  if (isPhone()) {
-    return `<div class="framewrap">
-      <div class="phonebar">
-        <span class="title">${esc(pageTitle())}</span>
-        ${isAdmin() && ['schedule', 'songs', 'members'].includes(p)
-          ? `<button class="btn sm ${state.editing ? '' : 'primary'}" onclick="toggleEdit()">${state.editing ? 'Done' : 'Edit'}</button>` : ''}
-      </div>
-      ${draftStrip('a')}
+  return `<aside class="sidebar ${state.rail ? 'rail' : ''}">
+    <div class="head">
+      <span class="brand">Rolling Sloans</span>
+      <button class="btn sm icon" onclick="toggleRail()" title="Collapse sidebar">${state.rail ? '»' : '«'}</button>
+    </div>
+    <nav>
+      ${NAV.filter(([, , adminOnly]) => !adminOnly || isAdmin()).map(([k, label]) => `
+        <a href="#" onclick="go('${k}');return false" ${p === k ? 'aria-current="page"' : ''} title="${label}">
+          <span class="glyph"></span><span class="label">${label}</span>
+          ${k === 'conflicts' ? '<span class="count">3</span>' : ''}
+        </a>`).join('')}
+      ${isAdmin() ? `<div class="group"><span class="gb-label">Admin</span></div>
+        <a href="#" onclick="go('semesters');return false" ${p === 'semesters' ? 'aria-current="page"' : ''} title="Semesters">
+          <span class="glyph"></span><span class="label">Semesters</span></a>` : ''}
+    </nav>
+    ${isAdmin() ? semesterPanel() : ''}
+    <div class="sem-panel"><button class="btn sm hide-rail">Log out</button></div>
+  </aside>`;
+}
+
+function desktopShell(body) {
+  return `<div class="framewrap"><div class="shell">
+    ${sidebar()}
+    <div class="framewrap">
       ${state.editing ? editToolbar() : ''}
       <div class="frame-scroll"><div class="page">${body}</div></div>
-      ${tabbar(MEMBER_TABS, 'a')}
-    </div>`;
-  }
-  return `<div class="framewrap">
-    <div class="topbar">
-      <span class="brand">Rolling Sloans</span>
-      <nav class="topnav">${MEMBER_TABS.map(([k, l]) =>
-        `<a href="#a/${k}" onclick="go('${k}');return false" ${p === k ? 'aria-current="page"' : ''}>${l}</a>`).join('')}</nav>
-      <span class="right">${isAdmin() ? '<span class="field" style="min-width:150px">Spring 2027 — Draft ▾</span>' : ''}
-        <button class="btn sm ghost">Log out</button></span>
     </div>
-    ${draftStrip('a')}
-    ${state.editing ? editToolbar() : ''}
-    <div class="frame-scroll"><div class="page">${body}</div></div>
-  </div>`;
+  </div>${state.conflictModal ? conflictModal() : ''}</div>`;
 }
 function editToolbar() {
   return `<div class="edit-toolbar">
-    <span class="grow">Editing — 3 unsaved changes</span>
+    <span class="grow">Editing — ${state.dirty ? '3 unsaved changes' : 'no changes yet'}</span>
+    <button class="btn sm" onclick="setDirty(true)">Make a change</button>
     <button class="btn sm">Preview</button>
     <button class="btn sm" onclick="toggleEdit()">Discard</button>
-    <button class="btn sm primary" onclick="toggleEdit()">Save</button>
+    <button class="btn sm primary" ${state.dirty ? '' : 'disabled'} onclick="toggleEdit()">Save</button>
   </div>`;
 }
 
-/* --- Variant B: admin section ------------------------------ */
-const ADMIN_NAV = [
-  ['Semester', [['semesters', 'Semesters & setup']]],
-  ['Content',  [['members', 'Roster'], ['songs', 'Setlist'], ['schedule', 'Rehearsals & assignments']]],
-  ['Review',   [['conflicts', 'Conflicts']]],
-];
-function shellB(body) {
+function phoneShell(body) {
   const p = effectivePage();
-
-  if (!isAdmin()) {
-    /* Member: read-only everywhere, no admin door at all. */
-    return isPhone()
-      ? `<div class="framewrap"><div class="phonebar"><span class="title">${esc(pageTitle())}</span></div>
-         <div class="frame-scroll"><div class="page">${body}</div></div>${tabbar(MEMBER_TABS, 'b')}</div>`
-      : `<div class="framewrap">${topbarB(p, false)}
-         <div class="frame-scroll"><div class="page">${body}</div></div></div>`;
-  }
-
-  const sidebarInner = `
-    <div class="semester-pick">
-      <span class="gb-label">Editing</span>
-      <span class="field">Spring 2027 — Draft ▾</span>
-      <span class="muted" style="font-size:11.5px">Members see Fall 2026</span>
-    </div>
-    ${ADMIN_NAV.map(([g, items]) => `
-      <div class="group"><span class="gb-label">${g}</span></div>
-      ${items.map(([k, l]) => `<a href="#b/${k}" onclick="go('${k}');return false"
-        ${p === k ? 'aria-current="page"' : ''}>${l}</a>`).join('')}`).join('')}
-    <div class="group" style="margin-top:10px;border-top:1px solid var(--line);padding-top:12px">
-      <a href="#b/overview" onclick="go('overview');return false" style="padding-left:0">← Back to member view</a>
-    </div>`;
-
-  if (isPhone()) {
-    return `<div class="framewrap">
-      <div class="adminbar">
-        <button class="btn sm" onclick="toggleDrawer()">☰</button>
-        <span class="title">${esc(pageTitle())}</span>
-        <span class="admin-tag">Admin</span>
-      </div>
-      <div class="frame-scroll"><div class="page">${body}</div></div>
-      ${state.drawer ? `<div class="drawer-backdrop" onclick="toggleDrawer()">
-        <div class="drawer" onclick="event.stopPropagation()">${sidebarInner}</div></div>` : ''}
-    </div>`;
-  }
+  const tabs = [['overview', 'Home'], ['schedule', 'Schedule'], ['songs', 'Songs'],
+                ['members', 'Band'], isAdmin() ? ['more', 'More'] : ['profile', 'You']];
   return `<div class="framewrap">
-    ${topbarB(p, true)}
-    <div class="adminshell">
-      <aside class="sidebar">${sidebarInner}</aside>
-      <div class="frame-scroll" style="flex:1"><div class="page">${body}</div></div>
+    <div class="phonebar">
+      <span class="title">${esc(pageTitle())}</span>
+      ${isAdmin() ? `
+        <button class="btn sm" ${state.dirty ? '' : 'disabled'}>Save</button>
+        <button class="btn sm ${isDraft() ? 'primary' : ''}" ${isDraft() ? '' : 'disabled'}>Publish</button>`
+      : ''}
     </div>
-  </div>`;
-}
-function topbarB(p, admin) {
-  return `<div class="topbar">
-    <span class="brand">Rolling Sloans</span>
-    ${admin ? '<span class="admin-tag">Admin</span>' : `<nav class="topnav">${MEMBER_TABS.map(([k, l]) =>
-      `<a href="#b/${k}" onclick="go('${k}');return false" ${p === k ? 'aria-current="page"' : ''}>${l}</a>`).join('')}</nav>`}
-    ${admin ? '<span style="flex:1"></span>' : ''}
-    <span class="right">
-      ${isAdmin() && !admin ? '<button class="btn sm">Admin →</button>' : ''}
-      <button class="btn sm ghost">Log out</button></span>
-  </div>`;
-}
-
-/* --- Variant C: mode switch -------------------------------- */
-const ADMIN_EXTRA_TABS = [['conflicts', 'Conflicts'], ['semesters', 'Semesters']];
-function shellC(body) {
-  const p = effectivePage();
-  const tabs = isAdmin()
-    ? [...MEMBER_TABS.slice(0, 4), ['more', 'More']]
-    : MEMBER_TABS;
-
-  const modeBar = isAdmin() ? `
-    <div class="mode-context draft">
-      <span><b>Admin mode</b> — editing <b>Spring 2027</b> (draft). Members see Fall 2026.</span>
-      <span class="grow"></span>
-      <button class="btn sm">Switch semester</button>
-    </div>` : '';
-
-  if (isPhone()) {
-    return `<div class="framewrap">
-      <div class="phonebar">
-        <span class="title">${esc(pageTitle())}</span>
-        <span class="modeswitch">
-          <button aria-pressed="${!isAdmin()}" onclick="setMode('member')">Member</button>
-          <button aria-pressed="${isAdmin()}" onclick="setMode('admin')">Admin</button>
-        </span>
-      </div>
-      ${modeBar}
-      <div class="frame-scroll"><div class="page">${body}</div></div>
-      ${tabbarC(tabs)}
-      ${state.sheet ? `<div class="drawer-backdrop" style="align-items:flex-end" onclick="toggleSheet()">
-        <div class="sheet" onclick="event.stopPropagation()">
-          <span class="gb-label">Admin</span>
-          ${ADMIN_EXTRA_TABS.map(([k, l]) =>
-            `<a href="#c/${k}" onclick="go('${k}');return false">${l}</a>`).join('')}
-          <a href="#c/profile" onclick="go('profile');return false">Your profile</a>
-          <a href="#c/overview">Log out</a>
-        </div></div>` : ''}
-    </div>`;
-  }
-  return `<div class="framewrap">
-    <div class="topbar">
-      <span class="brand">Rolling Sloans</span>
-      <nav class="topnav">
-        ${MEMBER_TABS.map(([k, l]) => `<a href="#c/${k}" onclick="go('${k}');return false"
-          ${p === k ? 'aria-current="page"' : ''}>${l}</a>`).join('')}
-        ${isAdmin() ? ADMIN_EXTRA_TABS.map(([k, l]) => `<a href="#c/${k}" onclick="go('${k}');return false"
-          ${p === k ? 'aria-current="page"' : ''} style="color:var(--ink-2)">${l}</a>`).join('') : ''}
-      </nav>
-      <span class="right">
-        <span class="modeswitch">
-          <button aria-pressed="${!isAdmin()}" onclick="setMode('member')">Member</button>
-          <button aria-pressed="${isAdmin()}" onclick="setMode('admin')">Admin</button>
-        </span>
-        <button class="btn sm ghost">Log out</button></span>
-    </div>
-    ${modeBar}
+    ${isAdmin() && isDraft() ? `<div class="sem-strip">
+      <span>Viewing <b>${state.semester}</b> — not what members see</span>
+      <span style="flex:1"></span><button class="btn sm">Switch</button></div>` : ''}
+    ${state.editing ? editToolbar() : ''}
     <div class="frame-scroll"><div class="page">${body}</div></div>
+    <nav class="tabbar">
+      ${tabs.map(([k, l]) => k === 'more'
+        ? `<a href="#" onclick="toggleSheet();return false"><span class="glyph"></span>${l}
+           <span class="dot"></span></a>`
+        : `<a href="#" onclick="go('${k}');return false" ${p === k ? 'aria-current="page"' : ''}>
+           <span class="glyph"></span>${l}</a>`).join('')}
+    </nav>
+    ${state.sheet ? `<div class="backdrop bottom" onclick="toggleSheet()">
+      <div class="modal" onclick="event.stopPropagation()">
+        <div class="m-head"><h3>More</h3><button class="btn sm ghost" onclick="toggleSheet()">✕</button></div>
+        <div class="m-body" style="gap:0">
+          ${[['conflicts', 'Conflicts', '3'], ['semesters', 'Semesters', ''],
+             ['profile', 'You', '']].map(([k, l, n]) => `
+            <div class="row-between" style="padding:10px 0;border-bottom:1px solid var(--line-soft)"
+              onclick="go('${k}')"><span>${l}</span>
+              ${n ? `<span class="chip conflict">${n}</span>` : '<span class="muted">›</span>'}</div>`).join('')}
+          <div class="row-between" style="padding:10px 0"><span>Log out</span></div>
+        </div></div></div>` : ''}
+    ${state.conflictModal ? conflictModal() : ''}
   </div>`;
 }
-function tabbarC(tabs) {
-  const p = effectivePage();
-  return `<nav class="tabbar">${tabs.map(([k, l]) => k === 'more'
-    ? `<a href="#" onclick="toggleSheet();return false"><span class="glyph"></span>${l}</a>`
-    : `<a href="#c/${k}" onclick="go('${k}');return false" ${p === k ? 'aria-current="page"' : ''}>
-        <span class="glyph"></span>${l}</a>`).join('')}</nav>`;
-}
-function tabbar(tabs, v) {
-  const p = effectivePage();
-  return `<nav class="tabbar">${tabs.map(([k, l]) =>
-    `<a href="#${v}/${k}" onclick="go('${k}');return false" ${p === k ? 'aria-current="page"' : ''}>
-      <span class="glyph"></span>${l}</a>`).join('')}</nav>`;
-}
 
-const SHELLS = { a: shellA, b: shellB, c: shellC };
+const BODIES = {
+  overview: overviewPage, songs: songsPage, song: songPage, members: membersPage,
+  profile: profilePage, conflicts: conflictsPage, semesters: semestersPage,
+  schedule: () => state.scheduleView === 'all' ? allRehearsalsPage() : rehearsalPage(),
+};
 
 /* ============================================================
    Render
    ============================================================ */
 function render() {
-  const v = state.variant;
-  const body = BODIES[effectivePage()](v);
+  const body = BODIES[effectivePage()]();
   document.getElementById('stage').innerHTML =
-    `<div class="frame ${state.viewport}">${SHELLS[v](body)}</div>`;
+    `<div class="frame ${state.viewport}">${isPhone() ? phoneShell(body) : desktopShell(body)}</div>`;
 
-  const meta = VARIANTS[v];
-  document.getElementById('vname').textContent = `${v.toUpperCase()} · ${meta.name}`;
   document.getElementById('verdict').innerHTML = `
-    <h2>Variant ${v.toUpperCase()} — ${esc(meta.name)}</h2>
-    <p style="margin:0 0 10px;font-size:13px;color:var(--ink-2)">${esc(meta.blurb)}</p>
-    <ul>${meta.verdict.map(([b, t]) => `<li><b>${b}</b> — ${t}</li>`).join('')}</ul>`;
-  document.getElementById('pagesel').value = state.page;
-  syncSegs();
+    <div class="cols">
+      <div><h2>Settled in this build</h2><ul>
+        <li><b>Nav</b> — collapsible left sidebar on desktop (hit «), bottom tab bar on phone. Admin gets a <b>Conflicts</b> item with a count directly under Home.</li>
+        <li><b>Admin model</b> — edit-in-place. Every surface carries one Edit button; there is no separate admin app and no second copy of any page.</li>
+        <li><b>Semester control</b> — lives in the sidebar: Viewing dropdown, the draft warning, and Save changes / Publish, each enabled only when it applies. The top-right dropdown and the Overview admin card are gone. On phone it is Save/Publish in the top bar plus one strip.</li>
+        <li><b>Rehearsal page</b> — running order and assignments are one table keyed by start time. Pills read by state: assigned, backup, conflict, role-mismatch, unfilled.</li>
+        <li><b>Your slots</b> — now a timeline of the rehearsal window with your songs filled in, replacing the bar that showed nothing.</li>
+      </ul></div>
+      <div><h2>First drafts — these resolve under #305</h2><ul>
+        <li><b>All rehearsals</b> — a sub-view of Schedule rather than its own route, keeping /schedule/ the single member-facing page (#190).</li>
+        <li><b>Declare a conflict</b> — modal on desktop, bottom sheet on phone; three declaration types matching <code>CONFLICT_DECLARATION_CHOICES</code>, with the ADR 0005 privacy note and the ADR 0006 dress-rehearsal exclusion stated in the flow.</li>
+        <li><b>Song detail</b> — cast, admin notes, recordings, and where it has been rehearsed. Assignments are read-only here per ADR 0009.</li>
+        <li><b>Songs table</b> — Artist added; a second row per song shows every role with its person, empty roles included, so the shape stays constant. Recordings add/view and latest note are columns.</li>
+      </ul></div>
+    </div>`;
+  syncChrome();
 }
-function syncSegs() {
+function syncChrome() {
   document.querySelectorAll('#viewportseg button').forEach(b =>
     b.setAttribute('aria-pressed', String(b.dataset.vp === state.viewport)));
   document.querySelectorAll('#roleseg button').forEach(b =>
     b.setAttribute('aria-pressed', String(b.dataset.role === state.role)));
+  document.getElementById('dirty').textContent = `Unsaved edits: ${state.dirty ? 'on' : 'off'}`;
+  const sel = document.getElementById('pagesel');
+  sel.value = state.page === 'schedule' && state.scheduleView === 'all' ? 'schedule-all' : state.page;
 }
 
-/* switcher wiring */
 document.getElementById('pagesel').innerHTML =
   PAGES.map(([k, l]) => `<option value="${k}">${l}</option>`).join('');
 document.getElementById('pagesel').onchange = e => go(e.target.value);
-document.getElementById('prev').onclick = () =>
-  setVariant(ORDER[(ORDER.indexOf(state.variant) + ORDER.length - 1) % ORDER.length]);
-document.getElementById('next').onclick = () =>
-  setVariant(ORDER[(ORDER.indexOf(state.variant) + 1) % ORDER.length]);
 document.querySelectorAll('#viewportseg button').forEach(b =>
   b.onclick = () => { state.viewport = b.dataset.vp; render(); });
 document.querySelectorAll('#roleseg button').forEach(b =>
   b.onclick = () => { state.role = b.dataset.role; state.editing = false; render(); });
+document.getElementById('dirty').onclick = () => setDirty(!state.dirty);
 
-document.addEventListener('keydown', e => {
-  const t = e.target;
-  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
-  if (e.key === 'ArrowLeft') document.getElementById('prev').click();
-  if (e.key === 'ArrowRight') document.getElementById('next').click();
-});
-window.addEventListener('hashchange', () => { readHash(); render(); });
-
-readHash();
 render();
 </script>
