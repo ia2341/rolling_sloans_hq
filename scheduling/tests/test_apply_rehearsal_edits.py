@@ -215,6 +215,43 @@ class ApplyRehearsalEditsTests(TestCase):
 
         self.assertEqual(Rehearsal.objects.count(), count_before)
 
+    def test_a_new_rows_submitted_past_date_hard_fails_and_writes_nothing(self):
+        """A brand-new row (no rehearsal_id) submitting a past date is a hard failure, not just an existing-row concern."""
+        buffer = self._buffer([self._row(date=YESTERDAY)])
+        count_before = Rehearsal.objects.count()
+
+        with self.assertRaises(PastRehearsalEditError):
+            apply_rehearsal_edits(buffer, viewing_semester=self.semester)
+
+        self.assertEqual(Rehearsal.objects.count(), count_before)
+
+    def test_an_existing_rows_submitted_past_date_hard_fails_even_though_its_stored_date_is_future(self):
+        """An existing row whose *submitted* date is past hard-fails, even though its current stored date is still future."""
+        buffer = self._buffer([
+            self._row(rehearsal_id=self.rehearsal.pk, date=YESTERDAY, start_time=time(18, 0), end_time=time(20, 0)),
+        ])
+
+        with self.assertRaises(PastRehearsalEditError):
+            apply_rehearsal_edits(buffer, viewing_semester=self.semester)
+
+        self.rehearsal.refresh_from_db()
+        self.assertEqual(self.rehearsal.date, TOMORROW)
+
+    def test_swapping_dates_between_two_existing_rows_does_not_hit_the_unique_constraint(self):
+        """Two existing rows exchanging dates in one Buffer must not collide mid-batch on unique_rehearsal_date_per_semester."""
+        other = RehearsalFactory(semester=self.semester, date=NEXT_WEEK, start_time=time(19, 0))
+        buffer = self._buffer([
+            self._row(rehearsal_id=self.rehearsal.pk, date=NEXT_WEEK, start_time=time(18, 0), end_time=time(20, 0)),
+            self._row(rehearsal_id=other.pk, date=TOMORROW, start_time=time(19, 0), end_time=time(21, 0)),
+        ])
+
+        apply_rehearsal_edits(buffer, viewing_semester=self.semester)
+
+        self.rehearsal.refresh_from_db()
+        other.refresh_from_db()
+        self.assertEqual(self.rehearsal.date, NEXT_WEEK)
+        self.assertEqual(other.date, TOMORROW)
+
     def test_flipping_to_dress_with_existing_conflicts_still_refuses_per_adr_0006(self):
         """ADR-0006's flip-block still applies through this surface: a Rehearsal with Conflicts can't become the Dress Rehearsal."""
         ConflictFactory(rehearsal=self.rehearsal)

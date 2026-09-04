@@ -2583,15 +2583,19 @@ class StaleRehearsalSemesterError(ValueError):
 
 
 class PastRehearsalEditError(ValueError):
-    """Raised when a Rehearsal edit Buffer references a row whose current stored date is already in the past (issue #219).
+    """Raised when a Rehearsal edit Buffer names a row that is, or has become, past-dated (issue #219).
 
-    Not a Validation Error: the edit grid never renders inputs for a
-    past-dated Rehearsal (`ScheduleEditView`'s queryset excludes it
-    entirely), so a row reaching here in that state means the boundary
-    moved between GET and POST — most plausibly a Rehearsal dated "today"
-    at render time whose save lands after midnight. Matches the posture of
-    `WrongViewingSemesterError`: a hard failure, not Fallout, that writes
-    nothing.
+    Covers three ways the past/future boundary can move between GET and
+    POST, since the edit grid never renders inputs for a past-dated
+    Rehearsal (`ScheduleEditView`'s queryset excludes it entirely): (1) the
+    row's *submitted* `date` (new or existing) is itself already before
+    today, e.g. a Rehearsal dated "today" at render time whose save lands
+    after midnight; (2) an existing row's *current stored* `date` has
+    slipped into the past under a different edit (its submission may still
+    name a future date, but the ground moved out from under it); (3) an
+    existing row's Rehearsal no longer exists in this Semester at all.
+    Matches the posture of `WrongViewingSemesterError`: a hard failure,
+    not Fallout, that writes nothing.
     """
 
 
@@ -2661,10 +2665,9 @@ def apply_rehearsal_edits(buffer: RehearsalEditBuffer, *, viewing_semester: Seme
     match `viewing_semester`, checked before any transaction opens. Raises
     `StaleRehearsalSemesterError` inside the transaction if the Semester's
     `updated_at` no longer matches `buffer.semester_updated_at`. Raises
-    `PastRehearsalEditError` if any row names an existing Rehearsal whose
-    current stored `date` is already before today — see that error's
-    docstring. Both of the latter roll back whatever this call had already
-    applied.
+    `PastRehearsalEditError` for any row that is, or has become, past-dated
+    — see that error's docstring for the three cases. Both of the latter
+    roll back whatever this call had already applied.
     """
     if viewing_semester is None or buffer.semester_id != viewing_semester.pk:
         raise WrongViewingSemesterError(
@@ -2682,19 +2685,35 @@ def apply_rehearsal_edits(buffer: RehearsalEditBuffer, *, viewing_semester: Seme
             Rehearsal.objects.filter(semester=semester, pk__in=existing_ids).values_list('pk', 'date')
         )
         for row in buffer.rows:
-            if row.rehearsal_id is None:
-                continue
-            current_date = current_dates_by_id.get(row.rehearsal_id)
-            if current_date is None or current_date < today:
+            if row.date < today:
                 raise PastRehearsalEditError(
                     'A Rehearsal in this Buffer is dated in the past — reload and reapply.'
                 )
+            if row.rehearsal_id is not None:
+                current_date = current_dates_by_id.get(row.rehearsal_id)
+                if current_date is None or current_date < today:
+                    raise PastRehearsalEditError(
+                        'A Rehearsal in this Buffer is dated in the past — reload and reapply.'
+                    )
+
+        # Parking every existing row at a unique, unreachable sentinel date first means two rows
+        # swapping dates with each other can never collide with `unique_rehearsal_date_per_semester`
+        # mid-batch — sequential saves would otherwise hit the other row's not-yet-updated date.
+        for rehearsal_id in existing_ids:
+            Rehearsal.objects.filter(pk=rehearsal_id, semester=semester).update(
+                date=_sentinel_parking_date(rehearsal_id)
+            )
 
         for row in buffer.rows:
             _apply_rehearsal_edit_row(row, semester)
 
         semester.updated_at = timezone.now()
         semester.save(update_fields=['updated_at'])
+
+
+def _sentinel_parking_date(rehearsal_id: int) -> date:
+    """A date far enough in the future to collide with no real Rehearsal, unique per `rehearsal_id` (issue #219)."""
+    return date(9999, 12, 31) - timedelta(days=rehearsal_id)
 
 
 def _apply_rehearsal_edit_row(row: RehearsalEditRow, semester: Semester) -> None:

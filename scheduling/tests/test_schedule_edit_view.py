@@ -305,6 +305,21 @@ class ScheduleEditSaveTests(TestCase):
         rehearsal.refresh_from_db()
         self.assertEqual(rehearsal.start_time, time(18, 0))
 
+    def test_an_invalid_override_field_reopens_its_advanced_timing_details(self):
+        """A row with a bad override value re-renders with that row's <details> open, so the error is actually visible."""
+        semester = SemesterFactory()
+        rehearsal = RehearsalFactory(semester=semester, date=TOMORROW, start_time=time(18, 0))
+        admin_client(self)
+        data = formset_data([rehearsal], edits={rehearsal.pk: {'setup_grace_minutes': '-5'}})
+
+        response = self.client.post(reverse('scheduling:schedule-edit'), data)
+
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode()
+        details_start = content.index('schedule-edit-overrides-expander')
+        details_tag_end = content.index('>', details_start)
+        self.assertIn('open', content[details_start:details_tag_end])
+
     def test_a_new_row_dated_in_the_past_is_a_blocking_validation_error_naming_the_django_admin(self):
         """A new row dated before today is a blocking Validation Error, naming the Django admin, and writes nothing."""
         semester = SemesterFactory()
@@ -360,6 +375,14 @@ class ScheduleEditSaveTests(TestCase):
         rehearsal.refresh_from_db()
         self.assertEqual(rehearsal.start_time, time(18, 0))
         self.assertContains(response, 'reload and reapply')
+        self.assertContains(response, f'value="{stale_stamp}"')
+
+        second_response = self.client.post(reverse('scheduling:schedule-edit'), data)
+
+        self.assertEqual(second_response.status_code, 200)
+        rehearsal.refresh_from_db()
+        self.assertEqual(rehearsal.start_time, time(18, 0))
+        self.assertContains(second_response, 'reload and reapply')
 
     def test_a_wrong_semester_id_is_rejected_and_writes_nothing(self):
         """A hidden Semester id that no longer matches the session's viewed Semester is rejected wholesale."""

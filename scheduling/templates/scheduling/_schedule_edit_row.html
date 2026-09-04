@@ -20,7 +20,7 @@
     {{ form.is_full_setlist }}
     {{ form.is_full_setlist.errors }}
   </span>
-  <details class="schedule-edit-overrides-expander">
+  <details class="schedule-edit-overrides-expander"{% if form.setup_grace_minutes.errors or form.teardown_grace_minutes.errors or form.arrival_buffer_minutes.errors or form.departure_buffer_minutes.errors %} open{% endif %}>
     <summary>Advanced timing</summary>
     <span class="schedule-edit-field">
       <label for="{{ form.setup_grace_minutes.id_for_label }}">Setup grace (minutes)</label>

@@ -413,21 +413,29 @@ class ScheduleEditView(AdminRequiredMixin, View):
         if semester is None:
             return redirect(f"{reverse('scheduling:schedule')}?view=all")
         future_rehearsals, past_rehearsals = self._rehearsals(semester)
+        submitted_semester_id = request.POST.get('schedule_semester_id', '')
+        submitted_stamp = request.POST.get('schedule_semester_updated_at', '')
         formset = RehearsalEditFormSet(
             request.POST, queryset=future_rehearsals, prefix='rehearsal', form_kwargs={'semester': semester},
         )
         if formset.is_valid():
-            buffer = self._build_buffer(
-                formset, request.POST.get('schedule_semester_id', ''), request.POST.get('schedule_semester_updated_at', ''),
-            )
+            buffer = self._build_buffer(formset, submitted_semester_id, submitted_stamp)
             try:
                 apply_rehearsal_edits(buffer, viewing_semester=semester)
             except (WrongViewingSemesterError, StaleRehearsalSemesterError, PastRehearsalEditError) as error:
                 messages.error(request, str(error))
-                return self._render(request, semester, formset, past_rehearsals, status=200)
+                return self._render(
+                    request, semester, formset, past_rehearsals,
+                    schedule_semester_id=submitted_semester_id, schedule_semester_updated_at=submitted_stamp,
+                    status=200,
+                )
             messages.success(request, 'Rehearsals updated.')
             return redirect(f"{reverse('scheduling:schedule')}?view=all")
-        return self._render(request, semester, formset, past_rehearsals, status=200)
+        return self._render(
+            request, semester, formset, past_rehearsals,
+            schedule_semester_id=submitted_semester_id, schedule_semester_updated_at=submitted_stamp,
+            status=200,
+        )
 
     def _rehearsals(self, semester):
         """Return (future-or-today, past) Rehearsal querysets for `semester`, split on `rehearsal_schedule_for()`'s own boundary."""
@@ -459,14 +467,28 @@ class ScheduleEditView(AdminRequiredMixin, View):
             rows=rows,
         )
 
-    def _render(self, request, semester, formset, past_rehearsals, status=200):
-        """Render the fragment for an htmx request, else the full page; both carry the same buffer."""
+    def _render(
+        self, request, semester, formset, past_rehearsals,
+        schedule_semester_id=None, schedule_semester_updated_at=None, status=200,
+    ):
+        """Render the fragment for an htmx request, else the full page.
+
+        On a rejected POST, the caller passes through the *submitted*
+        semester id/stamp rather than `semester`'s live values — otherwise
+        a stale-stamp rejection would hand back the now-current stamp, and
+        a blind resubmit of the unchanged grid would pass the staleness
+        check and silently overwrite a concurrent edit it never saw.
+        """
         context = {
             'semester': semester,
             'formset': formset,
             'past_rehearsals': past_rehearsals,
-            'schedule_semester_id': semester.pk,
-            'schedule_semester_updated_at': semester.updated_at.isoformat(),
+            'schedule_semester_id': schedule_semester_id if schedule_semester_id is not None else semester.pk,
+            'schedule_semester_updated_at': (
+                schedule_semester_updated_at
+                if schedule_semester_updated_at is not None
+                else semester.updated_at.isoformat()
+            ),
         }
         template = self.fragment_template_name if _is_htmx(request) else self.page_template_name
         return render(request, template, context, status=status)
