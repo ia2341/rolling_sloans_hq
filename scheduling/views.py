@@ -33,7 +33,6 @@ from scheduling.forms import (
     RecordingUploadForm,
     RehearsalEditEmptyFormSet,
     RehearsalEditFormSet,
-    RehearsalForm,
     RehearsalPatternRangeForm,
     RehearsalTimeFormSet,
     RosterAddFormSet,
@@ -143,7 +142,6 @@ from scheduling.services import (
     recording_groups_for,
     rehearsal_count_target,
     rehearsal_schedule_for,
-    reorder_rehearsal_songs,
     reorder_songs,
     reserve_recording_upload,
     roster_for,
@@ -181,17 +179,6 @@ def _lock_semester(semester):
     `unique_song_position_per_semester`.
     """
     return Semester.objects.select_for_update().get(pk=semester.pk)
-
-
-def _lock_rehearsal(rehearsal):
-    """Row-lock `rehearsal` for the duration of the enclosing transaction.
-
-    Must be called inside `transaction.atomic()`. Mirrors `_lock_semester()`:
-    serializes concurrent Running Order renumbers against the same
-    Rehearsal so two overlapping edits can't compute/apply stale `order`
-    values and collide on `unique_order_per_rehearsal`.
-    """
-    return Rehearsal.objects.select_for_update().get(pk=rehearsal.pk)
 
 
 class OverviewView(BaseView, TemplateView):
@@ -884,9 +871,9 @@ class ScheduleEditShuffleView(AdminRequiredMixin, View):
     """`/schedule/edit/rehearsal/<rehearsal_id>/shuffle/`: proposes a reorder of one Rehearsal's own Running Order (issue #223).
 
     POST-only. `rehearsal_id` is scoped to the viewing Semester exactly like
-    every other per-Rehearsal endpoint on this page (`_lock_rehearsal()`'s
-    siblings), returning 404 for a Rehearsal outside it rather than a
-    Validation Error, since there is no submitted Buffer here to reject.
+    every other per-Rehearsal endpoint on this page, returning 404 for a
+    Rehearsal outside it rather than a Validation Error, since there is no
+    submitted Buffer here to reject.
     `shuffle_rehearsal_running_order()` reads the Rehearsal's *saved*
     RehearsalSong rows — a Rehearsal with none yet (never scheduled, or
     dealt but not yet saved) simply gets back an empty rows list, which the
@@ -2608,72 +2595,6 @@ class AssignmentPickerView(AdminRequiredMixin, View):
             rehearsal_song = get_object_or_404(RehearsalSong, rehearsal=rehearsal, song=song)
         picker = assignment_picker_for(song, role, semester, rehearsal_song=rehearsal_song)
         return render(request, 'scheduling/_assignment_picker.html', {'picker': picker})
-
-
-class RehearsalManageView(AdminRequiredMixin, View):
-    """`/manage/schedule/`: an admin lists and creates the viewing Semester's Rehearsals (issue #60, #17 story 10)."""
-
-    template_name = 'scheduling/manage_schedule.html'
-
-    def get(self, request):
-        """Render the viewing Semester's Rehearsals alongside an empty create form."""
-        return render(request, self.template_name, self._build_context())
-
-    def post(self, request):
-        """Validate the create form and save a new Rehearsal in the viewing Semester, or re-render with errors."""
-        semester = get_viewing_semester(request)
-        if semester is None:
-            messages.error(request, 'Create a Semester before scheduling Rehearsals.')
-            return redirect('scheduling:manage-schedule')
-        form = RehearsalForm(request.POST, instance=Rehearsal(semester=semester))
-        if form.is_valid():
-            form.save()
-            messages.success(request, 'Rehearsal created.')
-            return redirect('scheduling:manage-schedule')
-        return render(request, self.template_name, self._build_context(form))
-
-    def _build_context(self, form=None):
-        """Build context: the viewing Semester's Rehearsals plus the create form (fresh if none is given)."""
-        semester = get_viewing_semester(self.request)
-        return {
-            'semester': semester,
-            'rehearsals': _scoped_to_viewing_semester(Rehearsal, semester),
-            'form': form or RehearsalForm(),
-        }
-
-
-class RehearsalEditView(AdminRequiredMixin, View):
-    """`/manage/schedule/<pk>/edit/`: an admin edits an existing Rehearsal (issue #60, #17 story 10)."""
-
-    template_name = 'scheduling/manage_schedule_edit.html'
-
-    def get(self, request, pk):
-        """Render the edit form pre-filled with the target Rehearsal's current values."""
-        rehearsal = self._get_rehearsal(pk)
-        return render(request, self.template_name, {'rehearsal': rehearsal, 'form': RehearsalForm(instance=rehearsal)})
-
-    def post(self, request, pk):
-        """Validate and save the edit, re-deriving its RehearsalSongs' persisted times, or re-render with errors."""
-        rehearsal = self._get_rehearsal(pk)
-        form = RehearsalForm(request.POST, instance=rehearsal)
-        if form.is_valid():
-            with transaction.atomic():
-                _lock_rehearsal(rehearsal)
-                form.save()
-                existing_order = list(
-                    RehearsalSong.objects.filter(rehearsal=rehearsal).order_by('order').values_list('pk', flat=True)
-                )
-                if existing_order:
-                    reorder_rehearsal_songs(rehearsal, existing_order)
-            messages.success(request, 'Rehearsal updated.')
-            return redirect('scheduling:manage-schedule')
-        return render(request, self.template_name, {'rehearsal': rehearsal, 'form': form})
-
-    def _get_rehearsal(self, pk):
-        """Return the viewing Semester's Rehearsal with this id, or 404 (mirrors SongDetailView's scoping)."""
-        return get_object_or_404(_scoped_to_viewing_semester(Rehearsal, get_viewing_semester(self.request)), pk=pk)
-
-
 
 
 class RecordingUploadView(BaseView, View):

@@ -349,9 +349,10 @@ class Rehearsal(models.Model):
         set and let clean_fields()'s own required-field errors stand.
 
         Also refuses a flip to is_full_setlist=True on a Rehearsal that
-        already carries Conflicts (issue #150). RehearsalForm and the Django
-        admin both reach this through ModelForm._post_clean(), so neither
-        needs its own copy of the rule and the message renders once.
+        already carries Conflicts (issue #150). Any ModelForm editing this
+        field (the Django admin included) reaches this through
+        ModelForm._post_clean(), so none needs its own copy of the rule and
+        the message renders once.
         """
         if self._state.adding and self.semester_id is not None and self.date is not None:
             try:

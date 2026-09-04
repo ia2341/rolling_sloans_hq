@@ -237,7 +237,7 @@
               <td colspan="{{ matrix.roles|length|add:2 }}">
                 No songs scheduled for this rehearsal.
                 {% if can_edit_assignments and not rehearsal.is_full_setlist %}
-                  <a href="{% url 'scheduling:manage-schedule-edit' rehearsal.pk %}">Schedule songs for this rehearsal</a>
+                  <a href="{% url 'scheduling:schedule' %}?view=all">Schedule songs for this rehearsal</a>
                 {% endif %}
               </td>
             </tr>
