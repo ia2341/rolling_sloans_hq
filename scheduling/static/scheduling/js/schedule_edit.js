@@ -21,9 +21,15 @@ document.addEventListener('alpine:init', () => {
     falloutRequestId: 0,
 
     init() {
+      // Bound via x-init on the component root (#schedule-edit-grid), so
+      // `$el` and `$root` coincide here today -- but init() is also called
+      // directly by addRehearsalRow() and afterApplyGeneration(), neither of
+      // which runs inside a directive evaluation, so `$el` would be stale or
+      // undefined there. Use `$root` so this method is correct regardless of
+      // who calls it (issue #290).
       this.sortables.forEach((sortable) => sortable.destroy());
       this.sortables = [];
-      this.$el.querySelectorAll('.running-order-rows').forEach((rows) => {
+      this.$root.querySelectorAll('.running-order-rows').forEach((rows) => {
         this.sortables.push(Sortable.create(rows, {
           handle: '.running-order-drag-handle',
           animation: 150,
@@ -32,7 +38,7 @@ document.addEventListener('alpine:init', () => {
         this.reindex(rows);
         this.refreshAddSongOptions(rows);
       });
-      this.$el.querySelectorAll('.schedule-edit-row').forEach((row) => this.reindexRehearsalRow(row));
+      this.$root.querySelectorAll('.schedule-edit-row').forEach((row) => this.reindexRehearsalRow(row));
       this.openTargetedRunningOrder();
     },
 
@@ -71,9 +77,14 @@ document.addEventListener('alpine:init', () => {
     // (the toolbar's "+ Add rehearsal" click) and injectGeneratedCreate() (issue #222's staging modal's
     // Apply, which appends several rows in a row and must not steal focus for each one).
     _appendRehearsalRow() {
+      // Reached from addRehearsalRow() (bound on the "+ Add rehearsal"
+      // button) and injectGeneratedCreate() (called directly on this
+      // component's data from rehearsal_generation.js's applyGeneration(),
+      // outside any directive evaluation) -- `$el` is wrong in both cases,
+      // so this must resolve the formset via `$root` (issue #290).
       const template = document.getElementById('schedule-empty-row-template');
       const rows = document.getElementById('schedule-edit-rows');
-      const totalForms = this.$el.querySelector('[name="rehearsal-TOTAL_FORMS"]');
+      const totalForms = this.$root.querySelector('[name="rehearsal-TOTAL_FORMS"]');
       const nextIndex = Number(totalForms.value);
       const nextPrefix = `rehearsal-${nextIndex}`;
       const clone = template.content.cloneNode(true);
@@ -311,7 +322,11 @@ document.addEventListener('alpine:init', () => {
         ? Array.from(select.options).find((candidate) => candidate.value === String(songId))
         : null;
       const template = document.getElementById('running-order-empty-form-template');
-      const totalForms = this.$el.querySelector('[name="songs-TOTAL_FORMS"]');
+      // Reached from dealSchedule()/shuffleRehearsal() (both button-bound,
+      // then several stack frames removed from the click) via
+      // _applyRowsToSubGrid() -- `$el` there is the button, not the
+      // formset's own root, so this must use `$root` (issue #290).
+      const totalForms = this.$root.querySelector('[name="songs-TOTAL_FORMS"]');
       const nextIndex = Number(totalForms.value);
       const clone = template.content.cloneNode(true);
       clone.querySelectorAll('[name]').forEach((field) => {
@@ -401,7 +416,10 @@ document.addEventListener('alpine:init', () => {
       const rehearsalKey = subGrid.dataset.runningOrderFor;
       const rows = subGrid.querySelector('.running-order-rows');
       const template = document.getElementById('running-order-empty-form-template');
-      const totalForms = this.$el.querySelector('[name="songs-TOTAL_FORMS"]');
+      // Bound directly on the "+ Add song" <select> (@change="addRunningOrderSong($event)"),
+      // so `$el` here is a `<select>` inside one Rehearsal's sub-grid, not the
+      // component root -- use `$root` (issue #290).
+      const totalForms = this.$root.querySelector('[name="songs-TOTAL_FORMS"]');
       const nextIndex = Number(totalForms.value);
       const clone = template.content.cloneNode(true);
       clone.querySelectorAll('[name]').forEach((field) => {
@@ -493,9 +511,12 @@ document.addEventListener('alpine:init', () => {
     },
 
     hasPendingDeletions() {
-      const deletedRehearsal = Array.from(this.$el.querySelectorAll('.schedule-edit-delete-checkbox-wrapper input'))
+      // Reached from onSubmit, where `$el` is the `<form>` -- it happens to
+      // contain every row searched below today, but that's a coincidence of
+      // markup nesting, not a guarantee. Use `$root` (issue #290).
+      const deletedRehearsal = Array.from(this.$root.querySelectorAll('.schedule-edit-delete-checkbox-wrapper input'))
         .some((checkbox) => checkbox.checked);
-      const deletedRunningOrderRow = Array.from(this.$el.querySelectorAll('.running-order-delete-checkbox-wrapper input'))
+      const deletedRunningOrderRow = Array.from(this.$root.querySelectorAll('.running-order-delete-checkbox-wrapper input'))
         .some((checkbox) => checkbox.checked);
       return deletedRehearsal || deletedRunningOrderRow;
     },

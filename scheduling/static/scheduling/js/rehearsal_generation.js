@@ -28,7 +28,10 @@ document.addEventListener('alpine:init', () => {
     },
 
     close() {
-      this.$el.close();
+      // Bound on the "Close" button (@click="close"), so `$el` there is the
+      // button -- the root element is the <dialog> itself, so `.close()`
+      // must be called on `$root` (issue #290).
+      this.$root.close();
     },
 
     addRehearsalTimeRow() {
@@ -62,9 +65,12 @@ document.addEventListener('alpine:init', () => {
     // index substitution on name/id/label[for], and bumps that formset's own TOTAL_FORMS (mirrors
     // schedule_edit.js's addRehearsalRow()/_appendRehearsalRow()).
     _appendRow(templateId, rowsId, formsetPrefix) {
+      // Reached from addRehearsalTimeRow/addSkipDateRow, both bound on "+
+      // Add" buttons, so `$el` is never the dialog root here -- use `$root`
+      // (issue #290).
       const template = document.getElementById(templateId);
       const rows = document.getElementById(rowsId);
-      const totalForms = this.$el.querySelector(`[name="${formsetPrefix}-TOTAL_FORMS"]`);
+      const totalForms = this.$root.querySelector(`[name="${formsetPrefix}-TOTAL_FORMS"]`);
       const nextIndex = Number(totalForms.value);
       const clone = template.content.cloneNode(true);
       clone.querySelectorAll('[name]').forEach((field) => {

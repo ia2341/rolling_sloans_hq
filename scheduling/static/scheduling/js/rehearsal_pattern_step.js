@@ -31,9 +31,12 @@ document.addEventListener('alpine:init', () => {
     // Clones a <template>, does __prefix__ -> next index substitution on name/id/label[for], and bumps
     // the formset's own TOTAL_FORMS (mirrors rehearsal_generation.js's/schedule_edit.js's own "+ Add").
     _appendRow(templateId, rowsId, formsetPrefix) {
+      // Reached from addRehearsalTimeRow(), bound on the "+ Add Rehearsal
+      // Time" button, so `$el` there is that button, not the component root
+      // -- use `$root` (issue #290).
       const template = document.getElementById(templateId);
       const rows = document.getElementById(rowsId);
-      const totalForms = this.$el.querySelector(`[name="${formsetPrefix}-TOTAL_FORMS"]`);
+      const totalForms = this.$root.querySelector(`[name="${formsetPrefix}-TOTAL_FORMS"]`);
       const nextIndex = Number(totalForms.value);
       const clone = template.content.cloneNode(true);
       clone.querySelectorAll('[name]').forEach((field) => {
