@@ -89,7 +89,20 @@ Every field, for everyone, including the owner and an admin viewer of this page:
 
 ### `Recording`
 
-Every field, for everyone: **`never`**. A Recording's identity is the `RehearsalSong` slot it belongs to (`CONTEXT.md`), and the uploader is provenance rather than ownership — so Recordings are reached from the Song side only. A person-side listing would add a second signed-URL issuance path (ADR 0004) for no information the Song page doesn't already carry.
+**Your own uploads, on your own page, and nowhere else.** A Recording's identity is the `RehearsalSong` slot it belongs to (`CONTEXT.md`), and the uploader is provenance rather than ownership — so a *teammate's* Recordings are still reached from the Song side only, never through the person. What changed is the self case: issue #305 moved the upload surface here.
+
+| Field | Teammate | Self | Admin (edit mode) | Notes |
+| --- | --- | --- | --- | --- |
+| `uploaded_by`-scoped listing | ❌ never | ✅ self only | ❌ never | Your own uploads, with playback and delete. An admin viewing a teammate gets the Teammate verdict, not Self's — same divergence as `Person.email` above |
+| `rehearsal_song` → `Song.title`, `Rehearsal.date` | ❌ never | ✅ self only | ❌ never | How a row in your own list names itself; a Recording is meaningless without the slot it is a take of |
+| `note`, `file_size`, `uploaded_at` | ❌ never | ✅ self only | ❌ never | Per-upload text you wrote, and the row's own metadata |
+| `file` (the object key) | ❌ never | ❌ never | ❌ never | Never rendered. Playback is a short-lived signed URL issued per row (ADR 0004); the key itself stays server-side |
+| Count of your Recordings | ❌ never | ✅ self only | ❌ never | Not rendered on a teammate's page even as a bare number — a count is still a disclosure that they have been recording |
+| everything else | ❌ never | ❌ never | ❌ never | |
+
+**Why this reverses the earlier verdict.** This section previously read `never` for everyone, on the reasoning that a person-side listing adds a second signed-URL issuance path (ADR 0004) for no information the Song page doesn't already carry. That reasoning still holds for a *teammate's* recordings, and they stay `never`. It does not hold for your own: the upload flow has to live somewhere, issue #305 removed Recordings as a navigation destination of its own, and the two remaining ways in are per-Song from the Setlist and self-only from here. The second issuance path is accepted as the cost of that.
+
+The Song page keeps rendering every take on a Song to every member, uploader named by `.name` — that is unchanged, and it is not what this table governs.
 
 ### `Backup`
 
@@ -112,6 +125,8 @@ This section states a verdict the "anything not listed is `never`" default alrea
 - an explicit empty-state line
 
 and renders **no** declared-Roles list and **no** assigned-Songs section at all — not a zero. A `0` there is indistinguishable from "rostered but idle", and this Person is not on the roster.
+
+The self-only Recordings section is absent here too, for the same reason rather than as a privacy call: a Recording hangs off a `RehearsalSong` in some `Semester`, so a Person with no `Membership` in the current one has no rows this page could list.
 
 When there is no current `Semester` at all, both routes show an empty state, matching `SetlistView`.
 
