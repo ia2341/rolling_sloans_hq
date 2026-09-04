@@ -580,10 +580,13 @@ class RehearsalSong(models.Model):
         ordering: ClassVar[list[str]] = ['rehearsal', 'order']
 
     def _slot_duration(self):
-        """One song-slot's length: the Rehearsal's fixed window divided by its Semester's slot count."""
+        """One song-slot's length: the Rehearsal's window, minus setup/teardown grace, divided by slot count."""
         start = datetime.combine(self.rehearsal.date, self.rehearsal.start_time)
         end = datetime.combine(self.rehearsal.date, self.rehearsal.end_time)
-        return (end - start) / self.rehearsal.semester.default_song_slot_count
+        grace = timedelta(
+            minutes=self.rehearsal.setup_grace_minutes + self.rehearsal.teardown_grace_minutes,
+        )
+        return (end - start - grace) / self.rehearsal.semester.default_song_slot_count
 
     def _prior_slots(self):
         """Sum of slot_count for this Rehearsal's lower-order rows (excluding this one)."""
@@ -592,10 +595,16 @@ class RehearsalSong(models.Model):
         ).exclude(pk=self.pk).aggregate(total=models.Sum('slot_count'))['total'] or 0
 
     def _compute_times(self):
-        """Derive start_time/end_time from the slot_counts of lower-order rows plus this row's own."""
+        """Derive start_time/end_time from the slot_counts of lower-order rows plus this row's own.
+
+        The playable window begins setup_grace_minutes after the Rehearsal's
+        start_time, so every slot (including the first) is offset by it.
+        """
         slot_duration = self._slot_duration()
-        rehearsal_start = datetime.combine(self.rehearsal.date, self.rehearsal.start_time)
-        start = rehearsal_start + self._prior_slots() * slot_duration
+        playable_start = datetime.combine(
+            self.rehearsal.date, self.rehearsal.start_time,
+        ) + timedelta(minutes=self.rehearsal.setup_grace_minutes)
+        start = playable_start + self._prior_slots() * slot_duration
         end = start + self.slot_count * slot_duration
         self.start_time = start.time()
         self.end_time = end.time()
