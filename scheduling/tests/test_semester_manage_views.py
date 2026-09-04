@@ -1,5 +1,7 @@
 """The Semesters management surface and the Publish action: /manage/semesters/ (issue #170)."""
 
+from datetime import timedelta
+
 from django.test import TestCase, override_settings
 from django.urls import NoReverseMatch, reverse
 from django.utils import timezone
@@ -26,8 +28,8 @@ class PublishSemesterTests(TestCase):
 
     def test_republishing_an_older_semester_makes_it_live_again(self):
         """Publishing a previously-published, now-stale Semester makes it live again (rollback)."""
-        older = SemesterFactory()
-        newer = SemesterFactory()
+        older = SemesterFactory(published_at=timezone.now() - timedelta(days=2))
+        newer = SemesterFactory(published_at=timezone.now() - timedelta(days=1))
         self.assertEqual(get_live_semester(), newer)
 
         publish_semester(older)
