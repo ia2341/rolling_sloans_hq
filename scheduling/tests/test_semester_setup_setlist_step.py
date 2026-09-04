@@ -235,3 +235,27 @@ class SetlistStepImportAndSaveTests(TestCase):
         prior_song.refresh_from_db()
         self.assertEqual(prior_song.position, 1)
         self.assertEqual(Song.objects.filter(semester=prior).count(), 1)
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class SetlistStepEquivalenceTests(TestCase):
+    def test_skipping_then_saving_from_the_setlist_tab_matches_saving_it_in_the_wizard(self):
+        """Skipping this step and saving the identical rows from the Setlist tab afterward yields the same Song."""
+        row = {'title': 'Imported Track', 'artist': 'Imported Artist', 'length': '3:30', 'notes': ''}
+        wizard_semester = SemesterFactory(draft=True)
+        admin_client(self)
+        self.client.get(reverse('scheduling:manage-semester-setup-setlist', args=[wizard_semester.pk]))
+        self.client.post(reverse('scheduling:setlist-edit'), build_post_data(wizard_semester, rows=[row]))
+
+        tab_semester = SemesterFactory(draft=True)
+        # Skip step 4 outright -- only visit step 5, which switches the session's viewing Semester -- then
+        # finish the setlist later through the tab's own save endpoint, same as the abandoned-draft path.
+        self.client.get(reverse('scheduling:manage-semester-setup-rehearsals', args=[tab_semester.pk]))
+        self.client.post(reverse('scheduling:setlist-edit'), build_post_data(tab_semester, rows=[row]))
+
+        wizard_song = Song.objects.get(semester=wizard_semester)
+        tab_song = Song.objects.get(semester=tab_semester)
+        self.assertEqual(wizard_song.title, tab_song.title)
+        self.assertEqual(wizard_song.artist, tab_song.artist)
+        self.assertEqual(wizard_song.length, tab_song.length)
+        self.assertEqual(wizard_song.notes, tab_song.notes)

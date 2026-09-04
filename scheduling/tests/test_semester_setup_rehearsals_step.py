@@ -14,6 +14,7 @@ from scheduling.factories import (
 )
 from scheduling.models import Rehearsal, RehearsalPattern, RehearsalTime, SkipDate
 from scheduling.services import VIEWING_SEMESTER_SESSION_KEY
+from scheduling.tests.test_rehearsal_pattern_views import pattern_form_data
 
 PASSWORD = 'a-strong-test-password-123'
 
@@ -349,3 +350,40 @@ class RehearsalsStepSaveTests(TestCase):
         prior_pattern.refresh_from_db()
         self.assertEqual(prior_pattern.start_date, date(2025, 9, 1))
         self.assertEqual(RehearsalTime.objects.filter(pattern=prior_pattern).count(), 1)
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class RehearsalsStepEquivalenceTests(TestCase):
+    def test_skipping_then_saving_the_pattern_from_the_rehearsals_tab_matches_saving_it_in_the_wizard(self):
+        """Skipping this step and saving the identical Pattern from the Rehearsals tab afterward yields the same result."""
+        start_date, end_date = date(2026, 9, 1), date(2026, 12, 31)
+        rehearsal_times = [{'day_of_week': 2, 'start_time': '19:00', 'end_time': '23:00'}]
+        wizard_semester = SemesterFactory(draft=True)
+        admin_client(self)
+        self.client.post(
+            reverse('scheduling:manage-semester-setup-rehearsals', args=[wizard_semester.pk]),
+            {
+                'range-start_date': start_date.isoformat(), 'range-end_date': end_date.isoformat(),
+                **rehearsal_time_post_data(rehearsal_times),
+            },
+        )
+
+        tab_semester = SemesterFactory(draft=True)
+        # Visit step 5 (switching the session's viewing Semester) but follow its Skip link instead of
+        # submitting, then capture the Pattern later from the Rehearsals tab's own save endpoint -- the
+        # abandoned-draft path.
+        self.client.get(reverse('scheduling:manage-semester-setup-rehearsals', args=[tab_semester.pk]))
+        self.client.post(
+            reverse('scheduling:schedule-edit-generate-save'),
+            pattern_form_data(start_date=start_date, end_date=end_date, rehearsal_times=rehearsal_times),
+        )
+
+        wizard_pattern = RehearsalPattern.objects.get(semester=wizard_semester)
+        tab_pattern = RehearsalPattern.objects.get(semester=tab_semester)
+        self.assertEqual(wizard_pattern.start_date, tab_pattern.start_date)
+        self.assertEqual(wizard_pattern.end_date, tab_pattern.end_date)
+        wizard_time = RehearsalTime.objects.get(pattern=wizard_pattern)
+        tab_time = RehearsalTime.objects.get(pattern=tab_pattern)
+        self.assertEqual(wizard_time.day_of_week, tab_time.day_of_week)
+        self.assertEqual(wizard_time.start_time, tab_time.start_time)
+        self.assertEqual(wizard_time.end_time, tab_time.end_time)
