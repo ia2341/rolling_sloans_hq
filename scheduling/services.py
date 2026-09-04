@@ -1,6 +1,7 @@
 """Application services for the scheduling domain."""
 
 import logging
+import random
 from collections import defaultdict
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time, timedelta
@@ -3671,3 +3672,243 @@ def preview_rehearsal_generation(
     )
 
     return RehearsalGenerationDiff(creates=creates, keeps=keeps, retimes=retimes, orphans=orphans)
+
+
+@dataclass(frozen=True)
+class DealtRow:
+    """One Running Order sub-grid row `deal_running_orders()`/`shuffle_rehearsal_running_order()` propose (issue #223).
+
+    `rehearsal_song_id` is non-None exactly for an existing Recording-bearing
+    row the deal/shuffle leaves untouched at its own identity and
+    `slot_count` — everything else is a freshly dealt Song at `slot_count=1`
+    (a shuffle's non-pinned rows are also real RehearsalSong rows, but their
+    identity travels here too since a shuffle never creates or destroys a
+    row, only reorders existing ones). Mirrors `RunningOrderRow`'s shape
+    deliberately, so a caller can hand this straight to the Pending Buffer.
+    """
+
+    rehearsal_song_id: int | None
+    song_id: int
+    slot_count: int
+
+
+@dataclass(frozen=True)
+class DealtRehearsal:
+    """One Rehearsal's proposed Running Order rows, in final target order (issue #223)."""
+
+    rehearsal_id: int
+    rows: list[DealtRow]
+
+
+@dataclass(frozen=True)
+class RehearsalDeal:
+    """The whole proposed deal `deal_running_orders()` computes across every eligible Rehearsal (issue #223).
+
+    A pure read — writes nothing at all, same posture as
+    `preview_rehearsal_generation()`. There is no `apply_schedule_generation`:
+    #128 proposed one, then in the same resolution ruled that its output
+    simply fills the Rehearsal editor's existing Pending Buffer with no
+    consent step of its own — the only writer this Running Order ever
+    reaches is `apply_rehearsal_edits()`. Unlike the date generator's
+    Pattern, nothing here is persisted between runs: a deal's inputs (the
+    setlist, the eligible Rehearsals, which rows are Recording-pinned) all
+    already live in the database, so there is nothing a "Deal Pattern"
+    would remember that isn't re-derivable from a fresh run, and no seed is
+    kept either — the undo for a deal an admin dislikes is simply re-rolling
+    before Save, never an un-audit-able "was this generated" flag.
+    """
+
+    rehearsals: list[DealtRehearsal]
+
+
+class EmptySetlistError(ValueError):
+    """Raised by `deal_running_orders()` when the Semester's setlist has no Songs to deal (issue #223)."""
+
+
+class NoEligibleRehearsalsError(ValueError):
+    """Raised by `deal_running_orders()` when the Semester has no non-Dress, non-past Rehearsal to deal into (issue #223)."""
+
+
+def _eligible_rehearsals_for_deal(semester: Semester) -> list[Rehearsal]:
+    """Return `semester`'s non-Dress Rehearsals dated today or later, in schedule order (issue #223).
+
+    Shared boundary with `ScheduleEditView`'s own editable queryset (minus
+    the Dress exclusion, which that grid renders but never deals into) —
+    the dealer must never touch a Dress Rehearsal (ADR-0003 forbids the
+    rows outright) or a past one (generation cannot rewrite history).
+    """
+    today = timezone.localdate()
+    return list(
+        Rehearsal.objects.filter(semester=semester, is_full_setlist=False, date__gte=today)
+        .order_by('date', 'start_time')
+    )
+
+
+def _pinned_rows_by_rehearsal(rehearsals: list[Rehearsal]) -> dict[int, list[RehearsalSong]]:
+    """Return `{rehearsal_id: [RehearsalSong, ...]}` for every row across `rehearsals` that carries at least one Recording (issue #223).
+
+    These are the rows the dealer refuses to delete, move or re-slot — "the
+    manual path deliberately allows what the generator refuses" over a
+    Recording-bearing row, so a bulk run can never invalidate an upload's
+    timing.
+    """
+    by_rehearsal = defaultdict(list)
+    rehearsal_songs = (
+        RehearsalSong.objects.filter(rehearsal__in=rehearsals, recording__isnull=False)
+        .distinct().order_by('rehearsal_id', 'order')
+    )
+    for rehearsal_song in rehearsal_songs:
+        by_rehearsal[rehearsal_song.rehearsal_id].append(rehearsal_song)
+    return by_rehearsal
+
+
+def _pin_and_fill(
+    total: int, pinned: list[tuple[int, DealtRow]], free: list[DealtRow], rng: random.Random,
+) -> list[DealtRow]:
+    """Return a length-`total` list of `DealtRow`s: each `pinned` row parked at its own current order, `free` rows filling every remaining position in random order (issue #223).
+
+    Shared by `deal_running_orders()` (whose `free` rows are freshly dealt
+    Songs) and `shuffle_rehearsal_running_order()` (whose `free` rows are
+    the Rehearsal's own existing non-pinned rows) — the "hold pinned rows
+    fixed, randomize the rest" shape is identical either way. `pinned`'s
+    `order` is 1-indexed and clamped to `[1, total]` before placement (a
+    pinned row's order can only ever exceed `total` if the setlist or the
+    Semester's slot budget shrank since it was placed); a same-target
+    collision (two pinned rows clamping to the same index) probes forward
+    to the next free slot rather than raising, since this is a proposal an
+    admin can always discard by not saving.
+    """
+    slots: list[DealtRow | None] = [None] * total
+    for order, row in sorted(pinned, key=lambda pair: pair[0]):
+        index = min(order, total) - 1
+        while slots[index] is not None:
+            index = (index + 1) % total
+        slots[index] = row
+    shuffled_free = list(free)
+    rng.shuffle(shuffled_free)
+    free_iter = iter(shuffled_free)
+    return [slot if slot is not None else next(free_iter) for slot in slots]
+
+
+def deal_running_orders(semester: Semester) -> RehearsalDeal:
+    """Propose a balanced, randomized Running Order for every eligible Rehearsal in `semester`, writing nothing (issue #223).
+
+    A read, not a write — `RehearsalDeal`'s docstring explains why there is
+    no `apply_schedule_generation`. Deals the setlist across every eligible
+    Rehearsal (`_eligible_rehearsals_for_deal()`: non-Dress, dated today or
+    later) via a greedy round-robin: repeatedly, for each still-unfilled
+    slot (in random order across the whole term, so no one Rehearsal is
+    systematically favored), pick uniformly at random among whichever
+    Song(s) currently have the *fewest* total appearances across the term
+    and aren't already dealt into that particular slot's Rehearsal. This
+    keeps every Song's final appearance count within one of every other's
+    (a classic property of greedy-least-used selection) while still
+    randomizing which Song lands where. A Recording-bearing row is never a
+    candidate for this greedy fill at all — `_pinned_rows_by_rehearsal()`
+    excludes it up front, counts it toward its Song's running total from
+    the start (so the balance target already accounts for it), and
+    `_pin_and_fill()` parks it back at its own current order afterward, so
+    "the deal fills around it" rather than through it.
+
+    Each Rehearsal's target song count is `min(remaining_slots, available_songs)`
+    where `remaining_slots` is the Semester's `default_song_slot_count` minus
+    however many slots its pinned rows already consume, and `available_songs`
+    excludes Songs already pinned into that same Rehearsal — so a dealt row
+    is always `slot_count=1` and a Rehearsal never receives a Song twice. A
+    setlist smaller than the slot budget simply deals fewer rows, leaving
+    the rest empty (no row ever repeats a Song to pad it out).
+
+    Raises `EmptySetlistError` if `semester` has no Songs, and
+    `NoEligibleRehearsalsError` if it has no eligible Rehearsal — a silent
+    no-op would read as a bug, per this issue's spec.
+    """
+    rehearsals = _eligible_rehearsals_for_deal(semester)
+    songs = list(Song.objects.filter(semester=semester))
+    if not songs:
+        raise EmptySetlistError("This Semester's setlist has no Songs to deal.")
+    if not rehearsals:
+        raise NoEligibleRehearsalsError('This Semester has no eligible Rehearsal to deal a Running Order into.')
+
+    song_ids = [song.pk for song in songs]
+    pinned_by_rehearsal = _pinned_rows_by_rehearsal(rehearsals)
+
+    counts: dict[int, int] = defaultdict(int)
+    for pinned_rows in pinned_by_rehearsal.values():
+        for rehearsal_song in pinned_rows:
+            counts[rehearsal_song.song_id] += 1
+
+    used_in_rehearsal: dict[int, set[int]] = {
+        rehearsal.pk: {row.song_id for row in pinned_by_rehearsal.get(rehearsal.pk, [])} for rehearsal in rehearsals
+    }
+    capacity_by_rehearsal: dict[int, int] = {}
+    for rehearsal in rehearsals:
+        pinned_rows = pinned_by_rehearsal.get(rehearsal.pk, [])
+        remaining_slots = max(0, semester.default_song_slot_count - sum(row.slot_count for row in pinned_rows))
+        available_songs = len(song_ids) - len(used_in_rehearsal[rehearsal.pk])
+        capacity_by_rehearsal[rehearsal.pk] = max(0, min(remaining_slots, available_songs))
+
+    rng = random.Random()
+    pending_slots = [
+        rehearsal.pk for rehearsal in rehearsals for _ in range(capacity_by_rehearsal[rehearsal.pk])
+    ]
+    rng.shuffle(pending_slots)
+
+    dealt_song_ids: dict[int, list[int]] = defaultdict(list)
+    for rehearsal_id in pending_slots:
+        available = [song_id for song_id in song_ids if song_id not in used_in_rehearsal[rehearsal_id]]
+        min_count = min(counts[song_id] for song_id in available)
+        chosen = rng.choice([song_id for song_id in available if counts[song_id] == min_count])
+        dealt_song_ids[rehearsal_id].append(chosen)
+        used_in_rehearsal[rehearsal_id].add(chosen)
+        counts[chosen] += 1
+
+    dealt_rehearsals = []
+    for rehearsal in rehearsals:
+        pinned_rows = pinned_by_rehearsal.get(rehearsal.pk, [])
+        pinned = [
+            (rehearsal_song.order, DealtRow(
+                rehearsal_song_id=rehearsal_song.pk, song_id=rehearsal_song.song_id, slot_count=rehearsal_song.slot_count,
+            ))
+            for rehearsal_song in pinned_rows
+        ]
+        free = [DealtRow(rehearsal_song_id=None, song_id=song_id, slot_count=1) for song_id in dealt_song_ids[rehearsal.pk]]
+        total = len(pinned) + len(free)
+        rows = _pin_and_fill(total, pinned, free, rng) if total else []
+        dealt_rehearsals.append(DealtRehearsal(rehearsal_id=rehearsal.pk, rows=rows))
+
+    return RehearsalDeal(rehearsals=dealt_rehearsals)
+
+
+def shuffle_rehearsal_running_order(rehearsal: Rehearsal) -> list[DealtRow]:
+    """Propose a random reordering of `rehearsal`'s existing Running Order, writing nothing (issue #223).
+
+    The single-Rehearsal sibling of `deal_running_orders()`, sharing its
+    "hold pinned rows fixed, randomize the rest" shape via `_pin_and_fill()`
+    — the difference is every row here is already a real, saved
+    `RehearsalSong`, so nothing is added or removed: this reorders the
+    Rehearsal's *own already-dealt Songs* rather than redealing the term,
+    which is exactly why calling it can never unbalance the ±1 spread
+    `deal_running_orders()` established. Returns `[]` for a Rehearsal with
+    no Running Order rows at all — a no-op, not a refusal, since there is
+    nothing to shuffle and nothing an admin could be trying to fix.
+    """
+    rehearsal_songs = list(RehearsalSong.objects.filter(rehearsal=rehearsal).order_by('order'))
+    if not rehearsal_songs:
+        return []
+
+    pinned_ids = frozenset(
+        RehearsalSong.objects.filter(rehearsal=rehearsal, recording__isnull=False)
+        .distinct().values_list('pk', flat=True)
+    )
+    pinned = []
+    free = []
+    for rehearsal_song in rehearsal_songs:
+        row = DealtRow(
+            rehearsal_song_id=rehearsal_song.pk, song_id=rehearsal_song.song_id, slot_count=rehearsal_song.slot_count,
+        )
+        if rehearsal_song.pk in pinned_ids:
+            pinned.append((rehearsal_song.order, row))
+        else:
+            free.append(row)
+
+    return _pin_and_fill(len(rehearsal_songs), pinned, free, random.Random())

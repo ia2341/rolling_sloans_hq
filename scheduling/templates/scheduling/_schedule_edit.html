@@ -3,7 +3,9 @@
   x-data="scheduleEdit(
     '{% url 'scheduling:schedule-edit-confirm-destroy' %}',
     '{% url 'scheduling:schedule-edit-preview' %}',
-    '{% url 'scheduling:schedule-edit-generate' %}'
+    '{% url 'scheduling:schedule-edit-generate' %}',
+    '{% url 'scheduling:schedule-edit-deal' %}',
+    '{% url 'scheduling:schedule-edit-shuffle' 0 %}'
   )"
   x-init="init()"
 >
@@ -25,6 +27,14 @@
     </div>
     <button type="button" id="add-rehearsal-row" @click="addRehearsalRow">+ Add rehearsal</button>
     <button type="button" id="open-generate-modal" @click="openGenerateModal">Generate rehearsal dates</button>
+
+    {# The balanced dealer (issue #223): "Generate schedule" deals the setlist across every eligible Rehearsal;
+       "Re-roll" is the exact same call, just a second button so an admin who dislikes a deal can ask for another
+       without hunting for the first button again. Both fill this same Pending Buffer -- nothing commits until
+       Save Changes -- and neither is disabled by the other, since either is always safe to press again. #}
+    <button type="button" id="deal-running-orders" @click="dealSchedule">Generate schedule</button>
+    <button type="button" id="reroll-running-orders" @click="dealSchedule">Re-roll</button>
+    <p id="schedule-deal-error" x-show="dealError" x-text="dealError" role="alert"></p>
 
     {# The Fallout region (issue #221, ADR 0002/0008): visually separate from the Validation Error list
        above, and never a reason a save is blocked -- populated live by requestFallout()'s debounced fetch

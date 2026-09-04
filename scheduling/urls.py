@@ -22,6 +22,11 @@ urlpatterns = [
         'schedule/edit/generate/preview/',
         views.RehearsalGenerationPreviewView.as_view(), name='schedule-edit-generate-preview',
     ),
+    path('schedule/edit/deal/', views.ScheduleEditDealView.as_view(), name='schedule-edit-deal'),
+    path(
+        'schedule/edit/rehearsal/<int:rehearsal_id>/shuffle/',
+        views.ScheduleEditShuffleView.as_view(), name='schedule-edit-shuffle',
+    ),
     path('schedule/<int:rehearsal_id>/conflict/', views.ConflictDeclareView.as_view(), name='conflict-declare'),
     path('schedule/<int:rehearsal_id>/conflict/delete/', views.ConflictDeleteView.as_view(), name='conflict-delete'),
     path(

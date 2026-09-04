@@ -85,6 +85,11 @@
             <option value="{{ song.pk }}" data-title="{{ song.title }}">{{ song.title }}</option>
           {% endfor %}
         </select>
+        {% if form.instance.pk %}
+          {# Shuffle (issue #223): only meaningful for an already-saved Rehearsal -- shuffle_rehearsal_running_order()
+             reads its saved RehearsalSong rows, so a brand-new, not-yet-saved row has nothing to shuffle yet. #}
+          <button type="button" class="running-order-shuffle" @click="shuffleRehearsal($event)">Shuffle</button>
+        {% endif %}
       </span>
     </div>
   </details>
