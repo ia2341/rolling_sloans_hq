@@ -1,6 +1,9 @@
 {% extends "base.html" %}
 {% load static %}
 {% block title %}Set the rehearsal pattern{% endblock %}
+{% block alpine_components %}
+  <script src="{% static 'scheduling/js/rehearsal_pattern_step.js' %}" defer></script>
+{% endblock %}
 {% block content %}
 <h1>Set the rehearsal pattern</h1>
 <p>Step 5 of 5 &mdash; capture the shape of {{ semester.name }}'s rehearsal calendar: a date range and the
@@ -58,5 +61,4 @@
 </form>
 <a href="{% url 'scheduling:manage-semester-setup-finish' pk=semester.pk %}" id="skip-rehearsal-pattern">Skip this step</a>
 
-<script src="{% static 'scheduling/js/rehearsal_pattern_step.js' %}" defer></script>
 {% endblock %}
