@@ -28,6 +28,19 @@ class SemesterTests(TestCase):
         self.assertEqual(reloaded.default_arrival_buffer_minutes, 10)
         self.assertEqual(reloaded.default_departure_buffer_minutes, 5)
 
+    def test_default_dress_rehearsal_count_defaults_to_two(self):
+        """A Semester's default_dress_rehearsal_count defaults to 2 when left unset (issue #214)."""
+        semester = SemesterFactory()
+
+        self.assertEqual(semester.default_dress_rehearsal_count, 2)
+
+    def test_default_dress_rehearsal_count_can_be_overridden(self):
+        """A band running a single dress rehearsal, or three, can override the default (issue #214)."""
+        semester = SemesterFactory(default_dress_rehearsal_count=1)
+
+        reloaded = Semester.objects.get(pk=semester.pk)
+        self.assertEqual(reloaded.default_dress_rehearsal_count, 1)
+
 
 class RoleTests(TestCase):
     def test_active_by_default(self):

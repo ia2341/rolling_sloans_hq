@@ -17,9 +17,12 @@ from scheduling.models import (
     Conflict,
     ConflictWindow,
     Rehearsal,
+    RehearsalPattern,
     RehearsalSong,
+    RehearsalTime,
     Role,
     Semester,
+    SkipDate,
     Song,
     SongRoleAssignment,
     SongRoleRequirement,
@@ -67,6 +70,22 @@ class AdminRegistrationTests(TestCase):
         rehearsal_admin = admin.site._registry[Rehearsal]
         inline_models = [inline.model for inline in rehearsal_admin.inlines]
         self.assertIn(RehearsalSong, inline_models)
+
+    def test_rehearsal_pattern_is_registered_with_times_and_skip_dates_inlined(self):
+        """RehearsalPattern is registered, with RehearsalTime and SkipDate inlined on its admin page (issue #214)."""
+        self.assertIn(RehearsalPattern, admin.site._registry)
+        pattern_admin = admin.site._registry[RehearsalPattern]
+        inlined_models = {inline.model for inline in pattern_admin.inlines}
+        self.assertIn(RehearsalTime, inlined_models)
+        self.assertIn(SkipDate, inlined_models)
+
+    def test_rehearsal_time_is_registered(self):
+        """RehearsalTime is registered directly, for lookup outside its Pattern's inline (issue #214)."""
+        self.assertIn(RehearsalTime, admin.site._registry)
+
+    def test_skip_date_is_registered(self):
+        """SkipDate is registered directly, for lookup outside its Pattern's inline (issue #214)."""
+        self.assertIn(SkipDate, admin.site._registry)
 
     def test_conflict_is_registered(self):
         """Conflict is registered in Django admin for create/list/edit (issue #48)."""

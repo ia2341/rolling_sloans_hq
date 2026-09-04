@@ -23,6 +23,14 @@ class Semester(models.Model):
     in this map shares (issue #178): a write that touches this Semester's
     rows sets it explicitly (never `auto_now`, so an unrelated read never
     bumps it) and rejects a submission carrying an older stamp wholesale.
+
+    `default_rehearsal_duration_minutes` is demoted to a prefill-only field
+    as of issue #214/#127: rehearsal generation writes each Rehearsal Time's
+    own explicit end time onto the Rehearsals it creates, so this value's
+    only remaining jobs are prefilling a new RehearsalTime's end and
+    defaulting `end_time` on a hand-created Rehearsal (Rehearsal._apply_semester_defaults).
+    A wrong value here can therefore only produce a prefill an admin
+    overtypes, never a wrongly-timed generated Rehearsal.
     """
 
     name = models.CharField(max_length=255)
@@ -35,6 +43,7 @@ class Semester(models.Model):
     default_song_slot_count = models.PositiveIntegerField()
     default_arrival_buffer_minutes = models.PositiveIntegerField()
     default_departure_buffer_minutes = models.PositiveIntegerField()
+    default_dress_rehearsal_count = models.PositiveIntegerField(default=2)
 
     def __str__(self):
         return self.name
@@ -261,6 +270,9 @@ class Rehearsal(models.Model):
     is_full_setlist = models.BooleanField(default=False)
 
     class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(fields=['semester', 'date'], name='unique_rehearsal_date_per_semester'),
+        ]
         ordering: ClassVar[list[str]] = ['semester', 'date', 'start_time']
 
     def _default_from_semester(self, value, semester_field_name):
@@ -426,6 +438,118 @@ class Rehearsal(models.Model):
             needed_from_start=first_song.id in assigned_song_ids,
             needed_until_end=last_song.id in assigned_song_ids,
         )
+
+
+class RehearsalPattern(models.Model):
+    """An admin's persisted statement of a Semester's rehearsal-week shape (issue #214, decided on #127).
+
+    One per Semester. Input history with no downstream authority: `Rehearsal`
+    rows stay the source of truth for what rehearsals exist, and editing
+    this Pattern changes nothing until it is used to generate (not yet
+    built — see issues #219/#222). `start_date`/`end_date` are the
+    generation range; they deliberately do not live on `Semester`, whose
+    `published_at` stays the sole authority on which Semester is real
+    (ADR-0010, per the #127 amendment).
+    """
+
+    semester = models.OneToOneField(Semester, on_delete=models.CASCADE)
+    start_date = models.DateField()
+    end_date = models.DateField()
+
+    def _reversed_range(self):
+        """True if start_date doesn't fall on-or-before end_date."""
+        return self.start_date is not None and self.end_date is not None and self.start_date > self.end_date
+
+    def clean(self):
+        """Surface a reversed generation range as a normal form error, not a 500."""
+        if self._reversed_range():
+            message = 'End date must be on or after start date.'
+            raise ValidationError({'start_date': message, 'end_date': message})
+
+    def save(self, *args, **kwargs):
+        """Reject a reversed generation range before saving, for callers that skip full_clean()."""
+        if self._reversed_range():
+            raise ValueError("RehearsalPattern's start_date must be on or before end_date.")
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        """Return "Rehearsal Pattern — <semester>" for admin/debug display."""
+        return f'Rehearsal Pattern — {self.semester}'
+
+
+class RehearsalTime(models.Model):
+    """One recurring day-and-time within a Rehearsal Pattern, e.g. "Wednesdays 7-11pm" (issue #214, decided on #127).
+
+    Deliberately not called a "slot" — that word already names a Song's
+    timed block inside a Rehearsal (`Semester.default_song_slot_count`,
+    `RehearsalSong.slot_count`). Each Rehearsal Time carries its own
+    start/end since different days legitimately run different lengths.
+    """
+
+    MONDAY = 0
+    TUESDAY = 1
+    WEDNESDAY = 2
+    THURSDAY = 3
+    FRIDAY = 4
+    SATURDAY = 5
+    SUNDAY = 6
+    DAY_OF_WEEK_CHOICES = (
+        (MONDAY, 'Monday'),
+        (TUESDAY, 'Tuesday'),
+        (WEDNESDAY, 'Wednesday'),
+        (THURSDAY, 'Thursday'),
+        (FRIDAY, 'Friday'),
+        (SATURDAY, 'Saturday'),
+        (SUNDAY, 'Sunday'),
+    )
+
+    pattern = models.ForeignKey(RehearsalPattern, on_delete=models.CASCADE, related_name='rehearsal_times')
+    day_of_week = models.PositiveSmallIntegerField(choices=DAY_OF_WEEK_CHOICES)
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+
+    class Meta:
+        ordering: ClassVar[list[str]] = ['pattern', 'day_of_week', 'start_time']
+
+    def __str__(self):
+        """Return "<Pattern> — <day name> <start_time>-<end_time>" for admin/debug display."""
+        day_name = dict(self.DAY_OF_WEEK_CHOICES).get(self.day_of_week, self.day_of_week)
+        return f'{self.pattern} — {day_name} {self.start_time}-{self.end_time}'
+
+
+class SkipDate(models.Model):
+    """A single date, or an inclusive date range, on which no Rehearsal is generated (issue #214, decided on #127).
+
+    A holiday is one row with `end_date` left blank; a break (e.g. spring
+    break) is one row with `end_date` set, covering every date from
+    `start_date` through `end_date` inclusive.
+    """
+
+    pattern = models.ForeignKey(RehearsalPattern, on_delete=models.CASCADE, related_name='skip_dates')
+    start_date = models.DateField()
+    end_date = models.DateField(null=True, blank=True)
+
+    def _reversed_range(self):
+        """True if end_date is set but falls before start_date."""
+        return self.end_date is not None and self.start_date is not None and self.end_date < self.start_date
+
+    def clean(self):
+        """Surface a reversed date range as a normal form error, not a 500."""
+        if self._reversed_range():
+            message = 'End date must be on or after start date.'
+            raise ValidationError({'start_date': message, 'end_date': message})
+
+    def save(self, *args, **kwargs):
+        """Reject a reversed date range before saving, for callers that skip full_clean()."""
+        if self._reversed_range():
+            raise ValueError("SkipDate's end_date must be on or after start_date, when set.")
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        """Return "<Pattern> — <start_date>" or "<Pattern> — <start_date> to <end_date>" for admin/debug display."""
+        if self.end_date is None:
+            return f'{self.pattern} — {self.start_date}'
+        return f'{self.pattern} — {self.start_date} to {self.end_date}'
 
 
 class RehearsalSong(models.Model):

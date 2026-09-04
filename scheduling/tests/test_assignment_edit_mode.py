@@ -8,6 +8,7 @@ from django.utils import timezone
 
 from identity.factories import PersonFactory
 from scheduling.factories import (
+    ConflictFactory,
     MembershipFactory,
     MembershipRoleFactory,
     RehearsalFactory,
@@ -18,7 +19,7 @@ from scheduling.factories import (
     SongRoleAssignmentFactory,
     SongRoleRequirementFactory,
 )
-from scheduling.models import SongRoleAssignment
+from scheduling.models import Conflict, SongRoleAssignment
 from scheduling.services import VIEWING_SEMESTER_SESSION_KEY
 
 PASSWORD = 'a-strong-test-password-123'
@@ -37,6 +38,11 @@ def _save_url(rehearsal):
 def _picker_url(rehearsal, song, role):
     """Return the "+" picker's fetch endpoint for one (Song, Role) cell on `rehearsal`'s grid."""
     return reverse('scheduling:schedule-assignments-picker', args=[rehearsal.pk, song.pk, role.pk])
+
+
+def _preview_url(rehearsal):
+    """Return the assignment-Preview POST endpoint (issue #212) for `rehearsal`."""
+    return reverse('scheduling:schedule-assignments-preview', args=[rehearsal.pk])
 
 
 def _save_payload(rehearsal, removed_ids=(), added_entries=()):
@@ -113,6 +119,26 @@ class AnonymousAndNonAdminAccessTests(TestCase):
         response = self.client.get(_picker_url(self.rehearsal, self.song, self.role))
 
         self.assertEqual(response.status_code, 403)
+
+    def test_anonymous_preview_post_redirects_to_login(self):
+        """An anonymous Preview POST redirects to login rather than 403ing (issue #212)."""
+        url = _preview_url(self.rehearsal)
+
+        response = self.client.post(url, _save_payload(self.rehearsal))
+
+        self.assertRedirects(response, f"{reverse('identity:login')}?next={url}")
+
+    def test_non_admin_preview_post_is_forbidden(self):
+        """A logged-in non-admin's Preview POST is rejected with 403 and writes nothing (issue #212)."""
+        self.client.login(username=self.person.email, password=PASSWORD)
+
+        response = self.client.post(
+            _preview_url(self.rehearsal), _save_payload(self.rehearsal, [self.assignment.pk]),
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertTrue(SongRoleAssignment.objects.filter(pk=self.assignment.pk).exists())
+
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)
@@ -321,6 +347,93 @@ class SaveAssignmentEditsViewTests(TestCase):
         self.assertTrue(
             SongRoleAssignment.objects.filter(song=self.song, role=self.role, person=membership.person).exists()
         )
+
+    def test_a_blocked_save_re_renders_the_grid_with_the_pending_buffer_intact(self):
+        """A stale-stamp Validation Error re-renders the grid (status 200, no redirect) with removed/added preserved (issue #212)."""
+        membership = MembershipFactory(semester=self.semester)
+        stale_stamp = self.semester.updated_at - timedelta(days=1)
+        payload = _save_payload(
+            self.rehearsal,
+            removed_ids=[self.assignment.pk],
+            added_entries=[(self.song.pk, self.role.pk, membership.person.pk)],
+        )
+        payload['assignment_semester_updated_at'] = stale_stamp.isoformat()
+
+        response = self.client.post(_save_url(self.rehearsal), payload)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(SongRoleAssignment.objects.filter(pk=self.assignment.pk).exists())
+        self.assertContains(response, str(self.assignment.pk))
+        self.assertContains(response, membership.person.name)
+        self.assertContains(response, 'id="edit-assignments-button"')
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class AssignmentPreviewViewTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        """Build an admin Person, a future Rehearsal with one Song/Role slot, and one existing SongRoleAssignment."""
+        cls.admin = PersonFactory(password=PASSWORD, is_admin=True)
+        cls.semester = SemesterFactory()
+        cls.rehearsal = RehearsalFactory(semester=cls.semester, is_full_setlist=False)
+        cls.song = SongFactory(semester=cls.semester, position=1)
+        cls.role = RoleFactory(name='Singer')
+        SongRoleRequirementFactory(song=cls.song, role=cls.role, count=1)
+        RehearsalSongFactory(song=cls.song, rehearsal=cls.rehearsal, order=1)
+        cls.assignment = SongRoleAssignmentFactory(song=cls.song, role=cls.role)
+
+    def setUp(self):
+        """Log in as the synthetic admin Person before each test."""
+        self.client.login(username=self.admin.email, password=PASSWORD)
+
+    def test_preview_writes_nothing(self):
+        """A Preview POST removing the sole assignment leaves the row in place afterward (issue #212 acceptance)."""
+        self.client.post(_preview_url(self.rehearsal), _save_payload(self.rehearsal, [self.assignment.pk]))
+
+        self.assertTrue(SongRoleAssignment.objects.filter(pk=self.assignment.pk).exists())
+
+    def test_unfilled_requirement_renders_in_the_quiet_fallout_region(self):
+        """Removing the sole assignment shows an unfilled-Requirement line under 'Worth noting' (issue #212)."""
+        response = self.client.post(_preview_url(self.rehearsal), _save_payload(self.rehearsal, [self.assignment.pk]))
+
+        self.assertContains(response, 'Worth noting')
+        self.assertContains(response, 'unfilled')
+        self.assertNotContains(response, 'This will:')
+
+    def test_full_conflict_renders_in_the_loud_fallout_region(self):
+        """A full Conflict on a newly-picked Person shows a warning line under 'This will:' (issue #212)."""
+        membership = MembershipFactory(semester=self.semester)
+        ConflictFactory(person=membership.person, rehearsal=self.rehearsal, type=Conflict.FULL_CONFLICT)
+
+        response = self.client.post(
+            _preview_url(self.rehearsal),
+            _save_payload(self.rehearsal, added_entries=[(self.song.pk, self.role.pk, membership.person.pk)]),
+        )
+
+        self.assertContains(response, 'This will:')
+        self.assertContains(response, membership.person.name)
+
+    def test_validation_error_renders_in_its_own_region(self):
+        """A wrong-Semester Buffer renders a Validation Error region distinct from the Fallout region (issue #212)."""
+        other_semester = SemesterFactory(draft=True)
+        payload = _save_payload(self.rehearsal, [self.assignment.pk])
+        payload['assignment_semester_id'] = str(other_semester.pk)
+
+        response = self.client.post(_preview_url(self.rehearsal), payload)
+
+        self.assertContains(response, "This edit couldn't be validated:")
+        self.assertNotContains(response, 'This will:')
+        self.assertNotContains(response, 'Worth noting')
+
+    def test_preview_post_on_a_past_rehearsal_404s(self):
+        """A hand-crafted Preview POST against a non-editable (past-dated) Rehearsal 404s (issue #212)."""
+        past_rehearsal = RehearsalFactory(
+            semester=self.semester, is_full_setlist=False, date=timezone.localdate() - timedelta(days=1),
+        )
+
+        response = self.client.post(_preview_url(past_rehearsal), _save_payload(self.rehearsal, [self.assignment.pk]))
+
+        self.assertEqual(response.status_code, 404)
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)

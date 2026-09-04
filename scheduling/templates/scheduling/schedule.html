@@ -65,7 +65,9 @@
   </div>
 
   {{ cell_standing_assignees|json_script:"cell-standing-assignees-data" }}
-  <div x-data="assignmentGrid()">
+  <div
+    x-data="assignmentGrid(JSON.parse('{{ pending_removed_json|default:'[]'|escapejs }}'), JSON.parse('{{ pending_added_json|default:'[]'|escapejs }}'), {{ pending_editing|yesno:'true,false' }})"
+  >
     {% if can_edit_assignments %}
       <p>
         <button type="button" id="edit-assignments-button" x-show="!editing" @click="editing = true">Edit assignments</button>
@@ -80,7 +82,7 @@
     </p>
 
     {% if can_edit_assignments %}
-      <form method="post" action="{% url 'scheduling:schedule-assignments-save' rehearsal.pk %}">
+      <form id="assignment-edit-form" method="post" action="{% url 'scheduling:schedule-assignments-save' rehearsal.pk %}">
         {% csrf_token %}
         <input type="hidden" name="view" value="{{ view_mode }}">
         <input type="hidden" name="assignment_semester_id" value="{{ semester.pk }}">
@@ -103,7 +105,7 @@
         </template>
     {% endif %}
 
-      <table id="assignment-matrix">
+      <table id="assignment-matrix" class="rs-stack-table">
         <thead>
           <tr>
             <th>Song</th>
@@ -116,10 +118,10 @@
         <tbody>
           {% for row in matrix.rows %}
             <tr data-song-id="{{ row.song.pk }}" data-mine="{% if row.song.pk in my_song_ids %}true{% else %}false{% endif %}">
-              <td>{{ row.song.title }}</td>
-              <td>{% if row.start_time %}{{ row.start_time }}{% else %}&mdash;{% endif %}</td>
+              <td data-label="Song">{{ row.song.title }}</td>
+              <td data-label="Start Time">{% if row.start_time %}{{ row.start_time }}{% else %}&mdash;{% endif %}</td>
               {% for cell in row.cells %}
-                <td>
+                <td data-label="{{ cell.role.name }}">
                   {% for entry in cell.entries %}
                     {% include "scheduling/_assignment_chip.html" %}{% if not forloop.last %} {% endif %}
                   {% empty %}
@@ -198,7 +200,23 @@
         </p>
       </form>
 
-      <dialog id="assignment-picker-dialog" x-ref="assignmentPickerDialog" @click="onPickerDialogClick($event)">
+      <div id="assignment-fallout"></div>
+      <p id="assignment-fallout-error" x-show="previewError" x-text="previewError" role="alert"></p>
+
+      <dialog
+        id="assignment-picker-dialog"
+        x-ref="assignmentPickerDialog"
+        @click="onPickerDialogClick($event)"
+        hx-post="{% url 'scheduling:schedule-assignments-preview' rehearsal.pk %}"
+        hx-trigger="close"
+        hx-target="#assignment-fallout"
+        hx-swap="outerHTML"
+        hx-include="#assignment-edit-form"
+        hx-sync="this:replace"
+        @htmx:response-error="onPreviewError()"
+        @htmx:send-error="onPreviewError()"
+        @htmx:after-swap="onPreviewSettled()"
+      >
         <p id="assignment-picker-error" x-show="pickerError" x-text="pickerError" role="alert"></p>
         <div id="assignment-picker-body" x-html="pickerHtml"></div>
         <button type="button" id="close-assignment-picker" @click="closePicker()">Cancel</button>

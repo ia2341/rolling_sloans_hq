@@ -163,6 +163,23 @@ class ScheduleViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'class="role-mismatch"', count=1)
 
+    def test_assignment_matrix_stacks_via_the_shared_rs_stack_table_pattern_on_a_narrow_viewport(self):
+        """The grid carries `rs-stack-table` and per-cell `data-label`s so it stacks into cards below 48rem (issue #217)."""
+        semester = SemesterFactory()
+        rehearsal = RehearsalFactory(semester=semester)
+        song = SongFactory(semester=semester, title='Nowhere Man', position=1)
+        RehearsalSongFactory(song=song, rehearsal=rehearsal, order=1)
+        role = RoleFactory(name='Guitar')
+        SongRoleRequirementFactory(song=song, role=role, count=1)
+
+        response = self.client.get(reverse('scheduling:schedule'), {'rehearsal': rehearsal.pk})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'id="assignment-matrix" class="rs-stack-table"')
+        self.assertContains(response, 'data-label="Song"')
+        self.assertContains(response, 'data-label="Start Time"')
+        self.assertContains(response, 'data-label="Guitar"')
+
     def test_the_rehearsal_detail_carries_the_declare_form_for_that_rehearsal(self):
         """The declare affordance is inline on the rehearsal, posting at the new /schedule/ route (issue #190)."""
         semester = SemesterFactory()
@@ -499,9 +516,9 @@ class SongDetailViewTests(TestCase):
         """actual counts this Song's RehearsalSong rows; target counts the Semester's non-Dress Rehearsals."""
         semester = SemesterFactory()
         song = SongFactory(semester=semester)
-        rehearsal_one = RehearsalFactory(semester=semester, is_full_setlist=False)
-        rehearsal_two = RehearsalFactory(semester=semester, is_full_setlist=False)
-        RehearsalFactory(semester=semester, is_full_setlist=True)
+        rehearsal_one = RehearsalFactory(semester=semester, date=date(2026, 9, 16), is_full_setlist=False)
+        rehearsal_two = RehearsalFactory(semester=semester, date=date(2026, 9, 23), is_full_setlist=False)
+        RehearsalFactory(semester=semester, date=date(2026, 9, 30), is_full_setlist=True)
         RehearsalSongFactory(song=song, rehearsal=rehearsal_one, order=1)
         RehearsalSongFactory(song=song, rehearsal=rehearsal_two, order=1)
 
