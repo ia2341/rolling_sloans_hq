@@ -135,34 +135,13 @@ class DeclareConflictForm(forms.Form):
         return None
 
 
-class RehearsalForm(forms.ModelForm):
-    """Creates/edits a Rehearsal within its (already-set) Semester (issue #60).
-
-    `semester` is deliberately excluded: the view sets it on the instance
-    before binding (a fresh Rehearsal for create, the existing one for
-    edit), so it's never attacker-controlled via POST data.
-
-    There is deliberately no `clean()` here guarding the flip to
-    `is_full_setlist=True` on a Rehearsal with declared Conflicts (issue
-    #150): `Rehearsal.clean()` owns that rule, and `_post_clean()` surfaces
-    it as an `is_full_setlist` field error on this form. Duplicating it
-    would render the same message twice, since `Model.full_clean()` doesn't
-    filter `clean()`'s errors against fields the form already flagged.
-    """
-
-    class Meta:
-        model = Rehearsal
-        fields: ClassVar[list[str]] = [
-            'date', 'start_time', 'end_time', 'setup_grace_minutes', 'teardown_grace_minutes', 'is_full_setlist',
-        ]
-
-
 class RehearsalEditRowForm(forms.ModelForm):
     """One row of `/schedule/edit/`'s grid: date, times, the Dress toggle, and the four grace/buffer overrides (issue #219).
 
-    `semester` is excluded from `Meta.fields` for the same reason
-    `RehearsalForm` excludes it — it travels as a constructor kwarg instead,
-    used here for the override placeholders and the derived-end-time check,
+    `semester` is excluded from `Meta.fields` because it's set on the
+    instance by the view before binding (never attacker-controlled via POST
+    data) — it travels as a constructor kwarg instead, used here for the
+    override placeholders and the derived-end-time check,
     and applied to new instances by the view before `save()`. `end_time`
     and the four overrides are all optional: a blank override means
     "inherit the Semester default" (rendered as placeholder text by

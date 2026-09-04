@@ -1,9 +1,0 @@
-<!doctype html>
-<title>Edit rehearsal</title>
-<h1>Edit rehearsal: {{ rehearsal.date }}</h1>
-<form method="post">
-  {% csrf_token %}
-  {{ form.as_p }}
-  <button type="submit">Save</button>
-</form>
-<a href="{% url 'scheduling:manage-schedule' %}">Back to schedule</a>

@@ -16,6 +16,7 @@ from scheduling.services import (
     VIEWING_SEMESTER_SESSION_KEY,
     semester_options_for,
 )
+from scheduling.tests.test_schedule_edit_view import formset_data
 
 PASSWORD = 'a-strong-test-password-123'
 
@@ -234,10 +235,14 @@ class SelectionGovernsWritesTests(TestCase):
         draft = SemesterFactory(draft=True)
         admin_client(self)
         select(self, draft)
+        extra_row = {
+            'date': (timezone.now().date() + timedelta(days=1)).isoformat(),
+            'start_time': time(18, 0).isoformat(), 'end_time': time(20, 0).isoformat(), 'is_full_setlist': False,
+        }
 
         self.client.post(
-            reverse('scheduling:manage-schedule'),
-            {'date': timezone.now().date() + timedelta(days=1), 'start_time': time(18, 0)},
+            reverse('scheduling:schedule-edit'),
+            formset_data([], extra_rows=[extra_row], semester_id=draft.pk, stamp=draft.updated_at.isoformat()),
         )
 
         self.assertTrue(Rehearsal.objects.filter(semester=draft).exists())

@@ -200,7 +200,7 @@ class EditAssignmentsButtonTests(TestCase):
         response = self.client.get(_schedule_url(rehearsal))
 
         self.assertContains(response, 'id="edit-assignments-button"')
-        self.assertContains(response, reverse('scheduling:manage-schedule-edit', args=[rehearsal.pk]))
+        self.assertContains(response, f"{reverse('scheduling:schedule')}?view=all")
 
     def test_button_renders_on_a_grid_with_no_columns(self):
         """A Song with no Role Requirement yields zero columns; the button still renders."""
