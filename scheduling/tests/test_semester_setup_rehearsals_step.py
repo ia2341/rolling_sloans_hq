@@ -10,8 +10,9 @@ from scheduling.factories import (
     RehearsalPatternFactory,
     RehearsalTimeFactory,
     SemesterFactory,
+    SkipDateFactory,
 )
-from scheduling.models import Rehearsal, RehearsalPattern, RehearsalTime
+from scheduling.models import Rehearsal, RehearsalPattern, RehearsalTime, SkipDate
 from scheduling.services import VIEWING_SEMESTER_SESSION_KEY
 
 PASSWORD = 'a-strong-test-password-123'
@@ -310,6 +311,26 @@ class RehearsalsStepSaveTests(TestCase):
         saved = RehearsalPattern.objects.get(semester=semester)
         self.assertEqual(saved.start_date, date(2026, 9, 5))
         self.assertEqual(list(saved.rehearsal_times.values_list('day_of_week', flat=True)), [4])
+
+    def test_resaving_preserves_the_drafts_own_skip_dates(self):
+        """Re-submitting the step (no Skip Date field on this form) must not wipe Skip Dates set on the Rehearsals surface."""
+        semester = SemesterFactory(draft=True)
+        pattern = RehearsalPatternFactory(semester=semester, start_date=date(2026, 9, 1), end_date=date(2026, 12, 1))
+        RehearsalTimeFactory(pattern=pattern, day_of_week=RehearsalTime.MONDAY)
+        skip_date = SkipDateFactory(pattern=pattern, start_date=date(2026, 11, 24), end_date=date(2026, 11, 28))
+        admin_client(self)
+        data = {
+            'range-start_date': '2026-09-05', 'range-end_date': '2026-12-15',
+            **rehearsal_time_post_data([{'day_of_week': 4, 'start_time': '18:00', 'end_time': '21:00'}]),
+        }
+
+        self.client.post(reverse('scheduling:manage-semester-setup-rehearsals', args=[semester.pk]), data)
+
+        saved = RehearsalPattern.objects.get(semester=semester)
+        self.assertEqual(SkipDate.objects.filter(pattern=saved).count(), 1)
+        reloaded_skip_date = SkipDate.objects.get(pattern=saved)
+        self.assertEqual(reloaded_skip_date.start_date, skip_date.start_date)
+        self.assertEqual(reloaded_skip_date.end_date, skip_date.end_date)
 
     def test_saving_never_touches_the_prior_semesters_pattern(self):
         """Saving this draft's Pattern leaves the prior Semester's own Pattern untouched."""

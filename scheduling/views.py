@@ -2968,13 +2968,21 @@ class SemesterSetupRehearsalsView(AdminRequiredMixin, View):
     """`/manage/semesters/setup/<pk>/rehearsals/`: Semester setup step 5, capturing the Rehearsal Pattern (issue #203).
 
     Captures only a date range and a list of Rehearsal Times — no Skip
-    Dates, which stay a Rehearsals-surface-only concern (CONTEXT.md's
+    Dates form, which stay a Rehearsals-surface-only concern (CONTEXT.md's
     Skip Date is calendar-specific, not something a fresh draft needs
     before it can be scheduled). The range is soft-prefilled by parsing
     the Semester's name (`_suggested_rehearsal_date_range()`); the prior
     Semester's Rehearsal Times are offered as an opt-in prefill
     (`prior_rehearsal_times_for()`) but never its range or Skip Dates,
     since those are calendar-specific to that term.
+
+    This step is reachable even for a draft that already has a saved
+    Pattern (revisiting after a Skip Date was later added on the
+    Rehearsals surface, e.g. spring break) — so `post()` reads that
+    Pattern's existing Skip Dates and threads them back into the
+    `RehearsalPatternInput` unchanged. `save_rehearsal_pattern()` replaces
+    a Pattern's children wholesale, so leaving `skip_dates` at its default
+    empty list would silently delete every Skip Date on every re-save.
 
     Saving calls `save_rehearsal_pattern()` and nothing else — no
     Rehearsal row is ever created here. THIS IS DELIBERATE: #196 §3
@@ -3017,10 +3025,20 @@ class SemesterSetupRehearsalsView(AdminRequiredMixin, View):
             for form in time_formset.forms
             if (cleaned_data := form.cleaned_data) and not cleaned_data.get('DELETE')
         ]
+        existing_pattern = RehearsalPattern.objects.filter(semester=semester).prefetch_related('skip_dates').first()
+        skip_dates = (
+            [
+                SkipDateInput(start_date=skip_date.start_date, end_date=skip_date.end_date)
+                for skip_date in existing_pattern.skip_dates.all()
+            ]
+            if existing_pattern is not None
+            else []
+        )
         pattern_input = RehearsalPatternInput(
             start_date=range_form.cleaned_data['start_date'],
             end_date=range_form.cleaned_data['end_date'],
             rehearsal_times=rehearsal_times,
+            skip_dates=skip_dates,
         )
         try:
             save_rehearsal_pattern(semester, pattern_input)
