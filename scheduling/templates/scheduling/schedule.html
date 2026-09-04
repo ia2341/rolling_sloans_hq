@@ -1,6 +1,14 @@
 {% extends "base.html" %}
 {% load static %}
 {% block title %}My Schedule{% endblock %}
+{% block alpine_components %}
+  <script src="{% static 'scheduling/js/assignment_picker.js' %}" defer></script>
+  <script src="{% static 'scheduling/js/schedule.js' %}" defer></script>
+{% if request.user.is_admin %}
+  <script src="{% static 'vendor/sortable-1.15.7.min.js' %}" defer></script>
+  <script src="{% static 'scheduling/js/schedule_edit.js' %}" defer></script>
+{% endif %}
+{% endblock %}
 {% block content %}
 <h1>My Schedule</h1>
 {% for message in messages %}
@@ -277,10 +285,4 @@
   </div>
 {% endif %}
 
-<script src="{% static 'scheduling/js/assignment_picker.js' %}"></script>
-<script src="{% static 'scheduling/js/schedule.js' %}"></script>
-{% if request.user.is_admin %}
-  <script src="{% static 'vendor/sortable-1.15.7.min.js' %}" defer></script>
-  <script src="{% static 'scheduling/js/schedule_edit.js' %}" defer></script>
-{% endif %}
 {% endblock %}

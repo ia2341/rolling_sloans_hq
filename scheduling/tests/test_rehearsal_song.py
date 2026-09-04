@@ -1,6 +1,6 @@
 """RehearsalSong: timed song slots on a Rehearsal, and the Dress Rehearsal's live derivation (issue #37)."""
 
-from datetime import time
+from datetime import datetime, time, timedelta
 
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
@@ -36,49 +36,72 @@ class RehearsalSongOrderUniquenessTests(TestCase):
 
 
 class RehearsalSongComputedTimesTests(TestCase):
-    def test_first_song_starts_at_rehearsal_start_time(self):
-        """The first RehearsalSong (order=1) starts exactly at the Rehearsal's start_time."""
+    def test_first_song_starts_setup_grace_minutes_after_rehearsal_start_time(self):
+        """The first RehearsalSong (order=1) starts setup_grace_minutes after the Rehearsal's start_time."""
         semester = SemesterFactory(default_rehearsal_duration_minutes=90, default_song_slot_count=5)
-        rehearsal = RehearsalFactory(semester=semester, start_time=time(18, 0))
+        rehearsal = RehearsalFactory(
+            semester=semester, start_time=time(18, 0), setup_grace_minutes=15, teardown_grace_minutes=15,
+        )
 
         rehearsal_song = RehearsalSongFactory(rehearsal=rehearsal, order=1, slot_count=1)
 
-        self.assertEqual(rehearsal_song.start_time, time(18, 0))
-        self.assertEqual(rehearsal_song.end_time, time(18, 18))
+        self.assertEqual(rehearsal_song.start_time, time(18, 15))
+        self.assertEqual(rehearsal_song.end_time, time(18, 27))
 
     def test_later_song_starts_after_prior_slot_counts(self):
         """A second RehearsalSong starts after the first's slot_count worth of slot-minutes."""
         semester = SemesterFactory(default_rehearsal_duration_minutes=90, default_song_slot_count=5)
-        rehearsal = RehearsalFactory(semester=semester, start_time=time(18, 0))
+        rehearsal = RehearsalFactory(
+            semester=semester, start_time=time(18, 0), setup_grace_minutes=15, teardown_grace_minutes=15,
+        )
         RehearsalSongFactory(rehearsal=rehearsal, order=1, slot_count=2)
 
         second = RehearsalSongFactory(rehearsal=rehearsal, order=2, slot_count=1)
 
-        self.assertEqual(second.start_time, time(18, 36))
-        self.assertEqual(second.end_time, time(18, 54))
+        self.assertEqual(second.start_time, time(18, 39))
+        self.assertEqual(second.end_time, time(18, 51))
 
     def test_slot_count_greater_than_one_does_not_overrun_the_rehearsal_window(self):
-        """A slot_count > 1 row's computed end_time stays within the Rehearsal's fixed start/end window."""
+        """A slot_count > 1 row's computed end_time stays within the Rehearsal's playable (grace-excluded) window."""
         semester = SemesterFactory(default_rehearsal_duration_minutes=90, default_song_slot_count=5)
-        rehearsal = RehearsalFactory(semester=semester, start_time=time(18, 0))
+        rehearsal = RehearsalFactory(
+            semester=semester, start_time=time(18, 0), setup_grace_minutes=15, teardown_grace_minutes=15,
+        )
 
         rehearsal_song = RehearsalSongFactory(rehearsal=rehearsal, order=1, slot_count=3)
 
-        self.assertEqual(rehearsal_song.start_time, rehearsal.start_time)
+        self.assertEqual(rehearsal_song.start_time, time(18, 15))
         self.assertLessEqual(rehearsal_song.end_time, rehearsal.end_time)
-        self.assertEqual(rehearsal_song.end_time, time(18, 54))
+        self.assertEqual(rehearsal_song.end_time, time(18, 51))
 
     def test_editing_slot_count_recomputes_end_time(self):
         """Changing slot_count and re-saving recomputes end_time, not just at creation."""
         semester = SemesterFactory(default_rehearsal_duration_minutes=90, default_song_slot_count=5)
-        rehearsal = RehearsalFactory(semester=semester, start_time=time(18, 0))
+        rehearsal = RehearsalFactory(
+            semester=semester, start_time=time(18, 0), setup_grace_minutes=15, teardown_grace_minutes=15,
+        )
         rehearsal_song = RehearsalSongFactory(rehearsal=rehearsal, order=1, slot_count=1)
 
         rehearsal_song.slot_count = 2
         rehearsal_song.save()
 
         reloaded = RehearsalSong.objects.get(pk=rehearsal_song.pk)
-        self.assertEqual(reloaded.end_time, time(18, 36))
+        self.assertEqual(reloaded.end_time, time(18, 39))
+
+    def test_last_slot_ends_at_least_teardown_grace_minutes_before_rehearsal_end_time(self):
+        """The final slot's end_time leaves at least teardown_grace_minutes before the Rehearsal's end_time."""
+        semester = SemesterFactory(default_rehearsal_duration_minutes=90, default_song_slot_count=5)
+        rehearsal = RehearsalFactory(
+            semester=semester, start_time=time(18, 0), setup_grace_minutes=15, teardown_grace_minutes=15,
+        )
+        for order in range(1, 5):
+            RehearsalSongFactory(rehearsal=rehearsal, order=order, slot_count=1)
+
+        last = RehearsalSongFactory(rehearsal=rehearsal, order=5, slot_count=1)
+
+        self.assertEqual(last.end_time, time(19, 15))
+        margin = datetime.combine(rehearsal.date, rehearsal.end_time) - datetime.combine(rehearsal.date, last.end_time)
+        self.assertGreaterEqual(margin, timedelta(minutes=rehearsal.teardown_grace_minutes))
 
 
 class RehearsalSongOverrunRejectionTests(TestCase):
