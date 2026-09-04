@@ -325,7 +325,9 @@ class SaveBackupEditsViewTests(TestCase):
 
     def test_added_backup_entry_naming_another_rehearsals_rehearsal_song_is_not_created(self):
         """A RehearsalSong id from a different Rehearsal in the same Semester creates no Backup on this Save."""
-        other_rehearsal = RehearsalFactory(semester=self.semester, is_full_setlist=False)
+        other_rehearsal = RehearsalFactory(
+            semester=self.semester, is_full_setlist=False, date=self.rehearsal.date + timedelta(days=1),
+        )
         other_song = SongFactory(semester=self.semester, position=2)
         other_rehearsal_song = RehearsalSongFactory(song=other_song, rehearsal=other_rehearsal, order=1)
         member = MembershipFactory(semester=self.semester)
@@ -345,7 +347,9 @@ class SaveBackupEditsViewTests(TestCase):
 
     def test_removed_backup_id_naming_another_rehearsals_backup_is_not_deleted(self):
         """A Backup id anchored on a different Rehearsal's RehearsalSong survives a Save that names it as removed."""
-        other_rehearsal = RehearsalFactory(semester=self.semester, is_full_setlist=False)
+        other_rehearsal = RehearsalFactory(
+            semester=self.semester, is_full_setlist=False, date=self.rehearsal.date + timedelta(days=1),
+        )
         other_song = SongFactory(semester=self.semester, position=2)
         other_rehearsal_song = RehearsalSongFactory(song=other_song, rehearsal=other_rehearsal, order=1)
         other_backup = BackupFactory(rehearsal_song=other_rehearsal_song, role=self.role)
@@ -359,7 +363,9 @@ class SaveBackupEditsViewTests(TestCase):
 
     def test_covering_for_update_naming_another_rehearsals_backup_is_not_applied(self):
         """A covering_for update naming a Backup anchored on a different Rehearsal doesn't touch it."""
-        other_rehearsal = RehearsalFactory(semester=self.semester, is_full_setlist=False)
+        other_rehearsal = RehearsalFactory(
+            semester=self.semester, is_full_setlist=False, date=self.rehearsal.date + timedelta(days=1),
+        )
         other_song = SongFactory(semester=self.semester, position=2)
         other_rehearsal_song = RehearsalSongFactory(song=other_song, rehearsal=other_rehearsal, order=1)
         other_backup = BackupFactory(rehearsal_song=other_rehearsal_song, role=self.role, covering_for=None)
