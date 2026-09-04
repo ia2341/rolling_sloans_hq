@@ -16,7 +16,7 @@
 {% include "scheduling/_setlist_edit.html" %}
 </div>
 
-<a href="{% url 'scheduling:manage-semester-setup-finish' pk=semester.pk %}" id="skip-setlist-import">Skip for now</a>
+<a href="{% url 'scheduling:manage-semester-setup-rehearsals' pk=semester.pk %}" id="skip-setlist-import">Skip for now</a>
 
 <script src="{% static 'vendor/sortable-1.15.7.min.js' %}" defer></script>
 <script src="{% static 'scheduling/js/setlist_edit.js' %}" defer></script>

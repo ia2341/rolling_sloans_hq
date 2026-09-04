@@ -77,14 +77,14 @@ class SetlistStepGetTests(TestCase):
 
         self.assertEqual(self.client.session[VIEWING_SEMESTER_SESSION_KEY], semester.pk)
 
-    def test_offers_a_skip_link_to_the_finish_screen(self):
-        """The step offers a Skip link straight to the finish screen, writing nothing."""
+    def test_offers_a_skip_link_to_the_rehearsals_step(self):
+        """The step offers a Skip link on to step 5 (the Rehearsal Pattern), writing nothing."""
         semester = SemesterFactory(draft=True)
         admin_client(self)
 
         response = self.client.get(reverse('scheduling:manage-semester-setup-setlist', args=[semester.pk]))
 
-        self.assertContains(response, reverse('scheduling:manage-semester-setup-finish', args=[semester.pk]))
+        self.assertContains(response, reverse('scheduling:manage-semester-setup-rehearsals', args=[semester.pk]))
         self.assertEqual(Song.objects.count(), 0)
 
     def test_existing_songs_are_shown_for_review(self):

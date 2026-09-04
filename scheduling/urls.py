@@ -84,6 +84,10 @@ urlpatterns = [
         views.SemesterSetupSetlistView.as_view(), name='manage-semester-setup-setlist',
     ),
     path(
+        'manage/semesters/setup/<int:pk>/rehearsals/',
+        views.SemesterSetupRehearsalsView.as_view(), name='manage-semester-setup-rehearsals',
+    ),
+    path(
         'manage/semesters/setup/<int:pk>/finish/',
         views.SemesterSetupFinishView.as_view(), name='manage-semester-setup-finish',
     ),
