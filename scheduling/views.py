@@ -89,6 +89,8 @@ from scheduling.services import (
     RunningOrderRow,
     RunningOrderValidationError,
     SelfRemovalError,
+    SemesterDefaultsReapplyBlockedError,
+    SemesterDefaultsReapplyBuffer,
     SkipDateInput,
     SongRoleRequirementBuffer,
     SongRoleRequirementEntry,
@@ -96,6 +98,7 @@ from scheduling.services import (
     StaleAssignmentSemesterError,
     StaleRehearsalSemesterError,
     StaleRosterSemesterError,
+    StaleSemesterDefaultsError,
     StaleSongRoleRequirementsError,
     UnknownConflictError,
     WrongAdjudicationSemesterError,
@@ -104,6 +107,7 @@ from scheduling.services import (
     apply_adjudications,
     apply_rehearsal_edits,
     apply_roster_edits,
+    apply_semester_defaults_reapply,
     apply_song_role_assignments,
     apply_song_role_requirements,
     assigned_songs_for,
@@ -137,6 +141,7 @@ from scheduling.services import (
     preview_rehearsal_edits,
     preview_rehearsal_generation,
     preview_roster_edits,
+    preview_semester_defaults_reapply,
     preview_song_role_assignments,
     prior_rehearsal_times_for,
     publish_semester,
@@ -3176,6 +3181,54 @@ class SemesterDeleteView(AdminRequiredMixin, View):
         except LiveSemesterDeletionError as error:
             return HttpResponseBadRequest(str(error))
         messages.success(request, f'{semester} deleted.')
+        return redirect('scheduling:manage-semesters')
+
+
+class SemesterDefaultsReapplyView(AdminRequiredMixin, View):
+    """`/manage/semesters/<pk>/reapply-defaults/`: push a Semester's current timing defaults onto its Rehearsals (issue #291).
+
+    Mirrors `SemesterDeleteView`'s GET-confirm/POST-apply shape, addressed
+    by pk rather than the session's Viewing Semester — like Publish/Delete,
+    this action's target is never ambiguous. Per ADR-0008, GET's Fallout is
+    computed by running the real `apply_semester_defaults_reapply()` inside
+    a transaction this view itself rolls back, not by re-deriving the
+    consequences in the template. The hidden `semester_updated_at` field
+    carries the stamp seen at GET time forward to POST, so a Semester
+    edited (or reapplied) between confirm and submit is caught by
+    `StaleSemesterDefaultsError` rather than silently overwritten.
+    """
+
+    template_name = 'scheduling/manage_semesters_reapply_defaults.html'
+
+    def get(self, request, pk):
+        """Render the confirmation, computing its Fallout via a rolled-back real apply."""
+        semester = get_object_or_404(Semester, pk=pk)
+        buffer = SemesterDefaultsReapplyBuffer(semester_id=semester.pk, semester_updated_at=semester.updated_at)
+        with transaction.atomic():
+            fallout = preview_semester_defaults_reapply(buffer)
+            transaction.set_rollback(True)
+        return render(request, self.template_name, {'semester': semester, 'fallout': fallout})
+
+    def post(self, request, pk):
+        """Apply the reapply for real, or report a hard block/staleness, and redirect with a message.
+
+        `parse_datetime()` raises `ValueError` (rather than returning
+        `None`) for an ISO-shaped but invalid timestamp — treated the same
+        as a missing/stale one, since either way the confirmation can't be
+        trusted and the admin should reload and retry.
+        """
+        semester = get_object_or_404(Semester, pk=pk)
+        try:
+            semester_updated_at = parse_datetime(request.POST.get('semester_updated_at', ''))
+        except ValueError:
+            semester_updated_at = None
+        buffer = SemesterDefaultsReapplyBuffer(semester_id=semester.pk, semester_updated_at=semester_updated_at)
+        try:
+            apply_semester_defaults_reapply(buffer)
+        except (StaleSemesterDefaultsError, SemesterDefaultsReapplyBlockedError) as error:
+            messages.error(request, str(error))
+            return redirect('scheduling:manage-semesters-reapply-defaults', pk=semester.pk)
+        messages.success(request, f"Reapplied {semester.name}'s current timing defaults to its upcoming Rehearsals.")
         return redirect('scheduling:manage-semesters')
 
 

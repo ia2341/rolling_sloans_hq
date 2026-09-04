@@ -294,3 +294,43 @@ class RehearsalUniqueDatePerSemesterTests(TestCase):
         RehearsalFactory(semester=semester, date=date(2026, 9, 20))
 
         self.assertEqual(Rehearsal.objects.filter(semester=semester).count(), 2)
+
+
+class RehearsalOverwriteSemesterDefaultsTests(TestCase):
+    """`overwrite_semester_defaults()`: the bulk reapply action's per-Rehearsal write (issue #291)."""
+
+    def test_replaces_grace_and_buffer_fields_even_when_already_concrete(self):
+        """Unlike creation-time defaulting, an already-set value is overwritten, not left alone."""
+        semester = SemesterFactory(
+            default_setup_grace_minutes=20, default_teardown_grace_minutes=10,
+            default_arrival_buffer_minutes=15, default_departure_buffer_minutes=5,
+        )
+        rehearsal = RehearsalFactory(
+            semester=semester,
+            setup_grace_minutes=1, teardown_grace_minutes=1,
+            arrival_buffer_minutes=1, departure_buffer_minutes=1,
+        )
+
+        rehearsal.overwrite_semester_defaults()
+
+        self.assertEqual(rehearsal.setup_grace_minutes, 20)
+        self.assertEqual(rehearsal.teardown_grace_minutes, 10)
+        self.assertEqual(rehearsal.arrival_buffer_minutes, 15)
+        self.assertEqual(rehearsal.departure_buffer_minutes, 5)
+
+    def test_re_derives_end_time_from_start_time_and_current_duration(self):
+        """end_time is recomputed from start_time against the Semester's current default duration, not left as-is."""
+        semester = SemesterFactory(default_rehearsal_duration_minutes=90)
+        rehearsal = RehearsalFactory(semester=semester, start_time=time(18, 0), end_time=time(20, 0))
+
+        rehearsal.overwrite_semester_defaults()
+
+        self.assertEqual(rehearsal.end_time, time(19, 30))
+
+    def test_raises_instead_of_wrapping_past_midnight(self):
+        """A duration that would carry end_time past midnight raises, leaving no half-applied write to save."""
+        semester = SemesterFactory(default_rehearsal_duration_minutes=90)
+        rehearsal = RehearsalFactory(semester=semester, start_time=time(23, 30), end_time=time(23, 59))
+
+        with self.assertRaises(ValueError):
+            rehearsal.overwrite_semester_defaults()

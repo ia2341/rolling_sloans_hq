@@ -279,6 +279,18 @@ class Rehearsal(models.Model):
         """Return `value` if set, else fall back to the Semester's `semester_field_name` default."""
         return value if value is not None else getattr(self.semester, semester_field_name)
 
+    def _duration_end_time(self):
+        """Return `start_time` + the Semester's `default_rehearsal_duration_minutes`, raising ValueError past midnight."""
+        duration = timedelta(minutes=self.semester.default_rehearsal_duration_minutes)
+        start = datetime.combine(self.date, self.start_time)
+        end = start + duration
+        if end.date() != start.date():
+            raise ValueError(
+                "Rehearsal's default duration would carry end_time past midnight; "
+                'set end_time explicitly instead.'
+            )
+        return end.time()
+
     def _apply_semester_defaults(self):
         """Fill grace periods and end_time from the Semester's defaults, if not already set.
 
@@ -301,15 +313,26 @@ class Rehearsal(models.Model):
             self.departure_buffer_minutes, 'default_departure_buffer_minutes',
         )
         if self.end_time is None and self.start_time is not None:
-            duration = timedelta(minutes=self.semester.default_rehearsal_duration_minutes)
-            start = datetime.combine(self.date, self.start_time)
-            end = start + duration
-            if end.date() != start.date():
-                raise ValueError(
-                    "Rehearsal's default duration would carry end_time past midnight; "
-                    'set end_time explicitly instead.'
-                )
-            self.end_time = end.time()
+            self.end_time = self._duration_end_time()
+
+    def overwrite_semester_defaults(self):
+        """Unconditionally replace grace/buffer fields and end_time with the Semester's *current* defaults (issue #291).
+
+        Unlike `_apply_semester_defaults()` (creation-time only, fills a
+        blank field and leaves a concrete one alone), this is the bulk
+        reapply action's per-Rehearsal write: every one of the four
+        override fields is overwritten regardless of its current value, and
+        `end_time` is re-derived from `start_time` against the Semester's
+        possibly-changed `default_rehearsal_duration_minutes`. Raises
+        ValueError under the same midnight-wraparound condition
+        `_duration_end_time()` guards; the caller must not save a Rehearsal
+        left half-updated by a raised exception.
+        """
+        self.setup_grace_minutes = self.semester.default_setup_grace_minutes
+        self.teardown_grace_minutes = self.semester.default_teardown_grace_minutes
+        self.arrival_buffer_minutes = self.semester.default_arrival_buffer_minutes
+        self.departure_buffer_minutes = self.semester.default_departure_buffer_minutes
+        self.end_time = self._duration_end_time()
 
     def _blocked_full_setlist_flip_count(self):
         """Return how many Conflicts block making this saved Rehearsal the Dress Rehearsal, else 0 (issue #150).

@@ -94,6 +94,10 @@ urlpatterns = [
     path('manage/semesters/', views.SemesterManageView.as_view(), name='manage-semesters'),
     path('manage/semesters/<int:pk>/publish/', views.SemesterPublishView.as_view(), name='manage-semesters-publish'),
     path('manage/semesters/<int:pk>/delete/', views.SemesterDeleteView.as_view(), name='manage-semesters-delete'),
+    path(
+        'manage/semesters/<int:pk>/reapply-defaults/',
+        views.SemesterDefaultsReapplyView.as_view(), name='manage-semesters-reapply-defaults',
+    ),
     path('manage/conflicts/', views.ConflictAdjudicationIndexView.as_view(), name='manage-conflicts'),
     path(
         'manage/conflicts/<int:rehearsal_id>/',
