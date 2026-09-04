@@ -1141,7 +1141,9 @@ class AssignmentEditBuffer:
     backup_covering_for_updates: frozenset[tuple[int, int | None]] = frozenset()
 
 
-def apply_song_role_assignments(buffer: AssignmentEditBuffer, *, viewing_semester: Semester) -> None:
+def apply_song_role_assignments(
+    buffer: AssignmentEditBuffer, *, viewing_semester: Semester, rehearsal=None,
+) -> None:
     """Apply a Buffer of SongRoleAssignment and Backup removals and adds in one transaction (issues #210, #211, #216, ADR-0009).
 
     The SongRoleAssignment half is semester-wide: SongRoleAssignment is
@@ -1150,11 +1152,17 @@ def apply_song_role_assignments(buffer: AssignmentEditBuffer, *, viewing_semeste
     and at the concert, not only the Rehearsal whose grid the admin was
     viewing. The Backup half is anchored on a RehearsalSong instead
     (ADR-0007), so it only ever touches the one Rehearsal it was added
-    from. Takes no Semester row lock — nothing here renumbers Song
-    positions or RehearsalSong order, so there is no ordering constraint
-    to serialize against. Registers no `transaction.on_commit()` call —
-    nothing here reaches outside the Semester (no mail, no object
-    storage).
+    from — every Backup query below is scoped to `rehearsal`, not merely
+    to `viewing_semester`, so a hand-crafted POST naming a RehearsalSong
+    or Backup id from a *different* Rehearsal in the same Semester (one
+    the admin wasn't looking at, possibly a past, non-editable one) can't
+    touch anything. `rehearsal` is required whenever `buffer` carries any
+    Backup field; the standing-assignment-only tests predating issue #216
+    pass no Backup entries and so can omit it. Takes no Semester row
+    lock — nothing here renumbers Song positions or RehearsalSong order,
+    so there is no ordering constraint to serialize against. Registers no
+    `transaction.on_commit()` call — nothing here reaches outside the
+    Semester (no mail, no object storage).
 
     An added assignment entry is silently skipped if its Song isn't one
     of `viewing_semester`'s (a hand-crafted POST naming another
@@ -1169,22 +1177,26 @@ def apply_song_role_assignments(buffer: AssignmentEditBuffer, *, viewing_semeste
     is allowed, not blocked.
 
     An added Backup entry is likewise skipped if its RehearsalSong isn't
-    one of `viewing_semester`'s Rehearsals' — which, since the Dress
-    Rehearsal carries no RehearsalSong row at all (ADR-0006), is exactly
-    what makes a Backup against it impossible by this route, structurally
-    rather than by an explicit check — or if its Person holds no
-    Membership in `viewing_semester`. A `covering_for_id` naming someone
-    with no Membership, or the Backup's own Person (which
-    `backup_person_is_not_covering_for_self` would otherwise reject), is
-    silently dropped to None rather than failing the whole save: recording
-    who is covered is advisory (ADR-0007), never worth losing the Backup
-    itself over. `get_or_create` makes a duplicate add a no-op against
+    one of `rehearsal`'s — which, since the Dress Rehearsal carries no
+    RehearsalSong row at all (ADR-0006), is exactly what makes a Backup
+    against it impossible by this route, structurally rather than by an
+    explicit check — or if its Person holds no Membership in
+    `viewing_semester`. A `covering_for_id` naming the Backup's own
+    Person (which `backup_person_is_not_covering_for_self` would
+    otherwise reject), or anyone who isn't a standing SongRoleAssignment
+    on that same (Song, Role) cell — the only people the "covering for"
+    <select> ever offers — is silently dropped to None rather than
+    failing the whole save: recording who is covered is advisory
+    (ADR-0007), never worth losing the Backup itself over. `get_or_create`
+    makes a duplicate add a no-op against
     `unique_backup_per_slot_role_person`, matching the assignment side.
 
-    A `backup_covering_for_updates` pair naming a Backup this call already
-    deleted (via `removed_backup_ids`) is silently skipped rather than
-    resurrecting anything; one naming a still-live Backup applies the same
-    self/Membership guard as an added entry's `covering_for_id`.
+    A `backup_covering_for_updates` pair naming a Backup outside
+    `rehearsal`, or one this call already deleted (via
+    `removed_backup_ids`), is silently skipped rather than resurrecting
+    or misattributing anything; one naming a still-live Backup within
+    `rehearsal` applies the same self/standing-assignee guard as an added
+    entry's `covering_for_id`.
 
     Raises `WrongViewingSemesterError` if `buffer.semester_id` doesn't
     match `viewing_semester`, checked before any transaction opens. Raises
@@ -1222,20 +1234,28 @@ def apply_song_role_assignments(buffer: AssignmentEditBuffer, *, viewing_semeste
                 SongRoleAssignment.objects.get_or_create(song_id=song_id, role_id=role_id, person_id=person_id)
 
         Backup.objects.filter(
-            pk__in=buffer.removed_backup_ids, rehearsal_song__rehearsal__semester=semester,
+            pk__in=buffer.removed_backup_ids, rehearsal_song__rehearsal=rehearsal,
         ).delete()
 
+        # A covering_for pick is only ever valid against a standing SongRoleAssignment on the
+        # same (Song, Role) cell -- the only people the "covering for" <select> offers -- so both
+        # the add and the update path below check membership in this one set (issue #216 review).
+        standing_assignee_cells = frozenset(
+            SongRoleAssignment.objects.filter(song__semester=semester).values_list('song_id', 'role_id', 'person_id')
+        )
+
         if buffer.added_backup_entries:
-            valid_rehearsal_song_ids = frozenset(
+            song_id_by_rehearsal_song_id = dict(
                 RehearsalSong.objects.filter(
-                    rehearsal__semester=semester,
+                    rehearsal=rehearsal,
                     pk__in={rehearsal_song_id for rehearsal_song_id, _, _, _ in buffer.added_backup_entries},
-                ).values_list('pk', flat=True)
+                ).values_list('pk', 'song_id')
             )
             for rehearsal_song_id, role_id, person_id, covering_for_id in buffer.added_backup_entries:
-                if rehearsal_song_id not in valid_rehearsal_song_ids or person_id not in rostered_person_ids:
+                song_id = song_id_by_rehearsal_song_id.get(rehearsal_song_id)
+                if song_id is None or person_id not in rostered_person_ids:
                     continue
-                if covering_for_id == person_id or covering_for_id not in rostered_person_ids:
+                if covering_for_id == person_id or (song_id, role_id, covering_for_id) not in standing_assignee_cells:
                     covering_for_id = None
                 Backup.objects.get_or_create(
                     rehearsal_song_id=rehearsal_song_id,
@@ -1246,10 +1266,13 @@ def apply_song_role_assignments(buffer: AssignmentEditBuffer, *, viewing_semeste
 
         for backup_id, covering_for_id in buffer.backup_covering_for_updates:
             try:
-                backup = Backup.objects.get(pk=backup_id, rehearsal_song__rehearsal__semester=semester)
+                backup = Backup.objects.select_related('rehearsal_song').get(
+                    pk=backup_id, rehearsal_song__rehearsal=rehearsal,
+                )
             except Backup.DoesNotExist:
                 continue
-            if covering_for_id == backup.person_id or covering_for_id not in rostered_person_ids:
+            song_id = backup.rehearsal_song.song_id
+            if covering_for_id == backup.person_id or (song_id, backup.role_id, covering_for_id) not in standing_assignee_cells:
                 covering_for_id = None
             if backup.covering_for_id != covering_for_id:
                 backup.covering_for_id = covering_for_id
@@ -1289,16 +1312,19 @@ def _blocked_assignment_fallout(block_message: str, *, is_stale: bool = False) -
 
 
 def _assignment_fallout_lines(rehearsal, songs):
-    """Return (loud, quiet) Fallout lines for `rehearsal`'s current (post-apply) assignments over `songs` (issue #212).
+    """Return (loud, quiet) Fallout lines for `rehearsal`'s current (post-apply) assignments and Backups over `songs` (issue #212).
 
-    Loud: an assigned Person with a full Conflict for `rehearsal` (moot for
-    the Dress Rehearsal, which no Conflict can point at per ADR-0006), or a
-    partial Conflict whose Window overlaps the Song's RehearsalSong slot --
-    only computable through a Rehearsal, which is ADR-0009's whole reason
-    this surface exists. Quiet: an unfilled Role Requirement, or a role
-    mismatch -- both standing flags resolved elsewhere (ADR-0002), kept
-    quiet so they don't train an admin to ignore the loud tier. Reads
-    `Conflict.type` to tell full from partial, never `Conflict.status`.
+    Loud: an assigned Person (standing or Backup, issue #216) with a full
+    Conflict for `rehearsal` (moot for the Dress Rehearsal, which no
+    Conflict can point at per ADR-0006), or a partial Conflict whose
+    Window overlaps the Song's RehearsalSong slot -- only computable
+    through a Rehearsal, which is ADR-0009's whole reason this surface
+    exists. A Backup shares its standing counterpart's slot, so a Person
+    holding both is warned only once. Quiet: an unfilled Role Requirement,
+    or a role mismatch -- both standing flags resolved elsewhere
+    (ADR-0002), kept quiet so they don't train an admin to ignore the loud
+    tier. Reads `Conflict.type` to tell full from partial, never
+    `Conflict.status`.
     """
     song_ids = [song.pk for song in songs]
     assignments = list(
@@ -1306,7 +1332,12 @@ def _assignment_fallout_lines(rehearsal, songs):
         .select_related('person', 'role', 'song')
         .order_by('song__position', 'role__name', 'person__name')
     )
-    person_ids = {assignment.person_id for assignment in assignments}
+    backups = list(
+        Backup.objects.filter(rehearsal_song__rehearsal=rehearsal, rehearsal_song__song_id__in=song_ids)
+        .select_related('person', 'role', 'rehearsal_song__song')
+        .order_by('rehearsal_song__song__position', 'role__name', 'person__name')
+    )
+    person_ids = {assignment.person_id for assignment in assignments} | {backup.person_id for backup in backups}
 
     full_conflict_person_ids = frozenset(
         Conflict.objects.filter(
@@ -1327,23 +1358,38 @@ def _assignment_fallout_lines(rehearsal, songs):
         for rehearsal_song in RehearsalSong.objects.filter(rehearsal=rehearsal, song_id__in=song_ids)
     }
 
-    loud = []
-    for assignment in assignments:
-        if assignment.person_id in full_conflict_person_ids:
-            loud.append(
-                f'{assignment.person.name} is assigned to {assignment.song.title} but has a full Conflict '
-                'for this Rehearsal.'
-            )
-            continue
-        windows = windows_by_person_id.get(assignment.person_id)
-        slot = slot_by_song_id.get(assignment.song_id)
+    def _conflict_line(person_id, person_name, song_id, song_title, *, is_backup):
+        role_word = 'a Backup for' if is_backup else 'assigned to'
+        if person_id in full_conflict_person_ids:
+            return f'{person_name} is {role_word} {song_title} but has a full Conflict for this Rehearsal.'
+        windows = windows_by_person_id.get(person_id)
+        slot = slot_by_song_id.get(song_id)
         if windows and slot is not None and any(
             _windows_overlap(window_start, window_end, slot[0], slot[1]) for window_start, window_end in windows
         ):
-            loud.append(
-                f"{assignment.person.name} is assigned to {assignment.song.title}, but a declared Conflict "
-                'Window overlaps its rehearsal slot.'
+            return (
+                f'{person_name} is {role_word} {song_title}, but a declared Conflict Window overlaps its '
+                'rehearsal slot.'
             )
+        return None
+
+    loud = []
+    warned_person_song_pairs = set()
+    for assignment in assignments:
+        line = _conflict_line(
+            assignment.person_id, assignment.person.name, assignment.song_id, assignment.song.title, is_backup=False,
+        )
+        if line is not None:
+            loud.append(line)
+            warned_person_song_pairs.add((assignment.person_id, assignment.song_id))
+    for backup in backups:
+        song = backup.rehearsal_song.song
+        if (backup.person_id, song.id) in warned_person_song_pairs:
+            continue
+        line = _conflict_line(backup.person_id, backup.person.name, song.id, song.title, is_backup=True)
+        if line is not None:
+            loud.append(line)
+            warned_person_song_pairs.add((backup.person_id, song.id))
 
     quiet = []
     for song in songs:
@@ -1388,7 +1434,7 @@ def preview_song_role_assignments(buffer: AssignmentEditBuffer, *, rehearsal, vi
 
     apply_buffer = replace(buffer, semester_updated_at=current_semester.updated_at)
     try:
-        apply_song_role_assignments(apply_buffer, viewing_semester=viewing_semester)
+        apply_song_role_assignments(apply_buffer, viewing_semester=viewing_semester, rehearsal=rehearsal)
     except (WrongViewingSemesterError, StaleAssignmentSemesterError) as error:
         return _blocked_assignment_fallout(str(error), is_stale=is_stale)
 

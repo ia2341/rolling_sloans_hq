@@ -17,17 +17,30 @@
 document.addEventListener('alpine:init', () => {
   // initialRemoved/initialAdded/initialEditing re-seed the buffer after a blocked Save re-renders the
   // page (issue #212) -- a Validation Error must never cost the rest of an admin's pending edits.
-  Alpine.data('assignmentGrid', (pickerUrlTemplate, initialRemoved = [], initialAdded = [], initialEditing = false) => ({
+  // initialRemovedBackups/initialAddedBackups/initialBackupCoveringFor do the same for the Backup
+  // half of the buffer (issue #216 review): a blocked Save must not silently drop a pending Backup
+  // removal, a pending Backup pick, or a pending covering_for change on an already-persisted Backup.
+  Alpine.data('assignmentGrid', (
+    pickerUrlTemplate,
+    initialRemoved = [],
+    initialAdded = [],
+    initialEditing = false,
+    initialRemovedBackups = [],
+    initialAddedBackups = [],
+    initialBackupCoveringFor = {},
+  ) => ({
     editing: initialEditing,
     removed: [...initialRemoved],
     added: [...initialAdded],
-    removedBackups: [],
-    addedBackups: [],
+    removedBackups: [...initialRemovedBackups],
+    addedBackups: [...initialAddedBackups],
+    pendingBackupCoveringFor: { ...initialBackupCoveringFor },
     pickerSongId: null,
     pickerRoleId: null,
     pickerRehearsalSongId: null,
     pickerHtml: '',
     pickerError: '',
+    pickerRequestToken: 0,
     cellStandingAssignees: JSON.parse(document.getElementById('cell-standing-assignees-data').textContent),
     pickerUrlTemplate: pickerUrlTemplate || '',
     extraRoles: [],
@@ -38,9 +51,20 @@ document.addEventListener('alpine:init', () => {
     // "+ Add role" (issue #213): every addable Role (active, not already a column),
     // read once from the json_script the server rendered -- a plain data island, not
     // an Alpine.data() init arg, since a Role name could contain a quote or apostrophe.
+    //
+    // pendingBackupCoveringFor (issue #216 review) restores a blocked Save's pending pick onto an
+    // already-persisted Backup chip's "covering for" <select> -- that <select>'s server-rendered
+    // `selected` option reflects only the last-*saved* covering_for, not the just-submitted pick,
+    // since the chip comes from a fresh assignment_matrix_for() read, not from the pending Buffer.
     init() {
       const dataEl = document.getElementById('addable-roles-data');
       this.addableRoles = dataEl ? JSON.parse(dataEl.textContent) : [];
+      Object.entries(this.pendingBackupCoveringFor).forEach(([backupId, personId]) => {
+        const select = document.querySelector(`select[name="backup_covering_for_${backupId}"]`);
+        if (select) {
+          select.value = personId;
+        }
+      });
     },
 
     cancelEditing() {
@@ -79,9 +103,14 @@ document.addEventListener('alpine:init', () => {
       return this.pickerUrlTemplate.replace(/\/0\/0\/$/, `/${songId}/${roleId}/`);
     },
 
-    // Fetched only when a cell's "+" is opened -- an unopened cell issues no request.
+    // Fetched only when a cell's "+" is opened -- an unopened cell issues no request. The dialog
+    // isn't open yet while the fetch is in flight, so nothing stops a second "+" click from
+    // starting a newer request before this one resolves; pickerRequestToken lets a stale response
+    // recognize it's been superseded and bail rather than showing its (now mismatched) picker
+    // markup against the newer click's cell ids.
     async openPicker(event) {
       const button = event.currentTarget;
+      const requestToken = ++this.pickerRequestToken;
       this.pickerSongId = Number(button.dataset.songId);
       this.pickerRoleId = Number(button.dataset.roleId);
       this.pickerRehearsalSongId = button.dataset.rehearsalSongId ? Number(button.dataset.rehearsalSongId) : null;
@@ -91,8 +120,14 @@ document.addEventListener('alpine:init', () => {
       try {
         response = await fetch(button.dataset.pickerUrl);
       } catch (error) {
+        if (requestToken !== this.pickerRequestToken) {
+          return;
+        }
         this.pickerError = 'Could not reach the server to load the picker. Try again.';
         this.$refs.assignmentPickerDialog.showModal();
+        return;
+      }
+      if (requestToken !== this.pickerRequestToken) {
         return;
       }
       if (!response.ok) {

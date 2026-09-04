@@ -193,22 +193,21 @@ class SaveBackupEditsViewTests(TestCase):
         self.assertIsNone(backup.covering_for)
 
     def test_saving_a_backup_with_covering_for_set_records_it(self):
-        """A Backup save naming a covering_for Person records that Person on the created row."""
+        """A Backup save naming a standing assignee as covering_for records that Person on the created row."""
         backer = MembershipFactory(semester=self.semester)
-        covered = MembershipFactory(semester=self.semester)
 
         self.client.post(
             _save_url(self.rehearsal),
             _save_payload(
                 self.rehearsal,
                 added_backup_entries=[
-                    (self.rehearsal_song.pk, self.role.pk, backer.person.pk, covered.person.pk),
+                    (self.rehearsal_song.pk, self.role.pk, backer.person.pk, self.assignment.person.pk),
                 ],
             ),
         )
 
         backup = Backup.objects.get(rehearsal_song=self.rehearsal_song, role=self.role, person=backer.person)
-        self.assertEqual(backup.covering_for, covered.person)
+        self.assertEqual(backup.covering_for, self.assignment.person)
 
     def test_a_covering_for_pick_naming_the_backup_person_themself_is_dropped_rather_than_failing_the_save(self):
         """A tampered covering_for equal to the Backup's own person is silently dropped to None, not a 500."""
@@ -279,20 +278,19 @@ class SaveBackupEditsViewTests(TestCase):
         self.assertFalse(Backup.objects.filter(pk=backup.pk).exists())
 
     def test_updating_a_persisted_backups_covering_for_select_saves_it(self):
-        """Resubmitting a persisted Backup's covering_for select with a new pick updates that Backup's covering_for."""
+        """Resubmitting a persisted Backup's covering_for select with a standing assignee's pick updates covering_for."""
         backup = BackupFactory(rehearsal_song=self.rehearsal_song, role=self.role, covering_for=None)
-        covered = MembershipFactory(semester=self.semester)
 
         response = self.client.post(
             _save_url(self.rehearsal),
             _save_payload(
-                self.rehearsal, backup_covering_for_updates=[(backup.pk, covered.person.pk)],
+                self.rehearsal, backup_covering_for_updates=[(backup.pk, self.assignment.person.pk)],
             ),
         )
 
         self.assertRedirects(response, _schedule_url(self.rehearsal))
         backup.refresh_from_db()
-        self.assertEqual(backup.covering_for, covered.person)
+        self.assertEqual(backup.covering_for, self.assignment.person)
 
     def test_a_removed_backups_covering_for_update_is_a_no_op(self):
         """A covering_for update naming a Backup id that was also removed this save doesn't resurrect it."""
@@ -324,6 +322,113 @@ class SaveBackupEditsViewTests(TestCase):
 
         self.assertRedirects(response, _schedule_url(self.rehearsal))
         self.assertEqual(Backup.objects.filter(role=self.role, person=member.person).count(), 0)
+
+    def test_added_backup_entry_naming_another_rehearsals_rehearsal_song_is_not_created(self):
+        """A RehearsalSong id from a different Rehearsal in the same Semester creates no Backup on this Save."""
+        other_rehearsal = RehearsalFactory(semester=self.semester, is_full_setlist=False)
+        other_song = SongFactory(semester=self.semester, position=2)
+        other_rehearsal_song = RehearsalSongFactory(song=other_song, rehearsal=other_rehearsal, order=1)
+        member = MembershipFactory(semester=self.semester)
+
+        response = self.client.post(
+            _save_url(self.rehearsal),
+            _save_payload(
+                self.rehearsal,
+                added_backup_entries=[(other_rehearsal_song.pk, self.role.pk, member.person.pk, None)],
+            ),
+        )
+
+        self.assertRedirects(response, _schedule_url(self.rehearsal))
+        self.assertEqual(
+            Backup.objects.filter(rehearsal_song=other_rehearsal_song, role=self.role, person=member.person).count(), 0,
+        )
+
+    def test_removed_backup_id_naming_another_rehearsals_backup_is_not_deleted(self):
+        """A Backup id anchored on a different Rehearsal's RehearsalSong survives a Save that names it as removed."""
+        other_rehearsal = RehearsalFactory(semester=self.semester, is_full_setlist=False)
+        other_song = SongFactory(semester=self.semester, position=2)
+        other_rehearsal_song = RehearsalSongFactory(song=other_song, rehearsal=other_rehearsal, order=1)
+        other_backup = BackupFactory(rehearsal_song=other_rehearsal_song, role=self.role)
+
+        response = self.client.post(
+            _save_url(self.rehearsal), _save_payload(self.rehearsal, removed_backup_ids=[other_backup.pk]),
+        )
+
+        self.assertRedirects(response, _schedule_url(self.rehearsal))
+        self.assertTrue(Backup.objects.filter(pk=other_backup.pk).exists())
+
+    def test_covering_for_update_naming_another_rehearsals_backup_is_not_applied(self):
+        """A covering_for update naming a Backup anchored on a different Rehearsal doesn't touch it."""
+        other_rehearsal = RehearsalFactory(semester=self.semester, is_full_setlist=False)
+        other_song = SongFactory(semester=self.semester, position=2)
+        other_rehearsal_song = RehearsalSongFactory(song=other_song, rehearsal=other_rehearsal, order=1)
+        other_backup = BackupFactory(rehearsal_song=other_rehearsal_song, role=self.role, covering_for=None)
+        covered = MembershipFactory(semester=self.semester)
+
+        response = self.client.post(
+            _save_url(self.rehearsal),
+            _save_payload(
+                self.rehearsal, backup_covering_for_updates=[(other_backup.pk, covered.person.pk)],
+            ),
+        )
+
+        self.assertRedirects(response, _schedule_url(self.rehearsal))
+        other_backup.refresh_from_db()
+        self.assertIsNone(other_backup.covering_for)
+
+    def test_covering_for_naming_a_rostered_non_standing_assignee_is_dropped_rather_than_recorded(self):
+        """A covering_for pick naming a rostered Person with no standing assignment on the cell is dropped to None."""
+        member = MembershipFactory(semester=self.semester)
+        unrelated = MembershipFactory(semester=self.semester)
+
+        self.client.post(
+            _save_url(self.rehearsal),
+            _save_payload(
+                self.rehearsal,
+                added_backup_entries=[
+                    (self.rehearsal_song.pk, self.role.pk, member.person.pk, unrelated.person.pk),
+                ],
+            ),
+        )
+
+        backup = Backup.objects.get(rehearsal_song=self.rehearsal_song, role=self.role, person=member.person)
+        self.assertIsNone(backup.covering_for)
+
+    def test_covering_for_update_naming_a_rostered_non_standing_assignee_is_dropped_rather_than_recorded(self):
+        """A covering_for update naming a rostered Person with no standing assignment on the cell is dropped to None."""
+        backup = BackupFactory(rehearsal_song=self.rehearsal_song, role=self.role, covering_for=None)
+        unrelated = MembershipFactory(semester=self.semester)
+
+        self.client.post(
+            _save_url(self.rehearsal),
+            _save_payload(
+                self.rehearsal, backup_covering_for_updates=[(backup.pk, unrelated.person.pk)],
+            ),
+        )
+
+        backup.refresh_from_db()
+        self.assertIsNone(backup.covering_for)
+
+    def test_a_blocked_save_re_renders_the_grid_with_the_pending_backup_buffer_intact(self):
+        """A stale-stamp Validation Error re-renders the grid with pending Backup removals/adds/covering_for preserved."""
+        persisted_backup = BackupFactory(rehearsal_song=self.rehearsal_song, role=self.role, covering_for=None)
+        added_backer = MembershipFactory(semester=self.semester)
+        stale_stamp = self.semester.updated_at - timedelta(days=1)
+        payload = _save_payload(
+            self.rehearsal,
+            removed_backup_ids=[persisted_backup.pk],
+            added_backup_entries=[(self.rehearsal_song.pk, self.role.pk, added_backer.person.pk, None)],
+            backup_covering_for_updates=[(persisted_backup.pk, self.assignment.person.pk)],
+        )
+        payload['assignment_semester_updated_at'] = stale_stamp.isoformat()
+
+        response = self.client.post(_save_url(self.rehearsal), payload)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(Backup.objects.filter(pk=persisted_backup.pk).exists())
+        self.assertContains(response, str(persisted_backup.pk))
+        self.assertContains(response, added_backer.person.name)
+        self.assertContains(response, str(self.assignment.person.pk))
 
     def test_non_admin_backup_save_is_forbidden(self):
         """A logged-in non-admin's Backup-adding Save Changes POST is rejected with 403 and writes nothing."""

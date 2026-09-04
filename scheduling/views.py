@@ -332,6 +332,9 @@ def _build_schedule_context(request, semester, view_mode, rehearsal, error_rehea
         'pending_editing': False,
         'pending_removed_json': '[]',
         'pending_added_json': '[]',
+        'pending_removed_backups_json': '[]',
+        'pending_added_backups_json': '[]',
+        'pending_backup_covering_for_json': '{}',
     }
     if semester is None:
         return context
@@ -1841,7 +1844,7 @@ class AssignmentEditSaveView(AdminRequiredMixin, View):
         semester = get_viewing_semester(request)
         buffer = _build_assignment_buffer(request)
         try:
-            apply_song_role_assignments(buffer, viewing_semester=semester)
+            apply_song_role_assignments(buffer, viewing_semester=semester, rehearsal=rehearsal)
         except (WrongViewingSemesterError, StaleAssignmentSemesterError) as error:
             messages.error(request, str(error))
             return self._render_with_pending_buffer(request, rehearsal, buffer)
@@ -1859,7 +1862,15 @@ class AssignmentEditSaveView(AdminRequiredMixin, View):
         """
         context = _build_schedule_context(request, get_viewing_semester(request), VIEW_NEXT, rehearsal)
         context['pending_editing'] = True
-        context.update(_pending_assignment_buffer_context(buffer.removed_assignment_ids, buffer.added_entries))
+        context.update(
+            _pending_assignment_buffer_context(
+                buffer.removed_assignment_ids,
+                buffer.added_entries,
+                buffer.removed_backup_ids,
+                buffer.added_backup_entries,
+                buffer.backup_covering_for_updates,
+            )
+        )
         return render(request, 'scheduling/schedule.html', context, status=200)
 
 
@@ -1886,15 +1897,30 @@ def _build_assignment_buffer(request):
     )
 
 
-def _pending_assignment_buffer_context(removed_ids, added_entries):
-    """Return the two JSON strings that re-seed the Alpine assignment-grid buffer on a blocked save (issue #212).
+def _pending_assignment_buffer_context(
+    removed_ids,
+    added_entries,
+    removed_backup_ids=frozenset(),
+    added_backup_entries=frozenset(),
+    backup_covering_for_updates=frozenset(),
+):
+    """Return the JSON strings that re-seed the Alpine assignment-grid buffer on a blocked save (issue #212, #216).
 
     `added_entries` is `[(song_id, role_id, person_id), ...]`; each
     Person's name is looked up so the re-rendered grid's picked chips show
     a name instead of a bare id, matching what the picker itself would
-    have shown when the pick was first made.
+    have shown when the pick was first made. `added_backup_entries` is the
+    Backup equivalent, `[(rehearsal_song_id, role_id, person_id,
+    covering_for_id), ...]` — its RehearsalSong ids are resolved back to
+    Song ids the same way, since the re-rendered grid's `addedBackupsFor()`
+    filters by Song id, not RehearsalSong id.
+    `backup_covering_for_updates` re-seeds a *persisted* Backup chip's
+    "covering for" `<select>` with the pending pick a blocked save would
+    otherwise silently drop back to the last-saved value.
     """
-    person_ids = {person_id for _, _, person_id in added_entries}
+    person_ids = {person_id for _, _, person_id in added_entries} | {
+        person_id for _, _, person_id, _ in added_backup_entries
+    }
     names_by_id = dict(Person.objects.filter(pk__in=person_ids).values_list('pk', 'name'))
     pending_added = [
         {
@@ -1906,9 +1932,33 @@ def _pending_assignment_buffer_context(removed_ids, added_entries):
         }
         for song_id, role_id, person_id in added_entries
     ]
+    song_id_by_rehearsal_song_id = dict(
+        RehearsalSong.objects.filter(
+            pk__in={rehearsal_song_id for rehearsal_song_id, _, _, _ in added_backup_entries}
+        ).values_list('pk', 'song_id')
+    )
+    pending_added_backups = [
+        {
+            'key': f'{rehearsal_song_id}-{role_id}-{person_id}',
+            'rehearsalSongId': rehearsal_song_id,
+            'songId': song_id_by_rehearsal_song_id.get(rehearsal_song_id),
+            'roleId': role_id,
+            'personId': person_id,
+            'personName': names_by_id.get(person_id, ''),
+            'coveringForId': covering_for_id if covering_for_id is not None else '',
+        }
+        for rehearsal_song_id, role_id, person_id, covering_for_id in added_backup_entries
+    ]
+    pending_backup_covering_for = {
+        str(backup_id): (covering_for_id if covering_for_id is not None else '')
+        for backup_id, covering_for_id in backup_covering_for_updates
+    }
     return {
         'pending_removed_json': json.dumps(list(removed_ids)),
         'pending_added_json': json.dumps(pending_added),
+        'pending_removed_backups_json': json.dumps(list(removed_backup_ids)),
+        'pending_added_backups_json': json.dumps(pending_added_backups),
+        'pending_backup_covering_for_json': json.dumps(pending_backup_covering_for),
     }
 
 

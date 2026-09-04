@@ -64,7 +64,15 @@
     {{ addable_roles|json_script:"addable-roles-data" }}
   {% endif %}
   <div
-    x-data="assignmentGrid('{% url 'scheduling:schedule-assignments-picker' rehearsal.pk 0 0 %}', JSON.parse('{{ pending_removed_json|default:'[]'|escapejs }}'), JSON.parse('{{ pending_added_json|default:'[]'|escapejs }}'), {{ pending_editing|yesno:'true,false' }})"
+    x-data="assignmentGrid(
+      '{% url 'scheduling:schedule-assignments-picker' rehearsal.pk 0 0 %}',
+      JSON.parse('{{ pending_removed_json|default:'[]'|escapejs }}'),
+      JSON.parse('{{ pending_added_json|default:'[]'|escapejs }}'),
+      {{ pending_editing|yesno:'true,false' }},
+      JSON.parse('{{ pending_removed_backups_json|default:'[]'|escapejs }}'),
+      JSON.parse('{{ pending_added_backups_json|default:'[]'|escapejs }}'),
+      JSON.parse('{{ pending_backup_covering_for_json|default:'{}'|escapejs }}')
+    )"
   >
     {% if can_edit_assignments %}
       <p>
