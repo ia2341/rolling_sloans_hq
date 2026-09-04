@@ -54,6 +54,7 @@ SURVIVING_ROUTE_NAMES = (
     'scheduling:manage-semesters',
     'scheduling:manage-semesters-publish',
     'scheduling:manage-semesters-delete',
+    'scheduling:manage-semesters-reapply-defaults',
     'scheduling:manage-conflicts',
     'scheduling:manage-conflicts-detail',
     'identity:people',
@@ -65,6 +66,7 @@ SURVIVING_ROUTE_NAMES = (
 SURVIVING_ROUTE_ARGS = {
     'scheduling:manage-semesters-publish': [1],
     'scheduling:manage-semesters-delete': [1],
+    'scheduling:manage-semesters-reapply-defaults': [1],
     'scheduling:manage-conflicts-detail': [1],
     'identity:people-toggle-admin': [1],
 }
