@@ -15,7 +15,11 @@ document.addEventListener('alpine:init', () => {
     importSummary: '',
 
     init() {
-      const rows = this.$el.querySelector('#setlist-edit-rows');
+      // Bound via x-init on the component root, so `$el` and `$root` are the
+      // same element here -- but use `$root` anyway (issue #290), so the
+      // rule "component furniture is always reached via `$root`, never
+      // `$el`" holds with no exceptions to remember.
+      const rows = this.$root.querySelector('#setlist-edit-rows');
       if (!rows) {
         return;
       }
@@ -31,9 +35,11 @@ document.addEventListener('alpine:init', () => {
     // own initial/extra split always treats it as new -- see _save_buffer's docstring). Unlike drag/move,
     // this is the one place a slot index gets assigned, and it happens exactly once, at creation.
     addRow() {
-      const template = this.$el.querySelector('#setlist-empty-form-template');
-      const rows = this.$el.querySelector('#setlist-edit-rows');
-      const totalForms = this.$el.querySelector('[name$="-TOTAL_FORMS"]');
+      // Bound on the "+ Add song" button, so `$el` here is that button, not
+      // the component root -- these lookups must go through `$root` (issue #290).
+      const template = this.$root.querySelector('#setlist-empty-form-template');
+      const rows = this.$root.querySelector('#setlist-edit-rows');
+      const totalForms = this.$root.querySelector('[name$="-TOTAL_FORMS"]');
       const nextIndex = Number(totalForms.value);
       const clone = template.content.cloneNode(true);
       clone.querySelectorAll('[name]').forEach((field) => {
@@ -60,8 +66,10 @@ document.addEventListener('alpine:init', () => {
       this.importError = '';
       this.importSummary = '';
       this.importing = true;
-      const rows = this.$el.querySelector('#setlist-edit-rows');
-      const totalForms = this.$el.querySelector('[name$="-TOTAL_FORMS"]');
+      // Bound on the "Import" button, so `$el` is that button -- use `$root`
+      // for the component's own furniture (issue #290).
+      const rows = this.$root.querySelector('#setlist-edit-rows');
+      const totalForms = this.$root.querySelector('[name$="-TOTAL_FORMS"]');
       const nextIndex = Number(totalForms.value);
       const form = document.getElementById('setlist-edit-form');
       const csrfToken = form.querySelector('[name=csrfmiddlewaretoken]').value;
@@ -136,7 +144,11 @@ document.addEventListener('alpine:init', () => {
     // whether it reads as struck. The submitted *order* comes from each row's song_order field, which
     // travels with it for free since SortableJS/moveUp/moveDown move the whole row-group node.
     reindex() {
-      const rows = this.$el.querySelector('#setlist-edit-rows');
+      // Called from addRow/importPlaylist (button-bound) and from
+      // moveUp/moveDown/toggleDelete (row-button-bound), so `$el` is never
+      // reliably the root here -- always resolve the rows container via
+      // `$root` (issue #290).
+      const rows = this.$root.querySelector('#setlist-edit-rows');
       const groups = Array.from(rows.children);
       let visibleNumber = 0;
       groups.forEach((group) => {
@@ -158,7 +170,10 @@ document.addEventListener('alpine:init', () => {
     },
 
     deletedSongIds() {
-      return Array.from(this.$el.querySelectorAll('.setlist-edit-row-group'))
+      // Reached from onSubmit, where `$el` is the `<form>` and this lookup
+      // happens to succeed today -- made correct by construction via `$root`
+      // rather than relying on that coincidence (issue #290).
+      return Array.from(this.$root.querySelectorAll('.setlist-edit-row-group'))
         .filter((group) => group.dataset.songId && group.querySelector('.song-delete-checkbox-wrapper input').checked)
         .map((group) => group.dataset.songId);
     },

@@ -13,9 +13,11 @@ document.addEventListener('alpine:init', () => {
     // template's literal "__prefix__" token for that slot's numeric index -- the same token Django's
     // own formset.empty_form embeds in every name/id it renders.
     addRow() {
-      const template = this.$el.querySelector('#song-requirement-empty-form-template');
-      const rows = this.$el.querySelector('#song-requirement-add-rows');
-      const totalForms = this.$el.querySelector('[name="add-TOTAL_FORMS"]');
+      // Bound on the "+ Add requirement" button, so `$el` here is that
+      // button, not the component root -- use `$root` (issue #290).
+      const template = this.$root.querySelector('#song-requirement-empty-form-template');
+      const rows = this.$root.querySelector('#song-requirement-add-rows');
+      const totalForms = this.$root.querySelector('[name="add-TOTAL_FORMS"]');
       const nextIndex = Number(totalForms.value);
       const html = template.innerHTML.replaceAll('__prefix__', String(nextIndex));
       const wrapper = document.createElement('div');
@@ -40,7 +42,11 @@ document.addEventListener('alpine:init', () => {
     // the pending edits" the issue asks for, client-side. The server's own duplicate check
     // (BaseSongRequirementAddFormSet.clean()) is the backstop against a hand-crafted POST.
     excludeSelectedRoles() {
-      const selects = Array.from(this.$el.querySelectorAll('.song-requirement-role-select'));
+      // Bound via @change/@htmx:after-swap.window on the component root, so
+      // `$el` is safe there -- but this is also called from init() and from
+      // addRow() (button-bound), so it must resolve via `$root` regardless
+      // of which call site reached it (issue #290).
+      const selects = Array.from(this.$root.querySelectorAll('.song-requirement-role-select'));
       const chosenElsewhere = (select) => selects
         .filter((other) => other !== select && other.value)
         .map((other) => other.value);

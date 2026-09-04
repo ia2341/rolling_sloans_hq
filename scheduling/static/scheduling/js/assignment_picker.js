@@ -77,8 +77,13 @@ document.addEventListener('alpine:init', () => {
       if (!this.prefillBackup) {
         return;
       }
+      // Reached only from init() (Alpine's own automatic call, with the
+      // component root as the evaluating element -- there's no x-init on the
+      // grid's root), so `$el` would be safe here too, but use `$root`
+      // anyway (issue #290) so "component furniture is always reached via
+      // `$root`" holds with no exceptions to remember.
       this.editing = true;
-      const button = this.$el.querySelector(
+      const button = this.$root.querySelector(
         `.assignment-cell-add[data-song-id="${this.prefillBackup.songId}"][data-role-id="${this.prefillBackup.roleId}"]`,
       );
       if (button) {
