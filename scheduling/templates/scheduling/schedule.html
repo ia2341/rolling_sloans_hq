@@ -71,7 +71,8 @@
       {{ pending_editing|yesno:'true,false' }},
       JSON.parse('{{ pending_removed_backups_json|default:'[]'|escapejs }}'),
       JSON.parse('{{ pending_added_backups_json|default:'[]'|escapejs }}'),
-      JSON.parse('{{ pending_backup_covering_for_json|default:'{}'|escapejs }}')
+      JSON.parse('{{ pending_backup_covering_for_json|default:'{}'|escapejs }}'),
+      JSON.parse('{{ prefill_backup_json|default:'null'|escapejs }}')
     )"
   >
     {% if can_edit_assignments %}

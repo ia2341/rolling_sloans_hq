@@ -1848,12 +1848,18 @@ class ConflictFeasibilityRow:
     `has_standing_overlap` is only ever True for a Conflict id passed in
     `approved_conflict_ids` -- a pending or rejected Conflict never
     carries the advisory, since it isn't part of the band's real state.
+    `overlap_song_id`/`overlap_role_id` name the first assigned (Song,
+    Role) cell the overlap was found at -- the target for the adjudication
+    row's doors to the Running Order and the assignment grid (issue #195)
+    -- and are None exactly when `has_standing_overlap` is False.
     """
 
     conflict_id: int
     checked: bool
     verdict: str | None
     has_standing_overlap: bool
+    overlap_song_id: int | None
+    overlap_role_id: int | None
 
 
 def _windows_overlap(window_start, window_end, slot_start, slot_end) -> bool:
@@ -1918,17 +1924,22 @@ def _search_feasible(active_constraints, rehearsal_songs, rehearsal) -> bool:
     return False
 
 
-def _standing_overlap(conflict, assigned_song_ids, rehearsal_song_by_song_id, role_by_person_and_song, backed_up_slots) -> bool:
-    """True if `conflict`'s person is still assigned into one of their own Windows at the *saved* Running Order.
+def _standing_overlap_target(
+    conflict, assigned_song_ids, rehearsal_song_by_song_id, role_by_person_and_song, backed_up_slots,
+) -> tuple[int, int] | None:
+    """Return the first (song_id, role_id) `conflict`'s person is still assigned into their own Window at, or None.
 
     Computed against each assigned Song's stored RehearsalSong start_time/
     end_time -- never a candidate ordering -- because this describes the
     band's real state (issue #194). Silent once a Backup covers that Role
-    on that Song at that Rehearsal (ADR-0007).
+    on that Song at that Rehearsal (ADR-0007). "First" follows
+    `assigned_song_ids`' iteration order, which is fine: the advisory (and
+    its doors, issue #195) only ever need one target cell to send an admin
+    to, not an exhaustive list.
     """
     windows = [(window.unavailable_start, window.unavailable_end) for window in conflict.conflictwindow_set.all()]
     if not windows:
-        return False
+        return None
     for song_id in assigned_song_ids:
         rehearsal_song = rehearsal_song_by_song_id.get(song_id)
         if rehearsal_song is None:
@@ -1940,8 +1951,8 @@ def _standing_overlap(conflict, assigned_song_ids, rehearsal_song_by_song_id, ro
             continue
         role_id = role_by_person_and_song[(conflict.person_id, song_id)]
         if (rehearsal_song.pk, role_id) not in backed_up_slots:
-            return True
-    return False
+            return (song_id, role_id)
+    return None
 
 
 def conflict_feasibility_for(rehearsal, approved_conflict_ids) -> list[ConflictFeasibilityRow]:
@@ -2017,6 +2028,7 @@ def conflict_feasibility_for(rehearsal, approved_conflict_ids) -> list[ConflictF
         if conflict.type == Conflict.FULL_CONFLICT:
             rows.append(ConflictFeasibilityRow(
                 conflict_id=conflict.pk, checked=True, verdict=NOT_APPLICABLE, has_standing_overlap=False,
+                overlap_song_id=None, overlap_role_id=None,
             ))
             continue
         assigned_song_ids = assigned_song_ids_by_person.get(conflict.person_id, set())
@@ -2027,11 +2039,16 @@ def conflict_feasibility_for(rehearsal, approved_conflict_ids) -> list[ConflictF
         else:
             checked = True
             verdict = FEASIBLE if is_jointly_feasible(approved_ids | {conflict.pk}) else INFEASIBLE
-        has_overlap = conflict.pk in approved_ids and _standing_overlap(
-            conflict, assigned_song_ids, rehearsal_song_by_song_id, role_by_person_and_song, backed_up_slots,
-        )
+        overlap_target = None
+        if conflict.pk in approved_ids:
+            overlap_target = _standing_overlap_target(
+                conflict, assigned_song_ids, rehearsal_song_by_song_id, role_by_person_and_song, backed_up_slots,
+            )
         rows.append(ConflictFeasibilityRow(
-            conflict_id=conflict.pk, checked=checked, verdict=verdict, has_standing_overlap=has_overlap,
+            conflict_id=conflict.pk, checked=checked, verdict=verdict,
+            has_standing_overlap=overlap_target is not None,
+            overlap_song_id=overlap_target[0] if overlap_target else None,
+            overlap_role_id=overlap_target[1] if overlap_target else None,
         ))
     return rows
 
