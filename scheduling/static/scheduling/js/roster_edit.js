@@ -13,7 +13,11 @@ document.addEventListener('alpine:init', () => {
     // Any checked 'remove' checkbox means Save must show the batch confirmation dialog first --
     // one dialog for the whole batch, never one per removed person.
     hasPendingRemovals() {
-      return Array.from(this.$el.querySelectorAll('.roster-remove-checkbox')).some((checkbox) => checkbox.checked);
+      // Reached from onSubmit, where `$el` is the `<form>` -- it happens to
+      // contain every checkbox searched below today, but that's a
+      // coincidence of markup nesting, not a guarantee. Use `$root`
+      // (issue #290).
+      return Array.from(this.$root.querySelectorAll('.roster-remove-checkbox')).some((checkbox) => checkbox.checked);
     },
 
     // Fetches the removal confirmation and only opens the dialog on a successful response -- a
