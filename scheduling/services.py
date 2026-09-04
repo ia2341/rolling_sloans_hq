@@ -3358,6 +3358,237 @@ def preview_rehearsal_edits(buffer: RehearsalEditBuffer, *, viewing_semester: Se
     )
 
 
+class StaleSemesterDefaultsError(ValueError):
+    """Raised when a Semester's timing defaults changed since a reapply confirmation was opened (issue #291)."""
+
+
+class SemesterDefaultsReapplyBlockedError(ValueError):
+    """Raised when reapplying a Semester's current timing defaults would overrun a RehearsalSong's slots (issue #291).
+
+    `default_song_slot_count` may have shrunk since a Rehearsal's songs were
+    scheduled; reapplying never touches `slot_count`, so a row that used to
+    fit can stop fitting — the same invariant `RehearsalSong.save()` already
+    enforces via `_overruns_rehearsal_window()`. Raised before any commit so
+    the whole bulk reapply writes nothing, rather than applying to some
+    Rehearsals and stopping mid-batch at the first one that overruns.
+    """
+
+
+@dataclass(frozen=True)
+class SemesterDefaultsReapplyBuffer:
+    """The Semester identity `apply_semester_defaults_reapply()`/`preview_semester_defaults_reapply()` share (issue #291).
+
+    Carries no per-row data, unlike `RehearsalEditBuffer` — this bulk action
+    reads its input straight off the Semester's already-persisted `default_*`
+    fields and its existing Rehearsals. Addressed by `semester_id` alone,
+    the way `SemesterPublishView`/`SemesterDeleteView` are — this action has
+    no session-scoped Viewing Semester ambiguity to guard against, since its
+    target is always the pk named in the URL. `semester_updated_at` backs
+    the one staleness check that does apply: the Semester's defaults (or
+    another admin's concurrent reapply) may have changed between this
+    confirmation's GET and its POST.
+    """
+
+    semester_id: int
+    semester_updated_at: datetime
+
+
+def apply_semester_defaults_reapply(buffer: SemesterDefaultsReapplyBuffer) -> None:
+    """Push a Semester's current timing defaults onto its non-past Rehearsals in one transaction (issue #291).
+
+    `Rehearsal._apply_semester_defaults()` only fires at creation time, so
+    editing a Semester's `default_*` fields afterward never reaches an
+    already-created Rehearsal — this is the bulk push that does. For every
+    Rehearsal dated today or later, overwrites `setup_grace_minutes`,
+    `teardown_grace_minutes`, `arrival_buffer_minutes`, `departure_buffer_minutes`
+    and `end_time` with the Semester's current defaults via
+    `Rehearsal.overwrite_semester_defaults()`, then re-derives every
+    surviving RehearsalSong's persisted slot by handing `reorder_rehearsal_songs()`
+    its own current order — the same "identity permutation forces a
+    re-derive" trick that Rehearsal window edits already rely on — since
+    `default_song_slot_count` may also have changed. A past Rehearsal
+    (`date < today`) is excluded outright, mirroring `apply_rehearsal_edits()`'s
+    `PastRehearsalEditError` posture.
+
+    Raises `StaleSemesterDefaultsError` inside the transaction if the
+    Semester's `updated_at` no longer matches `buffer.semester_updated_at`.
+    Raises `SemesterDefaultsReapplyBlockedError` — see its docstring — if
+    any Rehearsal's end_time would wrap past midnight or any RehearsalSong
+    would overrun the Semester's `default_song_slot_count`; either rolls
+    back whatever this call had already applied.
+    """
+    with transaction.atomic():
+        semester = Semester.objects.select_for_update().get(pk=buffer.semester_id)
+        if semester.updated_at != buffer.semester_updated_at:
+            raise StaleSemesterDefaultsError(
+                "The Semester's defaults changed while this confirmation was open — reload and try again."
+            )
+
+        today = timezone.localdate()
+        rehearsals = list(Rehearsal.objects.filter(semester=semester, date__gte=today).order_by('pk'))
+        for rehearsal in rehearsals:
+            try:
+                rehearsal.overwrite_semester_defaults()
+            except ValueError as error:
+                raise SemesterDefaultsReapplyBlockedError(f'{rehearsal.date}: {error}') from error
+            rehearsal.save()
+
+        for rehearsal in rehearsals:
+            ordered_ids = list(
+                RehearsalSong.objects.filter(rehearsal=rehearsal).order_by('order').values_list('pk', flat=True)
+            )
+            if not ordered_ids:
+                continue
+            try:
+                reorder_rehearsal_songs(rehearsal, ordered_ids)
+            except ValueError as error:
+                raise SemesterDefaultsReapplyBlockedError(f'{rehearsal.date}: {error}') from error
+
+        semester.updated_at = timezone.now()
+        semester.save(update_fields=['updated_at'])
+
+
+@dataclass(frozen=True)
+class SemesterDefaultsFallout:
+    """Every observable consequence of reapplying a Semester's timing defaults, computed without committing it (issue #291, ADR-0008).
+
+    `is_blocked` mirrors `apply_semester_defaults_reapply()`'s Validation
+    Errors (stale stamp, a midnight wrap or a slot overrun) with no Fallout
+    computed at all. `is_stale` flags a `Semester.updated_at`
+    mismatch, reported never refused, per ADR-0008. `changed_rehearsal_count`
+    is how many upcoming Rehearsals this reapply would touch (0 renders as
+    "nothing to reapply" rather than a block). `loud`/`quiet` are the two
+    ADR-0002 tiers: a Recording whose RehearsalSong slot moved is loud (its
+    performers should know their recorded slot re-timed); a declared
+    Conflict Window that no longer overlaps its Rehearsal after the re-time
+    is quiet (an inert notification, never a call to act).
+    """
+
+    is_blocked: bool
+    block_message: str
+    is_stale: bool
+    changed_rehearsal_count: int
+    loud: list[str]
+    quiet: list[str]
+
+
+def _blocked_semester_defaults_fallout(block_message: str, *, is_stale: bool = False) -> SemesterDefaultsFallout:
+    """Return a SemesterDefaultsFallout reporting a hard block, with every Fallout list empty."""
+    return SemesterDefaultsFallout(
+        is_blocked=True, block_message=block_message, is_stale=is_stale,
+        changed_rehearsal_count=0, loud=[], quiet=[],
+    )
+
+
+def preview_semester_defaults_reapply(buffer: SemesterDefaultsReapplyBuffer) -> SemesterDefaultsFallout:
+    """Run the real `apply_semester_defaults_reapply()` for `buffer` and report every observable consequence (issue #291, ADR-0008).
+
+    This function's write is real — it must be called inside a transaction
+    the *caller* rolls back, exactly like `preview_rehearsal_edits()`.
+    Called outside such a transaction, this function corrupts the database.
+
+    Snapshots every upcoming Rehearsal's declared Conflict Windows and each
+    of its RehearsalSong's persisted slot before calling
+    `apply_semester_defaults_reapply()` (with a copy of `buffer` whose
+    `semester_updated_at` is swapped for the Semester's current value, so
+    the real function's own staleness check always passes and the write
+    actually runs), then re-reads the same state after and diffs the two:
+    a RehearsalSong carrying a Recording whose slot moved is a loud
+    re-timed-Recording line; a Conflict Window that used to overlap its
+    Rehearsal's window and no longer does is a quiet line. A
+    `StaleSemesterDefaultsError` or `SemesterDefaultsReapplyBlockedError`
+    from `apply_semester_defaults_reapply()` is reported as `is_blocked`
+    with no Fallout computed at all, rather than re-implementing either
+    check here.
+    """
+    current_semester = Semester.objects.filter(pk=buffer.semester_id).first()
+    if current_semester is None:
+        return _blocked_semester_defaults_fallout('This Semester no longer exists.')
+    is_stale = buffer.semester_updated_at != current_semester.updated_at
+
+    today = timezone.localdate()
+    touched_ids = list(
+        Rehearsal.objects.filter(semester=current_semester, date__gte=today).values_list('pk', flat=True)
+    )
+    conflicts_before = {
+        rehearsal_id: [
+            (window.unavailable_start, window.unavailable_end)
+            for conflict in Conflict.objects.filter(rehearsal_id=rehearsal_id, type=Conflict.PARTIAL)
+            .prefetch_related('conflictwindow_set')
+            for window in conflict.conflictwindow_set.all()
+        ]
+        for rehearsal_id in touched_ids
+    }
+    rehearsals_before = {rehearsal.pk: rehearsal for rehearsal in Rehearsal.objects.filter(pk__in=touched_ids)}
+
+    recordings_before = list(
+        Recording.objects.filter(rehearsal_song__rehearsal_id__in=touched_ids)
+        .select_related('rehearsal_song__song')
+    )
+    recording_ids_by_rehearsal_song_id = defaultdict(set)
+    for recording in recordings_before:
+        recording_ids_by_rehearsal_song_id[recording.rehearsal_song_id].add(recording.pk)
+    rehearsal_song_before_by_id = {
+        rehearsal_song.pk: (rehearsal_song.start_time, rehearsal_song.end_time, rehearsal_song.song.title)
+        for rehearsal_song in RehearsalSong.objects.filter(rehearsal_id__in=touched_ids).select_related('song')
+    }
+
+    apply_buffer = replace(buffer, semester_updated_at=current_semester.updated_at)
+    try:
+        apply_semester_defaults_reapply(apply_buffer)
+    except (StaleSemesterDefaultsError, SemesterDefaultsReapplyBlockedError) as error:
+        return _blocked_semester_defaults_fallout(str(error), is_stale=is_stale)
+
+    loud = []
+    surviving_rehearsal_song_times = {
+        pk: (start_time, end_time)
+        for pk, start_time, end_time
+        in RehearsalSong.objects.filter(pk__in=rehearsal_song_before_by_id).values_list('pk', 'start_time', 'end_time')
+    }
+    for rehearsal_song_id, (old_start, old_end, song_title) in rehearsal_song_before_by_id.items():
+        new_times = surviving_rehearsal_song_times.get(rehearsal_song_id)
+        if new_times is None or new_times == (old_start, old_end):
+            continue
+        recording_ids = recording_ids_by_rehearsal_song_id.get(rehearsal_song_id) or set()
+        if not recording_ids:
+            continue
+        count = len(recording_ids)
+        new_start, new_end = new_times
+        loud.append(
+            f"{count} recording{'' if count == 1 else 's'} on {song_title} "
+            f"{'was' if count == 1 else 'were'} made against "
+            f'{_format_slot(old_start, old_end)}, now {_format_slot(new_start, new_end)}.'
+        )
+
+    quiet = []
+    for rehearsal in Rehearsal.objects.filter(pk__in=touched_ids):
+        old_rehearsal = rehearsals_before.get(rehearsal.pk)
+        if old_rehearsal is None:
+            continue
+        old_windows = conflicts_before.get(rehearsal.pk, [])
+        if not old_windows:
+            continue
+        if old_rehearsal.start_time == rehearsal.start_time and old_rehearsal.end_time == rehearsal.end_time:
+            continue
+        for window_start, window_end in old_windows:
+            was_overlapping = _windows_overlap(
+                window_start, window_end, old_rehearsal.start_time, old_rehearsal.end_time,
+            )
+            still_overlapping = _windows_overlap(
+                window_start, window_end, rehearsal.start_time, rehearsal.end_time,
+            )
+            if was_overlapping and not still_overlapping:
+                quiet.append(
+                    f"A declared Conflict Window no longer overlaps {rehearsal.date}'s rehearsal time "
+                    'after this reapply.'
+                )
+
+    return SemesterDefaultsFallout(
+        is_blocked=False, block_message='', is_stale=is_stale,
+        changed_rehearsal_count=len(touched_ids), loud=loud, quiet=quiet,
+    )
+
+
 @dataclass(frozen=True)
 class RehearsalTimeInput:
     """One Rehearsal Time row as entered in the Pattern editor (issue #222): a day-of-week plus start/end."""

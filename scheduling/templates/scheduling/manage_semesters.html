@@ -19,6 +19,7 @@
         {% csrf_token %}
         <button type="submit">Publish</button>
       </form>
+      <a href="{% url 'scheduling:manage-semesters-reapply-defaults' semester.pk %}">Reapply defaults</a>
       {% if semester != live_semester %}
         <a href="{% url 'scheduling:manage-semesters-delete' semester.pk %}">Delete</a>
       {% endif %}

@@ -1,0 +1,40 @@
+<!doctype html>
+<title>Reapply {{ semester.name }}'s defaults</title>
+<h1>Reapply {{ semester.name }}'s timing defaults?</h1>
+{% for message in messages %}
+  <p>{{ message }}</p>
+{% endfor %}
+{% if fallout.is_blocked %}
+  <p>{{ fallout.block_message }}</p>
+  <a href="{% url 'scheduling:manage-semesters' %}">Cancel</a>
+{% else %}
+  {% if fallout.is_stale %}
+    <p>This Semester changed since you opened this page &mdash; reload before continuing.</p>
+  {% endif %}
+  <p>
+    This pushes {{ semester.name }}'s current setup/teardown grace, arrival/departure buffer,
+    and duration defaults onto its {{ fallout.changed_rehearsal_count }}
+    upcoming rehearsal{{ fallout.changed_rehearsal_count|pluralize }} (past rehearsals are untouched),
+    and re-times each one's songs against those defaults.
+  </p>
+  {% if fallout.loud %}
+    <ul>
+      {% for line in fallout.loud %}
+        <li>{{ line }}</li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+  {% if fallout.quiet %}
+    <ul>
+      {% for line in fallout.quiet %}
+        <li>{{ line }}</li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+  <form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="semester_updated_at" value="{{ semester.updated_at|date:'c' }}">
+    <button type="submit">Reapply {{ semester.name }}'s defaults</button>
+  </form>
+  <a href="{% url 'scheduling:manage-semesters' %}">Cancel</a>
+{% endif %}
