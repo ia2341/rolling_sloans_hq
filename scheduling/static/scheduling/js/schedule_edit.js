@@ -257,6 +257,13 @@ document.addEventListener('alpine:init', () => {
     // target list does NOT keep as a pending removal first, mirroring the grid's other undoable strike-through
     // deletes -- a shuffle never marks anything, since every row it's handed is already exactly the set on
     // screen, just reordered.
+    //
+    // A `data-pinned="true"` row (recording-bearing or hand-raised slot_count -- see _running_order_row.html)
+    // is never physically moved here, even though the server's returned position for it matches where it
+    // already sits in the saved Running Order: an admin can have dragged it somewhere else in the *unsaved*
+    // Pending Buffer before clicking Deal/Shuffle, and physically relocating it on the server's say-so would
+    // silently discard that unsaved move. It's still used as the anchor the surrounding free rows are inserted
+    // around, so the rest of the sequence still lands correctly -- only the pinned row itself stays put.
     _applyRowsToSubGrid(subGrid, targetRows, { supersedeExisting }) {
       const rowsContainer = subGrid.querySelector('.running-order-rows');
       if (supersedeExisting) {
@@ -281,10 +288,12 @@ document.addEventListener('alpine:init', () => {
         if (!rowEl) {
           return;
         }
-        if (insertionPoint) {
-          insertionPoint.after(rowEl);
-        } else {
-          rowsContainer.prepend(rowEl);
+        if (rowEl.dataset.pinned !== 'true') {
+          if (insertionPoint) {
+            insertionPoint.after(rowEl);
+          } else {
+            rowsContainer.prepend(rowEl);
+          }
         }
         insertionPoint = rowEl;
       });

@@ -3734,6 +3734,23 @@ class NoEligibleRehearsalsError(ValueError):
     """Raised by `deal_running_orders()` when the Semester has no non-Dress, non-past Rehearsal to deal into (issue #223)."""
 
 
+class DealInfeasibleError(ValueError):
+    """Raised by `deal_running_orders()`/`shuffle_rehearsal_running_order()` when the pinned rows themselves make a valid deal impossible (issue #223 review fix).
+
+    Two distinct causes share this one error, since both mean the same
+    thing to a caller: "don't propose this, the pins already broke it".
+    Either a pinned row's own `order` no longer fits within the rehearsal's
+    current row count (the setlist or the Semester's `default_song_slot_count`
+    shrank since it was pinned, so honoring both "leave it at its own order"
+    and "never exceed the slot budget" is impossible at once), or the pinned
+    rows alone already spread a Song's term-wide appearance count more than
+    one away from another's, with no remaining free slot anywhere left to
+    close the gap. Silently relocating the row (the first case) or silently
+    returning an unbalanced deal (the second) would both violate this
+    function's contract more than refusing does.
+    """
+
+
 def _eligible_rehearsals_for_deal(semester: Semester) -> list[Rehearsal]:
     """Return `semester`'s non-Dress Rehearsals dated today or later, in schedule order (issue #223).
 
@@ -3782,16 +3799,24 @@ def _pin_and_fill(
     Songs) and `shuffle_rehearsal_running_order()` (whose `free` rows are
     the Rehearsal's own existing non-pinned rows) — the "hold pinned rows
     fixed, randomize the rest" shape is identical either way. `pinned`'s
-    `order` is 1-indexed and clamped to `[1, total]` before placement (a
-    pinned row's order can only ever exceed `total` if the setlist or the
-    Semester's slot budget shrank since it was placed); a same-target
-    collision (two pinned rows clamping to the same index) probes forward
-    to the next free slot rather than raising, since this is a proposal an
-    admin can always discard by not saving.
+    `order` is 1-indexed and must already fall within `[1, total]`: a
+    pinned row's `order` can only exceed `total` if the setlist or the
+    Semester's slot budget shrank since it was placed, and relocating it to
+    fit would be exactly the "moves a pinned row" this function exists to
+    never do — so that case raises `DealInfeasibleError` rather than
+    silently clamping the index. A same-target collision (two pinned rows
+    landing on the same index) probes forward to the next free slot rather
+    than raising, since that's a genuine tie the caller can always discard
+    by not saving, not a forced relocation.
     """
     slots: list[DealtRow | None] = [None] * total
     for order, row in sorted(pinned, key=lambda pair: pair[0]):
-        index = min(order, total) - 1
+        if order > total:
+            raise DealInfeasibleError(
+                'A pinned Running Order row no longer fits within its Rehearsal — the setlist or slot budget '
+                'shrank since it was placed. Resolve this by hand before dealing or shuffling again.'
+            )
+        index = order - 1
         while slots[index] is not None:
             index = (index + 1) % total
         slots[index] = row
@@ -3830,9 +3855,14 @@ def deal_running_orders(semester: Semester) -> RehearsalDeal:
     setlist smaller than the slot budget simply deals fewer rows, leaving
     the rest empty (no row ever repeats a Song to pad it out).
 
-    Raises `EmptySetlistError` if `semester` has no Songs, and
-    `NoEligibleRehearsalsError` if it has no eligible Rehearsal — a silent
-    no-op would read as a bug, per this issue's spec.
+    Raises `EmptySetlistError` if `semester` has no Songs,
+    `NoEligibleRehearsalsError` if it has no eligible Rehearsal (a silent
+    no-op would read as a bug, per this issue's spec), and
+    `DealInfeasibleError` if the pinned rows alone already spread some
+    Song's term-wide count more than one away from another's with no free
+    slot left anywhere to close the gap — the greedy fill above can only
+    ever narrow that gap, never widen it, so this can only be detected
+    after the fact, not prevented by the fill itself.
     """
     rehearsals = _eligible_rehearsals_for_deal(semester)
     songs = list(Song.objects.filter(semester=semester))
@@ -3873,6 +3903,13 @@ def deal_running_orders(semester: Semester) -> RehearsalDeal:
         dealt_song_ids[rehearsal_id].append(chosen)
         used_in_rehearsal[rehearsal_id].add(chosen)
         counts[chosen] += 1
+
+    final_counts = [counts[song_id] for song_id in song_ids]
+    if max(final_counts) - min(final_counts) > 1:
+        raise DealInfeasibleError(
+            "The pinned rows already spread some Song's appearance count more than one away from another's, "
+            'with no free slot left to close the gap. Resolve this by hand before dealing again.'
+        )
 
     dealt_rehearsals = []
     for rehearsal in rehearsals:

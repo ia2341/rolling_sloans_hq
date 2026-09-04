@@ -72,6 +72,7 @@ from scheduling.services import (
     AdjudicationBuffer,
     AdjudicationEntry,
     AssignmentEditBuffer,
+    DealInfeasibleError,
     EmptySetlistError,
     InvalidSemesterNameError,
     LiveSemesterDeletionError,
@@ -874,7 +875,7 @@ class ScheduleEditDealView(AdminRequiredMixin, View):
             return JsonResponse({'error': 'No Semester is being edited.'}, status=400)
         try:
             deal = deal_running_orders(semester)
-        except (EmptySetlistError, NoEligibleRehearsalsError) as error:
+        except (EmptySetlistError, NoEligibleRehearsalsError, DealInfeasibleError) as error:
             return JsonResponse({'error': str(error)}, status=400)
         return JsonResponse({'rehearsals': [_dealt_rehearsal_json(dealt) for dealt in deal.rehearsals]})
 

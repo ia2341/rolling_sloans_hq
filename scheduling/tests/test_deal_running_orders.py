@@ -15,6 +15,7 @@ from scheduling.factories import (
 )
 from scheduling.models import RehearsalSong
 from scheduling.services import (
+    DealInfeasibleError,
     EmptySetlistError,
     NoEligibleRehearsalsError,
     deal_running_orders,
@@ -213,6 +214,33 @@ class DealRunningOrdersTests(TestCase):
             self.assertEqual(pinned_index, 2)  # order=3 is 1-indexed -> DOM index 2
             self.assertEqual(pinned_row.song_id, raised.song_id)
             self.assertEqual(pinned_row.slot_count, 2)
+
+    def test_refuses_when_a_pinned_row_no_longer_fits_within_a_shrunk_capacity(self):
+        """A pinned row's order can outlive a shrunk slot budget; the deal refuses rather than silently relocating it."""
+        semester = SemesterFactory(default_song_slot_count=4)
+        for _ in range(5):
+            SongFactory(semester=semester)
+        rehearsal = _future_rehearsal(semester, days_out=1)
+        pinned = RehearsalSongFactory(rehearsal=rehearsal, order=4, slot_count=1)
+        RecordingFactory(rehearsal_song=pinned)
+        semester.default_song_slot_count = 2
+        semester.save()
+
+        with self.assertRaises(DealInfeasibleError):
+            deal_running_orders(semester)
+
+    def test_refuses_when_pinned_rows_already_break_the_balance_target(self):
+        """Pinned rows alone can already spread Song counts more than one apart with no free slot left to fix it; the deal refuses rather than returning it."""
+        semester = SemesterFactory(default_song_slot_count=1)
+        song_a = SongFactory(semester=semester)
+        SongFactory(semester=semester)  # song_b: never dealt, so it stays at zero appearances
+        for day in range(3):
+            rehearsal = _future_rehearsal(semester, days_out=day + 1)
+            pinned = RehearsalSongFactory(rehearsal=rehearsal, song=song_a, order=1, slot_count=1)
+            RecordingFactory(rehearsal_song=pinned)
+
+        with self.assertRaises(DealInfeasibleError):
+            deal_running_orders(semester)
 
 
 class ShuffleRehearsalRunningOrderTests(TestCase):
