@@ -1,4 +1,4 @@
-"""Admin schedule & assignment management: /manage/schedule/, /manage/assignments/ (issue #60)."""
+"""Admin schedule management: /manage/schedule/ (issue #60); /manage/assignments/ is gone (issue #213)."""
 
 from datetime import time
 
@@ -9,11 +9,8 @@ from faker import Faker
 from identity.factories import PersonFactory
 from scheduling.factories import (
     ConflictFactory,
-    MembershipFactory,
-    MembershipRoleFactory,
     RehearsalFactory,
     RehearsalSongFactory,
-    RoleFactory,
     SemesterFactory,
     SongFactory,
     SongRoleAssignmentFactory,
@@ -29,14 +26,6 @@ class AnonymousAccessTests(TestCase):
     def test_manage_schedule_redirects_anonymous_users_to_login(self):
         """An anonymous request to /manage/schedule/ redirects to the login page."""
         url = reverse('scheduling:manage-schedule')
-
-        response = self.client.get(url)
-
-        self.assertRedirects(response, f"{reverse('identity:login')}?next={url}")
-
-    def test_manage_assignments_redirects_anonymous_users_to_login(self):
-        """An anonymous request to /manage/assignments/ redirects to the login page."""
-        url = reverse('scheduling:manage-assignments')
 
         response = self.client.get(url)
 
@@ -60,12 +49,6 @@ class NonAdminAccessTests(TestCase):
 
         self.assertEqual(response.status_code, 403)
 
-    def test_manage_assignments_is_forbidden_for_non_admin(self):
-        """A logged-in non-admin's GET to /manage/assignments/ returns 403."""
-        response = self.client.get(reverse('scheduling:manage-assignments'))
-
-        self.assertEqual(response.status_code, 403)
-
     def test_manage_schedule_edit_is_forbidden_for_non_admin(self):
         """A logged-in non-admin's GET/POST to the Rehearsal edit endpoint returns 403 and changes nothing."""
         rehearsal = RehearsalFactory(is_full_setlist=False)
@@ -74,15 +57,6 @@ class NonAdminAccessTests(TestCase):
         self.assertEqual(self.client.get(url).status_code, 403)
         self.assertEqual(self.client.post(url, {'is_full_setlist': True}).status_code, 403)
         self.assertFalse(Rehearsal.objects.get(pk=rehearsal.pk).is_full_setlist)
-
-    def test_manage_assignments_delete_is_forbidden_for_non_admin(self):
-        """A logged-in non-admin's POST to the assignment delete endpoint returns 403 and deletes nothing."""
-        assignment = SongRoleAssignmentFactory()
-
-        response = self.client.post(reverse('scheduling:manage-assignments-delete', args=[assignment.pk]))
-
-        self.assertEqual(response.status_code, 403)
-        self.assertTrue(SongRoleAssignment.objects.filter(pk=assignment.pk).exists())
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)
@@ -262,95 +236,34 @@ class RehearsalManageViewTests(TestCase):
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)
-class SongRoleAssignmentManageViewTests(TestCase):
+class ManageAssignmentsRemovedTests(TestCase):
+    """`/manage/assignments/` and its delete route are gone outright, no redirect (issue #213).
+
+    The flat add-form had no Rehearsal, so it structurally couldn't raise
+    the availability warning; the assignment grid on /schedule/ now covers
+    every case it did (add, remove, reach any Role), so both routes 404
+    for anyone, admin included, rather than redirecting anywhere.
+    """
+
     @classmethod
     def setUpTestData(cls):
-        """Build a synthetic admin Person, with a current Semester and Song."""
+        """Build a synthetic admin Person and one SongRoleAssignment to target the delete route with."""
         cls.admin = PersonFactory(password=PASSWORD, is_admin=True)
-        cls.semester = SemesterFactory()
-        cls.song = SongFactory(semester=cls.semester, position=1)
-        cls.role = RoleFactory()
+        cls.assignment = SongRoleAssignmentFactory()
 
     def setUp(self):
         """Log in as the synthetic admin Person before each test."""
         self.client.login(username=self.admin.email, password=PASSWORD)
 
-    def test_lists_current_semester_assignments(self):
-        """The assignments page lists SongRoleAssignments for the current Semester's Songs."""
-        assignment = SongRoleAssignmentFactory(song=self.song, role=self.role)
-
-        response = self.client.get(reverse('scheduling:manage-assignments'))
-
-        self.assertEqual(response.status_code, 200)
-        self.assertIn(assignment, response.context['assignments'])
-
-    def test_valid_post_creates_assignment_and_redirects_with_message(self):
-        """A valid POST creates a SongRoleAssignment and redirects with a success message."""
-        person = PersonFactory()
-        args = {'song': self.song.pk, 'role': self.role.pk, 'person': person.pk}
-
-        response = self.client.post(reverse('scheduling:manage-assignments'), args, follow=True)
-
-        self.assertRedirects(response, reverse('scheduling:manage-assignments'))
-        self.assertTrue(SongRoleAssignment.objects.filter(song=self.song, role=self.role, person=person).exists())
-
-    def test_role_mismatch_is_surfaced_in_response(self):
-        """An assignment whose Role isn't on the Person's Membership is created and flagged in the response."""
-        person = PersonFactory()
-        args = {'song': self.song.pk, 'role': self.role.pk, 'person': person.pk}
-
-        self.client.post(reverse('scheduling:manage-assignments'), args)
-        response = self.client.get(reverse('scheduling:manage-assignments'))
-
-        assignment = SongRoleAssignment.objects.get(song=self.song, role=self.role, person=person)
-        self.assertTrue(assignment.is_role_mismatch)
-        self.assertContains(response, 'role mismatch')
-
-    def test_matching_role_is_not_flagged(self):
-        """An assignment whose Role matches a declared MembershipRole is not flagged as a mismatch."""
-        membership = MembershipFactory(semester=self.semester)
-        MembershipRoleFactory(membership=membership, role=self.role)
-        args = {'song': self.song.pk, 'role': self.role.pk, 'person': membership.person.pk}
-
-        self.client.post(reverse('scheduling:manage-assignments'), args)
-
-        assignment = SongRoleAssignment.objects.get(song=self.song, role=self.role, person=membership.person)
-        self.assertFalse(assignment.is_role_mismatch)
-
-    def test_invalid_post_rerenders_form_with_errors(self):
-        """A POST missing required fields re-renders the form with errors, creating nothing."""
-        response = self.client.post(reverse('scheduling:manage-assignments'), {})
-
-        self.assertEqual(response.status_code, 200)
-        self.assertTrue(response.context['form'].errors)
-        self.assertEqual(SongRoleAssignment.objects.count(), 0)
-
-    def test_duplicate_post_rerenders_form_with_errors(self):
-        """A POST duplicating an existing (song, role, person) triple re-renders the form with a uniqueness error."""
-        assignment = SongRoleAssignmentFactory(song=self.song, role=self.role)
-        args = {'song': self.song.pk, 'role': self.role.pk, 'person': assignment.person.pk}
-
-        response = self.client.post(reverse('scheduling:manage-assignments'), args)
-
-        self.assertEqual(response.status_code, 200)
-        self.assertTrue(response.context['form'].errors)
-        self.assertEqual(SongRoleAssignment.objects.filter(song=self.song, role=self.role).count(), 1)
-
-    def test_delete_removes_assignment_and_redirects(self):
-        """A POST to the delete endpoint removes the SongRoleAssignment and redirects with a success message."""
-        assignment = SongRoleAssignmentFactory(song=self.song, role=self.role)
-
-        response = self.client.post(reverse('scheduling:manage-assignments-delete', args=[assignment.pk]), follow=True)
-
-        self.assertRedirects(response, reverse('scheduling:manage-assignments'))
-        self.assertFalse(SongRoleAssignment.objects.filter(pk=assignment.pk).exists())
-
-    def test_delete_404s_for_an_assignment_outside_the_current_semester(self):
-        """A stale Semester's SongRoleAssignment isn't removable through the current-Semester delete route."""
-        stale_assignment = SongRoleAssignmentFactory(song=self.song, role=self.role)
-        SemesterFactory()  # supersedes self.semester as "current" (most-recently-created)
-
-        response = self.client.post(reverse('scheduling:manage-assignments-delete', args=[stale_assignment.pk]))
+    def test_manage_assignments_404s(self):
+        """A GET to /manage/assignments/ returns 404, even for an admin."""
+        response = self.client.get('/manage/assignments/')
 
         self.assertEqual(response.status_code, 404)
-        self.assertTrue(SongRoleAssignment.objects.filter(pk=stale_assignment.pk).exists())
+
+    def test_manage_assignments_delete_404s(self):
+        """A POST to /manage/assignments/<pk>/delete/ returns 404 and deletes nothing, even for an admin."""
+        response = self.client.post(f'/manage/assignments/{self.assignment.pk}/delete/')
+
+        self.assertEqual(response.status_code, 404)
+        self.assertTrue(SongRoleAssignment.objects.filter(pk=self.assignment.pk).exists())

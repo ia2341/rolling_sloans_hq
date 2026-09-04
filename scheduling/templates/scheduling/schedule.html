@@ -64,12 +64,27 @@
     {% include "scheduling/_availability.html" with availability=my_availability %}
   </div>
 
+  {% if can_edit_assignments %}
+    {{ addable_roles|json_script:"addable-roles-data" }}
+  {% endif %}
   <div
-    x-data="assignmentGrid(JSON.parse('{{ pending_removed_json|default:'[]'|escapejs }}'), JSON.parse('{{ pending_added_json|default:'[]'|escapejs }}'), {{ pending_editing|yesno:'true,false' }})"
+    x-data="assignmentGrid('{% url 'scheduling:schedule-assignments-picker' rehearsal.pk 0 0 %}', JSON.parse('{{ pending_removed_json|default:'[]'|escapejs }}'), JSON.parse('{{ pending_added_json|default:'[]'|escapejs }}'), {{ pending_editing|yesno:'true,false' }})"
   >
     {% if can_edit_assignments %}
       <p>
         <button type="button" id="edit-assignments-button" x-show="!editing" @click="editing = true">Edit assignments</button>
+      </p>
+      <p x-show="editing">
+        <label>
+          Add a role column for this view:
+          <select id="add-role-select" x-model="selectedRoleToAdd">
+            <option value="">Choose a role&hellip;</option>
+            <template x-for="role in rolesAvailableToAdd()" :key="role.id">
+              <option :value="role.id" x-text="role.name"></option>
+            </template>
+          </select>
+        </label>
+        <button type="button" id="add-role-button" :disabled="!selectedRoleToAdd" @click="addRole()">+ Add role</button>
       </p>
     {% endif %}
 
@@ -102,6 +117,11 @@
             {% for role in matrix.roles %}
               <th>{{ role.name }}</th>
             {% endfor %}
+            {% if can_edit_assignments %}
+              <template x-for="role in extraRoles" :key="role.id">
+                <th x-text="role.name"></th>
+              </template>
+            {% endif %}
           </tr>
         </thead>
         <tbody>
@@ -142,6 +162,34 @@
                   {% endif %}
                 </td>
               {% endfor %}
+              {% if can_edit_assignments %}
+                <template x-for="role in extraRoles" :key="role.id">
+                  <td>
+                    <template x-for="item in addedFor({{ row.song.pk }}, role.id)" :key="item.key">
+                      <span class="assignment-chip">
+                        <span x-text="item.personName"></span>
+                        <button
+                          type="button"
+                          class="assignment-chip-remove"
+                          x-show="editing"
+                          @click="removeAdded(item.key)"
+                          :aria-label="'Remove ' + item.personName"
+                        >&times;</button>
+                      </span>
+                    </template>
+                    <button
+                      type="button"
+                      class="assignment-cell-add"
+                      x-show="editing"
+                      data-song-id="{{ row.song.pk }}"
+                      :data-role-id="role.id"
+                      :data-picker-url="pickerUrlFor({{ row.song.pk }}, role.id)"
+                      @click="openPicker($event)"
+                      :aria-label="'Add to ' + role.name + ' on {{ row.song.title|escapejs }}'"
+                    >+</button>
+                  </td>
+                </template>
+              {% endif %}
             </tr>
           {% empty %}
             <tr>

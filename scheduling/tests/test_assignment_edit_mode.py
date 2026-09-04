@@ -19,7 +19,7 @@ from scheduling.factories import (
     SongRoleAssignmentFactory,
     SongRoleRequirementFactory,
 )
-from scheduling.models import Conflict, SongRoleAssignment
+from scheduling.models import Conflict, SongRoleAssignment, SongRoleRequirement
 from scheduling.services import VIEWING_SEMESTER_SESSION_KEY
 
 PASSWORD = 'a-strong-test-password-123'
@@ -240,6 +240,82 @@ class EditAssignmentsButtonTests(TestCase):
         response = self.client.get(_schedule_url(rehearsal))
 
         self.assertContains(response, 'id="my-songs-only-filter"')
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class AddRoleColumnTests(TestCase):
+    """The "+ Add role" control (issue #213): a client-side-only column, writing no Requirement."""
+
+    @classmethod
+    def setUpTestData(cls):
+        """Build an admin Person and a future Rehearsal with one Song and no Roles required or assigned yet."""
+        cls.admin = PersonFactory(password=PASSWORD, is_admin=True)
+        cls.semester = SemesterFactory()
+        cls.rehearsal = RehearsalFactory(semester=cls.semester, is_full_setlist=False)
+        cls.song = SongFactory(semester=cls.semester, position=1)
+        RehearsalSongFactory(song=cls.song, rehearsal=cls.rehearsal, order=1)
+
+    def setUp(self):
+        """Log in as the synthetic admin Person before each test."""
+        self.client.login(username=self.admin.email, password=PASSWORD)
+
+    def test_add_role_control_renders_for_an_admin_in_edit_mode(self):
+        """An admin viewing an editable grid sees the "+ Add role" select and button."""
+        response = self.client.get(_schedule_url(self.rehearsal))
+
+        self.assertContains(response, 'id="add-role-select"')
+        self.assertContains(response, 'id="add-role-button"')
+
+    def test_add_role_control_is_the_entire_grid_when_there_are_no_columns(self):
+        """On a grid with zero real columns (no Song here carries a Requirement or Assignment), "+ Add role" is present and usable."""
+        response = self.client.get(_schedule_url(self.rehearsal))
+
+        self.assertEqual(response.context['matrix'].roles, [])
+        self.assertContains(response, 'id="add-role-select"')
+        self.assertContains(response, 'id="add-role-button"')
+
+    def test_non_admin_sees_no_add_role_control(self):
+        """A non-admin, who gets no edit mode at all, sees no "+ Add role" control either."""
+        self.client.logout()
+        member = PersonFactory(password=PASSWORD, is_admin=False)
+        self.client.login(username=member.email, password=PASSWORD)
+
+        response = self.client.get(_schedule_url(self.rehearsal))
+
+        self.assertNotContains(response, 'id="add-role-select"')
+
+    def test_addable_role_with_no_requirement_or_assignment_is_offered(self):
+        """A Role with neither a Requirement nor an Assignment on this Rehearsal's Songs is offered as addable."""
+        role = RoleFactory(name='Bassist')
+
+        response = self.client.get(_schedule_url(self.rehearsal))
+
+        self.assertContains(response, 'Bassist')
+        self.assertContains(response, f'"id": {role.pk}')
+
+    def test_role_already_a_column_is_not_offered_again(self):
+        """A Role already a column (via Requirement) is not re-offered in the "+ Add role" dropdown."""
+        role = RoleFactory(name='Singer')
+        SongRoleRequirementFactory(song=self.song, role=role, count=1)
+
+        response = self.client.get(_schedule_url(self.rehearsal))
+
+        self.assertNotContains(response, f'"id": {role.pk}')
+
+    def test_saving_an_added_entry_for_a_role_with_no_requirement_creates_no_requirement(self):
+        """Saving a pick in an added column creates the SongRoleAssignment and writes zero SongRoleRequirement rows."""
+        role = RoleFactory(name='Bassist')
+        membership = MembershipFactory(semester=self.semester)
+        requirement_count_before = SongRoleRequirement.objects.count()
+
+        response = self.client.post(
+            _save_url(self.rehearsal),
+            _save_payload(self.rehearsal, added_entries=[(self.song.pk, role.pk, membership.person.pk)]),
+        )
+
+        self.assertRedirects(response, _schedule_url(self.rehearsal))
+        self.assertTrue(SongRoleAssignment.objects.filter(song=self.song, role=role, person=membership.person).exists())
+        self.assertEqual(SongRoleRequirement.objects.count(), requirement_count_before)
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)

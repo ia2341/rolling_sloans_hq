@@ -868,13 +868,20 @@ def assignment_matrix_for(rehearsal) -> AssignmentMatrix:
     via RehearsalSong for a regular Rehearsal, or the live setlist
     (Rehearsal.dress_rehearsal_songs, ADR-0003) for the Dress Rehearsal,
     which carries no RehearsalSong rows and so no per-row start_time.
-    Columns are every Role carrying a SongRoleRequirement on any of those
-    Songs, ordered by name. Each cell lists an AssignmentMatrixEntry per
-    SongRoleAssignment for that (Song, Role) pair, ordered by person name,
-    each carrying is_role_mismatch (issue #208).
+    Columns are every Role carrying a SongRoleRequirement *or* a
+    SongRoleAssignment on any of those Songs, ordered by name (issue #213)
+    — a Requirement is a target, never a cap, so an Assignment with no
+    Requirement is a legal column with no target, not a hidden one. Each
+    cell lists an AssignmentMatrixEntry per SongRoleAssignment for that
+    (Song, Role) pair, ordered by person name, each carrying
+    is_role_mismatch (issue #208).
     """
     songs, start_times = _matrix_songs(rehearsal)
-    roles = list(Role.objects.filter(songrolerequirement__song__in=songs).distinct().order_by('name'))
+    roles = list(
+        Role.objects.filter(
+            Q(songrolerequirement__song__in=songs) | Q(songroleassignment__song__in=songs),
+        ).distinct().order_by('name')
+    )
     entries_by_song_role = _matrix_entries_by_song_role(songs, roles)
     rows = [
         AssignmentMatrixRow(
@@ -903,6 +910,19 @@ def _matrix_songs(rehearsal):
     start_times = {rehearsal_song.song_id: rehearsal_song.start_time for rehearsal_song in rehearsal_songs}
     songs = list(Song.objects.filter(pk__in=start_times.keys()).order_by('position'))
     return songs, start_times
+
+
+def addable_roles_for(matrix: AssignmentMatrix) -> list[Role]:
+    """Return active Roles not already a column in `matrix`, ordered by name (issue #213).
+
+    Backs "+ Add role" on /schedule/'s assignment grid: a client-side-only
+    column add that writes no SongRoleRequirement. Bounded to active Roles
+    the same way RosterAddRoleView's declared-Role choices are, and
+    excludes anything already a column since re-offering it would be a
+    no-op the admin can't tell apart from a fresh addable Role.
+    """
+    existing_role_ids = {role.pk for role in matrix.roles}
+    return list(Role.objects.filter(is_active=True).exclude(pk__in=existing_role_ids).order_by('name'))
 
 
 def _matrix_entries_by_song_role(songs, roles):

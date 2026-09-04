@@ -16,7 +16,6 @@ from scheduling.models import (
     RehearsalSong,
     Role,
     Song,
-    SongRoleAssignment,
 )
 from scheduling.services import (
     CONFLICT_DECLARATION_CHOICES,
@@ -495,25 +494,6 @@ class SongRequirementAddRoleForm(forms.Form):
         if not name:
             raise forms.ValidationError('A Role name is required.')
         return name
-
-
-class SongRoleAssignmentForm(forms.ModelForm):
-    """Assigns a Person to a Role on a Song, restricted to the viewing Semester's Songs (issue #60).
-
-    `is_role_mismatch` is excluded: SongRoleAssignment.save() always
-    recomputes it from the Person's current Membership, so it's never a
-    form input.
-    """
-
-    class Meta:
-        model = SongRoleAssignment
-        fields: ClassVar[list[str]] = ['song', 'role', 'person']
-
-    def __init__(self, *args, songs=None, **kwargs):
-        """Restrict the `song` choices to `songs` (the viewing Semester's) and `role` to active Roles."""
-        super().__init__(*args, **kwargs)
-        self.fields['song'].queryset = songs if songs is not None else Song.objects.none()
-        self.fields['role'].queryset = Role.objects.filter(is_active=True)
 
 
 class RecordingUploadForm(forms.Form):
