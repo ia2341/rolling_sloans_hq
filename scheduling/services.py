@@ -3363,14 +3363,18 @@ class StaleSemesterDefaultsError(ValueError):
 
 
 class SemesterDefaultsReapplyBlockedError(ValueError):
-    """Raised when reapplying a Semester's current timing defaults would overrun a RehearsalSong's slots (issue #291).
+    """Raised when reapplying a Semester's current timing defaults would leave inconsistent data (issue #291).
 
-    `default_song_slot_count` may have shrunk since a Rehearsal's songs were
-    scheduled; reapplying never touches `slot_count`, so a row that used to
-    fit can stop fitting — the same invariant `RehearsalSong.save()` already
-    enforces via `_overruns_rehearsal_window()`. Raised before any commit so
-    the whole bulk reapply writes nothing, rather than applying to some
-    Rehearsals and stopping mid-batch at the first one that overruns.
+    Covers several independent hazards a bulk reapply could otherwise
+    create: the target Semester no longer existing; a default duration too
+    short to leave any playable time once setup/teardown grace is
+    subtracted; a Rehearsal's end_time wrapping past midnight; and
+    `default_song_slot_count` having shrunk since a Rehearsal's songs were
+    scheduled — reapplying never touches `slot_count`, so a row that used
+    to fit can stop fitting, the same invariant `RehearsalSong.save()`
+    already enforces via `_overruns_rehearsal_window()`. Raised before any
+    commit so the whole bulk reapply writes nothing, rather than applying
+    to some Rehearsals and stopping mid-batch at the first one that fails.
     """
 
 
@@ -3413,12 +3417,20 @@ def apply_semester_defaults_reapply(buffer: SemesterDefaultsReapplyBuffer) -> No
     Raises `StaleSemesterDefaultsError` inside the transaction if the
     Semester's `updated_at` no longer matches `buffer.semester_updated_at`.
     Raises `SemesterDefaultsReapplyBlockedError` — see its docstring — if
-    any Rehearsal's end_time would wrap past midnight or any RehearsalSong
-    would overrun the Semester's `default_song_slot_count`; either rolls
-    back whatever this call had already applied.
+    the Semester no longer exists, its default duration leaves no playable
+    time after setup/teardown grace, any Rehearsal's end_time would wrap
+    past midnight, or any RehearsalSong would overrun the Semester's
+    `default_song_slot_count`; any of these rolls back whatever this call
+    had already applied. A declared Conflict Window that stops overlapping
+    a re-timed Rehearsal is deliberately *not* one of these — see
+    `preview_semester_defaults_reapply()`'s quiet Fallout tier, the same
+    tolerance `apply_rehearsal_edits()` already gives a manual edit.
     """
     with transaction.atomic():
-        semester = Semester.objects.select_for_update().get(pk=buffer.semester_id)
+        try:
+            semester = Semester.objects.select_for_update().get(pk=buffer.semester_id)
+        except Semester.DoesNotExist as error:
+            raise SemesterDefaultsReapplyBlockedError('This Semester no longer exists.') from error
         if semester.updated_at != buffer.semester_updated_at:
             raise StaleSemesterDefaultsError(
                 "The Semester's defaults changed while this confirmation was open — reload and try again."
@@ -3433,12 +3445,21 @@ def apply_semester_defaults_reapply(buffer: SemesterDefaultsReapplyBuffer) -> No
                 raise SemesterDefaultsReapplyBlockedError(f'{rehearsal.date}: {error}') from error
             rehearsal.save()
 
+        grace_total = timedelta(
+            minutes=semester.default_setup_grace_minutes + semester.default_teardown_grace_minutes,
+        )
+        playable_duration = timedelta(minutes=semester.default_rehearsal_duration_minutes) - grace_total
+
         for rehearsal in rehearsals:
             ordered_ids = list(
                 RehearsalSong.objects.filter(rehearsal=rehearsal).order_by('order').values_list('pk', flat=True)
             )
             if not ordered_ids:
                 continue
+            if playable_duration <= timedelta(0):
+                raise SemesterDefaultsReapplyBlockedError(
+                    f'{rehearsal.date}: the default duration leaves no playable time after setup/teardown grace.'
+                )
             try:
                 reorder_rehearsal_songs(rehearsal, ordered_ids)
             except ValueError as error:
@@ -3452,9 +3473,10 @@ def apply_semester_defaults_reapply(buffer: SemesterDefaultsReapplyBuffer) -> No
 class SemesterDefaultsFallout:
     """Every observable consequence of reapplying a Semester's timing defaults, computed without committing it (issue #291, ADR-0008).
 
-    `is_blocked` mirrors `apply_semester_defaults_reapply()`'s Validation
-    Errors (stale stamp, a midnight wrap or a slot overrun) with no Fallout
-    computed at all. `is_stale` flags a `Semester.updated_at`
+    `is_blocked` mirrors `apply_semester_defaults_reapply()`'s
+    `SemesterDefaultsReapplyBlockedError` — see its docstring for every
+    condition that raises it — with no Fallout computed at all. `is_stale`
+    flags a `Semester.updated_at`
     mismatch, reported never refused, per ADR-0008. `changed_rehearsal_count`
     is how many upcoming Rehearsals this reapply would touch (0 renders as
     "nothing to reapply" rather than a block). `loud`/`quiet` are the two

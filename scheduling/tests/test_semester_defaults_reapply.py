@@ -138,6 +138,31 @@ class ApplySemesterDefaultsReapplyTests(TestCase):
         rehearsal.refresh_from_db()
         self.assertEqual(rehearsal.setup_grace_minutes, 1)
 
+    def test_a_deleted_semester_blocks_rather_than_500s(self):
+        """A Semester deleted between confirmation and POST is reported as blocked, not a DoesNotExist 500."""
+        semester = SemesterFactory()
+        buffer = self._buffer(semester)
+        semester.delete()
+
+        with self.assertRaises(SemesterDefaultsReapplyBlockedError):
+            apply_semester_defaults_reapply(buffer)
+
+    def test_a_non_positive_playable_duration_blocks_the_whole_reapply(self):
+        """A default duration no longer than the combined setup/teardown grace blocks a Rehearsal with songs to re-time."""
+        semester = SemesterFactory(
+            default_rehearsal_duration_minutes=30,
+            default_setup_grace_minutes=15,
+            default_teardown_grace_minutes=15,
+        )
+        rehearsal = RehearsalFactory(semester=semester, date=TOMORROW, setup_grace_minutes=1)
+        RehearsalSongFactory(rehearsal=rehearsal, order=1, slot_count=1)
+
+        with self.assertRaises(SemesterDefaultsReapplyBlockedError):
+            apply_semester_defaults_reapply(self._buffer(semester))
+
+        rehearsal.refresh_from_db()
+        self.assertEqual(rehearsal.setup_grace_minutes, 1)
+
     def test_a_second_future_rehearsal_does_not_collide_on_unique_order_per_rehearsal(self):
         """Recomputing two Rehearsals' RehearsalSongs in one batch doesn't trip unique_order_per_rehearsal."""
         semester = SemesterFactory(default_rehearsal_duration_minutes=60, default_song_slot_count=2)

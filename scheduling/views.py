@@ -3210,9 +3210,18 @@ class SemesterDefaultsReapplyView(AdminRequiredMixin, View):
         return render(request, self.template_name, {'semester': semester, 'fallout': fallout})
 
     def post(self, request, pk):
-        """Apply the reapply for real, or report a hard block/staleness, and redirect with a message."""
+        """Apply the reapply for real, or report a hard block/staleness, and redirect with a message.
+
+        `parse_datetime()` raises `ValueError` (rather than returning
+        `None`) for an ISO-shaped but invalid timestamp — treated the same
+        as a missing/stale one, since either way the confirmation can't be
+        trusted and the admin should reload and retry.
+        """
         semester = get_object_or_404(Semester, pk=pk)
-        semester_updated_at = parse_datetime(request.POST.get('semester_updated_at', ''))
+        try:
+            semester_updated_at = parse_datetime(request.POST.get('semester_updated_at', ''))
+        except ValueError:
+            semester_updated_at = None
         buffer = SemesterDefaultsReapplyBuffer(semester_id=semester.pk, semester_updated_at=semester_updated_at)
         try:
             apply_semester_defaults_reapply(buffer)

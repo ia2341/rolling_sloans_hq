@@ -149,6 +149,21 @@ class SemesterDefaultsReapplyViewTests(TestCase):
         rehearsal.refresh_from_db()
         self.assertEqual(rehearsal.setup_grace_minutes, 1)
 
+    def test_post_with_an_invalid_timestamp_writes_nothing_and_redirects_back_with_an_error(self):
+        """An ISO-shaped but invalid semester_updated_at is treated as stale, not a parse_datetime 500."""
+        semester = SemesterFactory(default_setup_grace_minutes=20)
+        rehearsal = RehearsalFactory(semester=semester, date=TOMORROW, setup_grace_minutes=1)
+
+        response = self.client.post(
+            reverse('scheduling:manage-semesters-reapply-defaults', args=[semester.pk]),
+            {'semester_updated_at': '2024-02-30T25:61:00'},
+            follow=True,
+        )
+
+        self.assertRedirects(response, reverse('scheduling:manage-semesters-reapply-defaults', args=[semester.pk]))
+        rehearsal.refresh_from_db()
+        self.assertEqual(rehearsal.setup_grace_minutes, 1)
+
     def test_post_blocked_by_a_slot_overrun_writes_nothing_and_redirects_back_with_an_error(self):
         """A shrunk default_song_slot_count that would overrun a RehearsalSong blocks the POST and writes nothing."""
         semester = SemesterFactory(default_song_slot_count=5, default_setup_grace_minutes=20)
