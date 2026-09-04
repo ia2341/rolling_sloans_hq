@@ -4,6 +4,8 @@ Not a `factories.py` — this is test-only infrastructure, not a
 `factory_boy` model factory, so it lives here instead.
 """
 
+from unittest import mock
+
 from django.core import mail
 
 
@@ -20,9 +22,15 @@ def assert_preview_writes_nothing(test_case, preview_url, post_data, *, models_t
     `django.core.mail.outbox`'s length to verify no mail was sent, per ADR
     0008's `on_commit` rule — the base class cannot catch a side effect
     that escapes the database, so this is what actually verifies it.
-    Callers pass a Buffer containing creations, mutations *and* deletions
-    together, per issue #228's acceptance criteria: a helper exercised
-    only against additions proves nothing about the rollback of a delete.
+    Patches `scheduling.services._recording_storage` for the duration and
+    asserts its client's `delete_object` was never called, extended
+    (issue #221) to cover a Preview that would destroy Recordings: the
+    `on_commit()` registration a real Save's deletion relies on is
+    discarded along with everything else `PreviewMixin`'s savepoint rolls
+    back, so the storage backend must never even be asked. Callers pass a
+    Buffer containing creations, mutations *and* deletions together, per
+    issue #228's acceptance criteria: a helper exercised only against
+    additions proves nothing about the rollback of a delete.
 
     Returns the `HttpResponse` from the POST, so a caller can additionally
     assert on rendered content without a second request.
@@ -32,7 +40,9 @@ def assert_preview_writes_nothing(test_case, preview_url, post_data, *, models_t
     mail_count_before = len(mail.outbox)
     stamp_before = semester.updated_at if semester is not None else None
 
-    response = test_case.client.post(preview_url, post_data)
+    with mock.patch('scheduling.services._recording_storage') as recording_storage:
+        response = test_case.client.post(preview_url, post_data)
+        recording_storage.return_value.connection.meta.client.delete_object.assert_not_called()
 
     test_case.assertLess(response.status_code, 300, 'Preview request did not succeed.')
     for (model, filter_kwargs), count_before in zip(checks, counts_before, strict=True):

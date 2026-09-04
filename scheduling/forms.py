@@ -258,17 +258,19 @@ class RehearsalEditFormSetBase(forms.BaseModelFormSet):
 
 
 # `/schedule/edit/`'s buffer: every future-or-today Rehearsal on the viewing Semester, one row each, plus
-# whatever the grid's own "+ Add rehearsal" appends past TOTAL_FORMS later (issue #221). `extra=0`: mirrors
+# whatever the grid's own "+ Add rehearsal" appends past TOTAL_FORMS later. `extra=0`: mirrors
 # `SetlistEditFormSet` — added rows arrive by the client bumping TOTAL_FORMS, not by this factory's `extra`.
+# `can_delete=True` (issue #221) adds each row's `DELETE` field; a hard delete, not a flag, mirroring the
+# setlist grid's own "+ Add row" / delete pairing.
 RehearsalEditFormSet = forms.modelformset_factory(
-    Rehearsal, form=RehearsalEditRowForm, formset=RehearsalEditFormSetBase, extra=0,
+    Rehearsal, form=RehearsalEditRowForm, formset=RehearsalEditFormSetBase, extra=0, can_delete=True,
 )
 
 # Same buffer, `extra=1`: a Semester with zero future Rehearsals still needs one blank row present, so
 # "Edit rehearsals" isn't a dead end on a brand-new Semester (issue #219) — the same reasoning as
 # `SetlistEditEmptyFormSet`.
 RehearsalEditEmptyFormSet = forms.modelformset_factory(
-    Rehearsal, form=RehearsalEditRowForm, formset=RehearsalEditFormSetBase, extra=1,
+    Rehearsal, form=RehearsalEditRowForm, formset=RehearsalEditFormSetBase, extra=1, can_delete=True,
 )
 
 

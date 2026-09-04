@@ -1,9 +1,9 @@
 <div
   id="schedule-edit-grid"
-  x-data="scheduleEdit('{% url 'scheduling:schedule-edit-confirm-remove-song' %}')"
+  x-data="scheduleEdit('{% url 'scheduling:schedule-edit-confirm-destroy' %}', '{% url 'scheduling:schedule-edit-preview' %}')"
   x-init="init()"
 >
-  <form method="post" action="{% url 'scheduling:schedule-edit' %}" id="schedule-edit-form" @submit="onSubmit">
+  <form method="post" action="{% url 'scheduling:schedule-edit' %}" id="schedule-edit-form" @submit="onSubmit" @change="requestFallout">
     {% csrf_token %}
     <input type="hidden" name="schedule_semester_id" value="{{ schedule_semester_id }}">
     <input type="hidden" name="schedule_semester_updated_at" value="{{ schedule_semester_updated_at }}">
@@ -19,19 +19,30 @@
         {% include "scheduling/_schedule_edit_row.html" %}
       {% endfor %}
     </div>
+    <button type="button" id="add-rehearsal-row" @click="addRehearsalRow">+ Add rehearsal</button>
+
+    {# The Fallout region (issue #221, ADR 0002/0008): visually separate from the Validation Error list
+       above, and never a reason a save is blocked -- populated live by requestFallout()'s debounced fetch
+       to /schedule/edit/preview/, which renders the exact same template this div starts empty as. #}
+    <div id="schedule-fallout"></div>
+
     <button type="submit" id="save-rehearsal-changes">Save Changes</button>
     <a href="{% url 'scheduling:schedule' %}?view=all" id="cancel-schedule-edit">Cancel</a>
   </form>
-  <p id="running-order-delete-confirm-error" x-show="deleteError" x-text="deleteError" role="alert"></p>
+  <p id="schedule-destroy-confirm-error" x-show="deleteError" x-text="deleteError" role="alert"></p>
 
   <template id="running-order-empty-form-template">
     {% include "scheduling/_running_order_row.html" with form=songs_formset.empty_form %}
   </template>
 
-  <dialog id="running-order-delete-confirm-dialog" x-ref="deleteDialog">
-    <div id="running-order-delete-confirm-body" x-html="confirmHtml"></div>
-    <button type="button" id="confirm-delete-running-order-songs" @click="confirmDelete">Remove Anyway</button>
-    <button type="button" id="cancel-delete-running-order-songs" @click="cancelDelete">Cancel</button>
+  <template id="schedule-empty-row-template">
+    {% include "scheduling/_schedule_edit_row.html" with form=formset.empty_form %}
+  </template>
+
+  <dialog id="schedule-destroy-confirm-dialog" x-ref="deleteDialog">
+    <div id="schedule-destroy-confirm-body" x-html="confirmHtml"></div>
+    <button type="button" id="confirm-schedule-destroy" @click="confirmDelete">Save Anyway</button>
+    <button type="button" id="cancel-schedule-destroy" @click="cancelDelete">Cancel</button>
   </dialog>
 
   {% if past_rehearsals %}

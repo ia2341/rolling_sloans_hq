@@ -1,15 +1,19 @@
-// The "Edit rehearsals" grid's Running Order sub-grid: drag/keyboard reorder (confined to one Rehearsal),
-// a "+ Add song" picker excluding already-scheduled songs, and an undoable strike-through remove with a
-// Recordings confirmation dialog (issue #220) -- the first consumer of the vendored SortableJS unless #179
-// already claimed that spot, in which case this mirrors setlist_edit.js's shape rather than a second approach.
-// Registered once at page load (this file is loaded outside the htmx-swapped fragment), so Alpine's own
-// mutation observer picks up and initializes the grid whether it arrives as a full page or an htmx swap.
+// The "Edit rehearsals" grid: repeatable "+ Add rehearsal", an undoable strike-through Rehearsal delete,
+// the Running Order sub-grid's drag/keyboard reorder and its own undoable strike-through remove, a pending
+// Dress flag's auto-collapse to a read-only ADR-0003 note, a debounced live Fallout fetch, and the one
+// destructive-save confirmation dialog covering all three destructive causes together (issue #221) --
+// this file's shape before this issue only covered the sub-grid (issue #220); it mirrors setlist_edit.js's
+// and roster_edit.js's patterns throughout rather than inventing new ones. Registered once at page load
+// (this file is loaded outside the htmx-swapped fragment), so Alpine's own mutation observer picks up and
+// initializes the grid whether it arrives as a full page or an htmx swap.
 document.addEventListener('alpine:init', () => {
-  Alpine.data('scheduleEdit', (confirmUrl) => ({
+  Alpine.data('scheduleEdit', (confirmUrl, previewUrl) => ({
     confirmHtml: '',
     confirmUrl,
+    previewUrl,
     deleteError: '',
     sortables: [],
+    falloutTimer: null,
 
     init() {
       this.sortables.forEach((sortable) => sortable.destroy());
@@ -23,6 +27,88 @@ document.addEventListener('alpine:init', () => {
         this.reindex(rows);
         this.refreshAddSongOptions(rows);
       });
+      this.$el.querySelectorAll('.schedule-edit-row').forEach((row) => this.reindexRehearsalRow(row));
+    },
+
+    // Appends a brand-new Rehearsal row at the next never-before-used formset slot -- unlike drag/move
+    // elsewhere in this grid, this is the one place a slot index gets assigned, and it happens exactly
+    // once, at creation (mirrors setlist_edit.js's addRow()). Its end time is prefilled from the
+    // Semester's default duration by the server (RehearsalEditRowForm's placeholder becomes the field's
+    // own value here, since a brand-new row has nothing else to show).
+    addRehearsalRow() {
+      const template = document.getElementById('schedule-empty-row-template');
+      const rows = document.getElementById('schedule-edit-rows');
+      const totalForms = this.$el.querySelector('[name="rehearsal-TOTAL_FORMS"]');
+      const nextIndex = Number(totalForms.value);
+      const nextPrefix = `rehearsal-${nextIndex}`;
+      const clone = template.content.cloneNode(true);
+      clone.querySelectorAll('[name]').forEach((field) => {
+        field.name = field.name.replace('__prefix__', String(nextIndex));
+      });
+      clone.querySelectorAll('[id]').forEach((element) => {
+        element.id = element.id.replace('__prefix__', String(nextIndex));
+      });
+      clone.querySelectorAll('label[for]').forEach((label) => {
+        label.setAttribute('for', label.getAttribute('for').replace('__prefix__', String(nextIndex)));
+      });
+      const rowEl = clone.querySelector('.schedule-edit-row');
+      rowEl.dataset.formPrefix = nextPrefix;
+      const subGrid = clone.querySelector('.running-order-sub-grid');
+      subGrid.dataset.runningOrderFor = nextPrefix;
+      clone.querySelector('.running-order-rows').id = `running-order-rows-${nextPrefix}`;
+      rows.appendChild(clone);
+      totalForms.value = String(nextIndex + 1);
+      this.init();
+      const dateInput = rowEl.querySelector('input[name$="-date"]');
+      if (dateInput) {
+        dateInput.focus();
+      }
+    },
+
+    toggleRehearsalDelete(event) {
+      const row = event.target.closest('.schedule-edit-row');
+      const checkbox = row.querySelector('.schedule-edit-delete-checkbox-wrapper input');
+      checkbox.checked = !checkbox.checked;
+      this.reindexRehearsalRow(row);
+    },
+
+    reindexRehearsalRow(row) {
+      const checkbox = row.querySelector('.schedule-edit-delete-checkbox-wrapper input');
+      const deleted = checkbox.checked;
+      row.classList.toggle('schedule-edit-row-deleted', deleted);
+      const deleteButton = row.querySelector('.schedule-edit-delete-toggle');
+      if (deleteButton) {
+        deleteButton.textContent = deleted ? 'Undo' : 'Remove';
+      }
+    },
+
+    // A pending Dress flag (issue #221) strikes every Running Order row this Rehearsal currently shows
+    // and collapses the sub-grid to a read-only ADR-0003 note naming how many it removes -- un-checking
+    // the flag only un-collapses the note; it never restores the struck rows (Un-flagging simply leaves
+    // the rehearsal empty, per the spec -- reversing the toggle needs no ceremony beyond that).
+    toggleDressCollapse(event) {
+      const checkbox = event.target.closest('.schedule-edit-field-dress').querySelector('input[type=checkbox]');
+      const row = event.target.closest('.schedule-edit-row');
+      const subGrid = row.querySelector('.running-order-sub-grid');
+      const note = row.querySelector('.running-order-dress-note');
+      if (!checkbox.checked) {
+        subGrid.hidden = false;
+        note.style.display = 'none';
+        return;
+      }
+      const rowsContainer = subGrid.querySelector('.running-order-rows');
+      let removedCount = 0;
+      Array.from(rowsContainer.querySelectorAll('.running-order-row')).forEach((songRow) => {
+        const songCheckbox = songRow.querySelector('.running-order-delete-checkbox-wrapper input');
+        if (!songCheckbox.checked) {
+          songCheckbox.checked = true;
+          removedCount += 1;
+        }
+      });
+      this.reindex(rowsContainer);
+      note.textContent = `Songs derive from the Setlist (ADR 0003) — this removes ${removedCount} scheduled song${removedCount === 1 ? '' : 's'}.`;
+      note.style.display = '';
+      subGrid.hidden = true;
     },
 
     // Appends a brand-new Running Order row at the next never-before-used formset slot, into the
@@ -128,39 +214,68 @@ document.addEventListener('alpine:init', () => {
       });
     },
 
-    deletedRehearsalSongIds() {
-      return Array.from(this.$el.querySelectorAll('.running-order-row'))
-        .filter((row) => row.dataset.rehearsalSongId && row.querySelector('.running-order-delete-checkbox-wrapper input').checked)
-        .map((row) => row.dataset.rehearsalSongId);
+    hasPendingDeletions() {
+      const deletedRehearsal = Array.from(this.$el.querySelectorAll('.schedule-edit-delete-checkbox-wrapper input'))
+        .some((checkbox) => checkbox.checked);
+      const deletedRunningOrderRow = Array.from(this.$el.querySelectorAll('.running-order-delete-checkbox-wrapper input'))
+        .some((checkbox) => checkbox.checked);
+      return deletedRehearsal || deletedRunningOrderRow;
     },
 
-    // Fetches the deletion confirmation and only opens the dialog on a successful response -- a failed
-    // request must never let 'Remove Anyway' submit the destructive Save without the admin having seen
-    // the recording/uploader counts, so it surfaces a retryable error instead (mirrors setlist_edit.js).
+    // Debounced live Fallout (issue #221, ADR 0008): fires on any change to the buffer, fetching the
+    // exact same Preview call rendered into the #schedule-fallout region -- a Validation Error banner
+    // and the two Fallout tiers, kept visually separate, never blocking a save.
+    requestFallout() {
+      clearTimeout(this.falloutTimer);
+      this.falloutTimer = setTimeout(() => this.fetchFallout(), 400);
+    },
+
+    async fetchFallout() {
+      const form = document.getElementById('schedule-edit-form');
+      const csrfToken = form.querySelector('[name=csrfmiddlewaretoken]').value;
+      const body = new FormData(form);
+      let response;
+      try {
+        response = await fetch(this.previewUrl, { method: 'POST', headers: { 'X-CSRFToken': csrfToken }, body });
+      } catch (error) {
+        return;
+      }
+      if (!response.ok) {
+        return;
+      }
+      document.getElementById('schedule-fallout').innerHTML = await response.text();
+    },
+
+    // Fetches the destructive-save confirmation (the same Preview call, rendered into a different
+    // template per ADR 0008) and only opens the dialog on a successful response naming at least one
+    // doomed Recording -- a failed request must never let 'Save Anyway' submit the destructive Save
+    // without the admin having seen the counts, so it surfaces a retryable error instead. The dialog
+    // fires once for the whole buffer, across all three destructive causes (mirrors setlist_edit.js
+    // and roster_edit.js's own confirmation gates).
     async onSubmit(event) {
-      const rehearsalSongIds = this.deletedRehearsalSongIds();
-      if (rehearsalSongIds.length === 0) {
+      if (!this.hasPendingDeletions()) {
         return;
       }
       event.preventDefault();
       this.deleteError = '';
       const form = document.getElementById('schedule-edit-form');
       const csrfToken = form.querySelector('[name=csrfmiddlewaretoken]').value;
-      const body = new FormData();
-      rehearsalSongIds.forEach((id) => body.append('rehearsal_song_id', id));
+      const body = new FormData(form);
       let response;
       try {
-        response = await fetch(this.confirmUrl, {
-          method: 'POST',
-          headers: { 'X-CSRFToken': csrfToken },
-          body,
-        });
+        response = await fetch(this.confirmUrl, { method: 'POST', headers: { 'X-CSRFToken': csrfToken }, body });
       } catch (error) {
-        this.deleteError = 'Could not reach the server to confirm removals. Check your connection and click Save Changes again.';
+        this.deleteError = 'Could not reach the server to confirm this Save. Check your connection and click Save Changes again.';
         return;
       }
       if (!response.ok) {
-        this.deleteError = 'Could not load the removal confirmation. Click Save Changes again to retry.';
+        this.deleteError = 'Could not load the Save confirmation. Click Save Changes again to retry.';
+        return;
+      }
+      if (response.status === 204) {
+        // No Recording is doomed after all -- the DOM's struck rows destroy nothing that has actual
+        // audio, so the second (real) submit should proceed without a dialog the admin doesn't need.
+        document.getElementById('schedule-edit-form').submit();
         return;
       }
       this.confirmHtml = await response.text();
