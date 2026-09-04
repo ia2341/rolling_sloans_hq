@@ -54,7 +54,17 @@
               {% endif %}
             </td>
             <td data-testid="standing-overlap-advisory">
-              {% if feasibility.has_standing_overlap %}Still assigned during this window, with no Backup{% endif %}
+              {% if feasibility.has_standing_overlap %}
+                Still assigned during this window, with no Backup
+                <a
+                  href="{% url 'scheduling:schedule-edit' %}#schedule-edit-row-{{ row.conflict.rehearsal_id }}"
+                  data-testid="advisory-running-order-link"
+                >Running Order</a>
+                <a
+                  href="{% url 'scheduling:schedule' %}?rehearsal={{ row.conflict.rehearsal_id }}&backup_song_id={{ feasibility.overlap_song_id }}&backup_role_id={{ feasibility.overlap_role_id }}&covering_for_id={{ row.person.pk }}"
+                  data-testid="advisory-assignment-grid-link"
+                >Assignment grid</a>
+              {% endif %}
             </td>
           </tr>
         {% endfor %}
