@@ -334,10 +334,14 @@ def _build_schedule_context(request, semester, view_mode, rehearsal, error_rehea
         'my_breaks': [],
         'my_availability': None,
         'schedule': None,
+        'cell_standing_assignees': {},
         'addable_roles': [],
         'pending_editing': False,
         'pending_removed_json': '[]',
         'pending_added_json': '[]',
+        'pending_removed_backups_json': '[]',
+        'pending_added_backups_json': '[]',
+        'pending_backup_covering_for_json': '{}',
     }
     if semester is None:
         return context
@@ -365,6 +369,13 @@ def _build_schedule_context(request, semester, view_mode, rehearsal, error_rehea
     matrix = assignment_matrix_for(rehearsal)
     context['matrix'] = matrix
     context['can_edit_assignments'] = request.user.is_admin and assignment_grid_is_editable(rehearsal)
+    context['cell_standing_assignees'] = {
+        f'{row.song.pk}-{cell.role.pk}': [
+            {'id': person.pk, 'name': person.name} for person in cell.standing_assignees
+        ]
+        for row in matrix.rows
+        for cell in row.cells
+    }
     if context['can_edit_assignments']:
         context['addable_roles'] = [
             {'id': role.pk, 'name': role.name} for role in addable_roles_for(matrix)
@@ -2012,7 +2023,7 @@ class AssignmentEditSaveView(AdminRequiredMixin, View):
         semester = get_viewing_semester(request)
         buffer = _build_assignment_buffer(request)
         try:
-            apply_song_role_assignments(buffer, viewing_semester=semester)
+            apply_song_role_assignments(buffer, viewing_semester=semester, rehearsal=rehearsal)
         except (WrongViewingSemesterError, StaleAssignmentSemesterError) as error:
             messages.error(request, str(error))
             return self._render_with_pending_buffer(request, rehearsal, buffer)
@@ -2030,36 +2041,65 @@ class AssignmentEditSaveView(AdminRequiredMixin, View):
         """
         context = _build_schedule_context(request, get_viewing_semester(request), VIEW_NEXT, rehearsal)
         context['pending_editing'] = True
-        context.update(_pending_assignment_buffer_context(buffer.removed_assignment_ids, buffer.added_entries))
+        context.update(
+            _pending_assignment_buffer_context(
+                buffer.removed_assignment_ids,
+                buffer.added_entries,
+                buffer.removed_backup_ids,
+                buffer.added_backup_entries,
+                buffer.backup_covering_for_updates,
+            )
+        )
         return render(request, 'scheduling/schedule.html', context, status=200)
 
 
 def _build_assignment_buffer(request):
-    """Turn the POST body's hidden Semester stamp, removed-id list, and added-entry list into an AssignmentEditBuffer.
+    """Turn the POST body's hidden Semester stamp plus removed/added assignment and Backup lists into an AssignmentEditBuffer.
 
-    Shared by `AssignmentEditSaveView` and `AssignmentPreviewView` (issue
-    #212) — Save and Preview must parse the exact same POST body into the
-    exact same Buffer shape, per ADR 0008.
+    Shared by `AssignmentEditSaveView` and `AssignmentPreviewView` (issues
+    #212, #216) — Save and Preview must parse the exact same POST body into
+    the exact same Buffer shape, per ADR 0008.
     """
     removed_ids = frozenset(_parse_assignment_ids(request.POST.getlist('removed_assignment_id')))
     added_entries = frozenset(_parse_added_entries(request.POST.getlist('added_assignment_entry')))
+    removed_backup_ids = frozenset(_parse_assignment_ids(request.POST.getlist('removed_backup_id')))
+    added_backup_entries = frozenset(_parse_added_backup_entries(request.POST.getlist('added_backup_entry')))
+    backup_covering_for_updates = frozenset(_parse_backup_covering_for_updates(request.POST))
     return AssignmentEditBuffer(
         semester_id=_parse_roster_int(request.POST.get('assignment_semester_id', '')),
         semester_updated_at=parse_datetime(request.POST.get('assignment_semester_updated_at', '')) or timezone.now(),
         removed_assignment_ids=removed_ids,
         added_entries=added_entries,
+        removed_backup_ids=removed_backup_ids,
+        added_backup_entries=added_backup_entries,
+        backup_covering_for_updates=backup_covering_for_updates,
     )
 
 
-def _pending_assignment_buffer_context(removed_ids, added_entries):
-    """Return the two JSON strings that re-seed the Alpine assignment-grid buffer on a blocked save (issue #212).
+def _pending_assignment_buffer_context(
+    removed_ids,
+    added_entries,
+    removed_backup_ids=frozenset(),
+    added_backup_entries=frozenset(),
+    backup_covering_for_updates=frozenset(),
+):
+    """Return the JSON strings that re-seed the Alpine assignment-grid buffer on a blocked save (issue #212, #216).
 
     `added_entries` is `[(song_id, role_id, person_id), ...]`; each
     Person's name is looked up so the re-rendered grid's picked chips show
     a name instead of a bare id, matching what the picker itself would
-    have shown when the pick was first made.
+    have shown when the pick was first made. `added_backup_entries` is the
+    Backup equivalent, `[(rehearsal_song_id, role_id, person_id,
+    covering_for_id), ...]` — its RehearsalSong ids are resolved back to
+    Song ids the same way, since the re-rendered grid's `addedBackupsFor()`
+    filters by Song id, not RehearsalSong id.
+    `backup_covering_for_updates` re-seeds a *persisted* Backup chip's
+    "covering for" `<select>` with the pending pick a blocked save would
+    otherwise silently drop back to the last-saved value.
     """
-    person_ids = {person_id for _, _, person_id in added_entries}
+    person_ids = {person_id for _, _, person_id in added_entries} | {
+        person_id for _, _, person_id, _ in added_backup_entries
+    }
     names_by_id = dict(Person.objects.filter(pk__in=person_ids).values_list('pk', 'name'))
     pending_added = [
         {
@@ -2071,9 +2111,33 @@ def _pending_assignment_buffer_context(removed_ids, added_entries):
         }
         for song_id, role_id, person_id in added_entries
     ]
+    song_id_by_rehearsal_song_id = dict(
+        RehearsalSong.objects.filter(
+            pk__in={rehearsal_song_id for rehearsal_song_id, _, _, _ in added_backup_entries}
+        ).values_list('pk', 'song_id')
+    )
+    pending_added_backups = [
+        {
+            'key': f'{rehearsal_song_id}-{role_id}-{person_id}',
+            'rehearsalSongId': rehearsal_song_id,
+            'songId': song_id_by_rehearsal_song_id.get(rehearsal_song_id),
+            'roleId': role_id,
+            'personId': person_id,
+            'personName': names_by_id.get(person_id, ''),
+            'coveringForId': covering_for_id if covering_for_id is not None else '',
+        }
+        for rehearsal_song_id, role_id, person_id, covering_for_id in added_backup_entries
+    ]
+    pending_backup_covering_for = {
+        str(backup_id): (covering_for_id if covering_for_id is not None else '')
+        for backup_id, covering_for_id in backup_covering_for_updates
+    }
     return {
         'pending_removed_json': json.dumps(list(removed_ids)),
         'pending_added_json': json.dumps(pending_added),
+        'pending_removed_backups_json': json.dumps(list(removed_backup_ids)),
+        'pending_added_backups_json': json.dumps(pending_added_backups),
+        'pending_backup_covering_for_json': json.dumps(pending_backup_covering_for),
     }
 
 
@@ -2126,8 +2190,60 @@ def _parse_added_entries(raw_values):
     return parsed
 
 
+def _parse_added_backup_entries(raw_values):
+    """Return the subset of `raw_values` (each "rehearsal_song_id:role_id:person_id:covering_for_id") that parse, dropping the rest (issue #216).
+
+    The fourth segment is the "covering for" pick and may be empty,
+    meaning no `covering_for` was chosen (ADR-0007: recording it is a
+    choice, never a demand).
+    """
+    parsed = []
+    for raw_value in raw_values:
+        parts = raw_value.split(':')
+        if len(parts) != 4:
+            continue
+        try:
+            rehearsal_song_id, role_id, person_id = (int(part) for part in parts[:3])
+        except ValueError:
+            continue
+        covering_for_raw = parts[3]
+        covering_for_id = None
+        if covering_for_raw:
+            try:
+                covering_for_id = int(covering_for_raw)
+            except ValueError:
+                continue
+        parsed.append((rehearsal_song_id, role_id, person_id, covering_for_id))
+    return parsed
+
+
+def _parse_backup_covering_for_updates(post):
+    """Return (backup_id, covering_for_id) pairs from every `backup_covering_for_<id>` field in `post` (issue #216).
+
+    Each already-persisted Backup chip's "covering for" select carries a
+    field name keyed by that Backup's id, so its current pick resubmits
+    on every save regardless of whether the admin changed it.
+    """
+    parsed = []
+    for key, raw_value in post.items():
+        if not key.startswith('backup_covering_for_'):
+            continue
+        try:
+            backup_id = int(key[len('backup_covering_for_'):])
+        except ValueError:
+            continue
+        covering_for_id = None
+        if raw_value:
+            try:
+                covering_for_id = int(raw_value)
+            except ValueError:
+                continue
+        parsed.append((backup_id, covering_for_id))
+    return parsed
+
+
 class AssignmentPickerView(AdminRequiredMixin, View):
-    """`/schedule/<rehearsal_id>/assignments/picker/<song_id>/<role_id>/`: the "+" popover's fetched-on-open contents (issue #211).
+    """`/schedule/<rehearsal_id>/assignments/picker/<song_id>/<role_id>/`: the "+" popover's fetched-on-open contents (issues #211, #216).
 
     Fetched only when a cell's "+" is clicked, over the existing roster
     read — an unopened cell issues no request, so a twelve-song six-role
@@ -2138,11 +2254,14 @@ class AssignmentPickerView(AdminRequiredMixin, View):
 
     def get(self, request, rehearsal_id, song_id, role_id):
         """Render the picker partial for one (Song, Role) cell on an editable grid, or 404."""
-        _editable_assignment_rehearsal_or_404(request, rehearsal_id)
+        rehearsal = _editable_assignment_rehearsal_or_404(request, rehearsal_id)
         semester = get_viewing_semester(request)
         song = get_object_or_404(_scoped_to_viewing_semester(Song, semester), pk=song_id)
         role = get_object_or_404(Role, pk=role_id)
-        picker = assignment_picker_for(song, role, semester)
+        rehearsal_song = None
+        if not rehearsal.is_full_setlist:
+            rehearsal_song = get_object_or_404(RehearsalSong, rehearsal=rehearsal, song=song)
+        picker = assignment_picker_for(song, role, semester, rehearsal_song=rehearsal_song)
         return render(request, 'scheduling/_assignment_picker.html', {'picker': picker})
 
 

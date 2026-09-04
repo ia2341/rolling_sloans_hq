@@ -6,6 +6,7 @@ from django.db import transaction
 from django.test import TestCase
 
 from scheduling.factories import (
+    BackupFactory,
     ConflictFactory,
     ConflictWindowFactory,
     MembershipFactory,
@@ -112,6 +113,31 @@ class PreviewSongRoleAssignmentsTests(TestCase):
         ))
 
         self.assertEqual(fallout.loud, [])
+
+    def test_full_conflict_on_a_backup_is_loud(self):
+        """A full Conflict on a Person holding only a Backup (no standing assignment) at this Rehearsal is loud."""
+        membership = MembershipFactory(semester=self.semester)
+        ConflictFactory(person=membership.person, rehearsal=self.rehearsal, type=Conflict.FULL_CONFLICT)
+        rehearsal_song = self.song.rehearsalsong_set.get(rehearsal=self.rehearsal)
+        BackupFactory(rehearsal_song=rehearsal_song, role=self.role, person=membership.person)
+
+        fallout = self._preview(self._buffer())
+
+        self.assertFalse(fallout.is_blocked)
+        self.assertTrue(any(membership.person.name in line for line in fallout.loud))
+
+    def test_a_person_with_both_a_standing_assignment_and_a_backup_on_the_same_slot_is_warned_only_once(self):
+        """A full-Conflict Person holding both a standing assignment and a Backup for the same slot gets one loud line."""
+        membership = MembershipFactory(semester=self.semester)
+        ConflictFactory(person=membership.person, rehearsal=self.rehearsal, type=Conflict.FULL_CONFLICT)
+        SongRoleAssignmentFactory(song=self.song, role=self.role, person=membership.person)
+        rehearsal_song = self.song.rehearsalsong_set.get(rehearsal=self.rehearsal)
+        other_role = RoleFactory(name='Backup Singer')
+        BackupFactory(rehearsal_song=rehearsal_song, role=other_role, person=membership.person)
+
+        fallout = self._preview(self._buffer())
+
+        self.assertEqual(sum(membership.person.name in line for line in fallout.loud), 1)
 
     def test_unfilled_role_requirement_is_quiet(self):
         """Removing the sole assignment leaves the Song's Role Requirement unfilled, reported in the quiet tier."""

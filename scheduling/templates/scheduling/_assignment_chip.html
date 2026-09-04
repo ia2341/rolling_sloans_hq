@@ -1,14 +1,45 @@
-{% if can_edit_assignments %}
-  <span class="assignment-chip" x-show="!removed.includes({{ entry.id }})">
-    <span{% if entry.is_role_mismatch %} class="role-mismatch"{% endif %}>{{ entry.person.name }}</span>
-    <button
-      type="button"
-      class="assignment-chip-remove"
-      x-show="editing"
-      @click="removed.push({{ entry.id }})"
-      aria-label="Remove {{ entry.person.name }}"
-    >&times;</button>
+{% if entry.kind == 'backup' %}
+  <span
+    class="assignment-chip backup-chip{% if entry.is_role_mismatch %} role-mismatch{% endif %}"
+    {% if can_edit_assignments %}x-show="!removedBackups.includes({{ entry.id }})"{% endif %}
+  >
+    {{ entry.person.name }} (backup)
+    {% if request.user.is_admin and entry.covering_for %}
+      <span class="backup-covering-for">covering for {{ entry.covering_for.name }}</span>
+    {% endif %}
+    {% if can_edit_assignments %}
+      <select name="backup_covering_for_{{ entry.id }}" aria-label="Covering for {{ entry.person.name }}">
+        <option value="">&mdash;</option>
+        {% for assignee in cell.standing_assignees %}
+          {% if assignee.pk != entry.person.pk %}
+            <option value="{{ assignee.pk }}"{% if entry.covering_for.pk == assignee.pk %} selected{% endif %}>{{ assignee.name }}</option>
+          {% endif %}
+        {% endfor %}
+      </select>
+    {% endif %}
+    {% if can_edit_assignments %}
+      <button
+        type="button"
+        class="assignment-chip-remove"
+        x-show="editing"
+        @click="removedBackups.push({{ entry.id }})"
+        aria-label="Remove {{ entry.person.name }}"
+      >&times;</button>
+    {% endif %}
   </span>
 {% else %}
-  <span{% if entry.is_role_mismatch %} class="role-mismatch"{% endif %}>{{ entry.person.name }}</span>
+  {% if can_edit_assignments %}
+    <span class="assignment-chip" x-show="!removed.includes({{ entry.id }})">
+      <span{% if entry.is_role_mismatch %} class="role-mismatch"{% endif %}>{{ entry.person.name }}</span>
+      <button
+        type="button"
+        class="assignment-chip-remove"
+        x-show="editing"
+        @click="removed.push({{ entry.id }})"
+        aria-label="Remove {{ entry.person.name }}"
+      >&times;</button>
+    </span>
+  {% else %}
+    <span{% if entry.is_role_mismatch %} class="role-mismatch"{% endif %}>{{ entry.person.name }}</span>
+  {% endif %}
 {% endif %}

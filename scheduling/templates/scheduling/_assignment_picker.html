@@ -35,3 +35,58 @@
 {% if not picker.declared and not picker.others %}
   <p>No rostered members are available to add here.</p>
 {% endif %}
+
+<hr>
+
+<p><strong>Backup (this rehearsal only)</strong></p>
+
+{% if picker.rehearsal_song_id is None %}
+  <p>
+    The Dress Rehearsal has no per-song schedule of its own — it plays the live setlist — so there's no rehearsal
+    slot here to anchor a one-evening Backup to.
+  </p>
+{% else %}
+  <p>Covers this rehearsal only; the standing assignment above is unaffected.</p>
+
+  {% if picker.backup_declared %}
+    <ul class="assignment-picker-list">
+      {% for option in picker.backup_declared %}
+        <li>
+          <button
+            type="button"
+            data-backup-picker-person-id="{{ option.person.pk }}"
+            data-backup-picker-person-name="{{ option.person.name }}"
+          >
+            {{ option.person.name }}
+          </button>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p>No rostered member has declared {{ picker.role.name }} yet.</p>
+  {% endif %}
+
+  {% if picker.backup_others %}
+    <details>
+      <summary>Show all members</summary>
+      <ul class="assignment-picker-list">
+        {% for option in picker.backup_others %}
+          <li>
+            <button
+              type="button"
+              data-backup-picker-person-id="{{ option.person.pk }}"
+              data-backup-picker-person-name="{{ option.person.name }}"
+            >
+              {{ option.person.name }}
+            </button>
+            <span class="role-mismatch">Has not declared {{ picker.role.name }}</span>
+          </li>
+        {% endfor %}
+      </ul>
+    </details>
+  {% endif %}
+
+  {% if not picker.backup_declared and not picker.backup_others %}
+    <p>No rostered members are available to add as a Backup here.</p>
+  {% endif %}
+{% endif %}

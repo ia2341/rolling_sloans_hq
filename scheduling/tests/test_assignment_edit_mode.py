@@ -573,13 +573,20 @@ class AssignmentPickerViewTests(TestCase):
         self.assertNotContains(response, 'Outsider Olga')
 
     def test_an_already_assigned_person_is_not_reoffered(self):
-        """A Person already assigned to this exact (Song, Role) cell isn't offered again."""
+        """A Person already assigned to this exact (Song, Role) cell isn't offered again in the 'Assigned' section.
+
+        They may still appear in the separate "Backup (this rehearsal
+        only)" section (issue #216) — a standing assignee is not barred
+        from also covering their own cell for one evening — so this
+        checks the "Assigned" section's picker attribute specifically,
+        not the person's name anywhere on the page.
+        """
         already = SongRoleAssignmentFactory(song=self.song, role=self.role)
         MembershipFactory(person=already.person, semester=self.semester)
 
         response = self.client.get(_picker_url(self.rehearsal, self.song, self.role))
 
-        self.assertNotContains(response, already.person.name)
+        self.assertNotContains(response, f'data-picker-person-id="{already.person.pk}"')
 
     def test_picker_get_on_a_past_rehearsal_404s(self):
         """A hand-crafted picker fetch against a non-editable (past-dated) Rehearsal's grid 404s."""
