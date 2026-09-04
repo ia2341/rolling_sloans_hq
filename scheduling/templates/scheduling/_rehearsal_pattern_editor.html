@@ -1,0 +1,49 @@
+<!-- The Rehearsal Pattern editor's fields (issue #222): the generation range, a repeatable Rehearsal Time
+     list, and a repeatable Skip Date list. Re-rendered as-is by both RehearsalPatternModalView's GET and
+     RehearsalPatternSaveView's POST, so a rejected save preserves every submitted value. -->
+<div id="rehearsal-pattern-editor">
+  {% if save_error %}
+    <div class="rs-fallout-blocked" role="alert" id="rehearsal-pattern-save-error"><p>{{ save_error }}</p></div>
+  {% endif %}
+
+  <fieldset>
+    <legend>Generation range</legend>
+    {{ range_form.non_field_errors }}
+    <label for="{{ range_form.start_date.id_for_label }}">Start date</label>
+    {{ range_form.start_date }}
+    {{ range_form.start_date.errors }}
+    <label for="{{ range_form.end_date.id_for_label }}">End date</label>
+    {{ range_form.end_date }}
+    {{ range_form.end_date.errors }}
+  </fieldset>
+
+  <fieldset id="rehearsal-time-rows">
+    <legend>Rehearsal Times</legend>
+    {{ time_formset.management_form }}
+    {{ time_formset.non_form_errors }}
+    <div id="rehearsal-time-rows-list">
+      {% for form in time_formset %}
+        {% include "scheduling/_rehearsal_time_row.html" %}
+      {% endfor %}
+    </div>
+    <button type="button" id="add-rehearsal-time-row" @click="addRehearsalTimeRow">+ Add Rehearsal Time</button>
+    <template id="rehearsal-time-empty-row-template">
+      {% include "scheduling/_rehearsal_time_row.html" with form=time_formset.empty_form %}
+    </template>
+  </fieldset>
+
+  <fieldset id="skip-date-rows">
+    <legend>Skip Dates</legend>
+    {{ skip_formset.management_form }}
+    {{ skip_formset.non_form_errors }}
+    <div id="skip-date-rows-list">
+      {% for form in skip_formset %}
+        {% include "scheduling/_skip_date_row.html" %}
+      {% endfor %}
+    </div>
+    <button type="button" id="add-skip-date-row" @click="addSkipDateRow">+ Add Skip Date</button>
+    <template id="skip-date-empty-row-template">
+      {% include "scheduling/_skip_date_row.html" with form=skip_formset.empty_form %}
+    </template>
+  </fieldset>
+</div>

@@ -7,10 +7,11 @@
 // (this file is loaded outside the htmx-swapped fragment), so Alpine's own mutation observer picks up and
 // initializes the grid whether it arrives as a full page or an htmx swap.
 document.addEventListener('alpine:init', () => {
-  Alpine.data('scheduleEdit', (confirmUrl, previewUrl) => ({
+  Alpine.data('scheduleEdit', (confirmUrl, previewUrl, generateModalUrl) => ({
     confirmHtml: '',
     confirmUrl,
     previewUrl,
+    generateModalUrl,
     deleteError: '',
     sortables: [],
     falloutTimer: null,
@@ -55,6 +56,18 @@ document.addEventListener('alpine:init', () => {
     // Semester's default duration by the server (RehearsalEditRowForm's placeholder becomes the field's
     // own value here, since a brand-new row has nothing else to show).
     addRehearsalRow() {
+      const rowEl = this._appendRehearsalRow();
+      this.init();
+      const dateInput = rowEl.querySelector('input[name$="-date"]');
+      if (dateInput) {
+        dateInput.focus();
+      }
+    },
+
+    // Appends a brand-new Rehearsal row without focusing it -- the shared innards of addRehearsalRow()
+    // (the toolbar's "+ Add rehearsal" click) and injectGeneratedCreate() (issue #222's staging modal's
+    // Apply, which appends several rows in a row and must not steal focus for each one).
+    _appendRehearsalRow() {
       const template = document.getElementById('schedule-empty-row-template');
       const rows = document.getElementById('schedule-edit-rows');
       const totalForms = this.$el.querySelector('[name="rehearsal-TOTAL_FORMS"]');
@@ -77,11 +90,97 @@ document.addEventListener('alpine:init', () => {
       clone.querySelector('.running-order-rows').id = `running-order-rows-${nextPrefix}`;
       rows.appendChild(clone);
       totalForms.value = String(nextIndex + 1);
-      this.init();
-      const dateInput = rowEl.querySelector('input[name$="-date"]');
-      if (dateInput) {
-        dateInput.focus();
+      return document.getElementById('schedule-edit-rows').lastElementChild;
+    },
+
+    // Fetches the "Generate rehearsal dates" staging modal (issue #222) into its container the first time
+    // it's opened, then shows it -- a subsequent open reuses the same fetched dialog rather than
+    // re-fetching, so a Preview an admin already ran survives closing and reopening the modal by accident.
+    async openGenerateModal() {
+      const container = document.getElementById('generate-modal-container');
+      if (!container.querySelector('dialog')) {
+        const response = await fetch(this.generateModalUrl);
+        if (!response.ok) {
+          return;
+        }
+        container.innerHTML = await response.text();
       }
+      container.querySelector('dialog').showModal();
+    },
+
+    // Returns true when `row`'s date/start/end no longer match what the page loaded with -- an admin's
+    // own hand-edit of a Rehearsal the generation diff also wants to touch. Read from the row's own
+    // data-original-* attributes rather than a second fetch, since the Buffer this compares against is
+    // exactly what's on-screen right now (issue #222).
+    _isRowDirty(row) {
+      const dateInput = row.querySelector('input[name$="-date"]');
+      const startInput = row.querySelector('input[name$="-start_time"]');
+      const endInput = row.querySelector('input[name$="-end_time"]');
+      return (
+        dateInput.value !== row.dataset.originalDate
+        || startInput.value !== row.dataset.originalStartTime
+        || endInput.value !== row.dataset.originalEndTime
+      );
+    },
+
+    // Appends a brand-new Rehearsal row prefilled from one ticked Create outcome (issue #222's staging
+    // modal Apply) -- date/start/end/Dress land straight on the freshly-appended row's own inputs, which
+    // mirrors exactly what a hand-typed "+ Add rehearsal" row would carry into the Pending Buffer.
+    // Reconciles onto an already-pending row for the same date instead of appending a second one: Preview
+    // only sees saved Rehearsals, so a date an admin already hand-added to the Buffer looks like a Create
+    // to it too, and the schedule formset itself rejects two rows sharing a date (issue #222 review).
+    injectGeneratedCreate({ date, startTime, endTime, isDressRehearsal }) {
+      const rowEl = this._findPendingRowByDate(date) || this._appendRehearsalRow();
+      rowEl.querySelector('input[name$="-date"]').value = date;
+      rowEl.querySelector('input[name$="-start_time"]').value = startTime;
+      rowEl.querySelector('input[name$="-end_time"]').value = endTime;
+      if (isDressRehearsal) {
+        rowEl.querySelector('input[name$="-is_full_setlist"]').checked = true;
+      }
+    },
+
+    // Finds a grid row -- saved or freshly hand-added -- not marked for deletion whose date input already
+    // matches `date`, so injectGeneratedCreate() can reconcile onto it rather than duplicate it.
+    _findPendingRowByDate(date) {
+      return Array.from(document.querySelectorAll('.schedule-edit-row')).find((row) => {
+        const dateInput = row.querySelector('input[name$="-date"]');
+        const deleteCheckbox = row.querySelector('.schedule-edit-delete-checkbox-wrapper input');
+        return dateInput.value === date && !(deleteCheckbox && deleteCheckbox.checked);
+      });
+    },
+
+    // Re-times an existing Rehearsal row already on the grid to a ticked outcome's new hours (issue #222)
+    // -- refuses (returning false) when the admin already hand-edited this exact row, so Apply can never
+    // silently clobber an in-progress edit; the caller reports that refusal, this method only detects it.
+    injectGeneratedRetime({ rehearsalId, startTime, endTime }) {
+      const row = document.getElementById(`schedule-edit-row-${rehearsalId}`);
+      if (!row || this._isRowDirty(row)) {
+        return false;
+      }
+      row.querySelector('input[name$="-start_time"]').value = startTime;
+      row.querySelector('input[name$="-end_time"]').value = endTime;
+      return true;
+    },
+
+    // Marks an existing Rehearsal row's Remove checkbox for a ticked Orphan-delete outcome (issue #222)
+    // -- refuses (returning false) the same way injectGeneratedRetime() does, for the same reason.
+    injectGeneratedOrphanDelete({ rehearsalId }) {
+      const row = document.getElementById(`schedule-edit-row-${rehearsalId}`);
+      if (!row || this._isRowDirty(row)) {
+        return false;
+      }
+      const checkbox = row.querySelector('.schedule-edit-delete-checkbox-wrapper input');
+      checkbox.checked = true;
+      this.reindexRehearsalRow(row);
+      return true;
+    },
+
+    // Runs after rehearsal_generation.js's Apply has injected every ticked outcome -- re-wires SortableJS
+    // and re-derives visible numbering on the rows Apply appended, and refreshes the live Fallout the
+    // same as any other buffer change would.
+    afterApplyGeneration() {
+      this.init();
+      this.requestFallout();
     },
 
     toggleRehearsalDelete(event) {

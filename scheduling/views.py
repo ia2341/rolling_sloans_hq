@@ -27,11 +27,14 @@ from identity.services import invite_person
 from scheduling.forms import (
     AdjudicationFormSet,
     DeclareConflictForm,
+    GenerationRangeForm,
     MembershipRolesForm,
     RecordingUploadForm,
     RehearsalEditEmptyFormSet,
     RehearsalEditFormSet,
     RehearsalForm,
+    RehearsalPatternRangeForm,
+    RehearsalTimeFormSet,
     RosterAddFormSet,
     RosterAddRoleForm,
     RosterAddRowForm,
@@ -42,6 +45,7 @@ from scheduling.forms import (
     SemesterSetupForm,
     SetlistEditEmptyFormSet,
     SetlistEditFormSet,
+    SkipDateFormSet,
     SongRequirementAddFormSet,
     SongRequirementAddRoleForm,
     SongRequirementAddRowForm,
@@ -53,6 +57,7 @@ from scheduling.models import (
     Membership,
     Recording,
     Rehearsal,
+    RehearsalPattern,
     RehearsalSong,
     Role,
     Semester,
@@ -72,11 +77,15 @@ from scheduling.services import (
     RecordingUploadError,
     RehearsalEditBuffer,
     RehearsalEditRow,
+    RehearsalPatternCollisionError,
+    RehearsalPatternInput,
+    RehearsalTimeInput,
     RosterEditBuffer,
     RosterEditEntry,
     RunningOrderRow,
     RunningOrderValidationError,
     SelfRemovalError,
+    SkipDateInput,
     SongRoleRequirementBuffer,
     SongRoleRequirementEntry,
     StaleAdjudicationSemesterError,
@@ -121,6 +130,7 @@ from scheduling.services import (
     performers_for,
     preview_adjudications,
     preview_rehearsal_edits,
+    preview_rehearsal_generation,
     preview_roster_edits,
     preview_song_role_assignments,
     publish_semester,
@@ -132,6 +142,7 @@ from scheduling.services import (
     reorder_songs,
     reserve_recording_upload,
     roster_for,
+    save_rehearsal_pattern,
     semester_deletion_summary,
     semester_options_for,
     set_viewing_semester,
@@ -646,6 +657,177 @@ class ScheduleEditDestroyConfirmView(PreviewMixin, AdminRequiredMixin, View):
         if fallout.is_blocked or not fallout.doomed_recording_groups:
             return HttpResponse(status=204)
         return render(request, self.template_name, {'groups': fallout.doomed_recording_groups})
+
+
+def _build_rehearsal_pattern_forms(post_data):
+    """Bind the Pattern editor's range/Rehearsal Time/Skip Date forms to `post_data`, prefixed to match the modal's template.
+
+    Shared by `RehearsalPatternSaveView` and `RehearsalGenerationPreviewView`
+    so both bind the exact same three forms the same way (ADR-0008's "one
+    parsing path" reasoning, generalized to a surface with no `apply_*()`).
+    """
+    return (
+        RehearsalPatternRangeForm(post_data, prefix='range'),
+        RehearsalTimeFormSet(post_data, prefix='rehearsal-time'),
+        SkipDateFormSet(post_data, prefix='skip-date'),
+    )
+
+
+def _rehearsal_pattern_input_from_forms(range_form, time_formset, skip_formset):
+    """Build a RehearsalPatternInput from the three already-validated Pattern editor forms (issue #222)."""
+    rehearsal_times = [
+        RehearsalTimeInput(
+            day_of_week=cleaned_data['day_of_week'],
+            start_time=cleaned_data['start_time'],
+            end_time=cleaned_data['end_time'],
+        )
+        for form in time_formset.forms
+        if (cleaned_data := form.cleaned_data) and not cleaned_data.get('DELETE')
+    ]
+    skip_dates = [
+        SkipDateInput(start_date=cleaned_data['start_date'], end_date=cleaned_data.get('end_date'))
+        for form in skip_formset.forms
+        if (cleaned_data := form.cleaned_data) and not cleaned_data.get('DELETE')
+    ]
+    return RehearsalPatternInput(
+        start_date=range_form.cleaned_data['start_date'],
+        end_date=range_form.cleaned_data['end_date'],
+        rehearsal_times=rehearsal_times,
+        skip_dates=skip_dates,
+    )
+
+
+def _rehearsal_pattern_formset_errors(*forms_and_formsets):
+    """Return a flat list of 'Row N (field): message' strings for every submitted Pattern editor form/formset's errors."""
+    errors = []
+    for form_or_formset in forms_and_formsets:
+        if hasattr(form_or_formset, 'forms'):
+            for index, form in enumerate(form_or_formset.forms):
+                for field, field_errors in form.errors.items():
+                    for message in field_errors:
+                        errors.append(f'Row {index + 1} ({field}): {message}')
+            errors.extend(form_or_formset.non_form_errors())
+        else:
+            for field, field_errors in form_or_formset.errors.items():
+                for message in field_errors:
+                    errors.append(f'{field}: {message}')
+    return errors
+
+
+class RehearsalPatternModalView(AdminRequiredMixin, View):
+    """`/schedule/edit/generate/`: opens the "Generate rehearsal dates" staging modal over `/schedule/edit/` (issue #222).
+
+    GET-only: renders the Pattern editor prefilled from the viewing
+    Semester's saved `RehearsalPattern` (its Rehearsal Times and Skip
+    Dates), or blank fields if none exists yet. Opening the modal commits
+    nothing on its own — the Pattern is written only by
+    `RehearsalPatternSaveView`, called by the modal's own "Preview" action,
+    never merely by opening it (CONTEXT.md: "editing a Pattern changes
+    nothing until it is used to generate").
+    """
+
+    template_name = 'scheduling/_rehearsal_pattern_modal.html'
+
+    def get(self, request):
+        """Render the modal, prefilled from the Semester's saved Pattern if one exists."""
+        semester = get_viewing_semester(request)
+        if semester is None:
+            return HttpResponseBadRequest('No Semester is being edited.')
+        pattern = RehearsalPattern.objects.filter(semester=semester).prefetch_related(
+            'rehearsal_times', 'skip_dates',
+        ).first()
+        range_form = RehearsalPatternRangeForm(
+            prefix='range',
+            initial={
+                'start_date': pattern.start_date if pattern else None,
+                'end_date': pattern.end_date if pattern else None,
+            },
+        )
+        time_initial = [
+            {'day_of_week': rehearsal_time.day_of_week, 'start_time': rehearsal_time.start_time, 'end_time': rehearsal_time.end_time}
+            for rehearsal_time in (pattern.rehearsal_times.all() if pattern else [])
+        ]
+        skip_initial = [
+            {'start_date': skip_date.start_date, 'end_date': skip_date.end_date}
+            for skip_date in (pattern.skip_dates.all() if pattern else [])
+        ]
+        return render(request, self.template_name, {
+            'semester': semester,
+            'range_form': range_form,
+            'time_formset': RehearsalTimeFormSet(initial=time_initial, prefix='rehearsal-time'),
+            'skip_formset': SkipDateFormSet(initial=skip_initial, prefix='skip-date'),
+            'narrow_range_form': GenerationRangeForm(prefix='narrow'),
+            'save_error': '',
+        })
+
+
+class RehearsalPatternSaveView(AdminRequiredMixin, View):
+    """`/schedule/edit/generate/save/`: persists the modal's current Pattern editor state as `semester`'s RehearsalPattern (issue #222).
+
+    A POST-only sibling of the modal, never surfaced to the admin as its
+    own action — the modal's "Preview" button calls this first, so the
+    Pattern is remembered between runs, and only calls
+    `RehearsalGenerationPreviewView` if this succeeds. Writes no Rehearsal
+    and never touches the Pending Buffer: the only write here is
+    `save_rehearsal_pattern()`'s.
+    """
+
+    def post(self, request):
+        """Save the submitted Pattern, or re-render the editor with its Validation Errors / collision message."""
+        semester = get_viewing_semester(request)
+        if semester is None:
+            return HttpResponseBadRequest('No Semester is being edited.')
+        range_form, time_formset, skip_formset = _build_rehearsal_pattern_forms(request.POST)
+        context = {
+            'semester': semester, 'range_form': range_form,
+            'time_formset': time_formset, 'skip_formset': skip_formset, 'save_error': '',
+        }
+        if not (range_form.is_valid() and time_formset.is_valid() and skip_formset.is_valid()):
+            return render(request, 'scheduling/_rehearsal_pattern_editor.html', context)
+        pattern_input = _rehearsal_pattern_input_from_forms(range_form, time_formset, skip_formset)
+        try:
+            save_rehearsal_pattern(semester, pattern_input)
+        except RehearsalPatternCollisionError as error:
+            context['save_error'] = str(error)
+            return render(request, 'scheduling/_rehearsal_pattern_editor.html', context)
+        return render(request, 'scheduling/_rehearsal_pattern_editor.html', context)
+
+
+class RehearsalGenerationPreviewView(AdminRequiredMixin, View):
+    """`/schedule/edit/generate/preview/`: renders the four-bucket diff for the modal's current Pattern editor state (issue #222).
+
+    A pure read — `preview_rehearsal_generation()` writes nothing at all,
+    unlike ADR-0008's other `preview_*()` functions, so this view opens no
+    transaction and rolls nothing back; `PreviewMixin` exists specifically
+    for the run-the-real-write-then-roll-it-back shape this surface has no
+    use for, since there is no `apply_rehearsal_generation` to run. The
+    Pattern itself is never saved here — `RehearsalPatternSaveView` owns
+    that, called first by the modal's own "Preview" action.
+
+    Renders `scheduling/_rehearsal_generation_diff.html`, the same partial
+    the semester-setup wizard (#125/#198) will reuse as a step, per this
+    issue's spec.
+    """
+
+    def post(self, request):
+        """Render the four-bucket diff for the submitted Pattern editor state, or its Validation Errors."""
+        semester = get_viewing_semester(request)
+        if semester is None:
+            return HttpResponseBadRequest('No Semester is being edited.')
+        range_form, time_formset, skip_formset = _build_rehearsal_pattern_forms(request.POST)
+        narrow_range_form = GenerationRangeForm(request.POST, prefix='narrow')
+        if not (
+            range_form.is_valid() and time_formset.is_valid()
+            and skip_formset.is_valid() and narrow_range_form.is_valid()
+        ):
+            errors = _rehearsal_pattern_formset_errors(range_form, time_formset, skip_formset, narrow_range_form)
+            return render(request, 'scheduling/_rehearsal_generation_diff.html', {'diff': None, 'formset_errors': errors})
+        pattern_input = _rehearsal_pattern_input_from_forms(range_form, time_formset, skip_formset)
+        try:
+            diff = preview_rehearsal_generation(semester, pattern_input, date_range=narrow_range_form.as_date_range())
+        except RehearsalPatternCollisionError as error:
+            return render(request, 'scheduling/_rehearsal_generation_diff.html', {'diff': None, 'formset_errors': [str(error)]})
+        return render(request, 'scheduling/_rehearsal_generation_diff.html', {'diff': diff, 'formset_errors': []})
 
 
 def _running_order_initial(formset, future_rehearsals):

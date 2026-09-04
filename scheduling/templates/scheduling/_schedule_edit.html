@@ -1,6 +1,10 @@
 <div
   id="schedule-edit-grid"
-  x-data="scheduleEdit('{% url 'scheduling:schedule-edit-confirm-destroy' %}', '{% url 'scheduling:schedule-edit-preview' %}')"
+  x-data="scheduleEdit(
+    '{% url 'scheduling:schedule-edit-confirm-destroy' %}',
+    '{% url 'scheduling:schedule-edit-preview' %}',
+    '{% url 'scheduling:schedule-edit-generate' %}'
+  )"
   x-init="init()"
 >
   <form method="post" action="{% url 'scheduling:schedule-edit' %}" id="schedule-edit-form" @submit="onSubmit" @change="requestFallout">
@@ -20,6 +24,7 @@
       {% endfor %}
     </div>
     <button type="button" id="add-rehearsal-row" @click="addRehearsalRow">+ Add rehearsal</button>
+    <button type="button" id="open-generate-modal" @click="openGenerateModal">Generate rehearsal dates</button>
 
     {# The Fallout region (issue #221, ADR 0002/0008): visually separate from the Validation Error list
        above, and never a reason a save is blocked -- populated live by requestFallout()'s debounced fetch
@@ -30,6 +35,10 @@
     <a href="{% url 'scheduling:schedule' %}?view=all" id="cancel-schedule-edit">Cancel</a>
   </form>
   <p id="schedule-destroy-confirm-error" x-show="deleteError" x-text="deleteError" role="alert"></p>
+
+  {# The "Generate rehearsal dates" staging modal (issue #222) is fetched lazily into this container the
+     first time it's opened, rather than rendered eagerly on every page load. #}
+  <div id="generate-modal-container"></div>
 
   <template id="running-order-empty-form-template">
     {% include "scheduling/_running_order_row.html" with form=songs_formset.empty_form %}
