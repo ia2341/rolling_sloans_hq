@@ -11,6 +11,7 @@ from pathlib import Path
 
 import environ
 from django.core.exceptions import ImproperlyConfigured
+from django.urls import reverse_lazy
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -96,6 +97,24 @@ DATABASES = {
 # is a placeholder pointed at by this setting now; its real fields and
 # behavior are designed in the Identity & Auth spec (issue #5).
 AUTH_USER_MODEL = 'identity.Person'
+
+
+# Auth entry/exit points (issue #296).
+#
+# LOGIN_URL is pinned explicitly rather than left to Django's default
+# ('/accounts/login/'), which happens to match this project's login route
+# today only by coincidence — an unrelated rename of that route would
+# otherwise silently break every LoginRequiredMixin bounce. LOGIN_REDIRECT_URL
+# is Django's fallback destination for a next-less login (no ?next= in the
+# querystring); left unset it defaults to '/accounts/profile/', a route this
+# project doesn't have, so every next-less login — notably a brand-new
+# member's very first login right after setting their password — 404ed.
+# Both are derived from route names, via reverse_lazy (not reverse: this
+# module is imported before the URLconf is loaded, so a module-scope
+# reverse() call would raise), so a route rename keeps these honest instead
+# of drifting from a hardcoded URL literal.
+LOGIN_URL = reverse_lazy('identity:login')
+LOGIN_REDIRECT_URL = reverse_lazy('scheduling:overview')
 
 
 # Password validation
