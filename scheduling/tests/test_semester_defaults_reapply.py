@@ -67,7 +67,14 @@ class ApplySemesterDefaultsReapplyTests(TestCase):
         self.assertEqual(past.setup_grace_minutes, 1)
 
     def test_recomputes_rehearsal_song_slot_times_against_the_new_window(self):
-        """Shrinking the Semester's default duration re-times a surviving RehearsalSong's slot."""
+        """Shrinking the Semester's default duration re-times a surviving RehearsalSong's slot.
+
+        The Semester's default setup/teardown grace (15+15=30 min) is
+        subtracted from the reapplied 60-minute window before dividing by
+        slot count, and the first slot starts setup_grace_minutes after
+        start_time (issue #292) — so a 2-slot window yields 15-minute slots
+        starting at 18:15, not a naive 30-minute slot starting at 18:00.
+        """
         semester = SemesterFactory(default_rehearsal_duration_minutes=60, default_song_slot_count=2)
         rehearsal = RehearsalFactory(semester=semester, date=TOMORROW, start_time=time(18, 0), end_time=time(21, 0))
         song = RehearsalSongFactory(rehearsal=rehearsal, order=1, slot_count=1)
@@ -75,7 +82,7 @@ class ApplySemesterDefaultsReapplyTests(TestCase):
         apply_semester_defaults_reapply(self._buffer(semester))
 
         song.refresh_from_db()
-        self.assertEqual((song.start_time, song.end_time), (time(18, 0), time(18, 30)))
+        self.assertEqual((song.start_time, song.end_time), (time(18, 15), time(18, 30)))
 
     def test_bumps_the_semester_stamp(self):
         """A successful reapply strictly advances the Semester's updated_at."""
