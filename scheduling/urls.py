@@ -73,11 +73,6 @@ urlpatterns = [
     path('manage/semesters/<int:pk>/delete/', views.SemesterDeleteView.as_view(), name='manage-semesters-delete'),
     path('manage/schedule/', views.RehearsalManageView.as_view(), name='manage-schedule'),
     path('manage/schedule/<int:pk>/edit/', views.RehearsalEditView.as_view(), name='manage-schedule-edit'),
-    path('manage/assignments/', views.SongRoleAssignmentManageView.as_view(), name='manage-assignments'),
-    path(
-        'manage/assignments/<int:pk>/delete/',
-        views.SongRoleAssignmentDeleteView.as_view(), name='manage-assignments-delete',
-    ),
     path('manage/conflicts/', views.ConflictAdjudicationIndexView.as_view(), name='manage-conflicts'),
     path(
         'manage/conflicts/<int:rehearsal_id>/',
