@@ -1,0 +1,1137 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+  Charset must be declared in the first 1024 bytes, ahead of this comment: opened over
+  file:// there is no Content-Type header, so without it the browser guesses windows-1252
+  and every en dash and middle dot below renders as mojibake.
+
+  PROTOTYPE v2 — throwaway. Ticket #303 on map #302.
+
+  v1 offered three variants. Review closed the structural question, so v2 is a single
+  converged build rather than an A/B/C:
+
+    Nav        collapsible LEFT sidebar on desktop (v1 had a top bar); bottom tab bar on phone
+    Admin      edit-in-place (v1's A) — member pages carry Edit; no separate /manage/ app
+    Semester   the control lives in the sidebar (v1's B side panel), with Save changes /
+               Publish beneath it; the top-right dropdown and the Overview admin card are gone
+    Overview   v1's A layout on desktop; v1's B two-line list on phone
+    Schedule   v1's B per-song cards on phone; running order and assignments MERGED into
+               one table with a start-time column
+
+  First drafts of four surfaces v1 never showed — All rehearsals, Song detail, the
+  Declare-a-conflict flow, and the fuller Songs table. Those are formally #305's to
+  resolve; they are here so the nav model can be judged against real destinations.
+
+  Greybox: structure only. No colour, type or theme is being proposed.
+  All data synthesized — no real member data (CONTRIBUTING.md).
+-->
+<title>Shell Greybox</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+  :root {
+    --paper:      #eef0f4;
+    --surface:    #ffffff;
+    --surface-2:  #f4f6f9;
+    --box:        #e3e7ee;
+    --line:       #c6ccd8;
+    --line-soft:  #dde2ea;
+    --ink:        #171a21;
+    --ink-2:      #4d5566;
+    --ink-3:      #79808f;
+    --chrome:     #1d2430;
+    --chrome-ink: #e9ecf2;
+    --mark:       #2f4fd0;   /* prototype chrome only, never inside a frame */
+    --warn:       #9a5a12;   /* semantic: a declared conflict */
+    --warn-bg:    #f7ecdc;
+    --ok:         #2f6b47;   /* semantic: your own slot / confirmed */
+    --ok-bg:      #e6f0e9;
+    /* Role hues. Hue = which role; border + marker = state. The two must stay
+       separate encodings or a backup on drums and a conflict on keys collide. */
+    --role-0:     #6d5bd0;   /* Lead Vocals */
+    --role-1:     #12776a;   /* Guitar */
+    --role-2:     #a3417e;   /* Bass */
+    --role-3:     #9c4a37;   /* Drums */
+    --role-4:     #2f5fa8;   /* Keys */
+    --radius:     6px;
+    --sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #14171d; --surface: #1c2029; --surface-2: #232833; --box: #2b313d;
+      --line: #414958; --line-soft: #333a47; --ink: #e7eaf0; --ink-2: #a8b0bf;
+      --ink-3: #7d8593; --chrome: #0d1015; --mark: #7f95ee;
+      --warn: #e0ac66; --warn-bg: #3a2c1633; --ok: #7fc39b; --ok-bg: #1d3128aa;
+      --role-0: #a99af0; --role-1: #6fc9b6; --role-2: #e08cc0;
+      --role-3: #dd9179; --role-4: #8fb4ec;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #14171d; --surface: #1c2029; --surface-2: #232833; --box: #2b313d;
+    --line: #414958; --line-soft: #333a47; --ink: #e7eaf0; --ink-2: #a8b0bf;
+    --ink-3: #7d8593; --chrome: #0d1015; --mark: #7f95ee;
+    --warn: #e0ac66; --warn-bg: #3a2c1633; --ok: #7fc39b; --ok-bg: #1d3128aa;
+    --role-0: #a99af0; --role-1: #6fc9b6; --role-2: #e08cc0;
+    --role-3: #dd9179; --role-4: #8fb4ec;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font-family: var(--sans); font-size: 14px; line-height: 1.45;
+    padding: 18px 18px 104px;
+  }
+  h1, h2, h3 { margin: 0; text-wrap: balance; font-weight: 600; }
+  button { font: inherit; color: inherit; }
+
+  /* ---- prototype chrome ---- */
+  .chrome-head { max-width: 1180px; margin: 0 auto 14px; display: flex; flex-wrap: wrap;
+    align-items: baseline; gap: 10px 16px; }
+  .chrome-head h1 { font-size: 15px; letter-spacing: -0.01em; }
+  .chrome-head .tag { font-family: var(--mono); font-size: 10px; letter-spacing: 0.09em;
+    text-transform: uppercase; color: var(--ink-3); border: 1px solid var(--line);
+    border-radius: 99px; padding: 2px 8px; }
+  .chrome-head p { margin: 0; color: var(--ink-2); font-size: 12.5px; max-width: 62ch; }
+  .stage { max-width: 1180px; margin: 0 auto; }
+
+  .frame { background: var(--surface); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; margin: 0 auto; }
+  .frame.desktop { width: 100%; min-height: 680px; }
+  .frame.phone { width: 390px; height: 780px; border-radius: 26px; border-width: 8px;
+    border-color: var(--chrome); box-shadow: 0 10px 34px rgb(0 0 0 / 0.18); }
+  .frame-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; }
+  .framewrap { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; }
+
+  .verdict { max-width: 1180px; margin: 16px auto 0; border: 1px solid var(--line-soft);
+    border-radius: var(--radius); background: var(--surface); padding: 14px 16px; }
+  .verdict h2 { font-size: 12px; font-family: var(--mono); letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--ink-3); margin-bottom: 8px; }
+  .verdict ul { margin: 0 0 12px; padding-left: 18px; display: grid; gap: 6px; }
+  .verdict li { color: var(--ink-2); font-size: 13px; }
+  .verdict li b { color: var(--ink); font-weight: 600; }
+  .verdict .cols { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+
+  /* ---- greybox primitives ---- */
+  .gb-label { font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--ink-3); }
+  .btn { border: 1px solid var(--line); background: var(--surface-2); color: var(--ink);
+    border-radius: var(--radius); padding: 6px 11px; font-size: 13px; cursor: pointer; white-space: nowrap; }
+  .btn.primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+  .btn.ghost { background: transparent; border-color: transparent; color: var(--ink-2); }
+  .btn.sm { padding: 3px 8px; font-size: 12px; }
+  .btn[disabled] { opacity: 0.4; cursor: not-allowed; }
+  .btn.icon { padding: 3px 7px; font-family: var(--mono); }
+  .field { border: 1px solid var(--line); border-radius: 4px; background: var(--surface);
+    padding: 4px 7px; font-size: 13px; min-height: 28px; display: flex; align-items: center; color: var(--ink-2); }
+  .muted { color: var(--ink-3); }
+  .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .card { border: 1px solid var(--line-soft); border-radius: var(--radius);
+    background: var(--surface); padding: 12px 14px; }
+  .stack { display: grid; gap: 12px; }
+  .row-between { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .scroll-x { overflow-x: auto; }
+  .hstack { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+
+  /* assignment pills — styled by state (review item 6) */
+  .chip { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line);
+    background: var(--surface-2); border-radius: 99px; padding: 2px 9px; font-size: 12px; white-space: nowrap; }
+  .chip.empty { border-style: dashed; color: var(--ink-3); background: transparent; }
+  .chip.backup { border-style: dashed; background: transparent; }
+  .chip.backup .tagm { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--ink-3); }
+  .chip.conflict { border-color: var(--warn); background: var(--warn-bg); color: var(--warn); }
+  .chip.mismatch { border-style: solid; box-shadow: inset 0 -2px 0 var(--line); }
+  .chip.you { border-color: var(--ok); background: var(--ok-bg); color: var(--ok); font-weight: 600; }
+  /* Role hue rides on a dot, so it never fights the state colours on the pill itself. */
+  .chip .rdot { width: 7px; height: 7px; border-radius: 50%; background: var(--rc, var(--ink-3));
+    flex-shrink: 0; }
+  .chip.empty .rdot { background: transparent; border: 1px solid var(--rc, var(--line)); }
+  .chip .rcode { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.04em;
+    color: var(--rc, var(--ink-3)); font-weight: 600; }
+  .legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 11.5px; color: var(--ink-3);
+    align-items: center; }
+  .legend .swatch { display: inline-flex; align-items: center; gap: 5px; }
+  .legend .swatch i { width: 8px; height: 8px; border-radius: 50%; background: var(--rc); }
+  .castline { display: flex; gap: 5px; flex-wrap: wrap; align-items: center; }
+
+  table.gb { border-collapse: collapse; width: 100%; font-size: 13px; }
+  table.gb th, table.gb td { border-bottom: 1px solid var(--line-soft); padding: 7px 10px;
+    text-align: left; vertical-align: middle; }
+  table.gb th { font-weight: 600; font-size: 11.5px; color: var(--ink-2); white-space: nowrap; }
+  table.gb td.num, table.gb th.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  table.gb tr.sub td { border-bottom: 1px solid var(--line-soft); padding-top: 0; }
+  /* The Songs table carries the most per row, so it gets the most air. */
+  table.gb.songs td { padding-top: 11px; padding-bottom: 11px; }
+  table.gb.songs tr.sub td { padding-top: 0; }
+  table.gb.songs td:nth-child(3) { min-width: 260px; }
+
+  .page { padding: 16px; display: grid; gap: 16px; }
+  .frame.desktop .page { padding: 22px 28px; }
+  .page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+  .page-head h1 { font-size: 20px; letter-spacing: -0.015em; }
+  .frame.phone .page-head h1 { font-size: 17px; }
+  .page-head .actions { display: flex; gap: 6px; flex-shrink: 0; }
+  .section-head { font-size: 13px; color: var(--ink-2); font-weight: 600; }
+
+  /* toggle (review item 8) */
+  .toggle { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px;
+    color: var(--ink-2); cursor: pointer; }
+  .toggle .track { width: 30px; height: 17px; border-radius: 99px; background: var(--box);
+    border: 1px solid var(--line); position: relative; flex-shrink: 0; }
+  .toggle .knob { position: absolute; top: 1px; left: 1px; width: 13px; height: 13px;
+    border-radius: 50%; background: var(--surface); border: 1px solid var(--line); }
+  .toggle[aria-pressed="true"] .track { background: var(--ink); border-color: var(--ink); }
+  .toggle[aria-pressed="true"] .knob { left: auto; right: 1px; background: var(--surface); border-color: var(--ink); }
+
+  /* segmented sub-view control */
+  .seg2 { display: inline-flex; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+  .seg2 button { border: 0; background: transparent; padding: 5px 12px; font-size: 12.5px; cursor: pointer; color: var(--ink-3); }
+  .seg2 button[aria-pressed="true"] { background: var(--ink); color: var(--surface); font-weight: 600; }
+
+  /* ---- the shell: collapsible left sidebar (review item 1) ---- */
+  .shell { display: flex; flex: 1; min-height: 0; }
+  .sidebar { flex-shrink: 0; border-right: 1px solid var(--line); background: var(--surface-2);
+    display: flex; flex-direction: column; width: 236px; }
+  .sidebar.rail { width: 60px; }
+  .sidebar .head { display: flex; align-items: center; gap: 8px; padding: 12px 14px; height: 52px; }
+  .sidebar .brand { font-weight: 700; font-size: 14px; letter-spacing: -0.01em; white-space: nowrap;
+    overflow: hidden; flex: 1; }
+  .sidebar nav { flex: 1; overflow-y: auto; padding: 4px 0; }
+  .sidebar .group { padding: 12px 14px 4px; }
+  .sidebar a { display: flex; align-items: center; gap: 10px; text-decoration: none;
+    color: var(--ink-2); padding: 7px 14px; font-size: 13px; white-space: nowrap; }
+  .sidebar a[aria-current] { color: var(--ink); font-weight: 600; background: var(--surface);
+    box-shadow: inset 2px 0 0 var(--ink); }
+  .sidebar .glyph { width: 18px; height: 18px; border: 1.5px solid currentColor;
+    border-radius: 5px; flex-shrink: 0; }
+  .sidebar .count { margin-left: auto; font-family: var(--mono); font-size: 11px;
+    border: 1px solid var(--line); border-radius: 99px; padding: 0 6px; }
+  .sidebar.rail a { justify-content: center; padding: 8px 0; }
+  .sidebar.rail .label, .sidebar.rail .count, .sidebar.rail .group, .sidebar.rail .brand { display: none; }
+
+  /* the semester control — the shell's one home for it (review item 13) */
+  .sem-panel { border-top: 1px solid var(--line); padding: 12px 14px; display: grid; gap: 8px; }
+  .sem-panel.draft { background: var(--warn-bg); }
+  .sem-panel .warnline { font-size: 11.5px; color: var(--warn); }
+  .sidebar.rail .sem-panel { padding: 10px 6px; justify-items: center; }
+  .sidebar.rail .sem-panel .hide-rail { display: none; }
+
+  .topline { display: flex; align-items: center; gap: 10px; padding: 0 20px; height: 52px;
+    border-bottom: 1px solid var(--line); background: var(--surface); flex-shrink: 0; }
+  .topline .title { font-weight: 600; flex: 1; }
+
+  /* phone */
+  .phonebar { display: flex; align-items: center; gap: 8px; padding: 0 12px; height: 50px;
+    border-bottom: 1px solid var(--line); background: var(--surface); flex-shrink: 0; }
+  .phonebar .title { font-weight: 600; font-size: 15px; flex: 1; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  .tabbar { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr;
+    border-top: 1px solid var(--line); background: var(--surface); flex-shrink: 0; padding-bottom: 6px; }
+  .tabbar a { text-decoration: none; color: var(--ink-3); display: grid; justify-items: center;
+    gap: 3px; padding: 7px 2px 3px; font-size: 10.5px; position: relative; }
+  .tabbar a[aria-current] { color: var(--ink); font-weight: 600; }
+  .tabbar .glyph { width: 20px; height: 20px; border: 1.5px solid currentColor; border-radius: 5px; }
+  .tabbar .dot { position: absolute; top: 5px; right: 50%; margin-right: -14px; width: 6px;
+    height: 6px; border-radius: 50%; background: var(--warn); }
+  .sem-strip { padding: 7px 12px; font-size: 12px; display: flex; align-items: center; gap: 8px;
+    border-bottom: 1px solid var(--line); background: var(--warn-bg); color: var(--warn); flex-shrink: 0; }
+
+  /* edit toolbar */
+  .edit-toolbar { background: var(--ink); color: var(--surface); padding: 8px 16px;
+    display: flex; align-items: center; gap: 8px; flex-shrink: 0; font-size: 13px; }
+  .edit-toolbar .grow { flex: 1; font-weight: 600; }
+  .edit-toolbar .btn { background: transparent; border-color: rgb(255 255 255 / 0.35); color: inherit; }
+  .edit-toolbar .btn.primary { background: var(--surface); color: var(--ink); border-color: var(--surface); }
+
+  /* the rehearsal-window timeline (review item 3) */
+  .timeline { display: grid; gap: 5px; }
+  .timeline .track { display: flex; height: 26px; border: 1px solid var(--line);
+    border-radius: 4px; overflow: hidden; background: var(--surface-2); }
+  .timeline .slot { border-right: 1px solid var(--line-soft); display: flex; align-items: center;
+    justify-content: center; font-size: 9.5px; overflow: hidden; padding: 0 2px;
+    font-family: var(--mono); color: var(--ink-3); }
+  .timeline .slot:last-child { border-right: 0; }
+  .timeline .slot.mine { background: var(--ok-bg); color: var(--ok); font-weight: 600; }
+  .timeline .slot.brk { background: repeating-linear-gradient(45deg,
+      transparent, transparent 3px, var(--box) 3px, var(--box) 6px); }
+  .timeline .ends { display: flex; justify-content: space-between; font-size: 11px; }
+
+  /* modal / sheet */
+  .backdrop { position: absolute; inset: 0; background: rgb(0 0 0 / 0.38); display: flex;
+    align-items: center; justify-content: center; padding: 20px; }
+  .backdrop.bottom { align-items: flex-end; padding: 0; }
+  .modal { background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+    width: 100%; max-width: 440px; max-height: 100%; overflow-y: auto; }
+  .backdrop.bottom .modal { border-radius: 14px 14px 0 0; max-width: none; border-bottom: 0; }
+  .modal .m-head { padding: 14px 16px; border-bottom: 1px solid var(--line-soft);
+    display: flex; align-items: center; gap: 10px; }
+  .modal .m-head h3 { font-size: 15px; flex: 1; }
+  .modal .m-body { padding: 14px 16px; display: grid; gap: 12px; }
+  .modal .m-foot { padding: 12px 16px; border-top: 1px solid var(--line-soft);
+    display: flex; gap: 8px; justify-content: flex-end; }
+  .radio { display: flex; gap: 9px; align-items: flex-start; padding: 8px 10px;
+    border: 1px solid var(--line); border-radius: var(--radius); cursor: pointer; }
+  .radio[aria-checked="true"] { border-color: var(--ink); background: var(--surface-2); }
+  .radio .dot { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--line);
+    flex-shrink: 0; margin-top: 2px; }
+  .radio[aria-checked="true"] .dot { border-color: var(--ink); box-shadow: inset 0 0 0 3px var(--surface),
+    inset 0 0 0 8px var(--ink); }
+  .radio .sub { font-size: 11.5px; color: var(--ink-3); }
+  .privacy { font-size: 11.5px; color: var(--ink-3); border-left: 2px solid var(--line);
+    padding-left: 8px; }
+
+  .songlist { display: grid; }
+  .songlist .item { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px;
+    align-items: center; padding: 9px 0; border-bottom: 1px solid var(--line-soft); }
+  .songlist .item .sub { grid-column: 1 / -1; }
+  .prog { display: flex; align-items: center; gap: 8px; }
+  .prog .track { flex: 1; height: 5px; background: var(--box); border-radius: 99px; min-width: 50px; }
+  .prog .fill { height: 100%; background: var(--ink-2); border-radius: 99px; }
+  .songcards { display: grid; gap: 8px; }
+  .songcards .kv { display: flex; justify-content: space-between; gap: 10px; font-size: 12.5px; padding: 3px 0; }
+  .matrix th:first-child, .matrix td:first-child { position: sticky; left: 0; background: var(--surface); z-index: 1; }
+  .matrix th:nth-child(2), .matrix td:nth-child(2) { position: sticky; left: 62px; background: var(--surface); z-index: 1; }
+
+  /* ---- bottom switcher ---- */
+  .switcher { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 50;
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: center;
+    background: var(--chrome); color: var(--chrome-ink); border-radius: 99px; padding: 7px 9px;
+    box-shadow: 0 6px 26px rgb(0 0 0 / 0.3); max-width: calc(100vw - 24px); }
+  .switcher button, .switcher select { font: inherit; font-size: 12.5px;
+    border: 1px solid rgb(255 255 255 / 0.22); background: rgb(255 255 255 / 0.06);
+    color: inherit; border-radius: 99px; padding: 4px 11px; cursor: pointer; }
+  .switcher select { padding: 4px 8px; }
+  .switcher .seg { display: inline-flex; border-radius: 99px; overflow: hidden;
+    border: 1px solid rgb(255 255 255 / 0.22); }
+  .switcher .seg button { border: 0; border-radius: 0; }
+  .switcher .seg button[aria-pressed="true"] { background: var(--mark); color: #fff; font-weight: 600; }
+  .switcher .divider { width: 1px; height: 20px; background: rgb(255 255 255 / 0.2); }
+
+  :focus-visible { outline: 2px solid var(--mark); outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="chrome-head">
+  <h1>Rolling Sloans — shell greybox v2</h1>
+  <span class="tag">Prototype · #303</span>
+  <p>One converged build, not variants: the structural question closed in review. Collapsible
+  left sidebar, edit-in-place admin, and the semester control living in the sidebar. Structure
+  only — no colour, type or theme is proposed. All data synthesized.</p>
+</div>
+
+<div class="stage" id="stage"></div>
+<div class="verdict" id="verdict"></div>
+
+<div class="switcher" role="group" aria-label="Prototype controls">
+  <span class="seg" id="viewportseg">
+    <button data-vp="desktop">Desktop</button>
+    <button data-vp="phone">Phone</button>
+  </span>
+  <span class="seg" id="roleseg">
+    <button data-role="member">Member</button>
+    <button data-role="admin">Admin</button>
+  </span>
+  <span class="divider"></span>
+  <button id="dirty">Unsaved edits: off</button>
+  <span class="divider"></span>
+  <select id="pagesel" aria-label="Page"></select>
+</div>
+
+<script>
+/* ============================================================
+   Synthesized data — nothing here is a real person or setlist.
+   ============================================================ */
+const ROLES = ['Lead Vocals', 'Guitar', 'Bass', 'Drums', 'Keys'];
+const YOU = 'Avery Cho';
+
+const PEOPLE = [
+  { name: 'Avery Cho',      roles: 'Lead Vocals, Keys',     active: true },
+  { name: 'Dani Okafor',    roles: 'Drums',                 active: true },
+  { name: 'Priya Raman',    roles: 'Bass, Backing Vocals',  active: true },
+  { name: 'Marcus Vale',    roles: 'Guitar',                active: true },
+  { name: 'Nina Restrepo',  roles: 'Keys, Backing Vocals',  active: true },
+  { name: 'Theo Lindqvist', roles: 'Guitar, Bass',          active: true },
+  { name: 'Sam Aterlay',    roles: 'Lead Vocals',           active: true },
+  { name: 'Jules Marchetti', roles: 'Guitar',               active: false },
+];
+
+/* Cell forms: 'Name' | '~Name' backup | '!Name' role mismatch (ADR 0002) | '' unfilled */
+const SONGS = [
+  { pos: 1, title: 'Paper Lanterns',      artist: 'The Hollow Coast', len: '3:42', recs: 3,
+    note: 'Tighten the last chorus — come in a bar early.',
+    cast: ['Avery Cho', 'Marcus Vale', 'Priya Raman', 'Dani Okafor', 'Nina Restrepo'] },
+  { pos: 2, title: 'Riverbend',           artist: 'Junia Wolfe',      len: '4:15', recs: 1,
+    note: 'Key change still unsettled.',
+    cast: ['Sam Aterlay', 'Theo Lindqvist', '', 'Dani Okafor', ''] },
+  { pos: 3, title: 'Static Bloom',        artist: 'Ferris & Doe',     len: '2:58', recs: 4,
+    note: '',
+    cast: ['Avery Cho', 'Marcus Vale', 'Theo Lindqvist', 'Dani Okafor', 'Nina Restrepo'] },
+  { pos: 4, title: 'Two Weeks in June',   artist: 'Colma Park',       len: '5:07', recs: 0,
+    note: 'Not started — cast this first.',
+    cast: ['', '', '', '', ''] },
+  { pos: 5, title: 'Marigold',            artist: 'The Hollow Coast', len: '3:20', recs: 2,
+    note: 'Backup on drums while Dani is out.',
+    cast: ['Sam Aterlay', 'Marcus Vale', 'Priya Raman', '~Dani Okafor', '!Avery Cho'] },
+  { pos: 6, title: 'Cold Open',           artist: 'Nightjar',         len: '3:55', recs: 0,
+    note: '',
+    cast: ['Avery Cho', '', 'Priya Raman', '', 'Nina Restrepo'] },
+  { pos: 7, title: 'The Long Way Down',   artist: 'Junia Wolfe',      len: '6:12', recs: 5,
+    note: 'Locked. Recording is the reference take.',
+    cast: ['Sam Aterlay', 'Marcus Vale', 'Priya Raman', 'Dani Okafor', 'Avery Cho'] },
+  { pos: 8, title: 'Ninety-Nine Summers', artist: 'Colma Park',       len: '4:01', recs: 0,
+    note: '',
+    cast: ['', 'Theo Lindqvist', '', '', ''] },
+];
+const cast = s => s.cast.filter(Boolean).length;
+
+const REHEARSALS = [
+  { id: 1, date: 'Tue 15 Sep', time: '19:00–21:00', mine: '19:00–20:10', dress: false, conflicts: 2, songs: 5, past: false },
+  { id: 2, date: 'Thu 17 Sep', time: '19:00–21:00', mine: null,          dress: false, conflicts: 0, songs: 5, past: false },
+  { id: 3, date: 'Tue 22 Sep', time: '19:00–21:00', mine: '19:40–21:00', dress: false, conflicts: 1, songs: 6, past: false },
+  { id: 4, date: 'Thu 24 Sep', time: '19:00–21:00', mine: '19:00–21:00', dress: false, conflicts: 0, songs: 5, past: false },
+  { id: 5, date: 'Sat 26 Sep', time: '14:00–18:00', mine: '14:00–18:00', dress: true,  conflicts: 0, songs: 8, past: false },
+];
+
+/* Who has a declared conflict at rehearsal 1, and which slots it eats. */
+const CONFLICTED = { 'Nina Restrepo': 'arrives 19:40', 'Theo Lindqvist': 'leaves 20:15' };
+
+/* The next rehearsal's running order: song index + start time. */
+const ORDER1 = [
+  { song: 0, start: '19:00', end: '19:24' },
+  { song: 1, start: '19:24', end: '19:48' },
+  { song: 4, start: '19:48', end: '20:12' },
+  { song: 2, start: '20:12', end: '20:36', pinned: true },
+  { song: 5, start: '20:36', end: '21:00' },
+];
+
+/* ============================================================
+   State
+   ============================================================ */
+const state = {
+  page: 'overview', viewport: 'desktop', role: 'admin',
+  rail: false, editing: false, dirty: false,
+  scheduleView: 'next', myOnly: false, sheet: false,
+  conflictModal: false, conflictType: 'late_arrival', conflictDeclared: false,
+  semester: 'Spring 2027',
+};
+const LIVE = 'Fall 2026';
+
+const PAGES = [
+  ['overview',    'Home'],
+  ['schedule',    'Schedule — next rehearsal'],
+  ['schedule-all','Schedule — all rehearsals'],
+  ['songs',       'Songs'],
+  ['song',        'Song detail'],
+  ['members',     'Band'],
+  ['profile',     'You'],
+  ['conflicts',   'Manage conflicts (admin)'],
+  ['semesters',   'Semesters (admin)'],
+];
+
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const isPhone = () => state.viewport === 'phone';
+const isAdmin = () => state.role === 'admin';
+const isDraft = () => state.semester !== LIVE;
+
+function go(page) {
+  if (page === 'schedule-all') { state.page = 'schedule'; state.scheduleView = 'all'; }
+  else { state.page = page; if (page === 'schedule') state.scheduleView = 'next'; }
+  state.editing = false; state.sheet = false; state.conflictModal = false;
+  render();
+}
+function effectivePage() {
+  if (!isAdmin() && (state.page === 'conflicts' || state.page === 'semesters')) return 'overview';
+  return state.page;
+}
+function pageTitle() {
+  const p = effectivePage();
+  if (p === 'schedule') return state.scheduleView === 'all' ? 'All rehearsals' : REHEARSALS[0].date;
+  return ({ overview: 'Home', songs: 'Songs', song: 'Paper Lanterns', members: 'Band',
+            profile: 'You', conflicts: 'Conflicts', semesters: 'Semesters' })[p] || 'Home';
+}
+
+function toggleEdit() { state.editing = !state.editing; if (!state.editing) state.dirty = false; render(); }
+function toggleRail() { state.rail = !state.rail; render(); }
+function toggleMyOnly() { state.myOnly = !state.myOnly; render(); }
+function setScheduleView(v) { state.scheduleView = v; render(); }
+function openConflict() { state.conflictModal = true; render(); }
+function closeConflict() { state.conflictModal = false; render(); }
+function setConflictType(t) { state.conflictType = t; render(); }
+function submitConflict() { state.conflictDeclared = true; state.conflictModal = false; render(); }
+function clearConflict() { state.conflictDeclared = false; render(); }
+function toggleSheet() { state.sheet = !state.sheet; render(); }
+function setDirty(v) { state.dirty = v; syncChrome(); render(); }
+
+/* ============================================================
+   Assignment pill — one place decides how a cell reads.
+   ============================================================ */
+const ROLE_CODE = ['LV', 'GTR', 'BASS', 'DRM', 'KEY'];
+
+/* `role` is the index into ROLES. A filled pill shows the hue as a dot and lets fixed
+   position carry the rest; an empty one spells the role out, since there is no name to
+   infer it from. */
+function chip(val, opts = {}) {
+  const r = opts.role;
+  const hue = r == null ? '' : `--rc:var(--role-${r});`;
+  const dot = r == null ? '' : '<span class="rdot"></span>';
+  if (!val) {
+    return opts.armed || opts.showEmpty
+      ? `<span class="chip empty" style="${hue}">${dot}<span class="rcode">${r == null ? '' : ROLE_CODE[r]}</span>
+         <span>${opts.armed ? '+ assign' : 'unfilled'}</span></span>`
+      : '<span class="muted">—</span>';
+  }
+  let cls = 'chip', name = val, extra = '';
+  if (val[0] === '~') { name = val.slice(1); cls += ' backup'; extra = '<span class="tagm">backup</span>'; }
+  else if (val[0] === '!') { name = val.slice(1); cls += ' mismatch'; extra = '<span class="muted" title="Role not on their membership (ADR 0002)">◦</span>'; }
+  if (CONFLICTED[name] && opts.rehearsal) { cls += ' conflict'; extra += '<span class="mono" style="font-size:9.5px">⚠</span>'; }
+  else if (name === YOU && opts.markYou) { cls += ' you'; }
+  const title = r == null ? '' : ` title="${ROLES[r]}"`;
+  return `<span class="${cls}" style="${hue}"${title}>${dot}${esc(name)}${extra}</span>`;
+}
+
+/* Role hue is load-bearing once the labels come off, so the key is always on the page. */
+const roleLegend = `<div class="legend">
+  ${ROLES.map((r, i) => `<span class="swatch" style="--rc:var(--role-${i})"><i></i>${r}</span>`).join('')}
+</div>`;
+/* Only the states you cannot guess from a plain pill. */
+const stateLegend = `<div class="legend">
+  <span><span class="chip backup" style="padding:1px 7px">Name <span class="tagm">backup</span></span></span>
+  <span><span class="chip conflict" style="padding:1px 7px">Name ⚠</span> conflict here</span>
+  <span><span class="chip mismatch" style="padding:1px 7px">Name ◦</span> role not on their membership</span>
+</div>`;
+
+/* ============================================================
+   Pages
+   ============================================================ */
+
+/* --- Home ------------------------------------------------- */
+function overviewPage() {
+  const r = REHEARSALS[0];
+  const list = state.myOnly ? SONGS.filter(s => s.cast.some(c => c && c.replace(/^[~!]/, '') === YOU)) : SONGS;
+
+  /* Review item 3: the bar now shows the rehearsal window with your slots filled in. */
+  const timeline = `
+    <div class="timeline">
+      <div class="track">
+        ${ORDER1.map((o, i) => {
+          const s = SONGS[o.song];
+          const mine = s.cast.some(c => c && c.replace(/^[~!]/, '') === YOU);
+          return `<div class="slot ${mine ? 'mine' : ''}" style="flex:1" title="${esc(s.title)} · ${o.start}">
+            ${mine ? esc(s.title.split(' ')[0]) : ''}</div>`;
+        }).join('')}
+      </div>
+      <div class="ends mono muted"><span>19:00</span><span>You: 3 of 5 songs</span><span>21:00</span></div>
+    </div>`;
+
+  const nextCard = `
+    <div class="card stack" style="gap:10px">
+      <div class="row-between">
+        <span class="gb-label">Next rehearsal</span>
+        <button class="btn sm" onclick="go('schedule')">Open</button>
+      </div>
+      <div>
+        <div style="font-size:16px;font-weight:600">${r.date} · ${r.time}</div>
+        <div class="muted" style="font-size:12.5px">Arrive around <b class="mono">19:00</b>,
+          free to leave around <b class="mono">20:10</b></div>
+      </div>
+      ${timeline}
+    </div>`;
+
+  const upcoming = `
+    <div class="stack" style="gap:8px">
+      <div class="row-between"><h2 class="section-head">Upcoming rehearsals</h2>
+        <button class="btn sm ghost" onclick="go('schedule-all')">All rehearsals →</button></div>
+      <div class="songlist">
+        ${REHEARSALS.slice(0, 4).map(x => `
+          <div class="item">
+            <div><b style="font-weight:600">${x.date}</b> <span class="mono muted">${x.time}</span>
+              ${x.dress ? '<span class="chip" style="margin-left:6px">Dress</span>' : ''}</div>
+            <div class="mono" style="font-size:12px;${x.mine ? '' : 'color:var(--ink-3)'}">
+              ${x.mine || 'not needed'}</div>
+          </div>`).join('')}
+      </div>
+    </div>`;
+
+  const progress = isPhone()
+    /* phone: v1's B two-line list, per review */
+    ? `<div class="songlist">${list.map(s => `
+        <div class="item">
+          <div><b style="font-weight:600">${esc(s.title)}</b></div>
+          <div class="mono" style="font-size:12px">${cast(s)}/${s.cast.length}</div>
+          <div class="sub prog"><span class="mono muted" style="font-size:11px;min-width:20px">#${s.pos}</span>
+            <span class="track"><span class="fill" style="width:${cast(s) / s.cast.length * 100}%"></span></span></div>
+        </div>`).join('')}</div>`
+    /* desktop: v1's A table */
+    : `<div class="scroll-x"><table class="gb">
+        <thead><tr><th class="num">#</th><th>Song</th><th>Artist</th><th class="num">Length</th><th>Cast</th></tr></thead>
+        <tbody>${list.map(s => `<tr>
+          <td class="num">${s.pos}</td><td>${esc(s.title)}</td>
+          <td class="muted">${esc(s.artist)}</td><td class="num">${s.len}</td>
+          <td><span class="prog"><span class="track" style="max-width:90px">
+            <span class="fill" style="width:${cast(s) / s.cast.length * 100}%"></span></span>
+            <span class="mono" style="font-size:12px">${cast(s)}/${s.cast.length}</span></span></td>
+        </tr>`).join('')}</tbody></table></div>`;
+
+  return `
+    ${pageHead('Home', null, isAdmin() ? `Editing ${state.semester}` : 'Fall 2026')}
+    ${nextCard}
+    ${upcoming}
+    <div class="stack" style="gap:8px">
+      <div class="row-between">
+        <h2 class="section-head">Song progress</h2>
+        <button class="toggle" aria-pressed="${state.myOnly}" onclick="toggleMyOnly()">
+          <span class="track"><span class="knob"></span></span> My songs only</button>
+      </div>
+      ${progress}
+    </div>`;
+}
+
+/* --- Schedule: all rehearsals (review item 7, new) --------- */
+function allRehearsalsPage() {
+  const rows = REHEARSALS.map(r => isPhone() ? `
+    <div class="card" style="padding:10px 12px" onclick="go('schedule')">
+      <div class="row-between"><b style="font-weight:600">${r.date}</b>
+        <span class="mono muted" style="font-size:12px">${r.time}</span></div>
+      <div class="hstack" style="margin-top:5px">
+        ${r.dress ? '<span class="chip">Dress · attendance required</span>' : ''}
+        <span class="chip ${r.mine ? 'you' : 'empty'}">${r.mine ? 'You: ' + r.mine : 'Not needed'}</span>
+        <span class="muted" style="font-size:12px">${r.songs} songs</span>
+        ${isAdmin() && r.conflicts ? `<span class="chip conflict">${r.conflicts} conflicts</span>` : ''}
+      </div>
+    </div>` : `
+    <tr>
+      <td><b style="font-weight:600">${r.date}</b>
+        ${r.dress ? '<span class="chip" style="margin-left:6px">Dress</span>' : ''}</td>
+      <td class="num">${r.time}</td>
+      <td>${r.mine ? `<span class="chip you">${r.mine}</span>` : '<span class="muted">Not needed</span>'}</td>
+      <td class="num">${r.songs}</td>
+      ${isAdmin() ? `<td>${r.conflicts ? `<span class="chip conflict">${r.conflicts} ⚠</span>` : '<span class="muted">—</span>'}</td>` : ''}
+      <td><button class="btn sm" onclick="go('schedule')">Open</button></td>
+    </tr>`).join('');
+
+  return `
+    ${pageHead('Schedule', isAdmin() ? [{ label: state.editing ? 'Done' : 'Edit rehearsals' }] : null,
+      `${state.semester} · ${REHEARSALS.length} rehearsals`)}
+    ${scheduleSeg()}
+    ${isPhone() ? `<div class="songcards">${rows}</div>` : `<div class="scroll-x"><table class="gb">
+      <thead><tr><th>Date</th><th>Time</th><th>You</th><th class="num">Songs</th>
+        ${isAdmin() ? '<th>Conflicts</th>' : ''}<th></th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`}
+    ${state.editing ? `<div class="hstack"><button class="btn sm">+ Add rehearsal</button>
+      <button class="btn sm">Generate from pattern</button><button class="btn sm">Deal running orders</button></div>` : ''}`;
+}
+function scheduleSeg() {
+  return `<div class="seg2">
+    <button aria-pressed="${state.scheduleView === 'next'}" onclick="setScheduleView('next')">Next rehearsal</button>
+    <button aria-pressed="${state.scheduleView === 'all'}" onclick="setScheduleView('all')">All rehearsals</button>
+  </div>`;
+}
+
+/* --- Schedule: one rehearsal ------------------------------ */
+function rehearsalPage() {
+  const r = REHEARSALS[0];
+  const armed = state.editing && isAdmin();
+
+  /* Review item 4: the declared state, and the flow that produces it. */
+  const availability = state.conflictDeclared ? `
+    <div class="card stack" style="gap:8px;border-color:var(--warn)">
+      <div class="row-between">
+        <div><span class="gb-label" style="color:var(--warn)">Your availability</span>
+          <div style="font-size:14px"><b>Arriving late — 19:40</b></div>
+          <div class="muted" style="font-size:12px">Awaiting an admin verdict</div></div>
+        <div class="hstack"><button class="btn sm" onclick="openConflict()">Edit</button>
+          <button class="btn sm" onclick="clearConflict()">Withdraw</button></div>
+      </div>
+      <div class="privacy">Only admins can see the reason you gave (ADR 0005).</div>
+    </div>` : `
+    <div class="card row-between">
+      <div><span class="gb-label">Your availability</span>
+        <div style="font-size:14px">Available for the whole rehearsal</div></div>
+      <button class="btn sm" onclick="openConflict()">Declare a conflict</button>
+    </div>`;
+
+  const mine = `
+    <div class="card stack" style="gap:10px">
+      <span class="gb-label">You at this rehearsal</span>
+      <div style="font-size:15px">Arrive around <b class="mono">${state.conflictDeclared ? '19:40' : '19:00'}</b>,
+        free to leave around <b class="mono">20:10</b></div>
+      <div class="muted" style="font-size:12.5px">Break: 19:25–19:40</div>
+    </div>`;
+
+  /* Review item 5: running order + assignments merged into one table. */
+  let grid;
+  if (!isPhone()) {
+    grid = `<div class="scroll-x"><table class="gb matrix">
+      <thead><tr><th class="num">Start</th><th>Song</th>${ROLES.map(x => `<th>${x}</th>`).join('')}</tr></thead>
+      <tbody>${ORDER1.map((o, i) => {
+        const s = SONGS[o.song];
+        return `<tr>
+          <td class="num">${armed ? '<span class="muted" style="cursor:grab">⠿</span> ' : ''}${o.start}</td>
+          <td><b style="font-weight:600">${esc(s.title)}</b>
+            ${o.pinned ? '<span class="chip" style="margin-left:6px">pinned</span>' : ''}</td>
+          ${s.cast.map((c, i) => `<td>${chip(c, { armed, rehearsal: true, markYou: true, role: i })}</td>`).join('')}
+        </tr>`;
+      }).join('')}</tbody></table></div>`;
+  } else {
+    /* phone: v1's B per-song cards, per review */
+    grid = `<div class="songcards">${ORDER1.map(o => {
+      const s = SONGS[o.song];
+      return `<div class="card" style="padding:10px 12px">
+        <div class="row-between" style="margin-bottom:4px">
+          <b style="font-weight:600">${esc(s.title)}</b>
+          <span class="mono muted" style="font-size:12px">${o.start}</span></div>
+        ${ROLES.map((role, i) => `<div class="kv">
+          <span class="muted">${role}</span>${chip(s.cast[i], { armed, rehearsal: true, markYou: true, role: i })}</div>`).join('')}
+      </div>`;
+    }).join('')}</div>`;
+  }
+
+  return `
+    ${pageHead(r.date, isAdmin() ? [{ label: state.editing ? 'Done' : 'Edit assignments' }] : null,
+      `${r.time} · rehearsal 1 of ${REHEARSALS.length}`)}
+    ${scheduleSeg()}
+    ${mine}
+    ${availability}
+    <div class="stack" style="gap:8px">
+      <div class="row-between"><h2 class="section-head">Running order &amp; assignments</h2>
+        ${armed ? '<div class="hstack"><button class="btn sm">Deal</button><button class="btn sm">Shuffle</button></div>' : ''}</div>
+      ${stateLegend}
+      ${grid}
+    </div>`;
+}
+
+/* Declare-a-conflict flow (review item 4) */
+function conflictModal() {
+  const types = [
+    ['late_arrival',    'Arriving late',    'You will miss the start of the rehearsal.'],
+    ['early_departure', 'Leaving early',    'You will miss the end of the rehearsal.'],
+    ['full_absence',    'Missing entirely', 'You cannot attend at all.'],
+  ];
+  const needsTime = state.conflictType !== 'full_absence';
+  return `<div class="backdrop ${isPhone() ? 'bottom' : ''}" onclick="closeConflict()">
+    <div class="modal" onclick="event.stopPropagation()">
+      <div class="m-head"><h3>Declare a conflict</h3>
+        <button class="btn sm ghost" onclick="closeConflict()">✕</button></div>
+      <div class="m-body">
+        <div class="muted" style="font-size:12.5px">Tue 15 Sep · 19:00–21:00</div>
+        <div class="stack" style="gap:6px">
+          ${types.map(([k, label, sub]) => `
+            <div class="radio" role="radio" aria-checked="${state.conflictType === k}" onclick="setConflictType('${k}')">
+              <span class="dot"></span>
+              <span><div style="font-weight:600;font-size:13px">${label}</div>
+                <div class="sub">${sub}</div></span>
+            </div>`).join('')}
+        </div>
+        ${needsTime ? `<div class="stack" style="gap:4px">
+          <span class="gb-label">${state.conflictType === 'late_arrival' ? 'Arriving at' : 'Leaving at'}</span>
+          <span class="field mono" style="max-width:120px">19:40</span>
+          <span class="muted" style="font-size:11.5px">Must fall inside 19:00–21:00.</span>
+        </div>` : ''}
+        <div class="stack" style="gap:4px">
+          <span class="gb-label">Reason (optional)</span>
+          <span class="field" style="min-height:56px;align-items:flex-start">Lab section runs until 19:30.</span>
+        </div>
+        <div class="privacy">Only admins ever see this reason — it never appears on a page
+          other members can read, including for admins browsing as members (ADR 0005).</div>
+        <div class="privacy">The dress rehearsal on Sat 26 Sep cannot take a conflict:
+          attendance there is mandatory (ADR 0006).</div>
+      </div>
+      <div class="m-foot">
+        <button class="btn" onclick="closeConflict()">Cancel</button>
+        <button class="btn primary" onclick="submitConflict()">Declare conflict</button>
+      </div>
+    </div></div>`;
+}
+
+/* --- Songs (review items 8, 9, 10) ------------------------- */
+function songsPage() {
+  const armed = state.editing && isAdmin();
+  const list = state.myOnly ? SONGS.filter(s => s.cast.some(c => c && c.replace(/^[~!]/, '') === YOU)) : SONGS;
+
+  /* Every role always rendered in ROLES order, empty ones included: fixed position plus
+     hue identifies the role, so no pill has to carry its own label. */
+  const castLine = s => `<div class="castline">
+    ${ROLES.map((role, i) => chip(s.cast[i], { armed, markYou: true, role: i, showEmpty: true })).join('')}
+  </div>`;
+
+  const body = isPhone() ? `
+    <div class="songcards">${list.map(s => `
+      <div class="card" style="padding:10px 12px" onclick="go('song')">
+        <div class="row-between"><b style="font-weight:600">${esc(s.title)}</b>
+          <span class="mono muted" style="font-size:12px">${s.len}</span></div>
+        <div class="muted" style="font-size:12.5px">${esc(s.artist)}</div>
+        <div style="margin-top:6px">${castLine(s)}</div>
+        ${s.note ? `<div class="privacy" style="margin-top:6px">${esc(s.note)}</div>` : ''}
+        <div class="hstack" style="margin-top:6px">
+          <button class="btn sm icon">+</button><button class="btn sm icon">▶</button>
+          <span class="muted" style="font-size:12px">${s.recs} recordings</span></div>
+      </div>`).join('')}</div>`
+    /* Desktop: cast moves up into a column of its own, and the note takes the full-width
+       row underneath where prose has somewhere to go. Songs with no note get no row. */
+    : `<div class="scroll-x"><table class="gb songs">
+      <thead><tr><th class="num">#</th><th>Song</th><th>Cast</th>
+        <th class="num">Length</th><th>Recordings</th><th></th></tr></thead>
+      <tbody>${list.map(s => `
+        <tr ${s.note ? 'style="border-bottom:0"' : ''}>
+          <td class="num">${armed ? '⠿ ' : ''}${s.pos}</td>
+          <td><b style="font-weight:600">${esc(s.title)}</b>
+            <div class="muted" style="font-size:12px">${esc(s.artist)}</div></td>
+          <td>${castLine(s)}</td>
+          <td class="num">${s.len}</td>
+          <td><span class="hstack"><button class="btn sm icon" title="Add recording">+</button>
+            <button class="btn sm icon" title="View recordings">▶</button>
+            <span class="mono muted" style="font-size:11.5px">${s.recs}</span></span></td>
+          <td><button class="btn sm" onclick="go('song')">Open</button></td>
+        </tr>
+        ${s.note ? `<tr class="sub"><td></td><td colspan="5">
+          <span class="gb-label">Note</span>
+          <span class="muted" style="font-size:12.5px">${esc(s.note)}</span></td></tr>` : ''}`).join('')}
+      </tbody></table></div>`;
+
+  return `
+    ${pageHead('Songs', isAdmin() ? [{ label: state.editing ? 'Done' : 'Edit setlist' }] : null,
+      `${state.semester} · ${SONGS.length} songs · 33:30`)}
+    <div class="row-between">
+      ${roleLegend}
+      <button class="toggle" aria-pressed="${state.myOnly}" onclick="toggleMyOnly()">
+        <span class="track"><span class="knob"></span></span> My songs only</button>
+    </div>
+    ${body}
+    ${armed ? `<div class="hstack"><button class="btn sm">+ Add song</button>
+      <button class="btn sm">Import from Spotify</button></div>` : ''}`;
+}
+
+/* --- Song detail (review item 10, new) --------------------- */
+function songPage() {
+  const s = SONGS[0];
+  const armed = state.editing && isAdmin();
+  return `
+    ${pageHead(s.title, isAdmin() ? [{ label: state.editing ? 'Done' : 'Edit song' }] : null,
+      `${esc(s.artist)} · ${s.len} · position ${s.pos}`)}
+    <button class="btn sm ghost" onclick="go('songs')">← All songs</button>
+
+    <div class="card stack" style="gap:10px">
+      <div class="row-between"><span class="gb-label">Cast</span>
+        ${isAdmin() ? '<span class="muted" style="font-size:11.5px">Edit assignments from a rehearsal (ADR 0009)</span>' : ''}</div>
+      <div class="songlist">
+        ${ROLES.map((role, i) => `<div class="item">
+          <div class="muted">${role}</div>${chip(s.cast[i], { markYou: true, role: i, showEmpty: true })}</div>`).join('')}
+      </div>
+      ${armed ? '<div><button class="btn sm">+ Add role requirement</button></div>' : ''}
+    </div>
+
+    <div class="stack" style="gap:8px">
+      <div class="row-between"><h2 class="section-head">Notes</h2>
+        ${isAdmin() ? '<button class="btn sm">Add note</button>' : ''}</div>
+      <div class="songlist">
+        <div class="item"><div><b style="font-weight:600">${esc(s.note)}</b>
+          <div class="muted" style="font-size:12px">Posted by an admin · Tue 15 Sep</div></div></div>
+        <div class="item"><div>Intro is four bars, not two.
+          <div class="muted" style="font-size:12px">Posted by an admin · Thu 10 Sep</div></div></div>
+      </div>
+    </div>
+
+    <div class="stack" style="gap:8px">
+      <div class="row-between"><h2 class="section-head">Recordings</h2>
+        <button class="btn sm primary">+ Add recording</button></div>
+      <div class="songlist">
+        ${[['Tue 15 Sep', 'Avery Cho', '2.4 MB'], ['Thu 10 Sep', 'Marcus Vale', '3.1 MB'],
+           ['Tue 8 Sep', 'Dani Okafor', '1.9 MB']].map(([d, who, size]) => `
+          <div class="item">
+            <div><b style="font-weight:600">${d}</b>
+              <span class="muted" style="font-size:12.5px">· ${who}</span></div>
+            <div class="hstack"><span class="mono muted" style="font-size:11.5px">${size}</span>
+              <button class="btn sm icon" title="Play">▶</button></div>
+          </div>`).join('')}
+      </div>
+    </div>
+
+    <div class="stack" style="gap:8px">
+      <h2 class="section-head">Rehearsed at</h2>
+      <div class="songlist">
+        ${REHEARSALS.slice(0, 3).map(r => `<div class="item">
+          <div>${r.date} <span class="mono muted">${r.time}</span></div>
+          <div class="mono muted" style="font-size:12px">19:00–19:24</div></div>`).join('')}
+      </div>
+    </div>`;
+}
+
+/* --- Band (review item 11: active members only) ------------ */
+function membersPage() {
+  const armed = state.editing && isAdmin();
+  const active = PEOPLE.filter(p => p.active);
+  const body = isPhone() ? `
+    <div class="songcards">${active.map(p => `
+      <div class="card" style="padding:10px 12px">
+        <div class="row-between"><b style="font-weight:600">${esc(p.name)}</b>
+          ${armed ? '<button class="btn sm">Remove</button>'
+            : '<button class="btn sm ghost" onclick="go(\'profile\')">View</button>'}</div>
+        <div class="muted" style="font-size:12.5px">${esc(p.roles)}</div>
+      </div>`).join('')}</div>`
+    : `<div class="scroll-x"><table class="gb">
+      <thead><tr><th>Name</th><th>Roles</th><th></th></tr></thead>
+      <tbody>${active.map(p => `<tr>
+        <td><b style="font-weight:600">${esc(p.name)}</b></td>
+        <td>${armed ? `<span class="field">${esc(p.roles)} +</span>` : esc(p.roles)}</td>
+        <td>${armed ? '<button class="btn sm">Remove</button>'
+          : `<button class="btn sm" onclick="go('profile')">View</button>`}</td>
+      </tr>`).join('')}</tbody></table></div>`;
+
+  return `
+    ${pageHead('Band', isAdmin() ? [{ label: state.editing ? 'Done' : 'Edit roster' }] : null,
+      `${state.semester} · ${active.length} members`)}
+    ${body}
+    ${armed ? `<div class="hstack"><button class="btn sm">+ Add member</button>
+      <button class="btn sm">Import roster</button><button class="btn sm">Send invites</button>
+      <span class="muted" style="font-size:12px">1 invited member not yet active — shown only while editing.</span></div>` : ''}`;
+}
+
+/* --- You --------------------------------------------------- */
+function profilePage() {
+  const mine = SONGS.filter(s => s.cast.some(c => c && c.replace(/^[~!]/, '') === YOU));
+  return `
+    ${pageHead(YOU, null, 'Your profile · Fall 2026')}
+    <div class="card stack" style="gap:10px">
+      <div class="row-between"><span class="gb-label">Your roles this semester</span>
+        <button class="btn sm">Edit</button></div>
+      <div class="hstack"><span class="chip">Lead Vocals</span><span class="chip">Keys</span>
+        <span class="chip empty">+ add</span></div>
+    </div>
+    <div class="stack" style="gap:8px">
+      <h2 class="section-head">Songs you're on</h2>
+      <div class="songlist">${mine.map(s => `
+        <div class="item"><div><b style="font-weight:600">${esc(s.title)}</b>
+          <span class="muted" style="font-size:12.5px">· ${esc(s.artist)}</span></div>
+          <div class="mono muted" style="font-size:12px">${
+            ROLES[s.cast.findIndex(c => c && c.replace(/^[~!]/, '') === YOU)]}</div></div>`).join('')}</div>
+    </div>
+    <div class="stack" style="gap:8px">
+      <div class="row-between"><h2 class="section-head">Your recordings</h2>
+        <button class="btn sm primary">Upload</button></div>
+      <div class="songlist">
+        <div class="item"><div>Riverbend <span class="muted">· Tue 15 Sep</span></div>
+          <div class="mono muted" style="font-size:12px">2.4 MB</div></div>
+        <div class="item"><div>Marigold <span class="muted">· Tue 15 Sep</span></div>
+          <div class="mono muted" style="font-size:12px">3.1 MB</div></div>
+      </div>
+    </div>`;
+}
+
+/* --- Manage conflicts -------------------------------------- */
+function conflictsPage() {
+  return `
+    ${pageHead('Conflicts', null, '3 awaiting a verdict')}
+    <div class="privacy">Reasons and verdicts never render on a member-facing page (ADR 0005).</div>
+    ${REHEARSALS.filter(r => r.conflicts).map(r => `
+      <div class="card stack" style="gap:10px">
+        <div class="row-between"><b style="font-weight:600">${r.date} · ${r.time}</b>
+          <span class="chip conflict">${r.conflicts} pending</span></div>
+        <div class="scroll-x"><table class="gb">
+          <thead><tr><th>Person</th><th>Declared</th><th>Reason</th><th>Verdict</th></tr></thead>
+          <tbody>${Object.entries(CONFLICTED).slice(0, r.conflicts).map(([who, what]) => `
+            <tr><td>${esc(who)}</td><td class="num">${what}</td>
+              <td class="muted" style="font-size:12px">Lab section runs late</td>
+              <td><span class="field" style="min-width:120px">Undecided ▾</span></td></tr>`).join('')}
+          </tbody></table></div>
+        <div class="hstack"><button class="btn sm">Preview fallout</button>
+          <button class="btn sm primary">Save verdicts</button></div>
+      </div>`).join('')}`;
+}
+
+/* --- Semesters --------------------------------------------- */
+function semestersPage() {
+  return `
+    ${pageHead('Semesters', null, 'Create, publish, set up')}
+    <div class="songlist">
+      ${[[LIVE, 'Published'], ['Spring 2027', 'Draft']].map(([n, st]) => `
+        <div class="item">
+          <div><b style="font-weight:600">${n}</b>
+            <span class="chip ${st === 'Published' ? 'you' : ''}" style="margin-left:6px">${st}</span></div>
+          <div class="hstack">
+            <button class="btn sm">${st === 'Published' ? 'Republish' : 'Publish'}</button>
+            ${st === 'Published' ? '' : '<button class="btn sm">Delete</button>'}</div>
+        </div>`).join('')}
+    </div>
+    <div class="card stack" style="gap:10px">
+      <span class="gb-label">Set up Spring 2027</span>
+      <div class="hstack">${['Roster', 'Setlist', 'Rehearsals', 'Finish'].map((s, i) => `
+        <span class="chip" ${i === 0 ? 'style="border-color:var(--ink)"' : ''}>${i + 1}. ${s}</span>
+        ${i < 3 ? '<span class="muted">→</span>' : ''}`).join('')}</div>
+      <div><button class="btn primary">Continue setup</button></div>
+    </div>`;
+}
+
+function pageHead(title, actions, sub) {
+  return `<div class="page-head">
+    <div><h1>${esc(title)}</h1>
+      ${sub ? `<div class="muted" style="font-size:12.5px">${esc(sub)}</div>` : ''}</div>
+    ${actions ? `<div class="actions">${actions.map(a =>
+      `<button class="btn ${state.editing ? '' : 'primary'}" onclick="toggleEdit()">${a.label}</button>`).join('')}</div>` : ''}
+  </div>`;
+}
+
+/* ============================================================
+   Shell
+   ============================================================ */
+const NAV = [
+  ['overview',  'Home',      false],
+  ['conflicts', 'Conflicts', true],   /* review item 13: admin quick access, next to Home */
+  ['schedule',  'Schedule',  false],
+  ['songs',     'Songs',     false],
+  ['members',   'Band',      false],
+  ['profile',   'You',       false],
+];
+
+/* The semester control — one place, sidebar-resident (review item 13). */
+function semesterPanel() {
+  const draft = isDraft();
+  return `<div class="sem-panel ${draft ? 'draft' : ''}">
+    <div class="hide-rail stack" style="gap:6px">
+      <span class="gb-label">Viewing</span>
+      <span class="field">${state.semester} ▾</span>
+      ${draft ? '<span class="warnline">Not what members see — they see Fall 2026.</span>' : ''}
+      <div class="hstack" style="gap:6px">
+        <button class="btn sm" ${state.dirty ? '' : 'disabled'}>Save changes</button>
+        <button class="btn sm ${draft ? 'primary' : ''}" ${draft ? '' : 'disabled'}>Publish</button>
+      </div>
+    </div>
+    <div class="glyph" style="display:none"></div>
+  </div>`;
+}
+
+function sidebar() {
+  const p = effectivePage();
+  return `<aside class="sidebar ${state.rail ? 'rail' : ''}">
+    <div class="head">
+      <span class="brand">Rolling Sloans</span>
+      <button class="btn sm icon" onclick="toggleRail()" title="Collapse sidebar">${state.rail ? '»' : '«'}</button>
+    </div>
+    <nav>
+      ${NAV.filter(([, , adminOnly]) => !adminOnly || isAdmin()).map(([k, label]) => `
+        <a href="#" onclick="go('${k}');return false" ${p === k ? 'aria-current="page"' : ''} title="${label}">
+          <span class="glyph"></span><span class="label">${label}</span>
+          ${k === 'conflicts' ? '<span class="count">3</span>' : ''}
+        </a>`).join('')}
+      ${isAdmin() ? `<div class="group"><span class="gb-label">Admin</span></div>
+        <a href="#" onclick="go('semesters');return false" ${p === 'semesters' ? 'aria-current="page"' : ''} title="Semesters">
+          <span class="glyph"></span><span class="label">Semesters</span></a>` : ''}
+    </nav>
+    ${isAdmin() ? semesterPanel() : ''}
+    <div class="sem-panel"><button class="btn sm hide-rail">Log out</button></div>
+  </aside>`;
+}
+
+function desktopShell(body) {
+  return `<div class="framewrap"><div class="shell">
+    ${sidebar()}
+    <div class="framewrap">
+      ${state.editing ? editToolbar() : ''}
+      <div class="frame-scroll"><div class="page">${body}</div></div>
+    </div>
+  </div>${state.conflictModal ? conflictModal() : ''}</div>`;
+}
+function editToolbar() {
+  return `<div class="edit-toolbar">
+    <span class="grow">Editing — ${state.dirty ? '3 unsaved changes' : 'no changes yet'}</span>
+    <button class="btn sm" onclick="setDirty(true)">Make a change</button>
+    <button class="btn sm">Preview</button>
+    <button class="btn sm" onclick="toggleEdit()">Discard</button>
+    <button class="btn sm primary" ${state.dirty ? '' : 'disabled'} onclick="toggleEdit()">Save</button>
+  </div>`;
+}
+
+function phoneShell(body) {
+  const p = effectivePage();
+  const tabs = [['overview', 'Home'], ['schedule', 'Schedule'], ['songs', 'Songs'],
+                ['members', 'Band'], isAdmin() ? ['more', 'More'] : ['profile', 'You']];
+  return `<div class="framewrap">
+    <div class="phonebar">
+      <span class="title">${esc(pageTitle())}</span>
+      ${isAdmin() ? `
+        <button class="btn sm" ${state.dirty ? '' : 'disabled'}>Save</button>
+        <button class="btn sm ${isDraft() ? 'primary' : ''}" ${isDraft() ? '' : 'disabled'}>Publish</button>`
+      : ''}
+    </div>
+    ${isAdmin() && isDraft() ? `<div class="sem-strip">
+      <span>Viewing <b>${state.semester}</b> — not what members see</span>
+      <span style="flex:1"></span><button class="btn sm">Switch</button></div>` : ''}
+    ${state.editing ? editToolbar() : ''}
+    <div class="frame-scroll"><div class="page">${body}</div></div>
+    <nav class="tabbar">
+      ${tabs.map(([k, l]) => k === 'more'
+        ? `<a href="#" onclick="toggleSheet();return false"><span class="glyph"></span>${l}
+           <span class="dot"></span></a>`
+        : `<a href="#" onclick="go('${k}');return false" ${p === k ? 'aria-current="page"' : ''}>
+           <span class="glyph"></span>${l}</a>`).join('')}
+    </nav>
+    ${state.sheet ? `<div class="backdrop bottom" onclick="toggleSheet()">
+      <div class="modal" onclick="event.stopPropagation()">
+        <div class="m-head"><h3>More</h3><button class="btn sm ghost" onclick="toggleSheet()">✕</button></div>
+        <div class="m-body" style="gap:0">
+          ${[['conflicts', 'Conflicts', '3'], ['semesters', 'Semesters', ''],
+             ['profile', 'You', '']].map(([k, l, n]) => `
+            <div class="row-between" style="padding:10px 0;border-bottom:1px solid var(--line-soft)"
+              onclick="go('${k}')"><span>${l}</span>
+              ${n ? `<span class="chip conflict">${n}</span>` : '<span class="muted">›</span>'}</div>`).join('')}
+          <div class="row-between" style="padding:10px 0"><span>Log out</span></div>
+        </div></div></div>` : ''}
+    ${state.conflictModal ? conflictModal() : ''}
+  </div>`;
+}
+
+const BODIES = {
+  overview: overviewPage, songs: songsPage, song: songPage, members: membersPage,
+  profile: profilePage, conflicts: conflictsPage, semesters: semestersPage,
+  schedule: () => state.scheduleView === 'all' ? allRehearsalsPage() : rehearsalPage(),
+};
+
+/* ============================================================
+   Render
+   ============================================================ */
+function render() {
+  const body = BODIES[effectivePage()]();
+  document.getElementById('stage').innerHTML =
+    `<div class="frame ${state.viewport}">${isPhone() ? phoneShell(body) : desktopShell(body)}</div>`;
+
+  document.getElementById('verdict').innerHTML = `
+    <div class="cols">
+      <div><h2>Settled in this build</h2><ul>
+        <li><b>Nav</b> — collapsible left sidebar on desktop (hit «), bottom tab bar on phone. Admin gets a <b>Conflicts</b> item with a count directly under Home.</li>
+        <li><b>Admin model</b> — edit-in-place. Every surface carries one Edit button; there is no separate admin app and no second copy of any page.</li>
+        <li><b>Semester control</b> — lives in the sidebar: Viewing dropdown, the draft warning, and Save changes / Publish, each enabled only when it applies. The top-right dropdown and the Overview admin card are gone. On phone it is Save/Publish in the top bar plus one strip.</li>
+        <li><b>Rehearsal page</b> — running order and assignments are one table keyed by start time. Pills read by state: assigned, backup, conflict, role-mismatch, unfilled.</li>
+        <li><b>Your slots</b> — now a timeline of the rehearsal window with your songs filled in, replacing the bar that showed nothing.</li>
+      </ul></div>
+      <div><h2>First drafts — these resolve under #305</h2><ul>
+        <li><b>All rehearsals</b> — a sub-view of Schedule rather than its own route, keeping /schedule/ the single member-facing page (#190).</li>
+        <li><b>Declare a conflict</b> — modal on desktop, bottom sheet on phone; three declaration types matching <code>CONFLICT_DECLARATION_CHOICES</code>, with the ADR 0005 privacy note and the ADR 0006 dress-rehearsal exclusion stated in the flow.</li>
+        <li><b>Song detail</b> — cast, admin notes, recordings, and where it has been rehearsed. Assignments are read-only here per ADR 0009.</li>
+        <li><b>Songs table</b> — Artist added; a second row per song shows every role with its person, empty roles included, so the shape stays constant. Recordings add/view and latest note are columns.</li>
+      </ul></div>
+    </div>`;
+  syncChrome();
+}
+function syncChrome() {
+  document.querySelectorAll('#viewportseg button').forEach(b =>
+    b.setAttribute('aria-pressed', String(b.dataset.vp === state.viewport)));
+  document.querySelectorAll('#roleseg button').forEach(b =>
+    b.setAttribute('aria-pressed', String(b.dataset.role === state.role)));
+  document.getElementById('dirty').textContent = `Unsaved edits: ${state.dirty ? 'on' : 'off'}`;
+  const sel = document.getElementById('pagesel');
+  sel.value = state.page === 'schedule' && state.scheduleView === 'all' ? 'schedule-all' : state.page;
+}
+
+document.getElementById('pagesel').innerHTML =
+  PAGES.map(([k, l]) => `<option value="${k}">${l}</option>`).join('');
+document.getElementById('pagesel').onchange = e => go(e.target.value);
+document.querySelectorAll('#viewportseg button').forEach(b =>
+  b.onclick = () => { state.viewport = b.dataset.vp; render(); });
+document.querySelectorAll('#roleseg button').forEach(b =>
+  b.onclick = () => { state.role = b.dataset.role; state.editing = false; render(); });
+document.getElementById('dirty').onclick = () => setDirty(!state.dirty);
+
+render();
+</script>
