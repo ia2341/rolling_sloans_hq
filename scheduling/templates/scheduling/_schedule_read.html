@@ -1,0 +1,18 @@
+{% if schedule.past %}
+  <details>
+    <summary>Show past rehearsals</summary>
+    <ul>
+      {% for row in schedule.past %}
+        {% include "scheduling/_rehearsal_list_row.html" %}
+      {% endfor %}
+    </ul>
+  </details>
+{% endif %}
+
+<ul>
+  {% for row in schedule.future %}
+    {% include "scheduling/_rehearsal_list_row.html" %}
+  {% empty %}
+    <li>No upcoming rehearsals scheduled.</li>
+  {% endfor %}
+</ul>

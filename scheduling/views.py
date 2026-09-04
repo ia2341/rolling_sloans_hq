@@ -27,6 +27,8 @@ from scheduling.forms import (
     DeclareConflictForm,
     MembershipRolesForm,
     RecordingUploadForm,
+    RehearsalEditEmptyFormSet,
+    RehearsalEditFormSet,
     RehearsalForm,
     RosterAddFormSet,
     RosterAddRoleForm,
@@ -63,7 +65,10 @@ from scheduling.services import (
     AssignmentEditBuffer,
     InvalidSemesterNameError,
     LiveSemesterDeletionError,
+    PastRehearsalEditError,
     RecordingUploadError,
+    RehearsalEditBuffer,
+    RehearsalEditRow,
     RosterEditBuffer,
     RosterEditEntry,
     SelfRemovalError,
@@ -71,6 +76,7 @@ from scheduling.services import (
     SongRoleRequirementEntry,
     StaleAdjudicationSemesterError,
     StaleAssignmentSemesterError,
+    StaleRehearsalSemesterError,
     StaleRosterSemesterError,
     StaleSongRoleRequirementsError,
     UnknownConflictError,
@@ -78,6 +84,7 @@ from scheduling.services import (
     WrongViewingSemesterError,
     addable_roles_for,
     apply_adjudications,
+    apply_rehearsal_edits,
     apply_roster_edits,
     apply_song_role_assignments,
     apply_song_role_requirements,
@@ -366,6 +373,125 @@ def _build_schedule_context(request, semester, view_mode, rehearsal, error_rehea
         rehearsal, conflict_rows.get(rehearsal.pk), today, error_rehearsal, error_form,
     )
     return context
+
+
+class ScheduleEditView(AdminRequiredMixin, View):
+    """`/schedule/edit/`: an admin's in-place "Edit rehearsals" mode for the viewing Semester's rehearsal list (issue #219).
+
+    A sibling of `ScheduleView`, htmx-swapped into `?view=all`'s list the
+    same way `SetlistEditView` swaps into the Setlist — GET renders the
+    grid (a bare fragment for the in-place swap, a full page for a
+    direct/no-JS request), POST commits the whole buffer as one atomic
+    write via `apply_rehearsal_edits()` or writes nothing and re-renders
+    with every submitted value preserved.
+
+    The grid's queryset is every Rehearsal dated today or later — a
+    past-dated one renders with no inputs in the DOM at all, matching
+    `rehearsal_schedule_for()`'s own past/future boundary, and the past
+    section stays collapsed by default so the edit surface never nudges an
+    admin toward it. Member-facing filters have no equivalent on this page
+    today; the assignment grid's "My Songs Only" is the only one that
+    exists elsewhere on `/schedule/`, and it isn't rendered here.
+    """
+
+    fragment_template_name = 'scheduling/_schedule_edit.html'
+    page_template_name = 'scheduling/schedule_edit.html'
+
+    def get(self, request):
+        """Render the edit grid: a bare fragment for htmx, a full page otherwise."""
+        semester = get_viewing_semester(request)
+        if semester is None:
+            return redirect(f"{reverse('scheduling:schedule')}?view=all")
+        future_rehearsals, past_rehearsals = self._rehearsals(semester)
+        formset_class = RehearsalEditFormSet if future_rehearsals.exists() else RehearsalEditEmptyFormSet
+        formset = formset_class(queryset=future_rehearsals, prefix='rehearsal', form_kwargs={'semester': semester})
+        return self._render(request, semester, formset, past_rehearsals)
+
+    def post(self, request):
+        """Validate and apply the whole Rehearsal edit Buffer atomically, or re-render with errors."""
+        semester = get_viewing_semester(request)
+        if semester is None:
+            return redirect(f"{reverse('scheduling:schedule')}?view=all")
+        future_rehearsals, past_rehearsals = self._rehearsals(semester)
+        submitted_semester_id = request.POST.get('schedule_semester_id', '')
+        submitted_stamp = request.POST.get('schedule_semester_updated_at', '')
+        formset = RehearsalEditFormSet(
+            request.POST, queryset=future_rehearsals, prefix='rehearsal', form_kwargs={'semester': semester},
+        )
+        if formset.is_valid():
+            buffer = self._build_buffer(formset, submitted_semester_id, submitted_stamp)
+            try:
+                apply_rehearsal_edits(buffer, viewing_semester=semester)
+            except (WrongViewingSemesterError, StaleRehearsalSemesterError, PastRehearsalEditError) as error:
+                messages.error(request, str(error))
+                return self._render(
+                    request, semester, formset, past_rehearsals,
+                    schedule_semester_id=submitted_semester_id, schedule_semester_updated_at=submitted_stamp,
+                    status=200,
+                )
+            messages.success(request, 'Rehearsals updated.')
+            return redirect(f"{reverse('scheduling:schedule')}?view=all")
+        return self._render(
+            request, semester, formset, past_rehearsals,
+            schedule_semester_id=submitted_semester_id, schedule_semester_updated_at=submitted_stamp,
+            status=200,
+        )
+
+    def _rehearsals(self, semester):
+        """Return (future-or-today, past) Rehearsal querysets for `semester`, split on `rehearsal_schedule_for()`'s own boundary."""
+        today = timezone.localdate()
+        base = _scoped_to_viewing_semester(Rehearsal, semester).order_by('date', 'start_time')
+        return base.filter(date__gte=today), base.filter(date__lt=today)
+
+    def _build_buffer(self, formset, submitted_semester_id, submitted_stamp):
+        """Turn a valid RehearsalEditFormSet into a RehearsalEditBuffer, carrying the Semester state it was rendered against."""
+        rows = []
+        for form in formset.forms:
+            cleaned_data = form.cleaned_data
+            if not cleaned_data:
+                continue
+            rows.append(RehearsalEditRow(
+                rehearsal_id=form.instance.pk,
+                date=cleaned_data['date'],
+                start_time=cleaned_data['start_time'],
+                end_time=cleaned_data.get('end_time'),
+                is_full_setlist=cleaned_data['is_full_setlist'],
+                setup_grace_minutes=cleaned_data.get('setup_grace_minutes'),
+                teardown_grace_minutes=cleaned_data.get('teardown_grace_minutes'),
+                arrival_buffer_minutes=cleaned_data.get('arrival_buffer_minutes'),
+                departure_buffer_minutes=cleaned_data.get('departure_buffer_minutes'),
+            ))
+        return RehearsalEditBuffer(
+            semester_id=_parse_roster_int(submitted_semester_id),
+            semester_updated_at=parse_datetime(submitted_stamp) or timezone.now(),
+            rows=rows,
+        )
+
+    def _render(
+        self, request, semester, formset, past_rehearsals,
+        schedule_semester_id=None, schedule_semester_updated_at=None, status=200,
+    ):
+        """Render the fragment for an htmx request, else the full page.
+
+        On a rejected POST, the caller passes through the *submitted*
+        semester id/stamp rather than `semester`'s live values — otherwise
+        a stale-stamp rejection would hand back the now-current stamp, and
+        a blind resubmit of the unchanged grid would pass the staleness
+        check and silently overwrite a concurrent edit it never saw.
+        """
+        context = {
+            'semester': semester,
+            'formset': formset,
+            'past_rehearsals': past_rehearsals,
+            'schedule_semester_id': schedule_semester_id if schedule_semester_id is not None else semester.pk,
+            'schedule_semester_updated_at': (
+                schedule_semester_updated_at
+                if schedule_semester_updated_at is not None
+                else semester.updated_at.isoformat()
+            ),
+        }
+        template = self.fragment_template_name if _is_htmx(request) else self.page_template_name
+        return render(request, template, context, status=status)
 
 
 class SetlistView(BaseView, TemplateView):

@@ -13,24 +13,19 @@
   <p><a href="{% url 'scheduling:schedule' %}">Back to next rehearsal</a></p>
   <h2>All Rehearsals</h2>
 
-  {% if schedule.past %}
-    <details>
-      <summary>Show past rehearsals</summary>
-      <ul>
-        {% for row in schedule.past %}
-          {% include "scheduling/_rehearsal_list_row.html" %}
-        {% endfor %}
-      </ul>
-    </details>
+  {% if semester and request.user.is_admin %}
+    <button
+      type="button"
+      id="edit-rehearsals-button"
+      hx-get="{% url 'scheduling:schedule-edit' %}"
+      hx-target="#schedule-edit-surface"
+      hx-swap="innerHTML"
+    >Edit rehearsals</button>
   {% endif %}
 
-  <ul>
-    {% for row in schedule.future %}
-      {% include "scheduling/_rehearsal_list_row.html" %}
-    {% empty %}
-      <li>No upcoming rehearsals scheduled.</li>
-    {% endfor %}
-  </ul>
+  <div id="schedule-edit-surface">
+    {% include "scheduling/_schedule_read.html" %}
+  </div>
 {% elif not rehearsal %}
   <p>No upcoming rehearsal to show.</p>
   <p><a href="{% url 'scheduling:schedule' %}?view=all">View all rehearsals</a></p>
