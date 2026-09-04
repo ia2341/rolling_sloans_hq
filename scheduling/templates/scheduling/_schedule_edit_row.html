@@ -43,4 +43,33 @@
       {{ form.departure_buffer_minutes.errors }}
     </span>
   </details>
+
+  {# The Running Order sub-grid (issue #220): collapsed by default, but every input stays in the DOM regardless of
+     whether an admin ever opens it -- a whole-run re-roll must be able to fill a rehearsal nobody expanded. #}
+  <details class="running-order-expander">
+    <summary>Running Order ({{ form.running_order_forms|length }} song{{ form.running_order_forms|length|pluralize }})</summary>
+    <div class="running-order-sub-grid" data-running-order-for="{{ form.prefix }}">
+      <div class="running-order-header">
+        <span></span>
+        <span></span>
+        <span></span>
+        <span>Song</span>
+        <span>Slots</span>
+        <span></span>
+      </div>
+      <div class="running-order-rows" id="running-order-rows-{{ form.prefix }}">
+        {% for running_order_form in form.running_order_forms %}
+          {% include "scheduling/_running_order_row.html" with form=running_order_form %}
+        {% endfor %}
+      </div>
+      <span class="running-order-add-song">
+        <select class="running-order-add-song-select" @change="addRunningOrderSong($event)">
+          <option value="">+ Add song&hellip;</option>
+          {% for song in setlist_songs %}
+            <option value="{{ song.pk }}" data-title="{{ song.title }}">{{ song.title }}</option>
+          {% endfor %}
+        </select>
+      </span>
+    </div>
+  </details>
 </div>

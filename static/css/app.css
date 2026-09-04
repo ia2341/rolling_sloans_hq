@@ -290,6 +290,99 @@ body > nav [aria-current='page'] {
   }
 }
 
+/* Each Rehearsal row's Running Order sub-grid (issue #220): a smaller CSS-grid
+   sibling of the setlist edit grid above, one per expanded rehearsal. Collapsed
+   by default via <details>, but its inputs stay in the DOM regardless, so a
+   never-expanded rehearsal's Running Order still saves. */
+.running-order-sub-grid {
+  margin-block-start: var(--rs-space-sm);
+}
+
+.running-order-header,
+.running-order-row {
+  display: grid;
+  grid-template-columns: 1.5rem 1.5rem 3.5rem 1fr 5rem auto;
+  align-items: center;
+  gap: var(--rs-space-sm);
+}
+
+.running-order-header {
+  font-weight: bold;
+  padding-block-end: var(--rs-space-xs);
+  border-block-end: 1px solid var(--rs-border-color);
+}
+
+.running-order-row {
+  padding-block: var(--rs-space-xs);
+  border-block-end: 1px solid var(--rs-border-color);
+}
+
+.running-order-drag-handle {
+  cursor: grab;
+}
+
+/* A row struck for removal: undoable up to Save, mirrors .setlist-row-deleted. */
+.running-order-row-deleted {
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+
+.running-order-field-label {
+  display: none;
+}
+
+/* Below this breakpoint the sub-grid becomes stacked cards, same reasoning as
+   the setlist edit grid's own mobile layout above (issue #220). */
+@media (max-width: 48rem) {
+  .running-order-header {
+    display: none;
+  }
+
+  .running-order-row {
+    grid-template-columns: auto auto 1fr auto;
+    grid-template-areas:
+      "number handle move remove"
+      "title title title title"
+      "slots slots slots slots";
+    row-gap: var(--rs-space-sm);
+    padding: var(--rs-space-sm);
+    border: 1px solid var(--rs-border-color);
+    border-radius: var(--pico-border-radius);
+    margin-block-end: var(--rs-space-sm);
+  }
+
+  .running-order-row-number {
+    grid-area: number;
+  }
+
+  .running-order-drag-handle {
+    grid-area: handle;
+    padding: var(--rs-space-sm);
+    font-size: 1.25rem;
+  }
+
+  .running-order-move-buttons {
+    grid-area: move;
+  }
+
+  .running-order-delete-toggle {
+    grid-area: remove;
+  }
+
+  .running-order-song-title {
+    grid-area: title;
+  }
+
+  .running-order-field-slot-count {
+    grid-area: slots;
+  }
+
+  .running-order-field-label {
+    display: block;
+    font-weight: bold;
+  }
+}
+
 /* The Roster edit table and its Add list (issue #231): a Person×Role table is
    the widest content on this surface, with no columns left to compress on a
    phone, so below this breakpoint each `<tr>` becomes its own card instead of

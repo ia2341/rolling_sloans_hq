@@ -8,6 +8,11 @@ urlpatterns = [
     path('', views.OverviewView.as_view(), name='overview'),
     path('schedule/', views.ScheduleView.as_view(), name='schedule'),
     path('schedule/edit/', views.ScheduleEditView.as_view(), name='schedule-edit'),
+    path('schedule/edit/preview/', views.ScheduleEditPreviewView.as_view(), name='schedule-edit-preview'),
+    path(
+        'schedule/edit/confirm-remove-song/',
+        views.RunningOrderDeleteConfirmView.as_view(), name='schedule-edit-confirm-remove-song',
+    ),
     path('schedule/<int:rehearsal_id>/conflict/', views.ConflictDeclareView.as_view(), name='conflict-declare'),
     path('schedule/<int:rehearsal_id>/conflict/delete/', views.ConflictDeleteView.as_view(), name='conflict-delete'),
     path(

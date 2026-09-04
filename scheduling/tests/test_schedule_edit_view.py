@@ -7,9 +7,16 @@ from django.urls import reverse
 from django.utils import timezone
 
 from identity.factories import PersonFactory
-from scheduling.factories import RehearsalFactory, SemesterFactory
-from scheduling.models import Rehearsal
+from scheduling.factories import (
+    RecordingFactory,
+    RehearsalFactory,
+    RehearsalSongFactory,
+    SemesterFactory,
+    SongFactory,
+)
+from scheduling.models import Rehearsal, RehearsalSong
 from scheduling.services import VIEWING_SEMESTER_SESSION_KEY
+from scheduling.tests.preview_helpers import assert_preview_writes_nothing
 
 PASSWORD = 'a-strong-test-password-123'
 TOMORROW = timezone.localdate() + timedelta(days=1)
@@ -38,8 +45,8 @@ def select(test_case, semester):
     session.save()
 
 
-def formset_data(rehearsals, edits=None, extra_rows=(), semester_id=None, stamp=None):
-    """Build POST data for `RehearsalEditFormSet`, one row per existing Rehearsal plus any `extra_rows`.
+def formset_data(rehearsals, edits=None, extra_rows=(), semester_id=None, stamp=None, running_order=()):
+    """Build POST data for `RehearsalEditFormSet` (plus `RunningOrderFormSet`), one row per existing Rehearsal plus any `extra_rows`.
 
     Every existing row starts from the Rehearsal's current values so a
     test only has to spell out the fields it means to change, keyed by
@@ -47,6 +54,10 @@ def formset_data(rehearsals, edits=None, extra_rows=(), semester_id=None, stamp=
     `INITIAL_FORMS`, for a brand-new row. `semester_id`/`stamp` default to
     the first Rehearsal's Semester; both are required even with zero
     Rehearsals, so a caller building a from-empty Buffer must pass them.
+    `running_order` (issue #220) is a list of dicts for `RunningOrderFormSet`'s
+    rows (each needs `rehearsal_row_key`, `song_id`, `slot_count`, and
+    optionally `rehearsal_song_id`/`DELETE`) — empty by default, so a test
+    that doesn't touch the sub-grid still submits a valid (empty) buffer for it.
     """
     edits = edits or {}
     data = {
@@ -54,7 +65,24 @@ def formset_data(rehearsals, edits=None, extra_rows=(), semester_id=None, stamp=
         'rehearsal-INITIAL_FORMS': str(len(rehearsals)),
         'rehearsal-MIN_NUM_FORMS': '0',
         'rehearsal-MAX_NUM_FORMS': '1000',
+        'songs-TOTAL_FORMS': str(len(running_order)),
+        'songs-INITIAL_FORMS': '0',
+        'songs-MIN_NUM_FORMS': '0',
+        'songs-MAX_NUM_FORMS': '1000',
     }
+    song_order_tokens = []
+    for index, row in enumerate(running_order):
+        prefix = f'songs-{index}'
+        song_order_tokens.append(prefix)
+        data[f'{prefix}-rehearsal_row_key'] = row['rehearsal_row_key']
+        data[f'{prefix}-song_id'] = str(row['song_id'])
+        data[f'{prefix}-slot_count'] = str(row['slot_count'])
+        if row.get('rehearsal_song_id') is not None:
+            data[f'{prefix}-rehearsal_song_id'] = str(row['rehearsal_song_id'])
+        if row.get('DELETE'):
+            data[f'{prefix}-DELETE'] = 'on'
+    if song_order_tokens:
+        data['song_slot_order'] = song_order_tokens
     for index, rehearsal in enumerate(rehearsals):
         row = {
             'date': rehearsal.date.isoformat(),
@@ -430,3 +458,258 @@ class ScheduleEditSaveTests(TestCase):
         past_rehearsal.refresh_from_db()
         self.assertEqual(past_rehearsal.date, YESTERDAY)
         self.assertEqual(past_rehearsal.start_time, time(18, 0))
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class ScheduleEditRunningOrderGetTests(TestCase):
+    def test_renders_a_collapsed_details_element_with_the_songs_inputs_present(self):
+        """The Running Order sub-grid renders inside a collapsed <details>, but its inputs are still in the DOM."""
+        semester = SemesterFactory(default_song_slot_count=5)
+        rehearsal = RehearsalFactory(semester=semester, date=TOMORROW, start_time=time(18, 0), end_time=time(20, 0))
+        song = SongFactory(semester=semester, position=1)
+        rehearsal_song = RehearsalSongFactory(rehearsal=rehearsal, song=song, order=1, slot_count=1)
+        admin_client(self)
+
+        response = self.client.get(reverse('scheduling:schedule-edit'))
+        content = response.content.decode()
+
+        self.assertIn('class="running-order-expander"', content)
+        self.assertNotIn('class="running-order-expander" open', content)
+        self.assertIn(f'name="songs-0-song_id" value="{song.pk}"', content)
+        self.assertIn(f'data-rehearsal-song-id="{rehearsal_song.pk}"', content)
+
+    def test_the_song_title_is_read_only_text_not_an_editable_input(self):
+        """A scheduled Song's title renders as plain text in the sub-grid, never a free-text input."""
+        semester = SemesterFactory()
+        rehearsal = RehearsalFactory(semester=semester, date=TOMORROW, start_time=time(18, 0), end_time=time(20, 0))
+        song = SongFactory(semester=semester, position=1, title='Song A')
+        RehearsalSongFactory(rehearsal=rehearsal, song=song, order=1)
+        admin_client(self)
+
+        response = self.client.get(reverse('scheduling:schedule-edit'))
+
+        self.assertContains(response, '<span class="running-order-song-title">Song A</span>')
+        self.assertNotContains(response, 'name="songs-0-title"')
+
+    def test_add_song_options_exclude_songs_already_scheduled_in_that_rehearsal(self):
+        """The '+ Add song' <select> lists a not-yet-scheduled Song as a normal option and a scheduled one hidden."""
+        semester = SemesterFactory()
+        rehearsal = RehearsalFactory(semester=semester, date=TOMORROW, start_time=time(18, 0), end_time=time(20, 0))
+        scheduled = SongFactory(semester=semester, position=1, title='Song A')
+        unscheduled = SongFactory(semester=semester, position=2, title='Song B')
+        RehearsalSongFactory(rehearsal=rehearsal, song=scheduled, order=1)
+        admin_client(self)
+
+        response = self.client.get(reverse('scheduling:schedule-edit'))
+        content = response.content.decode()
+
+        self.assertIn(f'value="{unscheduled.pk}" data-title="Song B">Song B</option>', content)
+        self.assertIn(f'value="{scheduled.pk}" data-title="Song A">Song A</option>', content)
+
+    def test_a_past_rehearsal_renders_no_running_order_sub_grid_at_all(self):
+        """A past-dated Rehearsal contributes no Running Order sub-grid — only the future Rehearsal's own sub-grid renders."""
+        semester = SemesterFactory()
+        past = RehearsalFactory(semester=semester, date=YESTERDAY, start_time=time(18, 0))
+        RehearsalFactory(semester=semester, date=TOMORROW, start_time=time(19, 0))
+        song = SongFactory(semester=semester, position=1)
+        past_rehearsal_song = RehearsalSongFactory(rehearsal=past, song=song, order=1)
+        admin_client(self)
+
+        response = self.client.get(reverse('scheduling:schedule-edit'))
+        content = response.content.decode()
+
+        self.assertEqual(content.count('class="running-order-sub-grid"'), 1)
+        self.assertNotIn(f'data-rehearsal-song-id="{past_rehearsal_song.pk}"', content)
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class ScheduleEditRunningOrderSaveTests(TestCase):
+    def test_adding_a_new_song_creates_a_rehearsal_song(self):
+        """A '+ Add song' row submitted with a real Song id creates a RehearsalSong on Save."""
+        semester = SemesterFactory(default_song_slot_count=5)
+        rehearsal = RehearsalFactory(semester=semester, date=TOMORROW, start_time=time(18, 0), end_time=time(20, 0))
+        song = SongFactory(semester=semester, position=1)
+        admin_client(self)
+        data = formset_data([rehearsal], running_order=[
+            {'rehearsal_row_key': 'rehearsal-0', 'song_id': song.pk, 'slot_count': 1},
+        ])
+
+        response = self.client.post(reverse('scheduling:schedule-edit'), data)
+
+        self.assertRedirects(response, f"{reverse('scheduling:schedule')}?view=all")
+        self.assertTrue(RehearsalSong.objects.filter(rehearsal=rehearsal, song=song).exists())
+
+    def test_reordering_two_existing_rows_renumbers_them(self):
+        """Submitting two existing rows in swapped order renumbers them to match on Save."""
+        semester = SemesterFactory(default_song_slot_count=5)
+        rehearsal = RehearsalFactory(semester=semester, date=TOMORROW, start_time=time(18, 0), end_time=time(20, 0))
+        song_a = SongFactory(semester=semester, position=1)
+        song_b = SongFactory(semester=semester, position=2)
+        first = RehearsalSongFactory(rehearsal=rehearsal, song=song_a, order=1)
+        second = RehearsalSongFactory(rehearsal=rehearsal, song=song_b, order=2)
+        admin_client(self)
+        data = formset_data([rehearsal], running_order=[
+            {'rehearsal_row_key': 'rehearsal-0', 'song_id': song_b.pk, 'slot_count': 1, 'rehearsal_song_id': second.pk},
+            {'rehearsal_row_key': 'rehearsal-0', 'song_id': song_a.pk, 'slot_count': 1, 'rehearsal_song_id': first.pk},
+        ])
+
+        response = self.client.post(reverse('scheduling:schedule-edit'), data)
+
+        self.assertRedirects(response, f"{reverse('scheduling:schedule')}?view=all")
+        second.refresh_from_db()
+        first.refresh_from_db()
+        self.assertEqual(second.order, 1)
+        self.assertEqual(first.order, 2)
+
+    def test_removing_a_row_by_omitting_it_deletes_it_on_save(self):
+        """A row left off the submitted running_order (never marked DELETE, just absent) is removed on Save."""
+        semester = SemesterFactory(default_song_slot_count=5)
+        rehearsal = RehearsalFactory(semester=semester, date=TOMORROW, start_time=time(18, 0), end_time=time(20, 0))
+        song = SongFactory(semester=semester, position=1)
+        doomed = RehearsalSongFactory(rehearsal=rehearsal, song=song, order=1)
+        admin_client(self)
+        data = formset_data([rehearsal], running_order=[])
+
+        response = self.client.post(reverse('scheduling:schedule-edit'), data)
+
+        self.assertRedirects(response, f"{reverse('scheduling:schedule')}?view=all")
+        self.assertFalse(RehearsalSong.objects.filter(pk=doomed.pk).exists())
+
+    def test_slot_counts_exceeding_the_semesters_default_block_the_save(self):
+        """A Running Order whose slot counts exceed the Semester's default_song_slot_count blocks the save; the database is unchanged."""
+        semester = SemesterFactory(default_song_slot_count=2)
+        rehearsal = RehearsalFactory(semester=semester, date=TOMORROW, start_time=time(18, 0), end_time=time(20, 0))
+        song_a = SongFactory(semester=semester, position=1)
+        song_b = SongFactory(semester=semester, position=2)
+        admin_client(self)
+        data = formset_data([rehearsal], running_order=[
+            {'rehearsal_row_key': 'rehearsal-0', 'song_id': song_a.pk, 'slot_count': 2},
+            {'rehearsal_row_key': 'rehearsal-0', 'song_id': song_b.pk, 'slot_count': 2},
+        ])
+
+        response = self.client.post(reverse('scheduling:schedule-edit'), data)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(RehearsalSong.objects.filter(rehearsal=rehearsal).count(), 0)
+
+    def test_a_running_order_on_a_row_flipped_to_dress_blocks_the_save(self):
+        """Flipping a row to Dress Rehearsal while its Running Order still names songs blocks the save; the database is unchanged."""
+        semester = SemesterFactory(default_song_slot_count=5)
+        rehearsal = RehearsalFactory(semester=semester, date=TOMORROW, start_time=time(18, 0), end_time=time(20, 0))
+        song = SongFactory(semester=semester, position=1)
+        admin_client(self)
+        data = formset_data(
+            [rehearsal], edits={rehearsal.pk: {'is_full_setlist': True}},
+            running_order=[{'rehearsal_row_key': 'rehearsal-0', 'song_id': song.pk, 'slot_count': 1}],
+        )
+
+        response = self.client.post(reverse('scheduling:schedule-edit'), data)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(RehearsalSong.objects.filter(rehearsal=rehearsal).count(), 0)
+
+    def test_a_malformed_song_slot_order_blocks_the_save(self):
+        """A song_slot_order token set that doesn't match the songs formset's own prefixes is rejected wholesale."""
+        semester = SemesterFactory(default_song_slot_count=5)
+        rehearsal = RehearsalFactory(semester=semester, date=TOMORROW, start_time=time(18, 0), end_time=time(20, 0))
+        song = SongFactory(semester=semester, position=1)
+        admin_client(self)
+        data = formset_data([rehearsal], running_order=[
+            {'rehearsal_row_key': 'rehearsal-0', 'song_id': song.pk, 'slot_count': 1},
+        ])
+        data['song_slot_order'] = ['songs-nonexistent']
+
+        response = self.client.post(reverse('scheduling:schedule-edit'), data)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(RehearsalSong.objects.filter(rehearsal=rehearsal).count(), 0)
+
+    def test_removing_a_recorded_row_by_hand_is_allowed_with_confirmation(self):
+        """A Running Order row carrying Recordings can still be removed by hand -- the asymmetry with the bulk generator."""
+        semester = SemesterFactory(default_song_slot_count=5)
+        rehearsal = RehearsalFactory(semester=semester, date=TOMORROW, start_time=time(18, 0), end_time=time(20, 0))
+        song = SongFactory(semester=semester, position=1)
+        rehearsal_song = RehearsalSongFactory(rehearsal=rehearsal, song=song, order=1)
+        RecordingFactory(rehearsal_song=rehearsal_song)
+        admin_client(self)
+        data = formset_data([rehearsal], running_order=[])
+
+        response = self.client.post(reverse('scheduling:schedule-edit'), data)
+
+        self.assertRedirects(response, f"{reverse('scheduling:schedule')}?view=all")
+        self.assertFalse(RehearsalSong.objects.filter(pk=rehearsal_song.pk).exists())
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class RunningOrderDeleteConfirmViewTests(TestCase):
+    def test_names_a_doomed_rows_recording_and_uploader_counts(self):
+        """The confirmation fragment names the doomed RehearsalSong row's recording count."""
+        semester = SemesterFactory()
+        rehearsal = RehearsalFactory(semester=semester, date=TOMORROW, start_time=time(18, 0))
+        song = SongFactory(semester=semester, position=1, title='Song A')
+        rehearsal_song = RehearsalSongFactory(rehearsal=rehearsal, song=song, order=1)
+        RecordingFactory(rehearsal_song=rehearsal_song)
+        admin_client(self)
+
+        response = self.client.post(
+            reverse('scheduling:schedule-edit-confirm-remove-song'), {'rehearsal_song_id': [rehearsal_song.pk]},
+        )
+
+        self.assertContains(response, 'Song A')
+        self.assertContains(response, '1 recording')
+
+    def test_is_forbidden_for_a_non_admin(self):
+        """A logged-in non-admin's POST to the confirm-removal endpoint returns 403."""
+        member_client(self)
+
+        response = self.client.post(reverse('scheduling:schedule-edit-confirm-remove-song'), {})
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_redirects_anonymous_users_to_login(self):
+        """An anonymous POST to the confirm-removal endpoint redirects to login."""
+        url = reverse('scheduling:schedule-edit-confirm-remove-song')
+
+        response = self.client.post(url, {})
+
+        self.assertRedirects(response, f"{reverse('identity:login')}?next={url}")
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class ScheduleEditPreviewViewTests(TestCase):
+    def test_preview_writes_nothing_for_a_buffer_mixing_creations_reorders_and_removals(self):
+        """Preview runs the real save and rolls it back for a buffer that adds, reorders and removes Running Order rows together."""
+        semester = SemesterFactory(default_song_slot_count=5)
+        rehearsal = RehearsalFactory(semester=semester, date=TOMORROW, start_time=time(18, 0), end_time=time(20, 0))
+        song_a = SongFactory(semester=semester, position=1)
+        song_b = SongFactory(semester=semester, position=2)
+        song_c = SongFactory(semester=semester, position=3)
+        kept = RehearsalSongFactory(rehearsal=rehearsal, song=song_a, order=1)
+        doomed = RehearsalSongFactory(rehearsal=rehearsal, song=song_b, order=2)
+        admin_client(self)
+        data = formset_data([rehearsal], running_order=[
+            {'rehearsal_row_key': 'rehearsal-0', 'song_id': song_c.pk, 'slot_count': 1},
+            {'rehearsal_row_key': 'rehearsal-0', 'song_id': song_a.pk, 'slot_count': 1, 'rehearsal_song_id': kept.pk},
+        ])
+
+        assert_preview_writes_nothing(
+            self, reverse('scheduling:schedule-edit-preview'), data,
+            models_to_check=[Rehearsal, RehearsalSong], semester=semester,
+        )
+        self.assertTrue(RehearsalSong.objects.filter(pk=doomed.pk).exists())
+
+    def test_is_forbidden_for_a_non_admin(self):
+        """A logged-in non-admin's POST to the preview endpoint returns 403."""
+        member_client(self)
+
+        response = self.client.post(reverse('scheduling:schedule-edit-preview'), {})
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_redirects_anonymous_users_to_login(self):
+        """An anonymous POST to the preview endpoint redirects to login."""
+        url = reverse('scheduling:schedule-edit-preview')
+
+        response = self.client.post(url, {})
+
+        self.assertRedirects(response, f"{reverse('identity:login')}?next={url}")

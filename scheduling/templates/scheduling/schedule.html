@@ -278,4 +278,8 @@
 
 <script src="{% static 'scheduling/js/assignment_picker.js' %}"></script>
 <script src="{% static 'scheduling/js/schedule.js' %}"></script>
+{% if request.user.is_admin %}
+  <script src="{% static 'vendor/sortable-1.15.7.min.js' %}" defer></script>
+  <script src="{% static 'scheduling/js/schedule_edit.js' %}" defer></script>
+{% endif %}
 {% endblock %}
