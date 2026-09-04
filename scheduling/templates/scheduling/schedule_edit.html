@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Edit Rehearsals{% endblock %}
+{% block content %}
+<h1>{% if semester %}{{ semester }} Rehearsals{% else %}Rehearsals{% endif %}</h1>
+
+{% for message in messages %}
+  <p>{{ message }}</p>
+{% endfor %}
+
+<div id="schedule-edit-surface">
+{% include "scheduling/_schedule_edit.html" %}
+</div>
+{% endblock %}

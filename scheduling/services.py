@@ -3,7 +3,7 @@
 import logging
 from collections import defaultdict
 from dataclasses import dataclass, replace
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from itertools import pairwise, permutations
 from uuid import uuid4
 
@@ -2729,3 +2729,172 @@ def apply_song_role_requirements(buffer: SongRoleRequirementBuffer, *, viewing_s
                 existing.save(update_fields=['count'])
 
     return song
+
+
+class StaleRehearsalSemesterError(ValueError):
+    """Raised when a Rehearsal edit Buffer's Semester changed since the Buffer was loaded (issue #219)."""
+
+
+class PastRehearsalEditError(ValueError):
+    """Raised when a Rehearsal edit Buffer names a row that is, or has become, past-dated (issue #219).
+
+    Covers three ways the past/future boundary can move between GET and
+    POST, since the edit grid never renders inputs for a past-dated
+    Rehearsal (`ScheduleEditView`'s queryset excludes it entirely): (1) the
+    row's *submitted* `date` (new or existing) is itself already before
+    today, e.g. a Rehearsal dated "today" at render time whose save lands
+    after midnight; (2) an existing row's *current stored* `date` has
+    slipped into the past under a different edit (its submission may still
+    name a future date, but the ground moved out from under it); (3) an
+    existing row's Rehearsal no longer exists in this Semester at all.
+    Matches the posture of `WrongViewingSemesterError`: a hard failure,
+    not Fallout, that writes nothing.
+    """
+
+
+@dataclass(frozen=True)
+class RehearsalEditRow:
+    """One Rehearsal edit grid row's target state: an existing Rehearsal's edit, or a brand-new one (issue #219).
+
+    `rehearsal_id` is None for a new row. A None override
+    (`setup_grace_minutes`, `teardown_grace_minutes`, `arrival_buffer_minutes`,
+    `departure_buffer_minutes`) means "inherit the Semester default";
+    `apply_rehearsal_edits()` resolves it to the Semester's current default
+    at save time rather than leaving it null, since every other read of
+    these fields (e.g. `attendance_suggestion_for`) assumes a concrete
+    value. `end_time` is the one field still allowed to reach `apply_*` as
+    None (only legal for a new row): `Rehearsal.save()`'s own defaulting
+    derives it from the Semester's default duration, exactly as a
+    hand-created Rehearsal already does.
+    """
+
+    rehearsal_id: int | None
+    date: date
+    start_time: time
+    end_time: time | None
+    is_full_setlist: bool
+    setup_grace_minutes: int | None
+    teardown_grace_minutes: int | None
+    arrival_buffer_minutes: int | None
+    departure_buffer_minutes: int | None
+
+
+@dataclass(frozen=True)
+class RehearsalEditBuffer:
+    """The whole diff `apply_rehearsal_edits()` commits in one transaction (issue #219).
+
+    `semester_id`/`semester_updated_at` back the same two staleness checks
+    `RosterEditBuffer` and `AssignmentEditBuffer` use. `rows` carries every
+    Rehearsal the grid wants saved — existing or newly added — in no
+    particular order; a Rehearsal the buffer doesn't mention is left
+    untouched (there is no delete on this surface yet — issue #221).
+    """
+
+    semester_id: int
+    semester_updated_at: datetime
+    rows: list[RehearsalEditRow]
+
+
+# Rehearsal override field name -> Semester default field name. Shared by RehearsalEditRowForm's
+# placeholders (forms.py) and _apply_rehearsal_edit_row()'s blank-resolution below, so the two lists
+# of four fields can't drift apart (issue #219).
+REHEARSAL_OVERRIDE_FIELDS = (
+    ('setup_grace_minutes', 'default_setup_grace_minutes'),
+    ('teardown_grace_minutes', 'default_teardown_grace_minutes'),
+    ('arrival_buffer_minutes', 'default_arrival_buffer_minutes'),
+    ('departure_buffer_minutes', 'default_departure_buffer_minutes'),
+)
+
+
+def apply_rehearsal_edits(buffer: RehearsalEditBuffer, *, viewing_semester: Semester) -> None:
+    """Apply a whole Rehearsal edit Buffer — new rows and edits to existing ones — in one transaction (issue #219).
+
+    The single write the rehearsal editor and its future Preview both run
+    (ADR-0008). Holds the Semester row lock for the duration, since this
+    surface is the one the Running Order sub-grid (issue #220) and the
+    schedule generators land renumbering work onto next.
+
+    Raises `WrongViewingSemesterError` if `buffer.semester_id` doesn't
+    match `viewing_semester`, checked before any transaction opens. Raises
+    `StaleRehearsalSemesterError` inside the transaction if the Semester's
+    `updated_at` no longer matches `buffer.semester_updated_at`. Raises
+    `PastRehearsalEditError` for any row that is, or has become, past-dated
+    — see that error's docstring for the three cases. Both of the latter
+    roll back whatever this call had already applied.
+    """
+    if viewing_semester is None or buffer.semester_id != viewing_semester.pk:
+        raise WrongViewingSemesterError(
+            "This Rehearsal edit Buffer's Semester doesn't match the Semester you're currently viewing."
+        )
+
+    with transaction.atomic():
+        semester = Semester.objects.select_for_update().get(pk=buffer.semester_id)
+        if semester.updated_at != buffer.semester_updated_at:
+            raise StaleRehearsalSemesterError('The rehearsals changed while you were editing — reload and reapply.')
+
+        today = timezone.localdate()
+        existing_ids = [row.rehearsal_id for row in buffer.rows if row.rehearsal_id is not None]
+        current_dates_by_id = dict(
+            Rehearsal.objects.filter(semester=semester, pk__in=existing_ids).values_list('pk', 'date')
+        )
+        for row in buffer.rows:
+            if row.date < today:
+                raise PastRehearsalEditError(
+                    'A Rehearsal in this Buffer is dated in the past — reload and reapply.'
+                )
+            if row.rehearsal_id is not None:
+                current_date = current_dates_by_id.get(row.rehearsal_id)
+                if current_date is None or current_date < today:
+                    raise PastRehearsalEditError(
+                        'A Rehearsal in this Buffer is dated in the past — reload and reapply.'
+                    )
+
+        # Parking every existing row at a unique, unreachable sentinel date first means two rows
+        # swapping dates with each other can never collide with `unique_rehearsal_date_per_semester`
+        # mid-batch — sequential saves would otherwise hit the other row's not-yet-updated date.
+        for rehearsal_id in existing_ids:
+            Rehearsal.objects.filter(pk=rehearsal_id, semester=semester).update(
+                date=_sentinel_parking_date(rehearsal_id)
+            )
+
+        for row in buffer.rows:
+            _apply_rehearsal_edit_row(row, semester)
+
+        semester.updated_at = timezone.now()
+        semester.save(update_fields=['updated_at'])
+
+
+def _sentinel_parking_date(rehearsal_id: int) -> date:
+    """A date far enough in the future to collide with no real Rehearsal, unique per `rehearsal_id` (issue #219)."""
+    return date(9999, 12, 31) - timedelta(days=rehearsal_id)
+
+
+def _apply_rehearsal_edit_row(row: RehearsalEditRow, semester: Semester) -> None:
+    """Save one Buffer row onto its Rehearsal (existing or new), resolving blank overrides to the Semester's current defaults."""
+    if row.rehearsal_id is not None:
+        rehearsal = Rehearsal.objects.get(pk=row.rehearsal_id, semester=semester)
+    else:
+        rehearsal = Rehearsal(semester=semester)
+    rehearsal.date = row.date
+    rehearsal.start_time = row.start_time
+    rehearsal.end_time = row.end_time
+    rehearsal.is_full_setlist = row.is_full_setlist
+    for field_name, default_field_name in REHEARSAL_OVERRIDE_FIELDS:
+        value = getattr(row, field_name)
+        setattr(rehearsal, field_name, value if value is not None else getattr(semester, default_field_name))
+    rehearsal.save()
+
+
+def preview_rehearsal_edits(buffer: RehearsalEditBuffer, *, viewing_semester: Semester) -> None:
+    """Run the real `apply_rehearsal_edits()` for `buffer`, without committing it (ADR-0008, issue #219).
+
+    This function's write is real — it must be called inside a
+    transaction the *caller* rolls back, exactly like `preview_roster_edits()`.
+    Called outside such a transaction, this function corrupts the
+    database. Reports nothing beyond whatever `apply_rehearsal_edits()`
+    raises: this surface has no Fallout to compute yet (adds/deletes and
+    their consequences land in issue #221), so today this is a thin,
+    real-write wrapper that exists so the surface's Preview and Save can
+    never disagree about whether a Buffer is saveable.
+    """
+    apply_rehearsal_edits(buffer, viewing_semester=viewing_semester)
