@@ -2,11 +2,13 @@
 
 import json
 import re
+from collections import defaultdict
 
 from django.contrib import messages
 from django.db import transaction
 from django.http import (
     Http404,
+    HttpResponse,
     HttpResponseBadRequest,
     HttpResponseForbidden,
     JsonResponse,
@@ -36,6 +38,7 @@ from scheduling.forms import (
     RosterEditFormSet,
     RosterEditRowForm,
     RosterInviteForm,
+    RunningOrderFormSet,
     SemesterSetupForm,
     SetlistEditEmptyFormSet,
     SetlistEditFormSet,
@@ -71,6 +74,8 @@ from scheduling.services import (
     RehearsalEditRow,
     RosterEditBuffer,
     RosterEditEntry,
+    RunningOrderRow,
+    RunningOrderValidationError,
     SelfRemovalError,
     SongRoleRequirementBuffer,
     SongRoleRequirementEntry,
@@ -115,6 +120,7 @@ from scheduling.services import (
     next_attended_rehearsal_for,
     performers_for,
     preview_adjudications,
+    preview_rehearsal_edits,
     preview_roster_edits,
     preview_song_role_assignments,
     publish_semester,
@@ -122,6 +128,7 @@ from scheduling.services import (
     recording_groups_for,
     rehearsal_count_target,
     rehearsal_schedule_for,
+    rehearsal_song_deletion_summaries,
     reorder_rehearsal_songs,
     reorder_songs,
     reserve_recording_upload,
@@ -376,7 +383,7 @@ def _build_schedule_context(request, semester, view_mode, rehearsal, error_rehea
 
 
 class ScheduleEditView(AdminRequiredMixin, View):
-    """`/schedule/edit/`: an admin's in-place "Edit rehearsals" mode for the viewing Semester's rehearsal list (issue #219).
+    """`/schedule/edit/`: an admin's in-place "Edit rehearsals" mode for the viewing Semester's rehearsal list (issues #219, #220).
 
     A sibling of `ScheduleView`, htmx-swapped into `?view=all`'s list the
     same way `SetlistEditView` swaps into the Setlist — GET renders the
@@ -392,10 +399,19 @@ class ScheduleEditView(AdminRequiredMixin, View):
     admin toward it. Member-facing filters have no equivalent on this page
     today; the assignment grid's "My Songs Only" is the only one that
     exists elsewhere on `/schedule/`, and it isn't rendered here.
+
+    Each Rehearsal row's Running Order sub-grid (issue #220) is a second,
+    flat `RunningOrderFormSet` sharing this same page and this same Save —
+    every row carries a `rehearsal_row_key` naming which `RehearsalEditRowForm`
+    prefix owns it, since a brand-new Rehearsal row has no pk yet to FK
+    against. Rendered collapsed but always with its inputs in the DOM (never
+    htmx-lazy), so a save carrying a never-expanded rehearsal's sub-grid
+    still writes it.
     """
 
     fragment_template_name = 'scheduling/_schedule_edit.html'
     page_template_name = 'scheduling/schedule_edit.html'
+    MALFORMED_ORDER_MESSAGE = 'The Running Order could not be saved — reload and reapply.'
 
     def get(self, request):
         """Render the edit grid: a bare fragment for htmx, a full page otherwise."""
@@ -405,10 +421,13 @@ class ScheduleEditView(AdminRequiredMixin, View):
         future_rehearsals, past_rehearsals = self._rehearsals(semester)
         formset_class = RehearsalEditFormSet if future_rehearsals.exists() else RehearsalEditEmptyFormSet
         formset = formset_class(queryset=future_rehearsals, prefix='rehearsal', form_kwargs={'semester': semester})
-        return self._render(request, semester, formset, past_rehearsals)
+        songs_formset = RunningOrderFormSet(
+            initial=_running_order_initial(formset, future_rehearsals), prefix='songs',
+        )
+        return self._render(request, semester, formset, songs_formset, past_rehearsals)
 
     def post(self, request):
-        """Validate and apply the whole Rehearsal edit Buffer atomically, or re-render with errors."""
+        """Validate and apply the whole Rehearsal edit Buffer (rows and Running Orders) atomically, or re-render with errors."""
         semester = get_viewing_semester(request)
         if semester is None:
             return redirect(f"{reverse('scheduling:schedule')}?view=all")
@@ -418,21 +437,35 @@ class ScheduleEditView(AdminRequiredMixin, View):
         formset = RehearsalEditFormSet(
             request.POST, queryset=future_rehearsals, prefix='rehearsal', form_kwargs={'semester': semester},
         )
-        if formset.is_valid():
-            buffer = self._build_buffer(formset, submitted_semester_id, submitted_stamp)
+        songs_formset = RunningOrderFormSet(request.POST, prefix='songs')
+        if formset.is_valid() and songs_formset.is_valid():
+            running_order_by_key = _running_order_by_rehearsal_key(songs_formset)
+            if running_order_by_key is None:
+                messages.error(request, self.MALFORMED_ORDER_MESSAGE)
+                return self._render(
+                    request, semester, formset, songs_formset, past_rehearsals,
+                    schedule_semester_id=submitted_semester_id, schedule_semester_updated_at=submitted_stamp,
+                    status=200,
+                )
+            buffer = _build_rehearsal_edit_buffer(
+                formset, running_order_by_key, submitted_semester_id, submitted_stamp,
+            )
             try:
                 apply_rehearsal_edits(buffer, viewing_semester=semester)
-            except (WrongViewingSemesterError, StaleRehearsalSemesterError, PastRehearsalEditError) as error:
+            except (
+                WrongViewingSemesterError, StaleRehearsalSemesterError,
+                PastRehearsalEditError, RunningOrderValidationError,
+            ) as error:
                 messages.error(request, str(error))
                 return self._render(
-                    request, semester, formset, past_rehearsals,
+                    request, semester, formset, songs_formset, past_rehearsals,
                     schedule_semester_id=submitted_semester_id, schedule_semester_updated_at=submitted_stamp,
                     status=200,
                 )
             messages.success(request, 'Rehearsals updated.')
             return redirect(f"{reverse('scheduling:schedule')}?view=all")
         return self._render(
-            request, semester, formset, past_rehearsals,
+            request, semester, formset, songs_formset, past_rehearsals,
             schedule_semester_id=submitted_semester_id, schedule_semester_updated_at=submitted_stamp,
             status=200,
         )
@@ -443,32 +476,8 @@ class ScheduleEditView(AdminRequiredMixin, View):
         base = _scoped_to_viewing_semester(Rehearsal, semester).order_by('date', 'start_time')
         return base.filter(date__gte=today), base.filter(date__lt=today)
 
-    def _build_buffer(self, formset, submitted_semester_id, submitted_stamp):
-        """Turn a valid RehearsalEditFormSet into a RehearsalEditBuffer, carrying the Semester state it was rendered against."""
-        rows = []
-        for form in formset.forms:
-            cleaned_data = form.cleaned_data
-            if not cleaned_data:
-                continue
-            rows.append(RehearsalEditRow(
-                rehearsal_id=form.instance.pk,
-                date=cleaned_data['date'],
-                start_time=cleaned_data['start_time'],
-                end_time=cleaned_data.get('end_time'),
-                is_full_setlist=cleaned_data['is_full_setlist'],
-                setup_grace_minutes=cleaned_data.get('setup_grace_minutes'),
-                teardown_grace_minutes=cleaned_data.get('teardown_grace_minutes'),
-                arrival_buffer_minutes=cleaned_data.get('arrival_buffer_minutes'),
-                departure_buffer_minutes=cleaned_data.get('departure_buffer_minutes'),
-            ))
-        return RehearsalEditBuffer(
-            semester_id=_parse_roster_int(submitted_semester_id),
-            semester_updated_at=parse_datetime(submitted_stamp) or timezone.now(),
-            rows=rows,
-        )
-
     def _render(
-        self, request, semester, formset, past_rehearsals,
+        self, request, semester, formset, songs_formset, past_rehearsals,
         schedule_semester_id=None, schedule_semester_updated_at=None, status=200,
     ):
         """Render the fragment for an htmx request, else the full page.
@@ -479,9 +488,16 @@ class ScheduleEditView(AdminRequiredMixin, View):
         a blind resubmit of the unchanged grid would pass the staleness
         check and silently overwrite a concurrent edit it never saw.
         """
+        setlist_songs = _scoped_to_viewing_semester(Song, semester).order_by('position')
+        songs_by_id = setlist_songs.in_bulk()
+        songs_by_rehearsal_key = _group_running_order_forms(songs_formset, songs_by_id)
+        for form in formset.forms:
+            form.running_order_forms = songs_by_rehearsal_key.get(form.prefix, [])
         context = {
             'semester': semester,
             'formset': formset,
+            'songs_formset': songs_formset,
+            'setlist_songs': setlist_songs,
             'past_rehearsals': past_rehearsals,
             'schedule_semester_id': schedule_semester_id if schedule_semester_id is not None else semester.pk,
             'schedule_semester_updated_at': (
@@ -492,6 +508,169 @@ class ScheduleEditView(AdminRequiredMixin, View):
         }
         template = self.fragment_template_name if _is_htmx(request) else self.page_template_name
         return render(request, template, context, status=status)
+
+
+class ScheduleEditPreviewView(PreviewMixin, AdminRequiredMixin, View):
+    """`/schedule/edit/preview/`: runs the real Rehearsal edit Buffer save and rolls it back (issue #220, ADR-0008).
+
+    A POST-only sibling of `ScheduleEditView`'s Save, bound to the exact
+    same POST body, per ADR-0008's "one parsing and validation path" rule.
+    This surface has no Fallout to compute yet (unlike `AssignmentPreviewView`)
+    — today this exists so Preview and Save can never disagree about
+    whether a Buffer (rows *and* Running Orders together) is saveable, per
+    `preview_rehearsal_edits()`'s own docstring.
+    """
+
+    def run_preview(self, request):
+        """Build the submitted Rehearsal edit Buffer and run `preview_rehearsal_edits()` for it, or 204 on a malformed/invalid submission."""
+        semester = get_viewing_semester(request)
+        if semester is None:
+            return HttpResponse(status=204)
+        today = timezone.localdate()
+        future_rehearsals = _scoped_to_viewing_semester(Rehearsal, semester).filter(date__gte=today)
+        formset = RehearsalEditFormSet(
+            request.POST, queryset=future_rehearsals, prefix='rehearsal', form_kwargs={'semester': semester},
+        )
+        songs_formset = RunningOrderFormSet(request.POST, prefix='songs')
+        if not formset.is_valid() or not songs_formset.is_valid():
+            return HttpResponse(status=204)
+        running_order_by_key = _running_order_by_rehearsal_key(songs_formset)
+        if running_order_by_key is None:
+            return HttpResponse(status=204)
+        buffer = _build_rehearsal_edit_buffer(
+            formset, running_order_by_key,
+            request.POST.get('schedule_semester_id', ''), request.POST.get('schedule_semester_updated_at', ''),
+        )
+        try:
+            preview_rehearsal_edits(buffer, viewing_semester=semester)
+        except (WrongViewingSemesterError, StaleRehearsalSemesterError, PastRehearsalEditError, RunningOrderValidationError):
+            pass
+        return HttpResponse(status=204)
+
+
+class RunningOrderDeleteConfirmView(AdminRequiredMixin, View):
+    """`/schedule/edit/confirm-remove-song/`: names a doomed RehearsalSong row's recording/uploader counts before a Save (issue #220).
+
+    Mirrors `SetlistDeleteConfirmView`'s shape: fetched by the sub-grid's
+    JS only when the buffer contains at least one removed row that carries
+    Recordings, keyed by `rehearsal_song_id` POST values. A pure counts
+    read — it writes nothing and rolls nothing back.
+    """
+
+    template_name = 'scheduling/_running_order_delete_confirm.html'
+
+    def post(self, request):
+        """Render the confirmation fragment naming each requested RehearsalSong row's recording/uploader counts."""
+        semester = get_viewing_semester(request)
+        rehearsal_song_ids = request.POST.getlist('rehearsal_song_id')
+        rehearsal_songs = RehearsalSong.objects.filter(
+            rehearsal__semester=semester, pk__in=rehearsal_song_ids,
+        ).select_related('song').order_by('rehearsal__date', 'order')
+        summaries = rehearsal_song_deletion_summaries(rehearsal_songs)
+        return render(request, self.template_name, {'summaries': summaries})
+
+
+def _running_order_initial(formset, future_rehearsals):
+    """Build `RunningOrderFormSet`'s initial rows: one per existing RehearsalSong, keyed to its owning row's formset prefix (issue #220).
+
+    `formset.forms` and `future_rehearsals` share the same order — the
+    ModelFormSet's initial forms are bound to `future_rehearsals` in
+    queryset order — so zipping them pairs each Rehearsal's pk with the
+    exact `rehearsal-N` prefix its row will render as.
+    """
+    key_by_rehearsal_id = {
+        rehearsal.pk: form.prefix for form, rehearsal in zip(formset.forms, future_rehearsals, strict=False)
+    }
+    rehearsal_songs = RehearsalSong.objects.filter(rehearsal__in=future_rehearsals).order_by('rehearsal_id', 'order')
+    return [
+        {
+            'rehearsal_song_id': rehearsal_song.pk,
+            'rehearsal_row_key': key_by_rehearsal_id[rehearsal_song.rehearsal_id],
+            'song_id': rehearsal_song.song_id,
+            'slot_count': rehearsal_song.slot_count,
+        }
+        for rehearsal_song in rehearsal_songs
+    ]
+
+
+def _running_order_by_rehearsal_key(songs_formset):
+    """Group a valid `RunningOrderFormSet`'s rows into `{rehearsal_row_key: [RunningOrderRow, ...]}`, or None if malformed.
+
+    The submitted order is carried by the repeated `songs-song_slot_order`
+    hidden field's *request order*, exactly mirroring
+    `SetlistEditView._save_buffer()`'s `song_order` trick: each row's
+    formset prefix travels with it on drag (SortableJS/moveUp/moveDown
+    move the whole row node, hidden inputs included), so the token
+    sequence *is* the buffer's row order. Checked to be an exact
+    duplicate-free permutation of the formset's own form prefixes before
+    anything is trusted — an unknown, duplicate or missing prefix returns
+    None rather than silently dropping a row or scrambling positions.
+    Grouping by `rehearsal_row_key` while walking the flat token sequence
+    preserves each group's relative order, which is all
+    `reorder_rehearsal_songs()`/`_apply_running_order()` need.
+    """
+    forms_by_prefix = {form.prefix: form for form in songs_formset.forms}
+    order_tokens = songs_formset.data.getlist('song_slot_order')
+    if sorted(order_tokens) != sorted(forms_by_prefix):
+        return None
+    grouped = defaultdict(list)
+    for token in order_tokens:
+        cleaned_data = forms_by_prefix[token].cleaned_data
+        if cleaned_data.get('DELETE'):
+            continue
+        grouped[cleaned_data['rehearsal_row_key']].append(RunningOrderRow(
+            rehearsal_song_id=cleaned_data.get('rehearsal_song_id'),
+            song_id=cleaned_data['song_id'],
+            slot_count=cleaned_data['slot_count'],
+        ))
+    return grouped
+
+
+def _group_running_order_forms(songs_formset, songs_by_id):
+    """Group `songs_formset`'s forms by owning `rehearsal_row_key`, attaching each form's Song for read-only display (issue #220).
+
+    Reads each field's *bound value* (`BoundField.value()`), which falls
+    back to `initial` when the formset is unbound — so this works
+    identically for a fresh GET and for a rejected POST re-render with
+    every submitted value preserved.
+    """
+    grouped = defaultdict(list)
+    for form in songs_formset.forms:
+        song_id = _parse_roster_int(form['song_id'].value())
+        form.song = songs_by_id.get(song_id)
+        grouped[form['rehearsal_row_key'].value()].append(form)
+    return grouped
+
+
+def _build_rehearsal_edit_buffer(formset, running_order_by_key, submitted_semester_id, submitted_stamp):
+    """Turn a valid RehearsalEditFormSet (plus its grouped Running Order rows) into a RehearsalEditBuffer.
+
+    Shared by `ScheduleEditView.post()` and `ScheduleEditPreviewView.run_preview()`
+    (ADR-0008) — the Preview and Save endpoints must parse the exact same
+    POST body into the exact same Buffer shape.
+    """
+    rows = []
+    for form in formset.forms:
+        cleaned_data = form.cleaned_data
+        if not cleaned_data:
+            continue
+        rows.append(RehearsalEditRow(
+            rehearsal_id=form.instance.pk,
+            date=cleaned_data['date'],
+            start_time=cleaned_data['start_time'],
+            end_time=cleaned_data.get('end_time'),
+            is_full_setlist=cleaned_data['is_full_setlist'],
+            setup_grace_minutes=cleaned_data.get('setup_grace_minutes'),
+            teardown_grace_minutes=cleaned_data.get('teardown_grace_minutes'),
+            arrival_buffer_minutes=cleaned_data.get('arrival_buffer_minutes'),
+            departure_buffer_minutes=cleaned_data.get('departure_buffer_minutes'),
+            running_order=running_order_by_key.get(form.prefix, []),
+        ))
+    return RehearsalEditBuffer(
+        semester_id=_parse_roster_int(submitted_semester_id),
+        semester_updated_at=parse_datetime(submitted_stamp) or timezone.now(),
+        rows=rows,
+    )
 
 
 class SetlistView(BaseView, TemplateView):

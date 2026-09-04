@@ -2,7 +2,7 @@
 
 import logging
 from collections import defaultdict
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time, timedelta
 from itertools import pairwise, permutations
 from uuid import uuid4
@@ -454,6 +454,54 @@ def delete_songs_with_recordings(songs) -> None:
         Recording.objects.filter(rehearsal_song__song_id__in=song_ids).values_list('file', flat=True)
     )
     Song.objects.filter(pk__in=song_ids).delete()
+    if object_keys:
+        transaction.on_commit(lambda: _delete_recording_objects(object_keys))
+
+
+@dataclass(frozen=True)
+class RehearsalSongDeletionSummary:
+    """One doomed RehearsalSong row's recording/uploader counts, for the Running Order sub-grid's delete confirmation (issue #220)."""
+
+    rehearsal_song: RehearsalSong
+    recording_count: int
+    uploader_count: int
+
+
+def rehearsal_song_deletion_summaries(rehearsal_songs) -> list['RehearsalSongDeletionSummary']:
+    """Return each of `rehearsal_songs`' recording count and distinct-uploader count, for the Running Order delete confirmation dialog.
+
+    Mirrors `song_deletion_summaries()`'s shape (issue #179): a pure counts
+    read, no locking, no transaction, nothing written.
+    """
+    summaries = []
+    for rehearsal_song in rehearsal_songs:
+        recordings = Recording.objects.filter(rehearsal_song=rehearsal_song)
+        summaries.append(RehearsalSongDeletionSummary(
+            rehearsal_song=rehearsal_song,
+            recording_count=recordings.count(),
+            uploader_count=recordings.values('uploaded_by').distinct().count(),
+        ))
+    return summaries
+
+
+def delete_rehearsal_songs_with_recordings(rehearsal_songs) -> None:
+    """Hard-delete `rehearsal_songs`, cleaning up their Recordings' storage objects (issue #220).
+
+    Mirrors `delete_songs_with_recordings()`'s shape: `Recording.rehearsal_song`
+    is `on_delete=CASCADE`, so object keys are collected first, while
+    they're still reachable. Storage deletion is registered with
+    `transaction.on_commit()` and reuses `_delete_recording_objects`'s
+    best-effort, log-don't-raise behavior — a storage failure never blocks
+    or rolls back the Save this runs inside. Deleting a recorded row by
+    hand is deliberately allowed here (unlike the bulk generator, which
+    refuses to touch one) — a room genuinely worked its songs in a
+    different order, and that correction is on the admin, not the tool.
+    """
+    ids = [rehearsal_song.pk for rehearsal_song in rehearsal_songs]
+    if not ids:
+        return
+    object_keys = list(Recording.objects.filter(rehearsal_song_id__in=ids).values_list('file', flat=True))
+    RehearsalSong.objects.filter(pk__in=ids).delete()
     if object_keys:
         transaction.on_commit(lambda: _delete_recording_objects(object_keys))
 
@@ -2599,6 +2647,33 @@ class PastRehearsalEditError(ValueError):
     """
 
 
+class RunningOrderValidationError(ValueError):
+    """Raised when a Rehearsal edit Buffer's Running Order sub-grid can't be saved as submitted (issue #220).
+
+    Covers the two new blocking Validation Errors the sub-grid introduces
+    — a row's slot_counts summing past the Semester's `default_song_slot_count`,
+    and a Running Order attached to a row flagged Dress (ADR-0003) — plus a
+    submitted Song id that doesn't belong to the buffer's own Semester.
+    Raised before any write, same posture as `PastRehearsalEditError`: a
+    hard failure, not Fallout, that writes nothing.
+    """
+
+
+@dataclass(frozen=True)
+class RunningOrderRow:
+    """One Running Order sub-grid row's target state: an existing RehearsalSong's edit, or a brand-new one (issue #220).
+
+    `rehearsal_song_id` is None for a row not yet backed by a saved
+    RehearsalSong. `song_id` is never attacker-typeable as free text — it
+    names a Song picked from the "+ Add song" list, and `apply_rehearsal_edits()`
+    rejects one that doesn't belong to the buffer's own Semester.
+    """
+
+    rehearsal_song_id: int | None
+    song_id: int
+    slot_count: int
+
+
 @dataclass(frozen=True)
 class RehearsalEditRow:
     """One Rehearsal edit grid row's target state: an existing Rehearsal's edit, or a brand-new one (issue #219).
@@ -2613,6 +2688,12 @@ class RehearsalEditRow:
     None (only legal for a new row): `Rehearsal.save()`'s own defaulting
     derives it from the Semester's default duration, exactly as a
     hand-created Rehearsal already does.
+
+    `running_order` (issue #220) is this row's Running Order sub-grid buffer,
+    in submitted display order — empty for a Rehearsal left with no songs,
+    which is legal. A row still carrying a `running_order` while
+    `is_full_setlist=True` is a blocking Validation Error (ADR-0003: the
+    Dress Rehearsal holds no RehearsalSong rows), checked before any write.
     """
 
     rehearsal_id: int | None
@@ -2624,6 +2705,7 @@ class RehearsalEditRow:
     teardown_grace_minutes: int | None
     arrival_buffer_minutes: int | None
     departure_buffer_minutes: int | None
+    running_order: list[RunningOrderRow] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -2666,8 +2748,12 @@ def apply_rehearsal_edits(buffer: RehearsalEditBuffer, *, viewing_semester: Seme
     `StaleRehearsalSemesterError` inside the transaction if the Semester's
     `updated_at` no longer matches `buffer.semester_updated_at`. Raises
     `PastRehearsalEditError` for any row that is, or has become, past-dated
-    — see that error's docstring for the three cases. Both of the latter
-    roll back whatever this call had already applied.
+    — see that error's docstring for the three cases. Raises
+    `RunningOrderValidationError` (issue #220) for a row whose Running Order
+    slot_counts sum past the Semester's `default_song_slot_count`, whose
+    Running Order is non-empty while `is_full_setlist=True`, or whose
+    Running Order names a Song outside this Semester's setlist. All of the
+    above roll back whatever this call had already applied.
     """
     if viewing_semester is None or buffer.semester_id != viewing_semester.pk:
         raise WrongViewingSemesterError(
@@ -2696,6 +2782,27 @@ def apply_rehearsal_edits(buffer: RehearsalEditBuffer, *, viewing_semester: Seme
                         'A Rehearsal in this Buffer is dated in the past — reload and reapply.'
                     )
 
+        valid_song_ids = set(
+            Song.objects.filter(
+                semester=semester,
+                pk__in={running_order_row.song_id for row in buffer.rows for running_order_row in row.running_order},
+            ).values_list('pk', flat=True)
+        )
+        for row in buffer.rows:
+            if row.running_order and row.is_full_setlist:
+                raise RunningOrderValidationError(
+                    'A Running Order cannot be attached to a Rehearsal flagged as the Dress Rehearsal — '
+                    'its songs are derived live from the setlist instead.'
+                )
+            if sum(running_order_row.slot_count for running_order_row in row.running_order) > semester.default_song_slot_count:
+                raise RunningOrderValidationError(
+                    "A Rehearsal's Running Order slot counts exceed the Semester's default_song_slot_count."
+                )
+            if any(running_order_row.song_id not in valid_song_ids for running_order_row in row.running_order):
+                raise RunningOrderValidationError(
+                    "A Running Order names a Song outside this Semester's setlist — reload and reapply."
+                )
+
         # Parking every existing row at a unique, unreachable sentinel date first means two rows
         # swapping dates with each other can never collide with `unique_rehearsal_date_per_semester`
         # mid-batch — sequential saves would otherwise hit the other row's not-yet-updated date.
@@ -2705,7 +2812,8 @@ def apply_rehearsal_edits(buffer: RehearsalEditBuffer, *, viewing_semester: Seme
             )
 
         for row in buffer.rows:
-            _apply_rehearsal_edit_row(row, semester)
+            rehearsal = _apply_rehearsal_edit_row(row, semester)
+            _apply_running_order(rehearsal, row.running_order)
 
         semester.updated_at = timezone.now()
         semester.save(update_fields=['updated_at'])
@@ -2716,8 +2824,8 @@ def _sentinel_parking_date(rehearsal_id: int) -> date:
     return date(9999, 12, 31) - timedelta(days=rehearsal_id)
 
 
-def _apply_rehearsal_edit_row(row: RehearsalEditRow, semester: Semester) -> None:
-    """Save one Buffer row onto its Rehearsal (existing or new), resolving blank overrides to the Semester's current defaults."""
+def _apply_rehearsal_edit_row(row: RehearsalEditRow, semester: Semester) -> Rehearsal:
+    """Save one Buffer row onto its Rehearsal (existing or new), resolving blank overrides to the Semester's current defaults; return it."""
     if row.rehearsal_id is not None:
         rehearsal = Rehearsal.objects.get(pk=row.rehearsal_id, semester=semester)
     else:
@@ -2730,6 +2838,51 @@ def _apply_rehearsal_edit_row(row: RehearsalEditRow, semester: Semester) -> None
         value = getattr(row, field_name)
         setattr(rehearsal, field_name, value if value is not None else getattr(semester, default_field_name))
     rehearsal.save()
+    return rehearsal
+
+
+def _apply_running_order(rehearsal: Rehearsal, rows: list[RunningOrderRow]) -> None:
+    """Save one Rehearsal's Running Order buffer — adds, edits, removals and reorder — in one pass (issue #220).
+
+    Mirrors `reorder_rehearsal_songs()`'s placeholder-then-final two-pass
+    shape (see its docstring for why a permutation can't be written in one
+    pass), extended to create brand-new rows and delete removed ones in the
+    same call. A row named in `rows` with no `rehearsal_song_id` is a
+    brand-new RehearsalSong; an existing row this Rehearsal currently has
+    but `rows` no longer names is removed via
+    `delete_rehearsal_songs_with_recordings()`. The placeholder pass only
+    touches already-existing rows' `order` (not their `slot_count`) — a
+    brand-new row has no prior `order` to collide with, so it's created
+    straight at its final position in the second pass. Slot-count overflow
+    is pre-validated by the caller against the *sum* of every row's
+    slot_count, which holds at every intermediate arrangement this
+    function produces (a row's `_prior_slots()` can only sum a subset of
+    the other rows' slot_counts, whatever their current `order`), so no
+    individual `.save()` here can spuriously trip
+    `RehearsalSong._overruns_rehearsal_window()`. Must run inside the
+    caller's `transaction.atomic()`, same as `reorder_rehearsal_songs()`.
+    """
+    existing_by_id = {rehearsal_song.pk: rehearsal_song for rehearsal_song in RehearsalSong.objects.filter(rehearsal=rehearsal)}
+    submitted_ids = {row.rehearsal_song_id for row in rows if row.rehearsal_song_id is not None}
+    removed = [rehearsal_song for pk, rehearsal_song in existing_by_id.items() if pk not in submitted_ids]
+    if removed:
+        delete_rehearsal_songs_with_recordings(removed)
+
+    surviving_existing_rows = [row for row in rows if row.rehearsal_song_id is not None]
+    placeholder_base = max([len(rows), *(rehearsal_song.order for rehearsal_song in existing_by_id.values())], default=len(rows))
+    for offset, row in enumerate(surviving_existing_rows, start=1):
+        rehearsal_song = existing_by_id[row.rehearsal_song_id]
+        rehearsal_song.order = placeholder_base + offset
+        rehearsal_song.save()
+
+    for position, row in enumerate(rows, start=1):
+        if row.rehearsal_song_id is not None:
+            rehearsal_song = existing_by_id[row.rehearsal_song_id]
+        else:
+            rehearsal_song = RehearsalSong(rehearsal=rehearsal, song_id=row.song_id)
+        rehearsal_song.slot_count = row.slot_count
+        rehearsal_song.order = position
+        rehearsal_song.save()
 
 
 def preview_rehearsal_edits(buffer: RehearsalEditBuffer, *, viewing_semester: Semester) -> None:

@@ -272,6 +272,34 @@ RehearsalEditEmptyFormSet = forms.modelformset_factory(
 )
 
 
+class RunningOrderRowForm(forms.Form):
+    """One row of a Rehearsal's Running Order sub-grid: a scheduled Song, its slot_count, and which Rehearsal row owns it (issue #220).
+
+    A plain `Form`, not a `ModelForm`: `RunningOrderFormSet` is flat across
+    every rehearsal on the page (mirroring `SetlistEditFormSet`'s
+    "song_order"-token trick), so `rehearsal_row_key` — the owning
+    `RehearsalEditRowForm`'s prefix (e.g. `"rehearsal-0"`) — travels with
+    the row instead of a real FK the row may not have yet (a brand-new
+    Rehearsal has no pk to point at until `apply_rehearsal_edits()` creates
+    it). `song` is deliberately not a form field here: the song title is
+    read-only in the sub-grid (picked once from "+ Add song", never
+    retyped), so only its id travels, as a hidden input the JS never lets
+    the admin edit by hand.
+    """
+
+    rehearsal_song_id = forms.IntegerField(required=False, widget=forms.HiddenInput)
+    rehearsal_row_key = forms.CharField(widget=forms.HiddenInput)
+    song_id = forms.IntegerField(widget=forms.HiddenInput)
+    slot_count = forms.IntegerField(min_value=1)
+    DELETE = forms.BooleanField(required=False, widget=forms.HiddenInput)
+
+
+# The Running Order sub-grid's buffer: one flat formset across every Rehearsal row on the page, each
+# row's `rehearsal_row_key` naming which Rehearsal it belongs to (issue #220). `extra=0`: rows arrive by
+# the "+ Add song" control bumping TOTAL_FORMS, mirroring `SetlistEditFormSet`.
+RunningOrderFormSet = forms.formset_factory(RunningOrderRowForm, extra=0)
+
+
 class SongEditForm(forms.ModelForm):
     """One row of the setlist edit grid: title/artist/length/notes on an existing Song (issue #178).
 

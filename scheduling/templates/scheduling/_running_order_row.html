@@ -1,0 +1,21 @@
+<div class="running-order-row" data-rehearsal-song-id="{{ form.rehearsal_song_id.value|default:'' }}" data-song-id="{{ form.song_id.value|default:'' }}" data-form-prefix="{{ form.prefix }}">
+  {{ form.rehearsal_song_id }}
+  {{ form.rehearsal_row_key }}
+  {{ form.song_id }}
+  {# The buffer's row order within its Rehearsal (issue #220): travels with this row on drag, independent of its formset slot. #}
+  <input type="hidden" name="song_slot_order" class="running-order-order-field" value="{{ form.prefix }}">
+  <span class="running-order-delete-checkbox-wrapper" style="display:none">{{ form.DELETE }}</span>
+  <span class="running-order-row-number"></span>
+  <span class="running-order-drag-handle" aria-hidden="true" title="Drag to reorder">⠿</span>
+  <span class="running-order-move-buttons">
+    <button type="button" class="running-order-move-up" @click="moveUp($event)" aria-label="Move up">↑</button>
+    <button type="button" class="running-order-move-down" @click="moveDown($event)" aria-label="Move down">↓</button>
+  </span>
+  <span class="running-order-song-title">{{ form.song.title }}</span>
+  <span class="running-order-field running-order-field-slot-count">
+    <label class="running-order-field-label" for="{{ form.slot_count.id_for_label }}">Slots</label>
+    {{ form.slot_count }}
+    {{ form.slot_count.errors }}
+  </span>
+  <button type="button" class="running-order-delete-toggle" @click="toggleRunningOrderDelete($event)">Remove</button>
+</div>
