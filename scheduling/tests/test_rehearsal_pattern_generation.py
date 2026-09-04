@@ -3,6 +3,7 @@
 from datetime import date, time, timedelta
 
 from django.test import TestCase
+from django.utils import timezone
 
 from scheduling.factories import (
     ConflictFactory,
@@ -93,7 +94,10 @@ class SaveRehearsalPatternTests(TestCase):
         self.assertEqual(RehearsalPattern.objects.count(), 0)
 
 
-TOMORROW = date(2026, 9, 2)  # a Wednesday
+# A future Wednesday, computed relative to today rather than hardcoded, so preview_rehearsal_generation()'s
+# clamp to today (issue #222 review) never eats one of these tests' generated dates out from under it.
+_earliest = timezone.localdate() + timedelta(days=1)
+TOMORROW = _earliest + timedelta(days=(RehearsalTime.WEDNESDAY - _earliest.weekday()) % 7)
 
 
 class PreviewRehearsalGenerationTests(TestCase):
@@ -115,6 +119,31 @@ class PreviewRehearsalGenerationTests(TestCase):
 
         wednesdays = [TOMORROW, TOMORROW + timedelta(days=7), TOMORROW + timedelta(days=14), TOMORROW + timedelta(days=21)]
         self.assertEqual([item.date for item in diff.creates], wednesdays)
+        self.assertEqual(diff.keeps, [])
+        self.assertEqual(diff.retimes, [])
+        self.assertEqual(diff.orphans, [])
+
+    def test_a_range_starting_before_today_is_clamped_to_today(self):
+        """A Pattern/range whose start_date is in the past never produces a Create, Re-time, or Orphan the Pending Buffer would refuse to save (issue #222 review)."""
+        semester = SemesterFactory()
+        past_wednesday = TOMORROW - timedelta(days=7)
+        stale_rehearsal = RehearsalFactory(semester=semester, date=past_wednesday, start_time=time(18, 0), end_time=time(20, 0))
+
+        diff = preview_rehearsal_generation(semester, self._pattern(start_date=past_wednesday))
+
+        self.assertNotIn(past_wednesday, [item.date for item in diff.creates])
+        self.assertNotIn(stale_rehearsal.pk, [item.rehearsal_id for item in diff.retimes])
+        self.assertNotIn(stale_rehearsal.pk, [item.rehearsal_id for item in diff.orphans])
+
+    def test_a_range_entirely_before_today_produces_an_empty_diff(self):
+        """A range that ends before today, not just starts before it, generates nothing rather than raising."""
+        semester = SemesterFactory()
+
+        diff = preview_rehearsal_generation(
+            semester, self._pattern(), date_range=(TOMORROW - timedelta(days=14), TOMORROW - timedelta(days=7)),
+        )
+
+        self.assertEqual(diff.creates, [])
         self.assertEqual(diff.keeps, [])
         self.assertEqual(diff.retimes, [])
         self.assertEqual(diff.orphans, [])

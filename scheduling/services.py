@@ -3598,7 +3598,13 @@ def preview_rehearsal_generation(
     """
     _check_no_rehearsal_time_collisions(pattern.rehearsal_times)
     start_date, end_date = date_range if date_range is not None else (pattern.start_date, pattern.end_date)
-    generated = list(_generated_dates(pattern, start_date, end_date))
+    # A past-dated Create would enter the Pending Buffer checked and immediately trip
+    # PastRehearsalEditError on save; a past Re-time/Orphan would render but its row is
+    # excluded from ScheduleEditView's editable set, so its injection could never find a
+    # match. Clamping here keeps every bucket confined to dates apply_rehearsal_edits()
+    # can actually act on.
+    start_date = max(start_date, timezone.localdate())
+    generated = list(_generated_dates(pattern, start_date, end_date)) if start_date <= end_date else []
     generated_dates = [generated_date for generated_date, _ in generated]
     dress_dates = (
         set(generated_dates[-semester.default_dress_rehearsal_count:])

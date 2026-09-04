@@ -13,6 +13,7 @@ document.addEventListener('alpine:init', () => {
     defaultDurationMinutes,
     diffHtml: '',
     previewError: '',
+    isPreviewing: false,
 
     init() {},
 
@@ -108,39 +109,53 @@ document.addEventListener('alpine:init', () => {
     // requests to separate endpoints, mirroring the service layer's own deliberate split between
     // save_rehearsal_pattern() and the pure-read preview_rehearsal_generation() (issue #222).
     async runPreview() {
+      if (this.isPreviewing) {
+        // The Preview button is :disabled while a run is in flight, but a guard here too costs
+        // nothing and covers any trigger other than a click (e.g. a stray Enter-key submit).
+        return;
+      }
+      this.isPreviewing = true;
       this.previewError = '';
       this.diffHtml = '';
       const csrfToken = this._csrfToken();
-      let saveResponse;
+      // Captured once and reused for both requests: the Preview diff must describe the exact
+      // same submitted state that got saved, not whatever the form happens to hold by the time
+      // the second request goes out (issue #222 review).
+      const formData = this._formData();
       try {
-        saveResponse = await fetch(this.saveUrl, { method: 'POST', headers: { 'X-CSRFToken': csrfToken }, body: this._formData() });
-      } catch (error) {
-        this.previewError = 'Could not reach the server to save this Pattern. Check your connection and try again.';
-        return;
-      }
-      if (!saveResponse.ok) {
-        this.previewError = 'Could not save this Pattern. Try again.';
-        return;
-      }
-      const savedEditorHtml = await saveResponse.text();
-      document.getElementById('rehearsal-pattern-body').innerHTML = savedEditorHtml;
-      if (document.getElementById('rehearsal-pattern-save-error')) {
-        // The editor re-render already carries the field-level/collision error; nothing further to fetch.
-        return;
-      }
+        let saveResponse;
+        try {
+          saveResponse = await fetch(this.saveUrl, { method: 'POST', headers: { 'X-CSRFToken': csrfToken }, body: formData });
+        } catch (error) {
+          this.previewError = 'Could not reach the server to save this Pattern. Check your connection and try again.';
+          return;
+        }
+        if (!saveResponse.ok) {
+          this.previewError = 'Could not save this Pattern. Try again.';
+          return;
+        }
+        const savedEditorHtml = await saveResponse.text();
+        document.getElementById('rehearsal-pattern-body').innerHTML = savedEditorHtml;
+        if (document.getElementById('rehearsal-pattern-save-error')) {
+          // The editor re-render already carries the field-level/collision error; nothing further to fetch.
+          return;
+        }
 
-      let previewResponse;
-      try {
-        previewResponse = await fetch(this.previewUrl, { method: 'POST', headers: { 'X-CSRFToken': csrfToken }, body: this._formData() });
-      } catch (error) {
-        this.previewError = 'Could not reach the server to compute this diff. Check your connection and try again.';
-        return;
+        let previewResponse;
+        try {
+          previewResponse = await fetch(this.previewUrl, { method: 'POST', headers: { 'X-CSRFToken': csrfToken }, body: formData });
+        } catch (error) {
+          this.previewError = 'Could not reach the server to compute this diff. Check your connection and try again.';
+          return;
+        }
+        if (!previewResponse.ok) {
+          this.previewError = 'Could not compute this diff. Try again.';
+          return;
+        }
+        this.diffHtml = await previewResponse.text();
+      } finally {
+        this.isPreviewing = false;
       }
-      if (!previewResponse.ok) {
-        this.previewError = 'Could not compute this diff. Try again.';
-        return;
-      }
-      this.diffHtml = await previewResponse.text();
     },
 
     // Reads every ticked outcome straight off the rendered diff's own DOM (data-* attributes set by
@@ -160,6 +175,10 @@ document.addEventListener('alpine:init', () => {
           endTime: checkbox.dataset.endTime,
           isDressRehearsal: checkbox.dataset.isDressRehearsal === 'true',
         });
+        // Consumed immediately: injectGeneratedCreate() always appends a new pending row, so a
+        // second Apply on a still-checked box (a partial refusal below, or re-opening the modal
+        // without a fresh Preview) would append a duplicate rather than a no-op (issue #222 review).
+        checkbox.checked = false;
       });
 
       region.querySelectorAll('.rs-generation-retime-checkbox:checked').forEach((checkbox) => {

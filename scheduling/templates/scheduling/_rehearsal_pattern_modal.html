@@ -33,7 +33,7 @@
     </fieldset>
   </form>
 
-  <button type="button" id="run-generation-preview" @click="runPreview">Preview</button>
+  <button type="button" id="run-generation-preview" :disabled="isPreviewing" @click="runPreview">Preview</button>
   <p id="rehearsal-generation-preview-error" x-show="previewError" x-text="previewError" role="alert"></p>
 
   <div id="rehearsal-generation-diff-region" x-html="diffHtml"></div>

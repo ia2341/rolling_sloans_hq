@@ -126,14 +126,27 @@ document.addEventListener('alpine:init', () => {
     // Appends a brand-new Rehearsal row prefilled from one ticked Create outcome (issue #222's staging
     // modal Apply) -- date/start/end/Dress land straight on the freshly-appended row's own inputs, which
     // mirrors exactly what a hand-typed "+ Add rehearsal" row would carry into the Pending Buffer.
+    // Reconciles onto an already-pending row for the same date instead of appending a second one: Preview
+    // only sees saved Rehearsals, so a date an admin already hand-added to the Buffer looks like a Create
+    // to it too, and the schedule formset itself rejects two rows sharing a date (issue #222 review).
     injectGeneratedCreate({ date, startTime, endTime, isDressRehearsal }) {
-      const rowEl = this._appendRehearsalRow();
+      const rowEl = this._findPendingRowByDate(date) || this._appendRehearsalRow();
       rowEl.querySelector('input[name$="-date"]').value = date;
       rowEl.querySelector('input[name$="-start_time"]').value = startTime;
       rowEl.querySelector('input[name$="-end_time"]').value = endTime;
       if (isDressRehearsal) {
         rowEl.querySelector('input[name$="-is_full_setlist"]').checked = true;
       }
+    },
+
+    // Finds a grid row -- saved or freshly hand-added -- not marked for deletion whose date input already
+    // matches `date`, so injectGeneratedCreate() can reconcile onto it rather than duplicate it.
+    _findPendingRowByDate(date) {
+      return Array.from(document.querySelectorAll('.schedule-edit-row')).find((row) => {
+        const dateInput = row.querySelector('input[name$="-date"]');
+        const deleteCheckbox = row.querySelector('.schedule-edit-delete-checkbox-wrapper input');
+        return dateInput.value === date && !(deleteCheckbox && deleteCheckbox.checked);
+      });
     },
 
     // Re-times an existing Rehearsal row already on the grid to a ticked outcome's new hours (issue #222)

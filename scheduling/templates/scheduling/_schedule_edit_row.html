@@ -4,8 +4,8 @@
   data-rehearsal-id="{{ form.instance.pk|default:'' }}"
   data-form-prefix="{{ form.prefix }}"
   data-original-date="{{ form.instance.date|date:'Y-m-d' }}"
-  data-original-start-time="{{ form.instance.start_time|time:'H:i' }}"
-  data-original-end-time="{{ form.instance.end_time|time:'H:i' }}"
+  data-original-start-time="{{ form.instance.start_time|time:'H:i:s' }}"
+  data-original-end-time="{{ form.instance.end_time|time:'H:i:s' }}"
 >
   {{ form.id }}
   <span class="schedule-edit-delete-checkbox-wrapper" style="display:none">{{ form.DELETE }}</span>
