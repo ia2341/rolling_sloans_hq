@@ -1,0 +1,1292 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+  Charset first, before this comment: over file:// there is no Content-Type header.
+
+  PROTOTYPE — throwaway. Ticket #305 on map #302. Shell inherited from #303.
+
+  QUESTION: what is the layout of each member-facing page, on phone and on desktop?
+
+  SHAPE: converged after review. Schedule's three variants were resolved to A.
+
+    Schedule    per-rehearsal page (variant A) — segmented This-rehearsal / All
+    Setlist     recordings reachable per row: play the takes, or add one
+    Song detail recordings grouped by RehearsalSong slot
+    Band        roster
+    Profile     /members/<pk>/ — and, SELF ONLY, Your recordings incl. the upload
+
+  REVIEW DECISIONS folded in (repo owner, this session):
+    - Schedule is variant A on desktop AND phone. B (one long feed) and C
+      (list + detail pane) are gone; find them at 227ea74 on this branch.
+    - Recordings is NOT a nav destination. It comes off the sidebar and off
+      the phone tab bar.
+    - Recordings are reached two ways instead: per song from the Setlist, and
+      your own uploads from your Profile page.
+    - /me/recordings/ folds into the Profile page. The Setlist's "+ add" deep
+      links to it with the RehearsalSong slot preselected.
+
+  REQUIRES A DOC CHANGE, not made here: docs/person-page-visibility.md marks
+  Recording `never` on /members/<pk>/ for every viewer, self included. Putting
+  Your recordings there needs a new row — `❌ never | ✅ self only | ❌ never` —
+  in the same shape Person.email already uses. Decided; writing it is execution.
+
+  CORRECTIONS to #303's drafts, made after reading the code rather than the ticket:
+
+    1. Conflict declaration types are the real CONFLICT_DECLARATION_CHOICES
+       (services.py:1649) — full_absence / late_arrival / early_departure. #303 guessed
+       the labels; these are the constants.
+    2. "+ Add recording" on a Song is NOT an open design question. /me/recordings/
+       already takes ?song=<id> (issue #102) and pre-filters the RehearsalSong dropdown
+       to that Song's slots. Nothing uploads in place from the Song page.
+    3. Song.notes IS a real field (models.py) and is already editable in the setlist
+       edit row. Map #302 rules per-song notes out of scope on the grounds that no such
+       model exists — that premise is wrong. Flagged, not acted on.
+    4. /members/<pk>/ shows NO Conflicts, NO Backups, NO attendance, and no teammate's
+       Recordings — docs/person-page-visibility.md marks those `never`. Only your own
+       recordings, on your own page, and only after the row above is written.
+    5. Conflict.status is pending / approved / rejected with an optional admin
+       adjudication_note, read by the owner on /schedule/ and nowhere else.
+
+  Greybox: structure only. No colour, type or theme is being proposed.
+  All data synthesized — no real member data (CONTRIBUTING.md).
+-->
+<title>Member Pages Greybox</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+  :root {
+    --paper:      #eef0f4;
+    --surface:    #ffffff;
+    --surface-2:  #f4f6f9;
+    --box:        #e3e7ee;
+    --line:       #c6ccd8;
+    --line-soft:  #dde2ea;
+    --ink:        #171a21;
+    --ink-2:      #4d5566;
+    --ink-3:      #79808f;
+    --chrome:     #1d2430;
+    --chrome-ink: #e9ecf2;
+    --mark:       #2f4fd0;   /* prototype chrome only, never inside a frame */
+    --warn:       #9a5a12;   /* semantic: a declared conflict */
+    --warn-bg:    #f7ecdc;
+    --ok:         #2f6b47;   /* semantic: your own slot / confirmed */
+    --ok-bg:      #e6f0e9;
+    /* Role hues. Hue = which role; border + marker = state. The two must stay
+       separate encodings or a backup on drums and a conflict on keys collide. */
+    --role-0:     #6d5bd0;   /* Lead Vocals */
+    --role-1:     #12776a;   /* Guitar */
+    --role-2:     #a3417e;   /* Bass */
+    --role-3:     #9c4a37;   /* Drums */
+    --role-4:     #2f5fa8;   /* Keys */
+    --radius:     6px;
+    --sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #14171d; --surface: #1c2029; --surface-2: #232833; --box: #2b313d;
+      --line: #414958; --line-soft: #333a47; --ink: #e7eaf0; --ink-2: #a8b0bf;
+      --ink-3: #7d8593; --chrome: #0d1015; --mark: #7f95ee;
+      --warn: #e0ac66; --warn-bg: #3a2c1633; --ok: #7fc39b; --ok-bg: #1d3128aa;
+      --role-0: #a99af0; --role-1: #6fc9b6; --role-2: #e08cc0;
+      --role-3: #dd9179; --role-4: #8fb4ec;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #14171d; --surface: #1c2029; --surface-2: #232833; --box: #2b313d;
+    --line: #414958; --line-soft: #333a47; --ink: #e7eaf0; --ink-2: #a8b0bf;
+    --ink-3: #7d8593; --chrome: #0d1015; --mark: #7f95ee;
+    --warn: #e0ac66; --warn-bg: #3a2c1633; --ok: #7fc39b; --ok-bg: #1d3128aa;
+    --role-0: #a99af0; --role-1: #6fc9b6; --role-2: #e08cc0;
+    --role-3: #dd9179; --role-4: #8fb4ec;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font-family: var(--sans); font-size: 14px; line-height: 1.45;
+    padding: 18px 18px 104px;
+  }
+  h1, h2, h3 { margin: 0; text-wrap: balance; font-weight: 600; }
+  button { font: inherit; color: inherit; }
+
+  /* ---- prototype chrome ---- */
+  .chrome-head { max-width: 1180px; margin: 0 auto 14px; display: flex; flex-wrap: wrap;
+    align-items: baseline; gap: 10px 16px; }
+  .chrome-head h1 { font-size: 15px; letter-spacing: -0.01em; }
+  .chrome-head .tag { font-family: var(--mono); font-size: 10px; letter-spacing: 0.09em;
+    text-transform: uppercase; color: var(--ink-3); border: 1px solid var(--line);
+    border-radius: 99px; padding: 2px 8px; }
+  .chrome-head p { margin: 0; color: var(--ink-2); font-size: 12.5px; max-width: 62ch; }
+  .stage { max-width: 1180px; margin: 0 auto; }
+
+  .frame { background: var(--surface); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; margin: 0 auto; }
+  .frame.desktop { width: 100%; min-height: 680px; }
+  .frame.phone { width: 390px; height: 780px; border-radius: 26px; border-width: 8px;
+    border-color: var(--chrome); box-shadow: 0 10px 34px rgb(0 0 0 / 0.18); }
+  .frame-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; }
+  .framewrap { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; }
+
+  .verdict { max-width: 1180px; margin: 16px auto 0; border: 1px solid var(--line-soft);
+    border-radius: var(--radius); background: var(--surface); padding: 14px 16px; }
+  .verdict h2 { font-size: 12px; font-family: var(--mono); letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--ink-3); margin-bottom: 8px; }
+  .verdict ul { margin: 0 0 12px; padding-left: 18px; display: grid; gap: 6px; }
+  .verdict li { color: var(--ink-2); font-size: 13px; }
+  .verdict li b { color: var(--ink); font-weight: 600; }
+  .verdict .cols { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+
+  /* ---- greybox primitives ---- */
+  .gb-label { font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--ink-3); }
+  .btn { border: 1px solid var(--line); background: var(--surface-2); color: var(--ink);
+    border-radius: var(--radius); padding: 6px 11px; font-size: 13px; cursor: pointer; white-space: nowrap; }
+  .btn.primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+  .btn.ghost { background: transparent; border-color: transparent; color: var(--ink-2); }
+  .btn.sm { padding: 3px 8px; font-size: 12px; }
+  .btn[disabled] { opacity: 0.4; cursor: not-allowed; }
+  .btn.icon { padding: 3px 7px; font-family: var(--mono); }
+  .field { border: 1px solid var(--line); border-radius: 4px; background: var(--surface);
+    padding: 4px 7px; font-size: 13px; min-height: 28px; display: flex; align-items: center; color: var(--ink-2); }
+  .muted { color: var(--ink-3); }
+  .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .card { border: 1px solid var(--line-soft); border-radius: var(--radius);
+    background: var(--surface); padding: 12px 14px; }
+  .stack { display: grid; gap: 12px; }
+  .row-between { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .scroll-x { overflow-x: auto; }
+  .hstack { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+
+  /* assignment pills — styled by state (review item 6) */
+  .chip { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line);
+    background: var(--surface-2); border-radius: 99px; padding: 2px 9px; font-size: 12px; white-space: nowrap; }
+  .chip.empty { border-style: dashed; color: var(--ink-3); background: transparent; }
+  .chip.backup { border-style: dashed; background: transparent; }
+  .chip.backup .tagm { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--ink-3); }
+  .chip.conflict { border-color: var(--warn); background: var(--warn-bg); color: var(--warn); }
+  .chip.mismatch { border-style: solid; box-shadow: inset 0 -2px 0 var(--line); }
+  .chip.you { border-color: var(--ok); background: var(--ok-bg); color: var(--ok); font-weight: 600; }
+  /* Role hue rides on a dot, so it never fights the state colours on the pill itself. */
+  .chip .rdot { width: 7px; height: 7px; border-radius: 50%; background: var(--rc, var(--ink-3));
+    flex-shrink: 0; }
+  .chip.empty .rdot { background: transparent; border: 1px solid var(--rc, var(--line)); }
+  .chip .rcode { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.04em;
+    color: var(--rc, var(--ink-3)); font-weight: 600; }
+  .legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 11.5px; color: var(--ink-3);
+    align-items: center; }
+  .legend .swatch { display: inline-flex; align-items: center; gap: 5px; }
+  .legend .swatch i { width: 8px; height: 8px; border-radius: 50%; background: var(--rc); }
+  .castline { display: flex; gap: 5px; flex-wrap: wrap; align-items: center; }
+
+  table.gb { border-collapse: collapse; width: 100%; font-size: 13px; }
+  table.gb th, table.gb td { border-bottom: 1px solid var(--line-soft); padding: 7px 10px;
+    text-align: left; vertical-align: middle; }
+  table.gb th { font-weight: 600; font-size: 11.5px; color: var(--ink-2); white-space: nowrap; }
+  table.gb td.num, table.gb th.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  table.gb tr.sub td { border-bottom: 1px solid var(--line-soft); padding-top: 0; }
+  /* The Songs table carries the most per row, so it gets the most air. */
+  table.gb.songs td { padding-top: 11px; padding-bottom: 11px; }
+  table.gb.songs tr.sub td { padding-top: 0; }
+  table.gb.songs td:nth-child(3) { min-width: 260px; }
+
+  .page { padding: 16px; display: grid; gap: 16px; }
+  .frame.desktop .page { padding: 22px 28px; }
+  .page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+  .page-head h1 { font-size: 20px; letter-spacing: -0.015em; }
+  .frame.phone .page-head h1 { font-size: 17px; }
+  .page-head .actions { display: flex; gap: 6px; flex-shrink: 0; }
+  .section-head { font-size: 13px; color: var(--ink-2); font-weight: 600; }
+
+  /* toggle (review item 8) */
+  .toggle { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px;
+    color: var(--ink-2); cursor: pointer; }
+  .toggle .track { width: 30px; height: 17px; border-radius: 99px; background: var(--box);
+    border: 1px solid var(--line); position: relative; flex-shrink: 0; }
+  .toggle .knob { position: absolute; top: 1px; left: 1px; width: 13px; height: 13px;
+    border-radius: 50%; background: var(--surface); border: 1px solid var(--line); }
+  .toggle[aria-pressed="true"] .track { background: var(--ink); border-color: var(--ink); }
+  .toggle[aria-pressed="true"] .knob { left: auto; right: 1px; background: var(--surface); border-color: var(--ink); }
+
+  /* segmented sub-view control */
+  .seg2 { display: inline-flex; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+  .seg2 button { border: 0; background: transparent; padding: 5px 12px; font-size: 12.5px; cursor: pointer; color: var(--ink-3); }
+  .seg2 button[aria-pressed="true"] { background: var(--ink); color: var(--surface); font-weight: 600; }
+
+  /* ---- the shell: collapsible left sidebar (review item 1) ---- */
+  .shell { display: flex; flex: 1; min-height: 0; }
+  .sidebar { flex-shrink: 0; border-right: 1px solid var(--line); background: var(--surface-2);
+    display: flex; flex-direction: column; width: 236px; }
+  .sidebar.rail { width: 60px; }
+  .sidebar .head { display: flex; align-items: center; gap: 8px; padding: 12px 14px; height: 52px; }
+  .sidebar .brand { font-weight: 700; font-size: 14px; letter-spacing: -0.01em; white-space: nowrap;
+    overflow: hidden; flex: 1; }
+  .sidebar nav { flex: 1; overflow-y: auto; padding: 4px 0; }
+  .sidebar .group { padding: 12px 14px 4px; }
+  .sidebar a { display: flex; align-items: center; gap: 10px; text-decoration: none;
+    color: var(--ink-2); padding: 7px 14px; font-size: 13px; white-space: nowrap; }
+  .sidebar a[aria-current] { color: var(--ink); font-weight: 600; background: var(--surface);
+    box-shadow: inset 2px 0 0 var(--ink); }
+  .sidebar .glyph { width: 18px; height: 18px; border: 1.5px solid currentColor;
+    border-radius: 5px; flex-shrink: 0; }
+  .sidebar .count { margin-left: auto; font-family: var(--mono); font-size: 11px;
+    border: 1px solid var(--line); border-radius: 99px; padding: 0 6px; }
+  .sidebar.rail a { justify-content: center; padding: 8px 0; }
+  .sidebar.rail .label, .sidebar.rail .count, .sidebar.rail .group, .sidebar.rail .brand { display: none; }
+
+  /* the semester control — the shell's one home for it (review item 13) */
+  .sem-panel { border-top: 1px solid var(--line); padding: 12px 14px; display: grid; gap: 8px; }
+  .sem-panel.draft { background: var(--warn-bg); }
+  .sem-panel .warnline { font-size: 11.5px; color: var(--warn); }
+  .sidebar.rail .sem-panel { padding: 10px 6px; justify-items: center; }
+  .sidebar.rail .sem-panel .hide-rail { display: none; }
+
+  .topline { display: flex; align-items: center; gap: 10px; padding: 0 20px; height: 52px;
+    border-bottom: 1px solid var(--line); background: var(--surface); flex-shrink: 0; }
+  .topline .title { font-weight: 600; flex: 1; }
+
+  /* phone */
+  .phonebar { display: flex; align-items: center; gap: 8px; padding: 0 12px; height: 50px;
+    border-bottom: 1px solid var(--line); background: var(--surface); flex-shrink: 0; }
+  .phonebar .title { font-weight: 600; font-size: 15px; flex: 1; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  .tabbar { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr;
+    border-top: 1px solid var(--line); background: var(--surface); flex-shrink: 0; padding-bottom: 6px; }
+  .tabbar a { text-decoration: none; color: var(--ink-3); display: grid; justify-items: center;
+    gap: 3px; padding: 7px 2px 3px; font-size: 10.5px; position: relative; }
+  .tabbar a[aria-current] { color: var(--ink); font-weight: 600; }
+  .tabbar .glyph { width: 20px; height: 20px; border: 1.5px solid currentColor; border-radius: 5px; }
+  .tabbar .dot { position: absolute; top: 5px; right: 50%; margin-right: -14px; width: 6px;
+    height: 6px; border-radius: 50%; background: var(--warn); }
+  .sem-strip { padding: 7px 12px; font-size: 12px; display: flex; align-items: center; gap: 8px;
+    border-bottom: 1px solid var(--line); background: var(--warn-bg); color: var(--warn); flex-shrink: 0; }
+
+  /* edit toolbar */
+  .edit-toolbar { background: var(--ink); color: var(--surface); padding: 8px 16px;
+    display: flex; align-items: center; gap: 8px; flex-shrink: 0; font-size: 13px; }
+  .edit-toolbar .grow { flex: 1; font-weight: 600; }
+  .edit-toolbar .btn { background: transparent; border-color: rgb(255 255 255 / 0.35); color: inherit; }
+  .edit-toolbar .btn.primary { background: var(--surface); color: var(--ink); border-color: var(--surface); }
+
+  /* the rehearsal-window timeline (review item 3) */
+  .timeline { display: grid; gap: 5px; }
+  .timeline .track { display: flex; height: 26px; border: 1px solid var(--line);
+    border-radius: 4px; overflow: hidden; background: var(--surface-2); }
+  .timeline .slot { border-right: 1px solid var(--line-soft); display: flex; align-items: center;
+    justify-content: center; font-size: 9.5px; overflow: hidden; padding: 0 2px;
+    font-family: var(--mono); color: var(--ink-3); }
+  .timeline .slot:last-child { border-right: 0; }
+  .timeline .slot.mine { background: var(--ok-bg); color: var(--ok); font-weight: 600; }
+  .timeline .slot.brk { background: repeating-linear-gradient(45deg,
+      transparent, transparent 3px, var(--box) 3px, var(--box) 6px); }
+  .timeline .ends { display: flex; justify-content: space-between; font-size: 11px; }
+
+  /* modal / sheet */
+  .backdrop { position: absolute; inset: 0; background: rgb(0 0 0 / 0.38); display: flex;
+    align-items: center; justify-content: center; padding: 20px; }
+  .backdrop.bottom { align-items: flex-end; padding: 0; }
+  .modal { background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+    width: 100%; max-width: 440px; max-height: 100%; overflow-y: auto; }
+  .backdrop.bottom .modal { border-radius: 14px 14px 0 0; max-width: none; border-bottom: 0; }
+  .modal .m-head { padding: 14px 16px; border-bottom: 1px solid var(--line-soft);
+    display: flex; align-items: center; gap: 10px; }
+  .modal .m-head h3 { font-size: 15px; flex: 1; }
+  .modal .m-body { padding: 14px 16px; display: grid; gap: 12px; }
+  .modal .m-foot { padding: 12px 16px; border-top: 1px solid var(--line-soft);
+    display: flex; gap: 8px; justify-content: flex-end; }
+  .radio { display: flex; gap: 9px; align-items: flex-start; padding: 8px 10px;
+    border: 1px solid var(--line); border-radius: var(--radius); cursor: pointer; }
+  .radio[aria-checked="true"] { border-color: var(--ink); background: var(--surface-2); }
+  .radio .dot { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--line);
+    flex-shrink: 0; margin-top: 2px; }
+  .radio[aria-checked="true"] .dot { border-color: var(--ink); box-shadow: inset 0 0 0 3px var(--surface),
+    inset 0 0 0 8px var(--ink); }
+  .radio .sub { font-size: 11.5px; color: var(--ink-3); }
+  .privacy { font-size: 11.5px; color: var(--ink-3); border-left: 2px solid var(--line);
+    padding-left: 8px; }
+
+  .songlist { display: grid; }
+  .songlist .item { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px;
+    align-items: center; padding: 9px 0; border-bottom: 1px solid var(--line-soft); }
+  .songlist .item .sub { grid-column: 1 / -1; }
+  .prog { display: flex; align-items: center; gap: 8px; }
+  .prog .track { flex: 1; height: 5px; background: var(--box); border-radius: 99px; min-width: 50px; }
+  .prog .fill { height: 100%; background: var(--ink-2); border-radius: 99px; }
+  .songcards { display: grid; gap: 8px; }
+  .songcards .kv { display: flex; justify-content: space-between; gap: 10px; font-size: 12.5px; padding: 3px 0; }
+  .matrix th:first-child, .matrix td:first-child { position: sticky; left: 0; background: var(--surface); z-index: 1; }
+  .matrix th:nth-child(2), .matrix td:nth-child(2) { position: sticky; left: 62px; background: var(--surface); z-index: 1; }
+
+  /* ---- bottom switcher ---- */
+  .switcher { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 50;
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: center;
+    background: var(--chrome); color: var(--chrome-ink); border-radius: 99px; padding: 7px 9px;
+    box-shadow: 0 6px 26px rgb(0 0 0 / 0.3); max-width: calc(100vw - 24px); }
+  .switcher button, .switcher select { font: inherit; font-size: 12.5px;
+    border: 1px solid rgb(255 255 255 / 0.22); background: rgb(255 255 255 / 0.06);
+    color: inherit; border-radius: 99px; padding: 4px 11px; cursor: pointer; }
+  .switcher select { padding: 4px 8px; }
+  .switcher .seg { display: inline-flex; border-radius: 99px; overflow: hidden;
+    border: 1px solid rgb(255 255 255 / 0.22); }
+  .switcher .seg button { border: 0; border-radius: 0; }
+  .switcher .seg button[aria-pressed="true"] { background: var(--mark); color: #fff; font-weight: 600; }
+  .switcher .divider { width: 1px; height: 20px; background: rgb(255 255 255 / 0.2); }
+
+  :focus-visible { outline: 2px solid var(--mark); outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+  /* ---- #305 additions ---- */
+
+  /* Schedule variant B: the feed. Each rehearsal is a disclosure section. */
+  .feed { display: grid; gap: 10px; }
+  .feed .rh { border: 1px solid var(--line-soft); border-radius: var(--radius);
+    background: var(--surface); overflow: hidden; }
+  .feed .rh.open { border-color: var(--line); }
+  .feed .rh > .hd { display: flex; align-items: center; gap: 10px; padding: 11px 14px;
+    cursor: pointer; background: var(--surface-2); }
+  .feed .rh.open > .hd { border-bottom: 1px solid var(--line-soft); }
+  .feed .rh > .hd .caret { font-family: var(--mono); color: var(--ink-3); width: 12px; }
+  .feed .rh > .hd .when { font-weight: 600; }
+  .feed .rh > .bd { padding: 14px; display: grid; gap: 14px; }
+  .feed .rh.past > .hd { opacity: 0.62; }
+
+  /* Schedule variant C: two-pane on desktop, sheet on phone. */
+  .twopane { display: grid; grid-template-columns: 268px 1fr; gap: 0;
+    border: 1px solid var(--line-soft); border-radius: var(--radius); overflow: hidden;
+    min-height: 460px; }
+  .twopane .list { border-right: 1px solid var(--line-soft); background: var(--surface-2);
+    overflow-y: auto; }
+  .twopane .list .it { padding: 10px 13px; border-bottom: 1px solid var(--line-soft);
+    cursor: pointer; display: grid; gap: 3px; }
+  .twopane .list .it[aria-current] { background: var(--surface); box-shadow: inset 2px 0 0 var(--ink); }
+  .twopane .list .it .when { font-weight: 600; font-size: 13px; }
+  .twopane .detail { padding: 16px; display: grid; gap: 14px; align-content: start;
+    overflow-y: auto; }
+
+  /* availability block — the ADR 0005 / 0006 surface, shared by all three variants */
+  .avail { border: 1px solid var(--line); border-radius: var(--radius); padding: 11px 13px;
+    display: grid; gap: 8px; }
+  .avail.declared { border-color: var(--warn); background: var(--warn-bg); }
+  .avail.locked { background: var(--surface-2); }
+  .avail .hd { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+  .avail .verdict-line { font-size: 12.5px; }
+  .avail .note { font-size: 12.5px; border-left: 2px solid var(--line); padding-left: 8px; color: var(--ink-2); }
+
+  /* person page */
+  .kvlist { display: grid; gap: 0; }
+  .kvlist .r { display: grid; grid-template-columns: 128px 1fr; gap: 10px; padding: 8px 0;
+    border-bottom: 1px solid var(--line-soft); font-size: 13px; align-items: baseline; }
+  .frame.phone .kvlist .r { grid-template-columns: 100px 1fr; }
+  .kvlist .r .k { color: var(--ink-3); font-size: 12px; }
+  .withheld { font-size: 11.5px; color: var(--ink-3); font-style: italic; }
+
+  /* recordings */
+  .drop { border: 1.5px dashed var(--line); border-radius: var(--radius); padding: 22px 14px;
+    text-align: center; color: var(--ink-3); display: grid; gap: 8px; justify-items: center; }
+  .slotgroup { border: 1px solid var(--line-soft); border-radius: var(--radius); overflow: hidden; }
+  .slotgroup .gh { padding: 8px 12px; background: var(--surface-2);
+    border-bottom: 1px solid var(--line-soft); display: flex; align-items: baseline; gap: 8px; }
+  .slotgroup .gb2 { padding: 4px 12px; }
+  .player { display: flex; align-items: center; gap: 9px; }
+  .player .bar { flex: 1; height: 4px; background: var(--box); border-radius: 99px; min-width: 60px; }
+  .player .bar i { display: block; height: 100%; background: var(--ink-2); border-radius: 99px; }
+  .steps { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 12px; }
+  .steps .st { border: 1px solid var(--line); border-radius: 99px; padding: 2px 9px; color: var(--ink-3); }
+  .steps .st.on { border-color: var(--ink); color: var(--ink); font-weight: 600; }
+
+  /* prototype annotation — visible commentary, never part of the design */
+  .note-pr { border-left: 3px solid var(--mark); background: color-mix(in srgb, var(--mark) 7%, transparent);
+    padding: 7px 11px; font-size: 12px; color: var(--ink-2); border-radius: 0 4px 4px 0; }
+  .note-pr b { color: var(--ink); }
+</style>
+
+<div class="chrome-head">
+  <h1>Rolling Sloans — member pages greybox</h1>
+  <span class="tag">Prototype · #305</span>
+  <p>Layouts for every member-facing surface, inside #303's shell. <b>Schedule carries three
+  structural variants</b> — the one page the ticket calls genuinely contested; everything else is a
+  single converged build. Structure only. All data synthesized.</p>
+</div>
+
+<div class="stage" id="stage"></div>
+<div class="verdict" id="verdict"></div>
+
+<div class="switcher" role="group" aria-label="Prototype controls">
+  <span class="seg" id="viewportseg">
+    <button data-vp="desktop">Desktop</button>
+    <button data-vp="phone">Phone</button>
+  </span>
+  <span class="seg" id="roleseg">
+    <button data-role="member">Member</button>
+    <button data-role="admin">Admin</button>
+  </span>
+  <span class="divider"></span>
+  <select id="pagesel" aria-label="Page"></select>
+  <span class="divider"></span>
+  <button id="vprev" title="Previous variant">‹</button>
+  <span id="vlabel" style="font-size:12.5px;min-width:150px;text-align:center">—</span>
+  <button id="vnext" title="Next variant">›</button>
+</div>
+
+<script>
+/* ============================================================
+   Synthesized data — nothing here is a real person or setlist.
+   ============================================================ */
+const ROLES = ['Lead Vocals', 'Guitar', 'Bass', 'Drums', 'Keys'];
+const ROLE_CODE = ['LV', 'GTR', 'BASS', 'DRM', 'KEY'];
+const YOU = 'Avery Cho';
+const LIVE = 'Fall 2026';
+
+const PEOPLE = [
+  { name: 'Avery Cho',       roles: ['Lead Vocals', 'Keys'],        active: true },
+  { name: 'Dani Okafor',     roles: ['Drums'],                      active: true },
+  { name: 'Priya Raman',     roles: ['Bass', 'Backing Vocals'],     active: true },
+  { name: 'Marcus Vale',     roles: ['Guitar'],                     active: true },
+  { name: 'Nina Restrepo',   roles: ['Keys', 'Backing Vocals'],     active: true },
+  { name: 'Theo Lindqvist',  roles: ['Guitar', 'Bass'],             active: true },
+  { name: 'Sam Aterlay',     roles: ['Lead Vocals'],                active: true },
+  { name: 'Jules Marchetti', roles: ['Guitar'],                     active: false },
+];
+
+/* Cell forms: 'Name' | '~Name' backup | '!Name' role mismatch (ADR 0002) | '' unfilled */
+const SONGS = [
+  { pos: 1, title: 'Paper Lanterns',      artist: 'The Hollow Coast', len: '3:42', recs: 3,
+    notes: 'Tighten the last chorus — come in a bar early. Intro is four bars, not two.',
+    cast: ['Avery Cho', 'Marcus Vale', 'Priya Raman', 'Dani Okafor', 'Nina Restrepo'] },
+  { pos: 2, title: 'Riverbend',           artist: 'Junia Wolfe',      len: '4:15', recs: 1,
+    notes: 'Key change still unsettled.',
+    cast: ['Sam Aterlay', 'Theo Lindqvist', '', 'Dani Okafor', ''] },
+  { pos: 3, title: 'Static Bloom',        artist: 'Ferris & Doe',     len: '2:58', recs: 4,
+    notes: '',
+    cast: ['Avery Cho', 'Marcus Vale', 'Theo Lindqvist', 'Dani Okafor', 'Nina Restrepo'] },
+  { pos: 4, title: 'Two Weeks in June',   artist: 'Colma Park',       len: '5:07', recs: 0,
+    notes: 'Not started — cast this first.',
+    cast: ['', '', '', '', ''] },
+  { pos: 5, title: 'Marigold',            artist: 'The Hollow Coast', len: '3:20', recs: 2,
+    notes: '',
+    cast: ['Sam Aterlay', 'Marcus Vale', 'Priya Raman', '~Dani Okafor', '!Avery Cho'] },
+  { pos: 6, title: 'Cold Open',           artist: 'Nightjar',         len: '3:55', recs: 0,
+    notes: '',
+    cast: ['Avery Cho', '', 'Priya Raman', '', 'Nina Restrepo'] },
+  { pos: 7, title: 'The Long Way Down',   artist: 'Junia Wolfe',      len: '6:12', recs: 5,
+    notes: 'Locked. The Thu 10 Sep take is the reference.',
+    cast: ['Sam Aterlay', 'Marcus Vale', 'Priya Raman', 'Dani Okafor', 'Avery Cho'] },
+  { pos: 8, title: 'Ninety-Nine Summers', artist: 'Colma Park',       len: '4:01', recs: 0,
+    notes: '',
+    cast: ['', 'Theo Lindqvist', '', '', ''] },
+];
+
+/* `you` is your declared availability for that rehearsal — the ADR 0005 surface.
+   status mirrors Conflict.STATUS_CHOICES; note is the admin's adjudication_note. */
+const REHEARSALS = [
+  { id: 0, date: 'Tue 8 Sep',  time: '19:00–21:00', dress: false, past: true,  pending: 0,
+    order: [6, 0, 2], you: null },
+  { id: 1, date: 'Tue 15 Sep', time: '19:00–21:00', dress: false, past: false, pending: 2,
+    order: [0, 1, 4, 2, 5], you: null },
+  { id: 2, date: 'Thu 17 Sep', time: '19:00–21:00', dress: false, past: false, pending: 0,
+    order: [3, 5, 1, 6, 0], you: { type: 'late_arrival', at: '19:40', status: 'approved',
+      reason: 'Lab section runs until 19:30.', note: 'Fine — we start on Cold Open anyway.' } },
+  { id: 3, date: 'Tue 22 Sep', time: '19:00–21:00', dress: false, past: false, pending: 1,
+    order: [2, 6, 3, 4, 0], you: { type: 'full_absence', at: null, status: 'pending',
+      reason: 'Out of town.', note: '' } },
+  { id: 4, date: 'Sat 26 Sep', time: '14:00–18:00', dress: true,  past: false, pending: 0,
+    order: [0, 1, 2, 3, 4, 5, 6, 7], you: null },
+];
+
+/* Who else has a declared conflict where, by rehearsal id. Names only — never a reason,
+   on any member-facing surface (ADR 0005). */
+const OTHERS = { 1: ['Nina Restrepo', 'Theo Lindqvist'], 3: ['Priya Raman'] };
+
+/* Slot times, derived the way RehearsalSong.save() derives them: equal shares of the
+   window, never Song.length. */
+function slots(r) {
+  const [a, b] = r.time.split('–');
+  const t0 = +a.slice(0, 2) * 60 + +a.slice(3), t1 = +b.slice(0, 2) * 60 + +b.slice(3);
+  const w = (t1 - t0) / r.order.length;
+  const fmt = m => String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(Math.round(m % 60)).padStart(2, '0');
+  return r.order.map((si, i) => ({ song: SONGS[si], start: fmt(t0 + i * w), end: fmt(t0 + (i + 1) * w) }));
+}
+const onSong = (s, who) => s.cast.some(c => c && c.replace(/^[~!]/, '') === who);
+/* Your call time and free-to-go time: first and last slot you are in. */
+function yourWindow(r) {
+  const sl = slots(r).filter(x => onSong(x.song, YOU));
+  return sl.length ? { first: sl[0].start, last: sl[sl.length - 1].end, n: sl.length } : null;
+}
+
+const CONFLICT_LABEL = { full_absence: 'Unavailable for entire rehearsal',
+  late_arrival: 'Arriving late', early_departure: 'Leaving early' };
+const STATUS_LABEL = { pending: 'Awaiting an admin decision', approved: 'Approved', rejected: 'Not approved' };
+
+const RECORDINGS = [
+  { song: 0, reh: 0, by: 'Avery Cho',   when: 'Tue 8 Sep',  size: '2.4 MB', len: '3:51', note: 'Full run, slightly rushed.' },
+  { song: 0, reh: 0, by: 'Marcus Vale', when: 'Tue 8 Sep',  size: '3.1 MB', len: '4:02', note: '' },
+  { song: 0, reh: 1, by: 'Avery Cho',   when: 'Tue 15 Sep', size: '2.9 MB', len: '3:44', note: 'Second half only.' },
+  { song: 4, reh: 0, by: 'Avery Cho',   when: 'Tue 8 Sep',  size: '1.9 MB', len: '3:20', note: '' },
+  { song: 6, reh: 1, by: 'Dani Okafor', when: 'Tue 15 Sep', size: '5.6 MB', len: '6:12', note: 'Reference take.' },
+];
+
+/* ============================================================
+   State
+   ============================================================ */
+const state = {
+  page: 'schedule', viewport: 'desktop', role: 'member', variant: 'A',
+  scheduleList: false,   /* Schedule's segmented sub-view: one rehearsal, or the list */
+  rail: false, editing: false, dirty: false,
+  openReh: 1,           /* variants B and C: which rehearsal is expanded / selected */
+  sheet: false,         /* phone: variant C's detail sheet, and the More menu */
+  more: false,
+  declareFor: null,     /* rehearsal id the declare flow is open for */
+  declareType: 'late_arrival',
+  personView: 'teammate', /* teammate | self */
+  semester: LIVE,
+};
+
+const PAGES = [
+  ['schedule', 'Schedule'],
+  ['songs',    'Setlist'],
+  ['song',     'Song detail'],
+  ['members',  'Band'],
+  ['person',   'Profile / person page'],
+];
+/* Schedule's three variants resolved to A in review, so nothing carries variants now.
+   The switcher keeps its arrows, disabled, rather than vanishing mid-review. */
+const VARIANTS = {};
+
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const isPhone = () => state.viewport === 'phone';
+const isAdmin = () => state.role === 'admin';
+const variantsFor = p => VARIANTS[p] || null;
+
+function go(page) {
+  state.page = page; state.editing = false; state.sheet = false;
+  state.more = false; state.declareFor = null;
+  syncURL(); render();
+}
+function setVariant(v) { state.variant = v; state.sheet = false; syncURL(); render(); }
+function cycleVariant(d) {
+  const vs = variantsFor(state.page); if (!vs) return;
+  const i = vs.findIndex(([k]) => k === state.variant);
+  setVariant(vs[(i + d + vs.length) % vs.length][0]);
+}
+function syncURL() {
+  const u = new URL(location.href);
+  u.searchParams.set('page', state.page);
+  if (variantsFor(state.page)) u.searchParams.set('variant', state.variant); else u.searchParams.delete('variant');
+  history.replaceState(null, '', u);
+}
+function openReh(id) { state.openReh = state.openReh === id ? null : id; render(); }
+function selectReh(id) { state.openReh = id; render(); }
+function setScheduleList(v) { state.scheduleList = v; render(); }
+function toggleEdit() { state.editing = !state.editing; if (!state.editing) state.dirty = false; render(); }
+function toggleRail() { state.rail = !state.rail; render(); }
+function toggleMore() { state.more = !state.more; render(); }
+function openDeclare(id) { state.declareFor = id; render(); }
+function closeDeclare() { state.declareFor = null; render(); }
+function setDeclareType(t) { state.declareType = t; render(); }
+function setPersonView(v) { state.personView = v; render(); }
+
+/* ============================================================
+   Shared primitives — one place decides how a cell reads.
+   ============================================================ */
+function chip(val, opts = {}) {
+  const r = opts.role;
+  const hue = r == null ? '' : `--rc:var(--role-${r});`;
+  const dot = r == null ? '' : '<span class="rdot"></span>';
+  if (!val) {
+    return opts.armed || opts.showEmpty
+      ? `<span class="chip empty" style="${hue}">${dot}<span class="rcode">${r == null ? '' : ROLE_CODE[r]}</span>
+         <span>${opts.armed ? '+ assign' : 'unfilled'}</span></span>`
+      : '<span class="muted">—</span>';
+  }
+  let cls = 'chip', name = val, extra = '';
+  if (val[0] === '~') { name = val.slice(1); cls += ' backup'; extra = '<span class="tagm">backup</span>'; }
+  else if (val[0] === '!') { name = val.slice(1); cls += ' mismatch'; extra = '<span class="muted" title="Role not on their membership (ADR 0002)">◦</span>'; }
+  /* A name is flagged only where a Rehearsal is in scope — and only the name, never why. */
+  if (opts.reh != null && (OTHERS[opts.reh] || []).includes(name)) {
+    cls += ' conflict'; extra += '<span class="mono" style="font-size:9.5px">⚠</span>';
+  } else if (name === YOU && opts.markYou) { cls += ' you'; }
+  return `<span class="${cls}" style="${hue}"${r == null ? '' : ` title="${ROLES[r]}"`}>${dot}${esc(name)}${extra}</span>`;
+}
+const roleLegend = `<div class="legend">
+  ${ROLES.map((r, i) => `<span class="swatch" style="--rc:var(--role-${i})"><i></i>${r}</span>`).join('')}</div>`;
+const stateLegend = `<div class="legend">
+  <span><span class="chip backup" style="padding:1px 7px">Name <span class="tagm">backup</span></span></span>
+  <span><span class="chip conflict" style="padding:1px 7px">Name ⚠</span> unavailable for part of this</span>
+  <span><span class="chip mismatch" style="padding:1px 7px">Name ◦</span> role not on their membership</span></div>`;
+
+function pageHead(title, actions, sub) {
+  return `<div class="page-head">
+    <div><h1>${esc(title)}</h1>
+      ${sub ? `<div class="muted" style="font-size:12.5px">${sub}</div>` : ''}</div>
+    ${actions ? `<div class="actions">${actions.map(a =>
+      `<button class="btn ${state.editing ? '' : 'primary'}" onclick="toggleEdit()">${a}</button>`).join('')}</div>` : ''}
+  </div>`;
+}
+const note = t => `<div class="note-pr">${t}</div>`;
+
+/* ============================================================
+   Availability — the ADR 0005 / 0006 block. One implementation, three hosts.
+   ============================================================ */
+function availability(r, compact) {
+  if (r.dress) {
+    return `<div class="avail locked">
+      <div><span class="gb-label">Your availability</span>
+        <div style="font-size:13.5px">Attendance is required at the dress rehearsal.</div></div>
+      <div class="muted" style="font-size:12px">There is nothing to declare here (ADR 0006).</div>
+    </div>`;
+  }
+  if (r.past) {
+    return compact ? '' : `<div class="avail locked">
+      <div><span class="gb-label">Your availability</span>
+        <div class="muted" style="font-size:13.5px">This rehearsal has passed.</div></div></div>`;
+  }
+  const c = r.you;
+  if (!c) {
+    return `<div class="avail"><div class="hd">
+      <div><span class="gb-label">Your availability</span>
+        <div style="font-size:13.5px">Available for the whole rehearsal</div></div>
+      <button class="btn sm" onclick="openDeclare(${r.id})">Declare a conflict</button>
+    </div></div>`;
+  }
+  return `<div class="avail declared"><div class="hd">
+      <div><span class="gb-label" style="color:var(--warn)">Your availability</span>
+        <div style="font-size:13.5px"><b>${CONFLICT_LABEL[c.type]}${c.at ? ' — ' + c.at : ''}</b></div>
+        <div class="verdict-line ${c.status === 'pending' ? 'muted' : ''}">${STATUS_LABEL[c.status]}</div>
+      </div>
+      <div class="hstack"><button class="btn sm" onclick="openDeclare(${r.id})">Edit</button>
+        <button class="btn sm">Withdraw</button></div>
+    </div>
+    ${c.note ? `<div class="note"><span class="gb-label">From an admin</span><br>${esc(c.note)}</div>` : ''}
+    <div class="privacy">Your reason and this decision are visible to you and to admins only —
+      never on a page another member can read (ADR 0005).</div>
+  </div>`;
+}
+
+/* Your call time / free-to-go, derived from the slots you are actually in. */
+function yourSlot(r) {
+  const w = yourWindow(r);
+  if (r.dress) return `<div class="card stack" style="gap:6px"><span class="gb-label">You at this rehearsal</span>
+    <div style="font-size:14.5px">Whole setlist, whole window — <b class="mono">${r.time}</b></div>
+    <div class="muted" style="font-size:12px">The dress rehearsal runs the current setlist live (ADR 0003).</div></div>`;
+  if (!w) return `<div class="card"><span class="gb-label">You at this rehearsal</span>
+    <div class="muted" style="font-size:14px">You are not on any song here.</div></div>`;
+  return `<div class="card stack" style="gap:8px">
+    <span class="gb-label">You at this rehearsal</span>
+    <div style="font-size:14.5px">Arrive around <b class="mono">${w.first}</b>,
+      free to leave around <b class="mono">${w.last}</b></div>
+    ${timeline(r)}
+  </div>`;
+}
+function timeline(r) {
+  const sl = slots(r), w = yourWindow(r);
+  return `<div class="timeline">
+    <div class="track">${sl.map(x => {
+      const mine = onSong(x.song, YOU);
+      return `<div class="slot ${mine ? 'mine' : ''}" style="flex:1" title="${esc(x.song.title)} · ${x.start}">${
+        mine ? esc(x.song.title.split(' ')[0]) : ''}</div>`;
+    }).join('')}</div>
+    <div class="ends mono muted"><span>${sl[0].start}</span>
+      <span>You: ${w ? w.n : 0} of ${sl.length} songs</span><span>${sl[sl.length - 1].end}</span></div>
+  </div>`;
+}
+
+/* The running order × role grid. Desktop = one table keyed by start time (#303's call);
+   phone = per-song cards, because five role columns cannot survive 390px. */
+function grid(r, armed) {
+  if (r.dress) {
+    return `<div class="note-pr">The dress rehearsal has no running order of its own — it runs
+      the setlist as it stands today (ADR 0003). Shown here as the setlist, live.</div>` + gridRows(
+      SONGS.map(s => ({ song: s, start: '', end: '' })), r, armed);
+  }
+  return gridRows(slots(r), r, armed);
+}
+function gridRows(rows, r, armed) {
+  if (!isPhone()) {
+    return `<div class="scroll-x"><table class="gb matrix">
+      <thead><tr>${r.dress ? '<th class="num">#</th>' : '<th class="num">Start</th>'}<th>Song</th>
+        ${ROLES.map(x => `<th>${x}</th>`).join('')}</tr></thead>
+      <tbody>${rows.map((x, i) => `<tr>
+        <td class="num">${armed && !r.dress ? '<span class="muted" style="cursor:grab">⠿</span> ' : ''}${x.start || (i + 1)}</td>
+        <td><b style="font-weight:600">${esc(x.song.title)}</b></td>
+        ${x.song.cast.map((c, ri) => `<td>${chip(c, { armed, reh: r.id, markYou: true, role: ri })}</td>`).join('')}
+      </tr>`).join('')}</tbody></table></div>`;
+  }
+  return `<div class="songcards">${rows.map((x, i) => `
+    <div class="card" style="padding:10px 12px">
+      <div class="row-between" style="margin-bottom:5px">
+        <b style="font-weight:600">${esc(x.song.title)}</b>
+        <span class="mono muted" style="font-size:12px">${x.start || '#' + (i + 1)}</span></div>
+      ${ROLES.map((role, ri) => `<div class="kv"><span class="muted">${role}</span>
+        ${chip(x.song.cast[ri], { armed, reh: r.id, markYou: true, role: ri })}</div>`).join('')}
+    </div>`).join('')}</div>`;
+}
+
+/* ============================================================
+   SCHEDULE — variant A, chosen in review for desktop AND phone.
+   /schedule/ is two sub-views behind a segmented control: one rehearsal at
+   full depth, or the list. Both stay on the one member-facing route (#190).
+   ============================================================ */
+function schedulePage() {
+  const r = REHEARSALS.find(x => x.id === state.openReh) || REHEARSALS[1];
+  const armed = state.editing && isAdmin();
+  const seg = `<div class="seg2">
+    <button aria-pressed="${!state.scheduleList}" onclick="setScheduleList(false)">This rehearsal</button>
+    <button aria-pressed="${state.scheduleList}" onclick="setScheduleList(true)">All rehearsals</button></div>`;
+
+  if (state.scheduleList) {
+    return `${pageHead('Schedule', isAdmin() ? ['Edit rehearsals'] : null,
+      `${state.semester} · ${REHEARSALS.length} rehearsals`)}
+      ${seg}
+      ${note('A sub-view of /schedule/, not a route of its own — #190 keeps this the single member-facing page.')}
+      ${rehearsalList(id => `selectReh(${id});setScheduleList(false)`)}`;
+  }
+  return `
+    ${pageHead(r.date, isAdmin() ? ['Edit assignments'] : null,
+      `${r.time}${r.dress ? ' · dress rehearsal' : ''} · rehearsal ${REHEARSALS.indexOf(r) + 1} of ${REHEARSALS.length}`)}
+    ${seg}
+    <div class="hstack">${REHEARSALS.map(x => `<button class="btn sm ${x.id === r.id ? 'primary' : ''}"
+      onclick="selectReh(${x.id})">${x.date.split(' ').slice(1).join(' ')}</button>`).join('')}</div>
+    ${yourSlot(r)}
+    ${availability(r)}
+    <div class="stack" style="gap:8px">
+      <div class="row-between"><h2 class="section-head">Running order &amp; assignments</h2>
+        ${armed ? '<div class="hstack"><button class="btn sm">Deal</button><button class="btn sm">Shuffle</button></div>' : ''}</div>
+      ${stateLegend}
+      ${grid(r, armed)}
+    </div>`;
+}
+
+/* Shared by A's list sub-view. Desktop table, phone cards. */
+function rehearsalList(onclickFor) {
+  if (isPhone()) {
+    return `<div class="songcards">${REHEARSALS.map(r => {
+      const w = yourWindow(r);
+      return `<div class="card ${r.past ? 'muted' : ''}" style="padding:10px 12px" onclick="${onclickFor(r.id)}">
+        <div class="row-between"><b style="font-weight:600">${r.date}</b>
+          <span class="mono muted" style="font-size:12px">${r.time}</span></div>
+        <div class="hstack" style="margin-top:5px">
+          ${r.dress ? '<span class="chip">Dress · required</span>' : ''}
+          ${r.you ? `<span class="chip conflict">${CONFLICT_LABEL[r.you.type]}</span>`
+            : w ? `<span class="chip you">${w.first}–${w.last}</span>` : '<span class="chip empty">Not needed</span>'}
+          <span class="muted" style="font-size:12px">${r.order.length} songs</span>
+          ${isAdmin() && r.pending ? `<span class="chip conflict">${r.pending} pending</span>` : ''}
+        </div></div>`;
+    }).join('')}</div>`;
+  }
+  return `<div class="scroll-x"><table class="gb">
+    <thead><tr><th>Date</th><th>Time</th><th>You</th><th class="num">Songs</th>
+      ${isAdmin() ? '<th>Conflicts</th>' : ''}<th></th></tr></thead>
+    <tbody>${REHEARSALS.map(r => {
+      const w = yourWindow(r);
+      return `<tr ${r.past ? 'style="opacity:.6"' : ''}>
+        <td><b style="font-weight:600">${r.date}</b>${r.dress ? '<span class="chip" style="margin-left:6px">Dress</span>' : ''}</td>
+        <td class="num">${r.time}</td>
+        <td>${r.you ? `<span class="chip conflict">${CONFLICT_LABEL[r.you.type]}</span>`
+          : w ? `<span class="chip you">${w.first}–${w.last}</span>` : '<span class="muted">Not needed</span>'}</td>
+        <td class="num">${r.order.length}</td>
+        ${isAdmin() ? `<td>${r.pending ? `<span class="chip conflict">${r.pending} ⚠</span>` : '<span class="muted">—</span>'}</td>` : ''}
+        <td><button class="btn sm" onclick="${onclickFor(r.id)}">Open</button></td>
+      </tr>`;
+    }).join('')}</tbody></table></div>`;
+}
+
+/* Declare-a-conflict. Real CONFLICT_DECLARATION_CHOICES, not #303's guess. */
+function declareModal() {
+  const r = REHEARSALS.find(x => x.id === state.declareFor);
+  const types = [['full_absence', 'Unavailable for entire rehearsal', 'You cannot attend at all.'],
+                 ['late_arrival', 'Arrive late at', 'You will miss the start.'],
+                 ['early_departure', 'Leave early at', 'You will miss the end.']];
+  const needsTime = state.declareType !== 'full_absence';
+  return `<div class="backdrop ${isPhone() ? 'bottom' : ''}" onclick="closeDeclare()">
+    <div class="modal" onclick="event.stopPropagation()">
+      <div class="m-head"><h3>Declare a conflict</h3>
+        <button class="btn sm ghost" onclick="closeDeclare()">✕</button></div>
+      <div class="m-body">
+        <div class="muted" style="font-size:12.5px">${r.date} · ${r.time}</div>
+        <div class="stack" style="gap:6px">${types.map(([k, label, sub]) => `
+          <div class="radio" role="radio" aria-checked="${state.declareType === k}" onclick="setDeclareType('${k}')">
+            <span class="dot"></span>
+            <span><div style="font-weight:600;font-size:13px">${label}</div><div class="sub">${sub}</div></span>
+          </div>`).join('')}</div>
+        ${needsTime ? `<div class="stack" style="gap:4px">
+          <span class="gb-label">Time</span><span class="field mono" style="max-width:120px">19:40</span>
+          <span class="muted" style="font-size:11.5px">Must fall inside ${r.time}.</span></div>` : ''}
+        <div class="stack" style="gap:4px"><span class="gb-label">Reason (optional)</span>
+          <span class="field" style="min-height:56px;align-items:flex-start">Lab section runs until 19:30.</span></div>
+        <div class="privacy">Only admins ever see this reason. It never renders on a page another
+          member can read — including for an admin browsing as a member (ADR 0005).</div>
+        <div class="privacy">The dress rehearsal on Sat 26 Sep takes no conflict: attendance
+          there is required (ADR 0006), so it is not offered.</div>
+      </div>
+      <div class="m-foot"><button class="btn" onclick="closeDeclare()">Cancel</button>
+        <button class="btn primary" onclick="closeDeclare()">Declare conflict</button></div>
+    </div></div>`;
+}
+
+/* ============================================================
+   CONVERGED PAGES — not contested, so one build each.
+   ============================================================ */
+
+/* --- Songs / Setlist -------------------------------------- */
+function songsPage() {
+  const armed = state.editing && isAdmin();
+  const castLine = s => `<div class="castline">
+    ${ROLES.map((role, i) => chip(s.cast[i], { armed, markYou: true, role: i, showEmpty: true })).join('')}</div>`;
+
+  const body = isPhone() ? `
+    <div class="songcards">${SONGS.map(s => `
+      <div class="card" style="padding:10px 12px" onclick="go('song')">
+        <div class="row-between"><b style="font-weight:600">${s.pos}. ${esc(s.title)}</b>
+          <span class="mono muted" style="font-size:12px">${s.len}</span></div>
+        <div class="muted" style="font-size:12.5px">${esc(s.artist)}</div>
+        <div style="margin-top:6px">${castLine(s)}</div>
+        ${s.notes ? `<div class="privacy" style="margin-top:6px">${esc(s.notes)}</div>` : ''}
+        <div class="hstack" style="margin-top:7px" onclick="event.stopPropagation()">
+          ${s.recs ? `<button class="btn sm">▶ ${s.recs} take${s.recs === 1 ? '' : 's'}</button>`
+            : '<span class="muted" style="font-size:12px">no takes yet</span>'}
+          <button class="btn sm icon" title="Add a recording of this song">+</button></div>
+      </div>`).join('')}</div>`
+    : `<div class="scroll-x"><table class="gb songs">
+      <thead><tr><th class="num">#</th><th>Song</th><th>Cast</th><th class="num">Length</th>
+        <th>Recordings</th><th></th></tr></thead>
+      <tbody>${SONGS.map(s => `
+        <tr ${s.notes ? 'style="border-bottom:0"' : ''}>
+          <td class="num">${armed ? '⠿ ' : ''}${s.pos}</td>
+          <td><b style="font-weight:600">${esc(s.title)}</b>
+            <div class="muted" style="font-size:12px">${esc(s.artist)}</div></td>
+          <td>${castLine(s)}</td>
+          <td class="num">${s.len}</td>
+          <td><span class="hstack">
+            ${s.recs ? `<button class="btn sm" onclick="go('song')" title="Play the takes">▶ ${s.recs}</button>`
+              : '<span class="muted" style="font-size:12px">—</span>'}
+            <button class="btn sm icon" title="Add a recording of this song">+</button></span></td>
+          <td><button class="btn sm" onclick="go('song')">Open</button></td></tr>
+        ${s.notes ? `<tr class="sub"><td></td><td colspan="5">
+          <span class="gb-label">Notes</span>
+          <span class="muted" style="font-size:12.5px">${esc(s.notes)}</span></td></tr>` : ''}`).join('')}
+      </tbody></table></div>`;
+
+  return `
+    ${pageHead('Setlist', isAdmin() ? ['Edit setlist'] : null, `${state.semester} · ${SONGS.length} songs · 33:30`)}
+    ${note('<b>Recordings are reached from here, not from a nav item.</b> ▶ plays the song\'s takes; ' +
+      '+ opens the upload with that song\'s slots preselected. There is no Recordings page in the nav.')}
+    ${note('Song.notes is a real field on the model and is already editable in the setlist row — ' +
+      'map #302 rules per-song notes out of scope on the grounds that no such model exists. That premise is wrong.')}
+    ${roleLegend}
+    ${body}
+    ${armed ? `<div class="hstack"><button class="btn sm">+ Add song</button>
+      <button class="btn sm">Import from Spotify</button></div>` : ''}`;
+}
+
+/* --- Song detail -------------------------------------------
+   Read-only for assignments (ADR 0009) — so it has to say WHERE casting happens,
+   or the most obvious place to cast a song is the one place you cannot.
+   Recordings group by RehearsalSong slot, matching recording_groups_for().     */
+function songPage() {
+  const s = SONGS[0];
+  const armed = state.editing && isAdmin();
+  const groups = {};
+  RECORDINGS.filter(r => r.song === 0).forEach(r => (groups[r.reh] = groups[r.reh] || []).push(r));
+
+  return `
+    ${pageHead(s.title, isAdmin() ? ['Edit song'] : null,
+      `${esc(s.artist)} · ${s.len} · position ${s.pos} in the setlist`)}
+    <button class="btn sm ghost" onclick="go('songs')">← Setlist</button>
+
+    <div class="card stack" style="gap:10px">
+      <div class="row-between"><span class="gb-label">Cast</span>
+        <span class="muted" style="font-size:11.5px">Read-only here</span></div>
+      <div class="kvlist">${ROLES.map((role, i) => `<div class="r">
+        <span class="k">${role}</span><span>${chip(s.cast[i], { markYou: true, role: i, showEmpty: true })}</span>
+      </div>`).join('')}</div>
+      ${isAdmin() ? `<div class="note-pr"><b>Casting happens on a rehearsal, not here.</b>
+        A cell edited there changes every rehearsal and the concert (ADR 0009) — the
+        availability check that makes it safe is only computable through a Rehearsal.
+        <div class="hstack" style="margin-top:6px">
+          <button class="btn sm" onclick="go('schedule')">Cast on Tue 15 Sep →</button></div></div>` : ''}
+      ${armed ? '<div><button class="btn sm">+ Add role requirement</button></div>' : ''}
+    </div>
+
+    ${s.notes ? `<div class="stack" style="gap:6px">
+      <h2 class="section-head">Notes</h2>
+      <div class="card" style="font-size:13px">${esc(s.notes)}</div>
+      ${note('One free-text field (Song.notes), not a feed of dated posts. #303 drew a posts list; ' +
+        'the model has no author and no timestamp, so this is a paragraph.')}
+    </div>` : ''}
+
+    <div class="stack" style="gap:8px">
+      <div class="row-between"><h2 class="section-head">Recordings</h2>
+        <button class="btn sm">+ Add a recording</button></div>
+      ${note('“+ Add” goes to <b>/me/recordings/?song=' + s.pos + '</b>, which pre-filters the slot ' +
+        'picker to this song (issue #102). Nothing uploads in place: a Recording belongs to a ' +
+        'RehearsalSong slot, and this page has no rehearsal in scope.')}
+      <div class="stack" style="gap:8px">${Object.entries(groups).map(([rid, recs]) => {
+        const r = REHEARSALS.find(x => x.id === +rid), sl = slots(r).find(x => x.song === s);
+        return `<div class="slotgroup">
+          <div class="gh"><b style="font-weight:600;font-size:13px">${r.date}</b>
+            <span class="mono muted" style="font-size:11.5px">${sl ? sl.start + '–' + sl.end : ''}</span>
+            <span style="flex:1"></span>
+            <span class="muted" style="font-size:11.5px">${recs.length} take${recs.length === 1 ? '' : 's'}</span></div>
+          <div class="gb2"><div class="songlist">${recs.map(rec => `
+            <div class="item">
+              <div class="player" style="grid-column:1"><button class="btn sm icon">▶</button>
+                <span class="bar"><i style="width:0%"></i></span>
+                <span class="mono muted" style="font-size:11px">${rec.len}</span></div>
+              <div class="muted" style="font-size:11.5px">${esc(rec.by)}</div>
+              ${rec.note ? `<div class="sub muted" style="font-size:12px">${esc(rec.note)}</div>` : ''}
+            </div>`).join('')}</div></div>
+        </div>`;
+      }).join('')}</div>
+    </div>
+
+    <div class="stack" style="gap:8px">
+      <h2 class="section-head">Rehearsed at</h2>
+      <div class="songlist">${REHEARSALS.filter(r => !r.dress && r.order.includes(0)).map(r => {
+        const sl = slots(r).find(x => x.song === s);
+        return `<div class="item"><div>${r.date} ${r.past ? '<span class="muted">· past</span>' : ''}</div>
+          <div class="mono muted" style="font-size:12px">${sl.start}–${sl.end}</div></div>`;
+      }).join('')}
+      <div class="item"><div>Sat 26 Sep <span class="muted">· dress rehearsal</span></div>
+        <div class="mono muted" style="font-size:12px">whole setlist</div></div></div>
+    </div>`;
+}
+
+/* --- Band roster ------------------------------------------- */
+function membersPage() {
+  const armed = state.editing && isAdmin();
+  const active = PEOPLE.filter(p => p.active);
+  const songsOn = p => SONGS.filter(s => onSong(s, p.name)).length;
+
+  const body = isPhone() ? `
+    <div class="songcards">${active.map(p => `
+      <div class="card" style="padding:10px 12px" onclick="setPersonView('${p.name === YOU ? 'self' : 'teammate'}');go('person')">
+        <div class="row-between"><b style="font-weight:600">${esc(p.name)}${p.name === YOU ? ' <span class="chip you" style="font-size:10.5px;padding:1px 6px">you</span>' : ''}</b>
+          <span class="muted" style="font-size:12px">${songsOn(p)} songs</span></div>
+        <div class="muted" style="font-size:12.5px">${p.roles.join(', ') || '—'}</div>
+      </div>`).join('')}</div>`
+    : `<div class="scroll-x"><table class="gb">
+      <thead><tr><th>Name</th><th>Roles</th><th class="num">Songs</th>${armed ? '<th></th>' : '<th></th>'}</tr></thead>
+      <tbody>${active.map(p => `<tr>
+        <td>${armed ? `<span class="field">${esc(p.name)}</span>`
+          : `<a href="#" onclick="setPersonView('${p.name === YOU ? 'self' : 'teammate'}');go('person');return false"
+             style="color:inherit"><b style="font-weight:600">${esc(p.name)}</b></a>${
+             p.name === YOU ? ' <span class="chip you" style="font-size:10.5px;padding:1px 6px">you</span>' : ''}`}</td>
+        <td>${armed ? `<span class="field">${esc(p.roles.join(', '))} ▾</span>` : esc(p.roles.join(', ') || '—')}</td>
+        <td class="num">${armed ? '<span class="muted">—</span>' : songsOn(p)}</td>
+        <td>${armed ? (p.name === YOU ? '<span class="muted" style="font-size:11.5px">can\'t remove yourself</span>'
+          : '<button class="btn sm">Remove</button>') : ''}</td>
+      </tr>`).join('')}</tbody></table></div>`;
+
+  return `
+    ${pageHead('Band', isAdmin() ? ['Edit roster'] : null, `${state.semester} · ${active.length} members`)}
+    ${note('Per docs/person-page-visibility.md: name, roles and a song count. The song count is ' +
+      'dropped in edit mode (not editable), and role-mismatch surfaces only there, as a quiet per-row flag.')}
+    ${body}
+    ${armed ? `<div class="hstack"><button class="btn sm">+ Invite someone new</button>
+      <span class="muted" style="font-size:12px">1 invited member not yet active — shown only while editing.</span></div>` : ''}`;
+}
+
+/* --- Person page ------------------------------------------
+   /members/<pk>/. One route, and every field verdict is already fixed by
+   docs/person-page-visibility.md — so this is a layout for a settled table,
+   not a proposal about what to show. NO recordings, conflicts, backups or
+   attendance: every one of those is `never` here.                     */
+function personPage() {
+  const self = state.personView === 'self';
+  const p = self ? PEOPLE[0] : PEOPLE.find(x => x.name === 'Priya Raman');
+  const canEditRoles = self || isAdmin();
+  const assigned = SONGS.map((s, i) => ({ s, ri: s.cast.findIndex(c => c && c.replace(/^[~!]/, '') === p.name) }))
+    .filter(x => x.ri >= 0);
+
+  return `
+    ${pageHead(p.name, null, `${state.semester}${self ? ' · this is you' : ''}`)}
+    <div class="hstack">
+      <span class="gb-label">Viewing as</span>
+      <div class="seg2">
+        <button aria-pressed="${!self}" onclick="setPersonView('teammate')">A teammate's page</button>
+        <button aria-pressed="${self}" onclick="setPersonView('self')">Your own page</button></div>
+    </div>
+    ${note(self ? 'Your own pk. The nav\'s Profile tab points here — there is no /me/profile/.'
+      : (isAdmin() ? 'A teammate\'s page, viewed by an admin. Admin buys ONE thing here: the right to save '
+        + 'their Roles (#232). It does <b>not</b> reveal their email, and it reveals no Conflict data at all — '
+        + 'ADR 0005 draws the boundary around the surface, not the viewer.'
+        : 'A teammate\'s page. Read-only.'))}
+
+    <div class="card stack" style="gap:10px">
+      <span class="gb-label">Details</span>
+      <div class="kvlist">
+        <div class="r"><span class="k">Name</span><span>${esc(p.name)}</span></div>
+        <div class="r"><span class="k">Email</span>
+          <span>${self ? esc('avery.cho@example.invalid')
+            : '<span class="withheld">shown on your own page only</span>'}</span></div>
+        ${self ? '<div class="r"><span class="k">Password</span><span><button class="btn sm">Change password</button></span></div>' : ''}
+      </div>
+    </div>
+
+    <div class="card stack" style="gap:10px">
+      <div class="row-between"><span class="gb-label">Declared roles</span>
+        ${canEditRoles ? '<span class="muted" style="font-size:11.5px">edit in place — no toggle</span>' : ''}</div>
+      <div class="hstack">
+        ${p.roles.map(r => canEditRoles
+          ? `<span class="chip">${r} <span class="muted">✕</span></span>` : `<span class="chip">${r}</span>`).join('')}
+        ${canEditRoles ? '<span class="chip empty">+ add a role</span>' : ''}
+      </div>
+      ${canEditRoles ? '<div><button class="btn sm primary">Save roles</button></div>' : ''}
+      ${!canEditRoles ? '<div class="muted" style="font-size:12px">Only they (or an admin) can change these.</div>' : ''}
+    </div>
+
+    <div class="stack" style="gap:8px">
+      <h2 class="section-head">Songs ${self ? "you're" : 'they are'} on</h2>
+      ${assigned.length ? `<div class="songlist">${assigned.map(({ s, ri }) => `
+        <div class="item" onclick="go('song')">
+          <div><b style="font-weight:600">${esc(s.title)}</b>
+            <span class="muted" style="font-size:12.5px">· ${esc(s.artist)}</span></div>
+          <div>${chip(ROLES[ri], { role: ri })}</div>
+        </div>`).join('')}</div>`
+        : '<div class="muted">Not on any song yet.</div>'}
+      ${note('Declared roles above and the filled Role here are both rendered, so a mismatch is ' +
+        'visible by eye. That is accepted and documented — what stays hidden is the admin\'s ' +
+        'queue marker, not the assignment.')}
+    </div>
+
+    ${self ? yourRecordings() : `<div class="card" style="border-style:dashed">
+      <span class="gb-label">Not shown here</span>
+      <div class="muted" style="font-size:12.5px;margin-top:4px">
+        Their recordings are <b>not</b> on this page. Yours appear on your own page and nowhere else —
+        a teammate's uploads are reached through the Song they are takes of, never through them.</div>
+    </div>`}
+
+    <div class="card" style="border-style:dashed">
+      <span class="gb-label">Deliberately absent</span>
+      <div class="muted" style="font-size:12.5px;margin-top:4px">
+        Conflicts, Backups, attendance and admin status are <b>never</b> on this page, for any viewer
+        including an admin. Availability lives on the Schedule; a Backup needs a Rehearsal in scope
+        and this page has none.</div>
+    </div>`;
+}
+
+/* --- Your recordings ---------------------------------------
+   SELF ONLY, and only on your own page. /me/recordings/ folds in here: the
+   nav item is gone, so this is where uploading lives. The Setlist's "+" deep
+   links in with a slot already chosen.
+   Blocked on a new row in docs/person-page-visibility.md, which currently
+   marks Recording `never` here for everyone — see the header comment.     */
+function yourRecordings() {
+  const mine = RECORDINGS.filter(r => r.by === YOU);
+  return `
+    <div class="stack" style="gap:8px">
+      <div class="row-between"><h2 class="section-head">Your recordings</h2>
+        <span class="muted" style="font-size:12px">${mine.length} uploads · only you can see this</span></div>
+      ${note('<b>Needs a doc change.</b> docs/person-page-visibility.md marks Recording ' +
+        '<code>never</code> on this route for every viewer. This section needs a new row — ' +
+        '<code>❌ never | ✅ self only | ❌ never</code> — the same shape Person.email already uses. ' +
+        'A teammate, and an admin viewing a teammate, still see nothing.')}
+
+      ${isPhone() ? `<div class="songcards">${mine.map(r => `
+        <div class="card" style="padding:10px 12px">
+          <div class="row-between"><b style="font-weight:600">${esc(SONGS[r.song].title)}</b>
+            <span class="mono muted" style="font-size:12px">${r.len}</span></div>
+          <div class="muted" style="font-size:12.5px">${REHEARSALS.find(x => x.id === r.reh).date} · ${r.size}</div>
+          ${r.note ? `<div class="privacy" style="margin-top:5px">${esc(r.note)}</div>` : ''}
+          <div class="player" style="margin-top:7px"><button class="btn sm icon">▶</button>
+            <span class="bar"><i style="width:0%"></i></span>
+            <button class="btn sm">Delete</button></div>
+        </div>`).join('')}</div>`
+      : `<div class="scroll-x"><table class="gb">
+        <thead><tr><th>Song</th><th>Rehearsal</th><th></th><th class="num">Size</th><th>Note</th><th></th></tr></thead>
+        <tbody>${mine.map(r => `<tr>
+          <td><b style="font-weight:600">${esc(SONGS[r.song].title)}</b></td>
+          <td>${REHEARSALS.find(x => x.id === r.reh).date}</td>
+          <td><span class="player"><button class="btn sm icon">▶</button>
+            <span class="bar" style="width:90px"><i style="width:0%"></i></span>
+            <span class="mono muted" style="font-size:11px">${r.len}</span></span></td>
+          <td class="num">${r.size}</td>
+          <td class="muted" style="font-size:12px">${esc(r.note) || '—'}</td>
+          <td><button class="btn sm">Delete</button></td></tr>`).join('')}</tbody></table></div>`}
+
+      <div class="card stack" style="gap:12px">
+        <div class="row-between"><span class="gb-label">Upload a take</span>
+          <div class="steps"><span class="st on">1. Pick a slot</span><span class="muted">→</span>
+            <span class="st">2. Choose a file</span><span class="muted">→</span>
+            <span class="st">3. Confirm</span></div></div>
+        ${note('Arrived from the Setlist\'s <b>+</b> on Paper Lanterns, so the slot is already chosen — ' +
+          'the ?song=&lt;id&gt; pre-filter that /me/recordings/ already implements (issue #102). Opened ' +
+          'from this page directly, the picker lists every slot in the semester.')}
+        <div class="stack" style="gap:5px">
+          <span class="gb-label">Which slot is this a take of?</span>
+          <span class="field">Paper Lanterns — Tue 15 Sep, 19:00–19:24 ▾</span>
+          <span class="muted" style="font-size:11.5px">A recording belongs to one song at one rehearsal.
+            Slots you weren't at are listed too — you might be uploading someone else's take.</span>
+        </div>
+        <div class="drop">
+          <div style="font-size:13px">Drop an audio file, or <b>browse</b></div>
+          <div class="muted" style="font-size:11.5px">Uploads straight to storage, not through the app (ADR 0004).</div>
+        </div>
+        <div class="stack" style="gap:5px"><span class="gb-label">Note (optional)</span>
+          <span class="field" style="min-height:44px;align-items:flex-start">Second half only.</span></div>
+        <div class="hstack"><button class="btn primary" disabled>Save recording</button>
+          <span class="muted" style="font-size:12px">Enabled once the file has finished uploading.</span></div>
+      </div>
+    </div>`;
+}
+
+/* ============================================================
+   Shell — inherited from #303, unchanged in shape.
+   ============================================================ */
+/* Recordings is deliberately NOT here. It is not a destination of its own: your own
+   uploads live on your Profile, and a song's takes are reached from the Setlist. */
+const NAV = [['schedule', 'Schedule'], ['songs', 'Setlist'], ['members', 'Band'],
+             ['person', 'Profile']];
+
+function sidebar() {
+  return `<aside class="sidebar ${state.rail ? 'rail' : ''}">
+    <div class="head"><span class="brand">Rolling Sloans</span>
+      <button class="btn sm icon" onclick="toggleRail()" title="Collapse">${state.rail ? '»' : '«'}</button></div>
+    <nav>
+      ${NAV.map(([k, l]) => `<a href="#" onclick="${k === 'person' ? "setPersonView('self');" : ''}go('${k}');return false"
+        ${state.page === k ? 'aria-current="page"' : ''} title="${l}">
+        <span class="glyph"></span><span class="label">${l}</span></a>`).join('')}
+      ${isAdmin() ? `<div class="group"><span class="gb-label">Admin</span></div>
+        <a href="#" onclick="return false"><span class="glyph"></span><span class="label">Conflicts</span>
+          <span class="count">3</span></a>
+        <a href="#" onclick="return false"><span class="glyph"></span><span class="label">Semesters</span></a>` : ''}
+    </nav>
+    ${isAdmin() ? `<div class="sem-panel"><div class="hide-rail stack" style="gap:6px">
+      <span class="gb-label">Viewing</span><span class="field">${state.semester} ▾</span>
+      <div class="hstack" style="gap:6px"><button class="btn sm" disabled>Save changes</button>
+        <button class="btn sm" disabled>Publish</button></div></div></div>` : ''}
+    <div class="sem-panel"><button class="btn sm hide-rail">Log out</button></div>
+  </aside>`;
+}
+function editToolbar() {
+  return `<div class="edit-toolbar"><span class="grow">Editing — no changes yet</span>
+    <button class="btn sm">Preview</button><button class="btn sm" onclick="toggleEdit()">Discard</button>
+    <button class="btn sm primary" onclick="toggleEdit()">Save</button></div>`;
+}
+function desktopShell(body) {
+  return `<div class="framewrap"><div class="shell">${sidebar()}
+    <div class="framewrap">${state.editing ? editToolbar() : ''}
+      <div class="frame-scroll"><div class="page">${body}</div></div></div>
+  </div>${overlays()}</div>`;
+}
+function phoneShell(body) {
+  const tabs = [['schedule', 'Schedule'], ['songs', 'Setlist'], ['members', 'Band'],
+                ['person', 'Profile'], ['more', 'More']];   /* no Recordings tab */
+  return `<div class="framewrap">
+    <div class="phonebar"><span class="title">${esc(PAGES.find(([k]) => k === state.page)[1])}</span>
+      ${isAdmin() ? '<button class="btn sm" disabled>Save</button>' : ''}</div>
+    ${state.editing ? editToolbar() : ''}
+    <div class="frame-scroll"><div class="page">${body}</div></div>
+    <nav class="tabbar">${tabs.map(([k, l]) => k === 'more'
+      ? `<a href="#" onclick="toggleMore();return false"><span class="glyph"></span>${l}</a>`
+      : `<a href="#" onclick="${k === 'person' ? "setPersonView('self');" : ''}go('${k}');return false"
+         ${state.page === k ? 'aria-current="page"' : ''}><span class="glyph"></span>${l}</a>`).join('')}</nav>
+    ${state.more ? `<div class="backdrop bottom" onclick="toggleMore()">
+      <div class="modal" onclick="event.stopPropagation()">
+        <div class="m-head"><h3>More</h3><button class="btn sm ghost" onclick="toggleMore()">✕</button></div>
+        <div class="m-body" style="gap:0">
+          ${isAdmin() ? `<div class="row-between" style="padding:10px 0;border-bottom:1px solid var(--line-soft)">
+            <span>Conflicts</span><span class="chip conflict">3</span></div>
+            <div class="row-between" style="padding:10px 0;border-bottom:1px solid var(--line-soft)">
+            <span>Semesters</span><span class="muted">›</span></div>` : ''}
+          <div class="row-between" style="padding:10px 0"><span>Log out</span></div>
+        </div></div></div>` : ''}
+    ${overlays()}</div>`;
+}
+/* Modals and sheets sit above the frame regardless of which shell drew it. */
+function overlays() {
+  return state.declareFor != null ? declareModal() : '';
+}
+
+/* ============================================================
+   Render
+   ============================================================ */
+const BODIES = { schedule: schedulePage, songs: songsPage, song: songPage,
+                 members: membersPage, person: personPage };
+
+const VERDICTS = {
+  schedule: `<div class="cols">
+    <div><h2>Resolved — variant A, desktop and phone</h2><ul>
+      <li>Two sub-views behind a segmented control, both on <code>/schedule/</code>: one rehearsal at full depth, or the list. #190's single member-facing page survives.</li>
+      <li>B (one long feed) and C (list + detail pane) are dropped. They are preserved at <code>227ea74</code> on this branch if the call is ever revisited.</li>
+      <li>The grid gets full width on desktop, which is what B and C both had to give up.</li>
+    </ul></div>
+    <div><h2>Bound by the ADRs, not chosen</h2><ul>
+      <li>Your call time and free-to-go come from the slots you are actually in — never from <code>Song.length</code>.</li>
+      <li>A conflicted teammate shows as a <b>name and a marker, never a reason</b> (ADR 0005). Your own reason and the admin's decision are on your row only.</li>
+      <li>The dress rehearsal takes no conflict (ADR 0006) and has no running order of its own — it runs the setlist live (ADR 0003).</li>
+    </ul></div></div>`,
+  songs: `<ul>
+    <li><b>Recordings are reached from here.</b> ▶ opens a song's takes; <b>+</b> opens the upload with that song's slots preselected. There is no Recordings nav item — the Setlist and your Profile are the two ways in.</li>
+    <li>Cast is a constant role-by-role line with empty roles shown, so the shape never changes between songs.</li>
+    <li>Desktop puts Notes on a second full-width row only when there is a note; phone puts it under the cast.</li>
+    <li><b>Flagged:</b> <code>Song.notes</code> exists on the model and is already editable in the setlist edit row. Map #302 rules per-song notes out of scope because "no such model exists" — that premise does not hold.</li></ul>`,
+  song: `<ul>
+    <li><b>The "where do recordings attach" constraint is answered by existing code:</b> <code>/me/recordings/</code> already takes <code>?song=&lt;id&gt;</code> and pre-filters the slot picker (issue #102). Nothing uploads in place here.</li>
+    <li>Recordings group by <code>RehearsalSong</code> slot, matching <code>recording_groups_for()</code>; slots with no takes are omitted.</li>
+    <li><b>ADR 0009 pointer:</b> cast is read-only, with an explicit admin-only route to the rehearsal where casting happens — otherwise the most obvious place to cast is the one place you cannot.</li>
+    <li>Notes is one paragraph, not a feed of dated posts: the field has no author and no timestamp.</li></ul>`,
+  members: `<ul>
+    <li>Name, roles, song count — the verdicts in <code>docs/person-page-visibility.md</code>, not a proposal.</li>
+    <li>Edit mode drops the song count (not editable) and refuses to remove the requesting admin's own row.</li>
+    <li>Phone is the card pattern; desktop is the table. No horizontal scroll on either.</li></ul>`,
+  person: `<div class="cols">
+    <div><h2>One route, three viewer states</h2><ul>
+      <li>Flip <b>Viewing as</b>, and flip Member/Admin, to see all of them.</li>
+      <li>Email is self-only: an <b>admin viewing a teammate gets the teammate verdict</b>, not self's. Admin buys exactly one thing here — the right to save someone's Roles (#232).</li>
+      <li>Roles edit in place with no toggle, which is why this page carries no Edit button in the head.</li>
+      <li>A mismatch between declared roles and a filled Role is visible by eye. That is accepted and documented — what stays hidden is the admin's queue marker, not the assignment.</li>
+    </ul></div>
+    <div><h2>Your recordings — self only</h2><ul>
+      <li><code>/me/recordings/</code> folds in here. The nav item is gone, so this is where uploading lives; the Setlist's <b>+</b> deep links in with a slot chosen.</li>
+      <li>A teammate's page shows <b>nothing</b> — not the list, not a count. Their takes are reached through the Song they are takes of, never through them.</li>
+      <li><b>Blocked on a doc change:</b> <code>docs/person-page-visibility.md</code> currently marks Recording <code>never</code> here for every viewer. Needs a new row, <code>❌ never | ✅ self only | ❌ never</code> — the same shape <code>Person.email</code> already uses. Decided; writing it is execution.</li>
+      <li>Still <code>never</code> on this page for anyone: Conflicts, Backups, attendance, admin status.</li>
+    </ul></div></div>`,
+};
+
+function render() {
+  const body = BODIES[state.page]();
+  document.getElementById('stage').innerHTML =
+    `<div class="frame ${state.viewport}">${isPhone() ? phoneShell(body) : desktopShell(body)}</div>`;
+  const vs = variantsFor(state.page);
+  document.getElementById('verdict').innerHTML =
+    `<h2>${PAGES.find(([k]) => k === state.page)[1]}${vs ? ' — variant ' + state.variant : ''}</h2>`
+    + VERDICTS[state.page];
+  syncChrome();
+}
+function syncChrome() {
+  document.querySelectorAll('#viewportseg button').forEach(b =>
+    b.setAttribute('aria-pressed', String(b.dataset.vp === state.viewport)));
+  document.querySelectorAll('#roleseg button').forEach(b =>
+    b.setAttribute('aria-pressed', String(b.dataset.role === state.role)));
+  document.getElementById('pagesel').value = state.page;
+  const vs = variantsFor(state.page);
+  document.getElementById('vlabel').textContent = vs
+    ? `${state.variant} · ${vs.find(([k]) => k === state.variant)[1]}` : 'converged — no variants';
+  ['vprev', 'vnext'].forEach(id => document.getElementById(id).disabled = !vs);
+}
+
+document.getElementById('pagesel').innerHTML = PAGES.map(([k, l]) => `<option value="${k}">${l}</option>`).join('');
+document.getElementById('pagesel').onchange = e => go(e.target.value);
+document.querySelectorAll('#viewportseg button').forEach(b =>
+  b.onclick = () => { state.viewport = b.dataset.vp; state.sheet = false; render(); });
+document.querySelectorAll('#roleseg button').forEach(b =>
+  b.onclick = () => { state.role = b.dataset.role; state.editing = false; render(); });
+document.getElementById('vprev').onclick = () => cycleVariant(-1);
+document.getElementById('vnext').onclick = () => cycleVariant(1);
+addEventListener('keydown', e => {
+  if (/^(INPUT|TEXTAREA)$/.test(e.target.tagName) || e.target.isContentEditable) return;
+  if (e.key === 'ArrowLeft') cycleVariant(-1);
+  if (e.key === 'ArrowRight') cycleVariant(1);
+});
+
+/* reload-stable: ?page= and ?variant= drive the initial state */
+const q = new URLSearchParams(location.search);
+if (q.get('page') && BODIES[q.get('page')]) state.page = q.get('page');
+if (q.get('variant')) state.variant = q.get('variant');
+render();
+</script>
