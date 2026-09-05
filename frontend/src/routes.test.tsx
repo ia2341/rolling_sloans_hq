@@ -52,6 +52,14 @@ describe('the route table', () => {
   })
 
   it('marks the active nav item with aria-current', () => {
+    mockFetchOnce(200, {
+      context: memberContext(),
+      data: {
+        semester_name: null,
+        schedule: { past: [], future: [] },
+        selected: null,
+      },
+    })
     setContext(memberContext())
     const router = createMemoryRouter(routes, { initialEntries: ['/schedule'] })
     render(<RouterProvider router={router} />)
