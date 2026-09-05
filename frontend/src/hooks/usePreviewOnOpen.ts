@@ -46,6 +46,7 @@ export function usePreviewOnOpen(
       wasOpen.current = true
       return () => {
         cancelled = true
+        wasOpen.current = false
       }
     }
     if (!open) wasOpen.current = false
