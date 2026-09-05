@@ -316,6 +316,111 @@ def semester_deletion_summary(semester: Semester) -> SemesterDeletionSummary:
     )
 
 
+@dataclass(frozen=True)
+class SemesterManagementRow:
+    """One Semester's row on the Manage-semesters sheet: its label plus every count an admin needs at a glance (issue #329).
+
+    Mirrors `SemesterOption` in shape (a Semester, its wire `status`, and
+    whether it's the one being viewed) but adds `recording_count`, which
+    the switcher's dropdown has no room for — this sheet is the one
+    surface an admin opens specifically to weigh a Delete. `updated_at`
+    rides along so the sheet's Reapply-defaults action can build a
+    `SemesterDefaultsReapplyBuffer` for *any* row, not only the viewing
+    Semester's — it is the same staleness token `apply_semester_defaults_reapply()`
+    already checks, not a new field of concern.
+    """
+
+    semester: Semester
+    status: str
+    is_viewing: bool
+    member_count: int
+    song_count: int
+    rehearsal_count: int
+    recording_count: int
+    updated_at: datetime
+
+
+def semester_management_rows(request) -> list['SemesterManagementRow']:
+    """Return one `SemesterManagementRow` per Semester, newest-created first, for the Manage-semesters sheet (issue #329).
+
+    Reuses `semester_options_for()`'s counting shape (member/song/rehearsal
+    counts via one annotated queryset) rather than issuing a fresh query
+    per Semester, and adds a `recording_count` annotation `semester_options_for()`
+    has no use for. Admin-only in concept — the sheet that calls this is
+    gated by `AdminApiView` — but the function itself takes no such gate:
+    it computes the same rows regardless of caller, same as
+    `semester_options_for()` returning `[]` for a non-admin rather than
+    raising.
+    """
+    if not _is_admin(getattr(request, 'user', None)):
+        return []
+    live = get_live_semester()
+    viewing = get_viewing_semester(request)
+    semesters = Semester.objects.order_by('-created_at', '-id').annotate(
+        member_count=Count('membership', distinct=True),
+        song_count=Count('song', distinct=True),
+        rehearsal_count=Count('rehearsal', distinct=True),
+        recording_count=Count('rehearsal__rehearsalsong__recording', distinct=True),
+    )
+    return [
+        SemesterManagementRow(
+            semester=semester,
+            status=_semester_status(semester, live),
+            is_viewing=viewing is not None and semester.pk == viewing.pk,
+            member_count=semester.member_count,
+            song_count=semester.song_count,
+            rehearsal_count=semester.rehearsal_count,
+            recording_count=semester.recording_count,
+            updated_at=semester.updated_at,
+        )
+        for semester in semesters
+    ]
+
+
+@dataclass(frozen=True)
+class SemesterPublishImpact:
+    """What publishing `target_semester` would do to the incumbent Live Semester, for the Publish popup (issue #329).
+
+    `incumbent` is whatever `get_live_semester()` currently returns (`None`
+    when nothing is published), never `target_semester` itself even when
+    `is_already_live` is True — a target that is already live has no
+    incumbent to be superseded, so its rehearsal/song counts are irrelevant
+    and left at 0. `has_no_setlist`/`has_no_rehearsals` describe
+    `target_semester` itself (an empty-looking Semester worth flagging
+    before publishing it), independent of the incumbent.
+    """
+
+    target_semester: Semester
+    is_already_live: bool
+    incumbent: Semester | None
+    incumbent_rehearsal_count: int
+    incumbent_song_count: int
+    has_no_setlist: bool
+    has_no_rehearsals: bool
+
+
+def semester_publish_impact(semester: Semester) -> SemesterPublishImpact:
+    """Return `semester`'s Publish-popup impact: the incumbent Live Semester it would supersede, plus empty-setlist/rehearsals flags (issue #329).
+
+    `is_already_live` is true exactly when `semester` is already the one
+    `get_live_semester()` returns, in which case there is no incumbent
+    (`incumbent` is `None` and its counts are 0) — publishing again is a
+    harmless re-stamp, not a takeover.
+    """
+    live = get_live_semester()
+    is_already_live = live is not None and live.pk == semester.pk
+    incumbent = None if is_already_live else live
+    return SemesterPublishImpact(
+        target_semester=semester,
+        is_already_live=is_already_live,
+        incumbent=incumbent,
+        incumbent_rehearsal_count=Rehearsal.objects.filter(semester=incumbent).count() if incumbent else 0,
+        incumbent_song_count=Song.objects.filter(semester=incumbent).count() if incumbent else 0,
+        has_no_setlist=not Song.objects.filter(semester=semester).exists(),
+        has_no_rehearsals=not Rehearsal.objects.filter(semester=semester).exists(),
+    )
+
+
 def delete_semester(semester: Semester) -> None:
     """Hard-delete `semester` and everything scoped to it, including its Recordings' storage objects (issue #171).
 

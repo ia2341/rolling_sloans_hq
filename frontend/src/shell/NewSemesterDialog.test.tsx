@@ -1,0 +1,162 @@
+import { screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+
+import { resetContextForTests, setContext } from '../api/contextStore'
+import { adminContext } from '../test/fixtures'
+import { mockMatchMedia } from '../test/mockMatchMedia'
+import { renderShell } from '../test/renderShell'
+import { NewSemesterDialog } from './NewSemesterDialog'
+
+const existingOption = {
+  id: 10,
+  name: 'Spring 2026',
+  status: 'live' as const,
+  is_viewing: true,
+  member_count: 6,
+  song_count: 10,
+  rehearsal_count: 4,
+}
+const options = [existingOption]
+
+function stubFetchSequence(
+  responses: Array<{ status: number; body: unknown }>,
+) {
+  const fetchSpy = vi.fn()
+  for (const { status, body } of responses) {
+    fetchSpy.mockResolvedValueOnce({
+      status,
+      ok: status >= 200 && status < 300,
+      json: () => Promise.resolve(body),
+    })
+  }
+  vi.stubGlobal('fetch', fetchSpy)
+  return fetchSpy
+}
+
+afterEach(() => {
+  resetContextForTests()
+  vi.unstubAllGlobals()
+  mockMatchMedia(false)
+})
+
+describe('NewSemesterDialog', () => {
+  it('prefills the name from the most recent Semester', async () => {
+    setContext(adminContext({ semester_options: options }))
+    stubFetchSequence([
+      {
+        status: 200,
+        body: {
+          context: adminContext({ semester_options: options }),
+          data: { semester_defaults: null },
+        },
+      },
+    ])
+    renderShell(<NewSemesterDialog open onOpenChange={() => {}} />)
+
+    await waitFor(() =>
+      expect(screen.getByDisplayValue('Spring 2026')).toBeInTheDocument(),
+    )
+  })
+
+  it('keeps the dialog open and shows the per-field error on a duplicate name', async () => {
+    setContext(adminContext({ semester_options: options }))
+    stubFetchSequence([
+      {
+        status: 200,
+        body: {
+          context: adminContext({ semester_options: options }),
+          data: { semester_defaults: null },
+        },
+      },
+      {
+        status: 200,
+        body: {
+          context: adminContext({ semester_options: options }),
+          ok: false,
+          errors: {
+            name: [
+              'A semester named "Spring 2026" already exists — choose a different name.',
+            ],
+          },
+          non_field_errors: [],
+          fallout: null,
+          values: null,
+          data: null,
+        },
+      },
+    ])
+    const user = userEvent.setup()
+    const onOpenChange = vi.fn()
+    renderShell(<NewSemesterDialog open onOpenChange={onOpenChange} />)
+
+    await waitFor(() =>
+      expect(screen.getByDisplayValue('Spring 2026')).toBeInTheDocument(),
+    )
+    await user.click(screen.getByRole('button', { name: /Create/ }))
+
+    expect(
+      await screen.findByText(
+        'A semester named "Spring 2026" already exists — choose a different name.',
+      ),
+    ).toBeInTheDocument()
+    expect(onOpenChange).not.toHaveBeenCalledWith(false)
+  })
+
+  it('closes on success, after which the Viewing control names the new semester', async () => {
+    setContext(adminContext({ semester_options: options }))
+    stubFetchSequence([
+      {
+        status: 200,
+        body: {
+          context: adminContext({ semester_options: options }),
+          data: { semester_defaults: null },
+        },
+      },
+      {
+        status: 200,
+        body: {
+          context: adminContext({
+            semester_options: [
+              {
+                id: 12,
+                name: 'Fall 2026',
+                status: 'draft',
+                is_viewing: true,
+                member_count: 0,
+                song_count: 0,
+                rehearsal_count: 0,
+              },
+              { ...existingOption, is_viewing: false },
+            ],
+            viewing_semester: {
+              id: 12,
+              name: 'Fall 2026',
+              status: 'draft',
+              published_at: null,
+              updated_at: '2026-02-01T00:00:00Z',
+            },
+          }),
+          ok: true,
+          errors: {},
+          non_field_errors: [],
+          fallout: null,
+          values: null,
+          data: null,
+        },
+      },
+    ])
+    const user = userEvent.setup()
+    const onOpenChange = vi.fn()
+    renderShell(<NewSemesterDialog open onOpenChange={onOpenChange} />)
+
+    await waitFor(() =>
+      expect(screen.getByDisplayValue('Spring 2026')).toBeInTheDocument(),
+    )
+    await user.clear(screen.getByLabelText('Name'))
+    await user.type(screen.getByLabelText('Name'), 'Fall 2026')
+    await user.click(screen.getByRole('button', { name: 'Create Fall 2026' }))
+
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false))
+  })
+})

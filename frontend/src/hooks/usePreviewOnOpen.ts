@@ -2,11 +2,11 @@ import { useEffect, useRef, useState } from 'react'
 
 import type { PreviewResult } from '../api/previewTypes'
 
-export type PreviewOnOpenState =
+export type PreviewOnOpenState<TResult = PreviewResult> =
   | { status: 'idle'; result: null; error: null }
   | { status: 'loading'; result: null; error: null }
   | { status: 'error'; result: null; error: unknown }
-  | { status: 'success'; result: PreviewResult; error: null }
+  | { status: 'success'; result: TResult; error: null }
 
 /**
  * Calls `preview()` exactly once per `open` transition from `false` to
@@ -15,12 +15,19 @@ export type PreviewOnOpenState =
  * pattern this ticket forbids. Guards with a ref keyed on the previous
  * `open` value rather than an empty dependency array, since `open` itself
  * must stay a dependency for the effect to notice a reopen at all.
+ *
+ * Generic over its result type (issue #329): `SaveChangesDialog` calls
+ * this with a `PreviewResult`-returning `preview`, but a surface whose
+ * Fallout doesn't fit that shape (the Reapply-defaults popup's
+ * `SemesterDefaultsFallout`, which has no `changes` list) can call it with
+ * its own result type instead — the open/loading/error/success state
+ * machine itself is the part every Preview popup shares.
  */
-export function usePreviewOnOpen(
+export function usePreviewOnOpen<TResult = PreviewResult>(
   open: boolean,
-  preview: () => Promise<PreviewResult>,
-): PreviewOnOpenState {
-  const [state, setState] = useState<PreviewOnOpenState>({
+  preview: () => Promise<TResult>,
+): PreviewOnOpenState<TResult> {
+  const [state, setState] = useState<PreviewOnOpenState<TResult>>({
     status: 'idle',
     result: null,
     error: null,

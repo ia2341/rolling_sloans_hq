@@ -32,6 +32,10 @@ from scheduling.services import (
     RosterEditBuffer,
     RosterEditFallout,
     RosterImportProposal,
+    SemesterDefaultsFallout,
+    SemesterDeletionSummary,
+    SemesterManagementRow,
+    SemesterPublishImpact,
     SetlistEditBuffer,
     SetlistEditFallout,
     SetlistSongDeletion,
@@ -116,6 +120,89 @@ def serialize_context(request) -> dict:
         'semester_warning': services.semester_banner_for(request) is not None,
         'semester_options': [_serialize_semester_option(option) for option in options],
         'pending_conflict_count': services.pending_conflict_count_for(viewing) if is_admin and viewing is not None else None,
+    }
+
+
+def _serialize_semester_management_row(row: SemesterManagementRow) -> dict:
+    """Return one `SemesterManagementRow` as a Manage-semesters sheet row: label, viewing flag, and four counts (issue #329).
+
+    Counts only, per ADR 0005 — no Conflict text, reason, note or person
+    identity ever reaches this payload, only aggregate row counts.
+    `updated_at` is a staleness token, not member data, so it carries no
+    such restriction: it lets the sheet build a Reapply-defaults request
+    for a row other than the one currently being viewed.
+    """
+    return {
+        'id': row.semester.pk,
+        'name': row.semester.name,
+        'status': _STATUS_WIRE_VALUES[row.status],
+        'is_viewing': row.is_viewing,
+        'member_count': row.member_count,
+        'song_count': row.song_count,
+        'rehearsal_count': row.rehearsal_count,
+        'recording_count': row.recording_count,
+        'updated_at': row.updated_at.isoformat(),
+    }
+
+
+def serialize_semester_management_rows(rows: list[SemesterManagementRow]) -> list[dict]:
+    """Return every `SemesterManagementRow` as the management-rows endpoint's `data` value (issue #329)."""
+    return [_serialize_semester_management_row(row) for row in rows]
+
+
+def serialize_semester_publish_impact(impact: SemesterPublishImpact) -> dict:
+    """Return a `SemesterPublishImpact` as the Publish popup's `data` value (issue #329).
+
+    `incumbent` is `None` (rather than an object with zeroed fields) when
+    nothing is published or the target is already live — the popup's own
+    job to render "nothing to supersede" from a null. Counts only, per
+    ADR 0005: no Conflict text, reason, note or person identity here.
+    """
+    return {
+        'target_semester_id': impact.target_semester.pk,
+        'target_semester_name': impact.target_semester.name,
+        'is_already_live': impact.is_already_live,
+        'incumbent': (
+            {'id': impact.incumbent.pk, 'name': impact.incumbent.name} if impact.incumbent is not None else None
+        ),
+        'incumbent_rehearsal_count': impact.incumbent_rehearsal_count,
+        'incumbent_song_count': impact.incumbent_song_count,
+        'has_no_setlist': impact.has_no_setlist,
+        'has_no_rehearsals': impact.has_no_rehearsals,
+    }
+
+
+def serialize_semester_deletion_summary(summary: SemesterDeletionSummary) -> dict:
+    """Return a `SemesterDeletionSummary` as the Delete popup's `data` value (issue #329).
+
+    Reuses `semester_deletion_summary()`'s already-computed counts
+    unchanged — the four counts must not be recomputed anywhere else, per
+    the issue. Counts only, per ADR 0005.
+    """
+    return {
+        'member_count': summary.member_count,
+        'song_count': summary.song_count,
+        'rehearsal_count': summary.rehearsal_count,
+        'recording_count': summary.recording_count,
+    }
+
+
+def serialize_semester_defaults_fallout(fallout: SemesterDefaultsFallout) -> dict:
+    """Return a `SemesterDefaultsFallout` as the Reapply-defaults preview's `fallout` value (issue #329, ADR 0008).
+
+    Named field-by-field, matching `serialize_setlist_edit_fallout()`/
+    `serialize_rehearsal_edit_fallout()`. `loud`/`quiet` are already plain
+    strings (`preview_semester_defaults_reapply()` composes them, unlike
+    the row-shaped surfaces' structured deletions), so no per-entry
+    sub-serializer is needed here.
+    """
+    return {
+        'is_blocked': fallout.is_blocked,
+        'block_message': fallout.block_message,
+        'is_stale': fallout.is_stale,
+        'changed_rehearsal_count': fallout.changed_rehearsal_count,
+        'loud': list(fallout.loud),
+        'quiet': list(fallout.quiet),
     }
 
 
