@@ -91,6 +91,8 @@ from scheduling.services import (
     SelfRemovalError,
     SemesterDefaultsReapplyBlockedError,
     SemesterDefaultsReapplyBuffer,
+    SetlistEditBuffer,
+    SetlistEditRow,
     SkipDateInput,
     SongRoleRequirementBuffer,
     SongRoleRequirementEntry,
@@ -99,6 +101,7 @@ from scheduling.services import (
     StaleRehearsalSemesterError,
     StaleRosterSemesterError,
     StaleSemesterDefaultsError,
+    StaleSetlistSemesterError,
     StaleSongRoleRequirementsError,
     UnknownConflictError,
     WrongAdjudicationSemesterError,
@@ -108,6 +111,7 @@ from scheduling.services import (
     apply_rehearsal_edits,
     apply_roster_edits,
     apply_semester_defaults_reapply,
+    apply_setlist_edits,
     apply_song_role_assignments,
     apply_song_role_requirements,
     assigned_songs_for,
@@ -127,7 +131,6 @@ from scheduling.services import (
     declare_conflict,
     declared_roles_for,
     delete_semester,
-    delete_songs_with_recordings,
     fill_status_for,
     future_rehearsals_for,
     get_live_semester,
@@ -142,6 +145,7 @@ from scheduling.services import (
     preview_rehearsal_generation,
     preview_roster_edits,
     preview_semester_defaults_reapply,
+    preview_setlist_edits,
     preview_song_role_assignments,
     prior_rehearsal_times_for,
     publish_semester,
@@ -149,7 +153,6 @@ from scheduling.services import (
     recording_groups_for,
     rehearsal_count_target,
     rehearsal_schedule_for,
-    reorder_songs,
     reserve_recording_upload,
     roster_for,
     save_rehearsal_pattern,
@@ -175,17 +178,6 @@ def _scoped_to_viewing_semester(model, semester):
     is the pre-publish empty state, which every caller renders as zero rows.
     """
     return model.objects.filter(semester=semester) if semester else model.objects.none()
-
-
-def _lock_semester(semester):
-    """Row-lock `semester` for the duration of the enclosing transaction.
-
-    Must be called inside `transaction.atomic()`. Serializes concurrent
-    Song-position mutations (create, move) against the same Semester so two
-    overlapping requests can't compute/apply stale positions and collide on
-    `unique_song_position_per_semester`.
-    """
-    return Semester.objects.select_for_update().get(pk=semester.pk)
 
 
 class OverviewView(BaseView, TemplateView):
@@ -1042,19 +1034,77 @@ class SetlistView(BaseView, TemplateView):
         return context
 
 
+def _build_setlist_buffer(formset, semester, submitted_stamp):
+    """Turn a valid, bound `SetlistEditFormSet` into a `SetlistEditBuffer`, in the grid's submitted visual order (issue #321).
+
+    Shared by `SetlistEditView.post()` and `SetlistPreviewView.run_preview()`
+    (ADR 0008) — the Save and Preview endpoints must parse the exact same
+    POST body into the exact same Buffer. A row's formset slot (`song-N-*`)
+    never moves on drag — only Django's own initial/extra boundary can tell
+    an existing Song's submitted id from a new row's, and that boundary is
+    a fixed index cutoff, not a per-row flag, so renaming an existing row's
+    slot on every drag would risk landing it past `INITIAL_FORMS` and
+    silently duplicating it as new. Visual order instead travels as the
+    repeated `song_order` field's *request order* (each value naming a
+    slot's prefix), which is exactly the buffer's row order because
+    SortableJS physically moves each row's DOM node — including its
+    `song_order` input — on drop.
+
+    `song_order` is checked to be an exact duplicate-free permutation of
+    the formset's own form prefixes — every row's `song_order` input
+    travels with it regardless of whether that row is deleted or an
+    untouched blank add, so the full prefix set (not just the surviving
+    ones) is what the grid's JS actually submits. Returns `None` on any
+    mismatch — the caller reports that as a malformed-order Validation
+    Error rather than building a Buffer at all.
+    """
+    deleted_forms = formset.deleted_forms
+    extra_forms = set(formset.extra_forms)
+    forms_by_prefix = {form.prefix: form for form in formset.forms}
+
+    order_tokens = formset.data.getlist('song_order')
+    if sorted(order_tokens) != sorted(forms_by_prefix):
+        return None
+
+    rows = []
+    for token in order_tokens:
+        form = forms_by_prefix[token]
+        if form in deleted_forms:
+            continue
+        if form in extra_forms and not form.has_changed():
+            continue
+        rows.append(SetlistEditRow(
+            song_id=form.instance.pk,
+            title=form.cleaned_data['title'],
+            artist=form.cleaned_data['artist'],
+            length=form.cleaned_data['length'],
+            notes=form.cleaned_data['notes'],
+        ))
+
+    deleted_song_ids = frozenset(form.instance.pk for form in deleted_forms if form.instance.pk)
+    return SetlistEditBuffer(
+        semester_id=semester.pk,
+        semester_updated_at=parse_datetime(submitted_stamp or '') or timezone.now(),
+        rows=rows,
+        deleted_song_ids=deleted_song_ids,
+    )
+
+
 class SetlistEditView(AdminRequiredMixin, View):
-    """`/setlist/edit/`: an admin's in-place editable grid for the viewing Semester's setlist (issues #178, #179).
+    """`/setlist/edit/`: an admin's in-place editable grid for the viewing Semester's setlist (issues #178, #179, #321).
 
     A sibling of `SetlistView` rather than a `/manage/` screen, because the
     point of this ticket is that an admin fixes a mistake on the page they
     spotted it on. GET renders the grid — as a bare fragment for the
     htmx-driven "Edit setlist" button's in-place swap, or as a full page
-    (banner and all) for a direct/no-JS request. POST commits the whole
-    buffer — edits, reorder, adds and deletes together — as one atomic
-    write, or writes nothing and re-renders the full page with every
-    submitted value preserved: per-field errors on a validation failure, or
-    a stale-stamp notice when another admin's save landed first (the
-    optimistic-concurrency stamp from #178's map).
+    (banner and all) for a direct/no-JS request. POST parses the same POST
+    body `_build_setlist_buffer()` and `SetlistPreviewView` share into a
+    `SetlistEditBuffer` and hands it to `apply_setlist_edits()` — the
+    single write this surface and its Preview both run (ADR-0008) — or
+    writes nothing and re-renders the full page with every submitted value
+    preserved: per-field errors on a validation failure, a malformed-order
+    notice, or a stale-stamp notice when another admin's save landed first
+    (the optimistic-concurrency stamp from #178's map).
     """
 
     fragment_template_name = 'scheduling/_setlist_edit.html'
@@ -1076,108 +1126,25 @@ class SetlistEditView(AdminRequiredMixin, View):
         return self._render(request, semester, formset)
 
     def post(self, request):
-        """Validate and save the whole buffer atomically, honoring the Semester's optimistic-concurrency stamp."""
+        """Build the Setlist edit Buffer and apply it atomically, honoring the Semester's optimistic-concurrency stamp."""
         semester = get_viewing_semester(request)
         if semester is None:
             return redirect('scheduling:setlist')
         songs = _scoped_to_viewing_semester(Song, semester).order_by('position')
         formset = SetlistEditFormSet(request.POST, queryset=songs, prefix='song')
         if formset.is_valid():
-            stale, malformed = self._save_if_current(semester, formset, request.POST.get('semester_updated_at', ''))
-            if not stale and not malformed:
-                messages.success(request, 'Setlist updated.')
-                return redirect('scheduling:setlist')
-            messages.error(request, self.STALE_MESSAGE if stale else self.MALFORMED_ORDER_MESSAGE)
-        return self._render(request, semester, formset, status=200)
-
-    def _save_if_current(self, semester, formset, submitted_stamp):
-        """Save `formset` and bump the Semester's stamp if `submitted_stamp` still matches; return (stale, malformed).
-
-        Locks the Semester row for the duration of the check-and-save so a
-        concurrent save can't slip in between the comparison and the write.
-        Rolls back and writes nothing when the stamp is stale, or when
-        `_save_buffer` rejects the submitted `song_order` as malformed,
-        without issuing any further query inside the doomed transaction.
-        """
-        stale = False
-        malformed = False
-        with transaction.atomic():
-            locked = _lock_semester(semester)
-            if not self._stamp_matches(locked, submitted_stamp):
-                stale = True
-                transaction.set_rollback(True)
-            elif not self._save_buffer(locked, formset):
-                malformed = True
-                transaction.set_rollback(True)
+            buffer = _build_setlist_buffer(formset, semester, request.POST.get('semester_updated_at', ''))
+            if buffer is None:
+                messages.error(request, self.MALFORMED_ORDER_MESSAGE)
             else:
-                locked.updated_at = timezone.now()
-                locked.save(update_fields=['updated_at'])
-        return stale, malformed
-
-    def _save_buffer(self, semester, formset):
-        """Apply the buffer's edits, adds, reorder and deletes as one write (issue #179); return whether it saved.
-
-        Runs inside the caller's locked transaction. A row's formset slot
-        (`song-N-*`) never moves on drag — only Django's own initial/extra
-        boundary can tell an existing Song's submitted id from a new row's,
-        and that boundary is a fixed index cutoff, not a per-row flag,
-        so renaming an existing row's slot on every drag would risk landing
-        it past `INITIAL_FORMS` and silently duplicating it as new. Visual
-        order instead travels as the repeated `song_order` field's *request
-        order* (each value naming a slot's prefix), which is exactly the
-        buffer's row order because SortableJS physically moves each row's
-        DOM node — including its `song_order` input — on drop.
-
-        Before any write, `song_order` is checked to be an exact
-        duplicate-free permutation of the formset's own form prefixes —
-        every row's `song_order` input travels with it regardless of
-        whether that row is deleted or an untouched blank add, so the
-        full prefix set (not just the surviving ones) is what the grid's
-        JS actually submits. An unknown, duplicate, or missing prefix
-        returns `False` and writes nothing, rather than silently omitting
-        a surviving Song's edits or assigning conflicting positions.
-        Every surviving row named there — changed, unchanged or
-        brand-new — is then saved with a throwaway position first
-        (position isn't a form field, so a new instance has none yet);
-        `reorder_songs()` renumbers that exact order to a contiguous
-        1..N, on the surviving Song ids alone, so valid deletions remain
-        supported. Deletions (`delete_songs_with_recordings`) run after
-        survivors are saved so a row moved out from under a doomed
-        Song's old position never collides — the deferred unique
-        constraint makes the whole sequence collision-free either way.
-        """
-        deleted_forms = formset.deleted_forms
-        deleted_songs = [form.instance for form in deleted_forms if form.instance.pk]
-        extra_forms = set(formset.extra_forms)
-        forms_by_prefix = {form.prefix: form for form in formset.forms}
-
-        order_tokens = formset.data.getlist('song_order')
-        if sorted(order_tokens) != sorted(forms_by_prefix):
-            return False
-
-        ordered_ids = []
-        for token in order_tokens:
-            form = forms_by_prefix[token]
-            if form in deleted_forms:
-                continue
-            if form in extra_forms and not form.has_changed():
-                continue
-            song = form.save(commit=False)
-            song.semester = semester
-            song.position = 0
-            song.save()
-            ordered_ids.append(song.pk)
-
-        if deleted_songs:
-            delete_songs_with_recordings(deleted_songs)
-
-        reorder_songs(semester, ordered_ids)
-        return True
-
-    def _stamp_matches(self, semester, submitted_stamp):
-        """Return whether `submitted_stamp` (an isoformat string) still matches `semester.updated_at`."""
-        parsed = parse_datetime(submitted_stamp or '')
-        return parsed is not None and parsed == semester.updated_at
+                try:
+                    apply_setlist_edits(buffer, viewing_semester=semester)
+                except StaleSetlistSemesterError:
+                    messages.error(request, self.STALE_MESSAGE)
+                else:
+                    messages.success(request, 'Setlist updated.')
+                    return redirect('scheduling:setlist')
+        return self._render(request, semester, formset, status=200)
 
     def _render(self, request, semester, formset, status=200):
         """Render the fragment for an htmx request, else the full page; both carry the same buffer."""
@@ -1193,6 +1160,55 @@ class SetlistEditView(AdminRequiredMixin, View):
             'formset': formset,
             'stamp': semester.updated_at.isoformat() if semester else '',
         }
+
+
+class SetlistPreviewView(PreviewMixin, AdminRequiredMixin, View):
+    """`/setlist/edit/preview/`: an admin's Preview of a Setlist edit Buffer, computed without committing it (issue #321, ADR 0008).
+
+    A POST-only sibling of `/setlist/edit/`'s Save endpoint, bound to the
+    exact same `SetlistEditFormSet` and the exact same POST body — same
+    field names and `song_order`/`semester_updated_at` hidden fields — as
+    the Save endpoint, per ADR 0008's "one parsing and validation path"
+    rule. `PreviewMixin` owns the savepoint/rollback shape; this view
+    supplies only the form, the shared `_build_setlist_buffer()`, and the
+    `preview_setlist_edits()` call.
+    """
+
+    template_name = 'scheduling/_setlist_preview.html'
+
+    def run_preview(self, request):
+        """Bind the Setlist edit formset and render its Fallout, or a Validation Error banner if it doesn't bind."""
+        semester = get_viewing_semester(request)
+        if semester is None:
+            return render(request, self.template_name, {
+                'formset_errors': ['No Semester is being edited.'],
+                'fallout': None,
+            })
+        songs = _scoped_to_viewing_semester(Song, semester).order_by('position')
+        formset = SetlistEditFormSet(request.POST, queryset=songs, prefix='song')
+        if not formset.is_valid():
+            return render(request, self.template_name, {
+                'formset_errors': self._formset_errors(formset),
+                'fallout': None,
+            })
+        buffer = _build_setlist_buffer(formset, semester, request.POST.get('semester_updated_at', ''))
+        if buffer is None:
+            return render(request, self.template_name, {
+                'formset_errors': [SetlistEditView.MALFORMED_ORDER_MESSAGE],
+                'fallout': None,
+            })
+        fallout = preview_setlist_edits(buffer, viewing_semester=semester)
+        return render(request, self.template_name, {'formset_errors': [], 'fallout': fallout})
+
+    def _formset_errors(self, formset):
+        """Return a flat list of 'Row N (field): message' strings naming an invalid formset's per-row errors."""
+        errors = []
+        for index, form in enumerate(formset.forms):
+            for field, field_errors in form.errors.items():
+                for message in field_errors:
+                    errors.append(f'Row {index + 1} ({field}): {message}')
+        errors.extend(formset.non_form_errors())
+        return errors
 
 
 class SetlistDeleteConfirmView(AdminRequiredMixin, View):

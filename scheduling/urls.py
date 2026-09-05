@@ -44,6 +44,10 @@ urlpatterns = [
     path('setlist/', views.SetlistView.as_view(), name='setlist'),
     path('setlist/edit/', views.SetlistEditView.as_view(), name='setlist-edit'),
     path(
+        'setlist/edit/preview/',
+        views.SetlistPreviewView.as_view(), name='setlist-edit-preview',
+    ),
+    path(
         'setlist/edit/confirm-delete/',
         views.SetlistDeleteConfirmView.as_view(), name='setlist-edit-confirm-delete',
     ),
