@@ -15,6 +15,7 @@ from django.db.models import Count, Q
 from django.utils import timezone
 
 from identity.models import Person
+from scheduling.fields import format_song_length
 from scheduling.models import (
     Backup,
     Conflict,
@@ -859,6 +860,144 @@ def rehearsal_count_target(song) -> int:
     re-derive it.
     """
     return song.semester.rehearsal_set.filter(is_full_setlist=False).count()
+
+
+def active_roles_for(semester) -> list[Role]:
+    """Return `semester`'s active Roles, in a stable name order — the fixed Role set every cast line in the Semester shares.
+
+    Computed once per payload, not per Song (issue #330): deriving the
+    set from each Song's own Role Requirements instead would make a Role's
+    hue and position shift row to row, the exact property the Setlist's
+    constant cast line exists to avoid.
+    """
+    return list(Role.objects.filter(is_active=True).order_by('name'))
+
+
+def _derive_role_code(name: str) -> str:
+    """Derive a short presentational code from a Role's name: initials of up to 3 words, else its first 3 letters, uppercased.
+
+    Never persisted (issue #330) — `Role` has no `code` field, and adding
+    one would be a second name column to keep in sync for something purely
+    presentational.
+    """
+    words = name.split()
+    if len(words) >= 2:
+        return ''.join(word[0] for word in words[:3]).upper()
+    return name[:3].upper()
+
+
+def role_codes_for(roles: list[Role]) -> dict[int, str]:
+    """Return a short code per Role id, derived from its name, falling back to the full name wherever two Roles' derived codes would collide.
+
+    A pill's `title` always names the Role in full regardless (issue
+    #330) — this code is a scannable accelerator, never the only channel
+    carrying the meaning.
+    """
+    codes_by_role_id = {role.id: _derive_role_code(role.name) for role in roles}
+    code_counts: dict[str, int] = defaultdict(int)
+    for code in codes_by_role_id.values():
+        code_counts[code] += 1
+    roles_by_id = {role.id: role for role in roles}
+    return {
+        role_id: (roles_by_id[role_id].name if code_counts[code] > 1 else code)
+        for role_id, code in codes_by_role_id.items()
+    }
+
+
+@dataclass(frozen=True)
+class CastPerformer:
+    """One Person filling one Role in a Song's cast line, carrying the ADR-0002 mismatch flag for that Role (issue #330)."""
+
+    person: object
+    is_role_mismatch: bool
+
+
+@dataclass(frozen=True)
+class CastRoleEntry:
+    """One Role's slot in a Song's cast line: its code and every Person who fills it — empty when nobody does (issue #330)."""
+
+    role: Role
+    code: str
+    performers: list[CastPerformer]
+
+
+def cast_line_for(song, roles: list[Role], codes: dict[int, str]) -> list[CastRoleEntry]:
+    """Return `song`'s cast as one entry per `roles`, in that fixed order, including an empty entry for an unfilled Role.
+
+    Reshapes `performers_for(song)` — person-first — into the Role-first
+    shape the Setlist and Song page need (issue #330): a Role in `roles`
+    with nobody assigned still gets an entry with an empty performer list,
+    a rendered empty rather than an omission. `roles`/`codes` are computed
+    once per payload by the caller (`active_roles_for`/`role_codes_for`),
+    never re-derived per Song.
+    """
+    mismatch_by_role_and_person = {
+        (role_id, person_id): is_role_mismatch
+        for role_id, person_id, is_role_mismatch in SongRoleAssignment.objects.filter(
+            song=song,
+        ).values_list('role_id', 'person_id', 'is_role_mismatch')
+    }
+    performers_by_role_id: dict[int, list[CastPerformer]] = defaultdict(list)
+    for performer in performers_for(song):
+        for role in performer.roles:
+            performers_by_role_id[role.id].append(
+                CastPerformer(
+                    person=performer.person,
+                    is_role_mismatch=mismatch_by_role_and_person.get((role.id, performer.person.id), False),
+                ),
+            )
+    return [
+        CastRoleEntry(role=role, code=codes[role.id], performers=performers_by_role_id.get(role.id, []))
+        for role in roles
+    ]
+
+
+def setlist_total_running_time(semester) -> str:
+    """Return the Setlist's total running time as a musician-readable display string, summed server-side across every Song's length.
+
+    Never a client-side reduce (issue #330): the client renders what this
+    returns and derives nothing. A Semester with no Songs returns
+    `"0:00"`.
+    """
+    total = Song.objects.filter(semester=semester).aggregate(total=models.Sum('length'))['total'] or timedelta()
+    return format_song_length(total)
+
+
+@dataclass(frozen=True)
+class RehearsedAtRow:
+    """One Rehearsal `song` is worked at: a scheduled slot with its times, or the Dress Rehearsal's live "whole setlist" row (ADR-0003, issue #330)."""
+
+    rehearsal: Rehearsal
+    is_dress_rehearsal: bool
+    start_time: time | None
+    end_time: time | None
+
+
+def rehearsed_at_for(song) -> list[RehearsedAtRow]:
+    """Return the Rehearsals `song` is worked at: each RehearsalSong slot's Rehearsal with its slot times, plus the Semester's Dress Rehearsal (if any) as a live "whole setlist" row.
+
+    The Dress Rehearsal carries no persisted RehearsalSong row for any Song
+    (ADR-0003) — every Song in the Semester "rehearses" there by
+    definition, so it's appended here rather than surfacing from the
+    RehearsalSong query.
+    """
+    rows = [
+        RehearsedAtRow(
+            rehearsal=rehearsal_song.rehearsal,
+            is_dress_rehearsal=False,
+            start_time=rehearsal_song.start_time,
+            end_time=rehearsal_song.end_time,
+        )
+        for rehearsal_song in RehearsalSong.objects.filter(song=song)
+        .select_related('rehearsal')
+        .order_by('rehearsal__date')
+    ]
+    dress_rehearsal = Rehearsal.objects.filter(semester=song.semester, is_full_setlist=True).first()
+    if dress_rehearsal is not None:
+        rows.append(
+            RehearsedAtRow(rehearsal=dress_rehearsal, is_dress_rehearsal=True, start_time=None, end_time=None),
+        )
+    return rows
 
 
 @dataclass(frozen=True)

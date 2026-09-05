@@ -13,6 +13,8 @@ nothing more.
 
 from identity.serializers import serialize_viewer
 from scheduling import services
+from scheduling.fields import format_song_length
+from scheduling.models import Song
 
 # The Semester status set crosses the wire as lowercase snake-case,
 # mirroring `services._semester_status()`'s three internal labels.
@@ -93,3 +95,132 @@ def serialize_context(request) -> dict:
         'semester_options': [_serialize_semester_option(option) for option in options],
         'pending_conflict_count': services.pending_conflict_count_for(viewing) if is_admin and viewing is not None else None,
     }
+
+
+def _serialize_role_legend_entry(role, codes):
+    """Return one Role as a `roles` legend entry: `id`, `name`, `code`."""
+    return {'id': role.pk, 'name': role.name, 'code': codes[role.id]}
+
+
+def _serialize_cast_performer(performer):
+    """Return one `CastPerformer` by name only (never `Person.email`, ADR 0005), plus the ADR-0002 mismatch flag."""
+    return {
+        'id': performer.person.pk,
+        'name': performer.person.name,
+        'is_role_mismatch': performer.is_role_mismatch,
+    }
+
+
+def _serialize_cast_entry(entry):
+    """Return one `CastRoleEntry`: the Role's id/name/code and its performers, empty when the Role is unfilled."""
+    return {
+        'role_id': entry.role.pk,
+        'role_name': entry.role.name,
+        'code': entry.code,
+        'performers': [_serialize_cast_performer(performer) for performer in entry.performers],
+    }
+
+
+def _serialize_setlist_song(song, roles, codes):
+    """Return one Setlist row: the Song's own fields, its role-by-role cast line, and its take count."""
+    return {
+        'id': song.pk,
+        'title': song.title,
+        'artist': song.artist,
+        'length': format_song_length(song.length),
+        'position': song.position,
+        'notes': song.notes,
+        'cast': [_serialize_cast_entry(entry) for entry in services.cast_line_for(song, roles, codes)],
+        'recording_count': services.recording_count_for(song),
+    }
+
+
+def serialize_setlist(semester) -> dict:
+    """Return the `/api/setlist/` `data` shape for `semester` (issue #330), or its empty-Semester/no-Semester shape when there's nothing to show.
+
+    Carries no `Conflict`, `ConflictWindow` or `Backup` field of any kind,
+    and no attendance inference (ADR 0005) — this surface has no Rehearsal
+    in scope. `is_role_mismatch` is the deliberate exception (ADR 0002):
+    `docs/person-page-visibility.md`'s `never` verdict for it is scoped to
+    `/members/` and `/members/<pk>/`, not to this surface.
+    """
+    if semester is None:
+        return {'semester_name': None, 'song_count': 0, 'total_running_time': '0:00', 'roles': [], 'songs': []}
+    songs = list(Song.objects.filter(semester=semester).order_by('position'))
+    roles = services.active_roles_for(semester)
+    codes = services.role_codes_for(roles)
+    return {
+        'semester_name': semester.name,
+        'song_count': len(songs),
+        'total_running_time': services.setlist_total_running_time(semester),
+        'roles': [_serialize_role_legend_entry(role, codes) for role in roles],
+        'songs': [_serialize_setlist_song(song, roles, codes) for song in songs],
+    }
+
+
+def _serialize_recording(recording):
+    """Return one Recording by its uploader's name (never email) and its short-lived signed playback URL (ADR 0004)."""
+    return {
+        'id': recording.pk,
+        'uploaded_by_name': recording.uploaded_by.name,
+        'note': recording.note,
+        'playback_url': services.create_recording_playback_url(recording),
+    }
+
+
+def _serialize_recording_group(group):
+    """Return one `RecordingSlotGroup`: the slot's Rehearsal date and window, its take count, and its Recordings."""
+    rehearsal_song = group.rehearsal_song
+    return {
+        'rehearsal_id': rehearsal_song.rehearsal_id,
+        'date': rehearsal_song.rehearsal.date.isoformat(),
+        'start_time': rehearsal_song.start_time.isoformat() if rehearsal_song.start_time else None,
+        'end_time': rehearsal_song.end_time.isoformat() if rehearsal_song.end_time else None,
+        'take_count': len(group.recordings),
+        'recordings': [_serialize_recording(recording) for recording in group.recordings],
+    }
+
+
+def _serialize_rehearsed_at_row(row):
+    """Return one `RehearsedAtRow`: its Rehearsal's date, whether it's the live-derived Dress Rehearsal row, and its slot times (null for the Dress Rehearsal)."""
+    return {
+        'rehearsal_id': row.rehearsal.pk,
+        'date': row.rehearsal.date.isoformat(),
+        'is_dress_rehearsal': row.is_dress_rehearsal,
+        'start_time': row.start_time.isoformat() if row.start_time else None,
+        'end_time': row.end_time.isoformat() if row.end_time else None,
+    }
+
+
+def _serialize_next_rehearsal(rehearsal):
+    """Return the admin-only "Cast on …" pointer's target Rehearsal: `id` and `date`."""
+    return {'id': rehearsal.pk, 'date': rehearsal.date.isoformat()}
+
+
+def serialize_song(song, *, is_admin: bool, next_rehearsal) -> dict:
+    """Return the `/api/songs/<pk>/` `data` shape for `song` (issue #330).
+
+    `next_rehearsal` is the admin-only ADR-0009 pointer's target — pass
+    `None` for a member viewer or when there's nothing upcoming, and it's
+    omitted from the payload rather than emitted as a stray null so a
+    member's payload carries no admin-only key at all. Carries no
+    `Conflict`, `ConflictWindow` or `Backup` field, and no attendance
+    inference (ADR 0005); `is_role_mismatch` is rendered here deliberately
+    (ADR 0002) — see `serialize_setlist()`'s docstring.
+    """
+    roles = services.active_roles_for(song.semester)
+    codes = services.role_codes_for(roles)
+    data = {
+        'id': song.pk,
+        'title': song.title,
+        'artist': song.artist,
+        'length': format_song_length(song.length),
+        'position': song.position,
+        'notes': song.notes,
+        'cast': [_serialize_cast_entry(entry) for entry in services.cast_line_for(song, roles, codes)],
+        'recording_groups': [_serialize_recording_group(group) for group in services.recording_groups_for(song)],
+        'rehearsed_at': [_serialize_rehearsed_at_row(row) for row in services.rehearsed_at_for(song)],
+    }
+    if is_admin:
+        data['next_rehearsal'] = _serialize_next_rehearsal(next_rehearsal) if next_rehearsal is not None else None
+    return data

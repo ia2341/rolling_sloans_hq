@@ -1,9 +1,15 @@
 """`scheduling`'s `/api/` routes (issue #326), included by `config/api_urls.py`.
 
-Empty for now: every concrete `scheduling` `/api/` endpoint is a later
-ticket (#330 Setlist/Song, #331 Schedule, #332 Home, #333 Band/Person,
-#335-#340 admin edit surfaces). This module exists so those tickets add
-routes here rather than deciding where `scheduling`'s API routes live.
+Issue #330 adds the first two: the Setlist and Song detail reads. Every
+other concrete `scheduling` `/api/` endpoint is a later ticket (#331
+Schedule, #332 Home, #333 Band/Person, #335-#340 admin edit surfaces).
 """
 
-urlpatterns = []
+from django.urls import path
+
+from scheduling import api_views
+
+urlpatterns = [
+    path('setlist/', api_views.SetlistApiView.as_view(), name='api-setlist'),
+    path('songs/<int:pk>/', api_views.SongDetailApiView.as_view(), name='api-song-detail'),
+]
