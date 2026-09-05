@@ -26,6 +26,12 @@
                 rehearsals took several screens. v2 is an accordion: a two-line summary
                 row that expands, one at a time.
 
+    Ctx bar     running order and assignments are two MODES of one rehearsal, never one
+                editable table (a reorder moves the start times the availability check is
+                computed from). Both surfaces wear one shared context bar - the rehearsal
+                named, plus a Running order | Assignments segmented switch - so the way
+                across is the same control in both directions and keeps your place.
+
   Surfaces: the rehearsal schedule editor, the Running Order sub-grid, the four-bucket
   generation diff, the assignment grid edit mode and its two-section picker.
 
@@ -473,6 +479,28 @@
   .pick-sec .plist .mm { margin-left: auto; font-size: 11px; color: var(--ink-3); }
   .pick-sec .plist .busy { margin-left: auto; font-size: 11px; color: var(--warn); }
 
+  /* ---- the rehearsal context bar: the one way between Running Order and Assignments.
+     Both surfaces wear it, identically, so the move is the same gesture in both
+     directions and it is visibly a MODE SWITCH - which is the point, since the two
+     cannot be edited at the same time. ---- */
+  .ctxbar { display: flex; align-items: center; gap: 10px 14px; flex-wrap: wrap;
+    border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2);
+    padding: 8px 11px; }
+  .ctxbar .who { display: grid; gap: 1px; }
+  .ctxbar .who b { font-size: 13.5px; }
+  .ctxbar .who .when { font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); }
+  .ctxbar .spacer { flex: 1; }
+  .ctxbar .seg2 { flex-shrink: 0; }
+  .ctxbar .steppers { display: flex; gap: 4px; align-items: center; }
+  /* On phone the switch takes its own full-width line rather than fighting for space. */
+  .frame.phone .ctxbar { gap: 8px; }
+  .frame.phone .ctxbar .spacer { display: none; }
+  .frame.phone .ctxbar .who { flex: 1; }
+  .frame.phone .ctxbar .seg2 { width: 100%; }
+  .frame.phone .ctxbar .seg2 button { flex: 1; }
+  /* The legend gets its own line on phone; it used to be crushed against the cross-link. */
+  .legendrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+
   .adminonly { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.06em;
     text-transform: uppercase; color: var(--ink-3); border: 1px solid var(--line);
     border-radius: 99px; padding: 0 6px; }
@@ -644,6 +672,7 @@ const state = {
   page: 'sched-edit', viewport: 'desktop', buffer: 'edits',
   rail: false, semester: 'Spring 2027',
   openRow: -1,            /* phone accordion + desktop running-order disclosure */
+  rehearsal: 0,           /* which Rehearsal the assignment grid is scoped to */
   modal: null,            /* 'save' | 'generate' | 'picker' | null */
   pickCell: null,
 };
@@ -672,6 +701,16 @@ function go(p) {
   state.page = p; state.openRow = -1;
   state.modal = p === 'generate' ? 'generate' : null;
   render();
+}
+/* The two halves of the round trip. Each remembers where you were, so moving
+   between Running Order and Assignments never costs you your place. */
+function toAssignments(i) { state.rehearsal = i; state.page = 'assign'; state.modal = null; render(); }
+function toRunningOrder() { state.page = 'sched-edit'; state.openRow = state.rehearsal; state.modal = null; render(); }
+function stepRehearsal(d) {
+  const list = rows(); const n = list.length;
+  let i = state.rehearsal;
+  for (let k = 0; k < n; k++) { i = (i + d + n) % n; if (!list[i].dress) break; }
+  state.rehearsal = i; render();
 }
 function setBuffer(b) { state.buffer = b; render(); }
 function toggleRail() { state.rail = !state.rail; render(); }
@@ -830,6 +869,26 @@ function runningOrder(r) {
   </div>`;
 }
 
+/* ---- The rehearsal context bar. Rendered by BOTH surfaces from one function, so
+       the way across is the same control in both directions. `mode` is which half is
+       currently live; the other half is one tap, and lands with your place kept. ---- */
+function contextBar(r, i, mode) {
+  const canAssign = !r.dress;
+  return `<div class="ctxbar">
+    <span class="who"><b>${r.dow}</b><span class="when">${r.start}&ndash;${r.end}${
+      r.dress ? ' &middot; Dress' : ` &middot; ${r.songs} song${r.songs === 1 ? '' : 's'}`}</span></span>
+    <span class="spacer"></span>
+    ${mode === 'assign' ? `<span class="steppers">
+      <button class="btn sm icon" onclick="stepRehearsal(-1)" aria-label="Previous rehearsal">&larr;</button>
+      <button class="btn sm icon" onclick="stepRehearsal(1)" aria-label="Next rehearsal">&rarr;</button></span>` : ''}
+    <span class="seg2" role="group" aria-label="What to edit for this rehearsal">
+      <button aria-pressed="${mode === 'order'}" onclick="toRunningOrder()">Running order</button>
+      <button aria-pressed="${mode === 'assign'}" ${canAssign ? `onclick="toAssignments(${i})"` : 'disabled'}
+        title="${canAssign ? '' : 'A Dress Rehearsal has no per-song slots to assign against (ADR 0003)'}">Assignments</button>
+    </span>
+  </div>`;
+}
+
 /* ---- desktop row: the dense seven-column grid, which works at this width ---- */
 function desktopRow(r, i) {
   const open = state.openRow === i;
@@ -852,9 +911,10 @@ function desktopRow(r, i) {
           <span class="caret">${open ? '&#9662;' : '&#9656;'}</span>
           Running Order (${r.dress ? 'derived' : r.songs + ' song' + (r.songs === 1 ? '' : 's')})</button>
         <button class="disclose"><span class="caret">&#9656;</span>Advanced timing</button>
-        <a class="disclose" href="#" onclick="go('assign');return false"><span class="caret">&rarr;</span>Assignments</a>
+        ${r.dress ? '' : `<button class="disclose" onclick="toAssignments(${i})">
+          <span class="caret">&rarr;</span>Assignments</button>`}
       </div>
-      ${open ? runningOrder(r) : ''}
+      ${open ? contextBar(r, i, 'order') + runningOrder(r) : ''}
     </div>
   </div>`;
 }
@@ -885,10 +945,11 @@ function phoneRow(r, i) {
         <button onclick="openRow(${i})"><span class="grow">Running Order</span>
           <span class="n">${r.dress ? 'derived' : r.songs}</span><span class="caret">&#8250;</span></button>
         <button><span class="grow">Advanced timing</span><span class="caret">&#8250;</span></button>
-        <a href="#" onclick="go('assign');return false"><span class="grow">Assignments</span><span class="caret">&#8250;</span></a>
+        ${r.dress ? '' : `<button onclick="toAssignments(${i})"><span class="grow">Assignments</span><span class="caret">&#8250;</span></button>`}
         <button><span class="grow" style="color:var(--warn)">${r.op === 'remove' ? 'Undo remove' : 'Remove this rehearsal'}</span></button>
       </div>
       ${r.dress || !r.songs ? runningOrder(r) : ''}
+      ${r.dress ? '' : contextBar(r, i, 'order')}
     </div>` : ''}
   </div>`;
 }
@@ -901,7 +962,8 @@ function editorGrid() {
         && list[state.openRow].songs ? `<div class="card stack" style="gap:8px">
       <div class="row-between"><b style="font-size:13px">Running Order &mdash; ${list[state.openRow].dow}</b>
         <button class="btn sm" onclick="openRow(${state.openRow})">Done</button></div>
-      ${runningOrder(list[state.openRow])}</div>` : ''}
+      ${runningOrder(list[state.openRow])}
+      ${contextBar(list[state.openRow], state.openRow, 'order')}</div>` : ''}
     <div class="toolstrip">
       <button class="btn">+ Add rehearsal</button>
       <button class="btn" onclick="openModal('generate')">Generate rehearsal dates&hellip;</button>
@@ -1073,15 +1135,21 @@ function assignPhone() {
     </div></div>`).join('')}</div>`;
 }
 function assignPage() {
+  const list = rows();
+  /* A Dress Rehearsal has no RehearsalSong rows to hang a grid off (ADR 0003), so the
+     grid can never be scoped to one - fall back to the nearest that can. */
+  let i = Math.min(state.rehearsal, list.length - 1);
+  if (list[i].dress) i = list.findIndex(x => !x.dress);
+  const r = list[i];
   return `<div class="stack">
-    <div class="page-head"><h1>Tue 15 Sep &mdash; assignments</h1>
-      <div class="actions"><span class="btn sm">19:00&ndash;21:00</span></div></div>
+    <div class="page-head"><h1>Assignments</h1></div>
+    ${contextBar(r, i, 'assign')}
     ${scopeBar()}
-    <div class="row-between">
-      <span class="legend">${ROLES.map((r, i) =>
-        `<span class="swatch" style="--rc:var(--role-${i})"><i></i>${r}</span>`).join('')}</span>
-      <a class="disclose" href="#" onclick="go('sched-edit');return false">
-        <span class="caret">&rarr;</span>Reorder in the schedule editor</a>
+    <div class="legendrow">
+      <span class="legend">${ROLES.map((n, ci) =>
+        `<span class="swatch" style="--rc:var(--role-${ci})"><i></i>${n}</span>`).join('')}</span>
+      <span class="muted" style="font-size:11.5px">Order is fixed here &mdash; switch to
+      <b>Running order</b> above to change it.</span>
     </div>
     ${isPhone() ? assignPhone() : assignDesktop()}
     <p class="muted" style="font-size:11.5px;margin:0">A past Rehearsal&rsquo;s grid is read-only, and the
@@ -1173,14 +1241,26 @@ function renderVerdict() {
         phone those are the primary affordance with the drag grip hidden.</li>
       </ul></div>
     </div>
-    <h2 style="margin-top:6px">Still open &mdash; one call left on this ticket</h2>
+    <h2 style="margin-top:6px">Running order vs assignments &mdash; settled</h2>
     <ul>
-      <li><b>Running order and assignments cannot both be editable at once.</b> #303 merged them into one
-      table for reading, keyed by start time. But a reorder moves start times, which moves which
-      <code>ConflictWindow</code>s overlap a slot &mdash; and that overlap is exactly what the loud tier is
-      computed from, so editing both live would compute availability against a moving target. This build
-      keeps them separate, each linking to the other. That is a revision to #303&rsquo;s merge, scoped to
-      edit mode, and it needs your nod before this ticket closes.</li>
+      <li><b>They are two modes of one rehearsal, not one editable table.</b> #303 merged them for
+      <i>reading</i>, keyed by start time. They cannot merge for <i>editing</i>: a reorder moves start times,
+      which moves which <code>ConflictWindow</code>s overlap a slot &mdash; and that overlap is exactly what
+      the loud tier is computed from, so editing both live would compute availability against a moving
+      target. Ratified in review: a revision to #303&rsquo;s merge, scoped to edit mode only.</li>
+      <li><b>So the split needed a way across, and now has one.</b> Both surfaces wear the same
+      <b>rehearsal context bar</b> &mdash; the rehearsal named on the left, a
+      <b>Running order | Assignments</b> segmented switch on the right &mdash; rendered from one function,
+      so the move is the same control and the same gesture in both directions. Being a segmented control
+      rather than a link is the point: it reads as a <i>mode switch</i>, which is what it is.</li>
+      <li><b>The round trip keeps your place.</b> Going to Assignments carries which rehearsal you were on;
+      coming back re-opens that row. The assignment grid also gets &larr;/&rarr; to walk rehearsals without
+      returning to the editor at all.</li>
+      <li><b>Fixed a real bug found in review:</b> v2&rsquo;s cross-link sat in a non-wrapping flex row beside
+      five role swatches, so on a 390px phone it was crushed against the edge. The legend now has its own
+      line and the switch is full-width above it.</li>
+      <li>The Dress Rehearsal has no assignment grid to switch to &mdash; no <code>RehearsalSong</code> rows
+      to hang one off (ADR 0003) &mdash; so its Assignments half is disabled and says why.</li>
     </ul>`;
 }
 function syncChrome() {
