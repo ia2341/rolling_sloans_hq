@@ -1,6 +1,7 @@
 /// <reference types="vitest/config" />
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
 
 // Matches Django's STATIC_URL. Vite prepends this to every asset reference
 // it emits internally (dynamic imports, CSS `url()`), so the built chunks
@@ -10,7 +11,9 @@ const STATIC_URL = '/static/'
 
 export default defineConfig({
   base: STATIC_URL,
-  plugins: [react()],
+  // Tailwind's own Vite plugin (issue #328) — no postcss.config.js, since
+  // Tailwind v4 no longer needs one for this setup.
+  plugins: [react(), tailwindcss()],
   build: {
     // A separate STATICFILES_DIRS entry from the vendored static/ tree
     // (issue #325) — the two coexist until issue #341 deletes the old one.

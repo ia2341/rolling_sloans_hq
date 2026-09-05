@@ -1,27 +1,101 @@
 import { render, screen } from '@testing-library/react'
 import { createMemoryRouter, RouterProvider } from 'react-router-dom'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 
+import { resetContextForTests, setContext } from './api/contextStore'
 import { routes } from './routes'
+import { memberContext } from './test/fixtures'
+import { mockMatchMedia } from './test/mockMatchMedia'
 
-/**
- * Proves the Vitest + React Testing Library harness runs in CI (issue #325)
- * — not behaviour that doesn't exist yet, which is issue #328's route table.
- */
+afterEach(() => {
+  resetContextForTests()
+  mockMatchMedia(false)
+})
+
 describe('the route table', () => {
-  it('renders the placeholder root route content at "/"', () => {
+  it('renders the six sidebar destinations in the decided order, with no count on Conflicts', () => {
+    setContext(memberContext())
     const router = createMemoryRouter(routes, { initialEntries: ['/'] })
     render(<RouterProvider router={router} />)
 
-    expect(screen.getByText('Rolling Sloans')).toBeInTheDocument()
+    const nav = screen.getByRole('navigation', { name: 'Primary' })
+    const labels = [
+      'Home',
+      'Conflicts',
+      'Schedule',
+      'Songs/Setlist',
+      'Band',
+      'Profile',
+    ]
+    for (const label of labels) {
+      expect(nav).toHaveTextContent(label)
+    }
+
+    const conflictsLink = screen.getByRole('link', { name: /^Conflicts$/ })
+    expect(conflictsLink).not.toHaveTextContent(/\d/)
   })
 
-  it('renders the not-found content for an unknown client route', () => {
+  it('renders no Semesters destination and no Recordings destination', () => {
+    setContext(memberContext())
+    const router = createMemoryRouter(routes, { initialEntries: ['/'] })
+    render(<RouterProvider router={router} />)
+
+    expect(
+      screen.queryByRole('link', { name: /Semesters/ }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('link', { name: /Recordings/ }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('marks the active nav item with aria-current', () => {
+    setContext(memberContext())
+    const router = createMemoryRouter(routes, { initialEntries: ['/schedule'] })
+    render(<RouterProvider router={router} />)
+
+    expect(screen.getByRole('link', { name: 'Schedule' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    )
+    expect(screen.getByRole('link', { name: 'Home' })).not.toHaveAttribute(
+      'aria-current',
+    )
+  })
+
+  it('renders the not-found content for an unknown client route, inside the shell', () => {
+    setContext(memberContext())
     const router = createMemoryRouter(routes, {
       initialEntries: ['/some/unknown/path'],
     })
     render(<RouterProvider router={router} />)
 
     expect(screen.getByText('Page not found')).toBeInTheDocument()
+    expect(
+      screen.getByRole('navigation', { name: 'Primary' }),
+    ).toBeInTheDocument()
+  })
+
+  it("redirects /profile to the viewer's own person page once context has loaded", () => {
+    setContext(memberContext())
+    const router = createMemoryRouter(routes, { initialEntries: ['/profile'] })
+    render(<RouterProvider router={router} />)
+
+    expect(router.state.location.pathname).toBe('/members/1')
+  })
+})
+
+describe('the phone layout', () => {
+  it('replaces the sidebar with exactly five tabs and a title bar', () => {
+    mockMatchMedia(true)
+    setContext(memberContext())
+    const router = createMemoryRouter(routes, { initialEntries: ['/'] })
+    render(<RouterProvider router={router} />)
+
+    const tabs = screen.getAllByRole('link', {
+      name: /^(Home|Schedule|Songs|Conflicts)$/,
+    })
+    expect(tabs).toHaveLength(4)
+    expect(screen.getByRole('button', { name: 'More' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Home' })).toBeInTheDocument()
   })
 })
