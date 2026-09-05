@@ -33,7 +33,11 @@ type LifecycleDialog =
  * dropdown's job); this sheet is for Publish/Reapply/Delete only. Fetches
  * `/api/semesters/management-rows/` once per open, mirroring the other
  * dialogs' fetch-on-open pattern without the ADR-0008 preview machinery —
- * this is a plain read, nothing here is rolled back.
+ * this is a plain read, nothing here is rolled back. Each nested lifecycle
+ * dialog's `onSuccess` calls `refetch()` so a Publish/Delete/Reapply made
+ * without closing this sheet doesn't leave `rows` showing a stale status
+ * (e.g. a stale "Delete enabled" on a row that just became the Live
+ * Semester).
  */
 export function ManageSemestersSheet({
   open,
@@ -48,6 +52,7 @@ export function ManageSemestersSheet({
     return envelope.data
   })
   const rows = state.status === 'success' ? state.result : null
+  const { refetch } = state
 
   return (
     <>
@@ -153,12 +158,14 @@ export function ManageSemestersSheet({
         onOpenChange={(next) => !next && setDialog(null)}
         semesterId={dialog?.kind === 'publish' ? dialog.semesterId : 0}
         semesterName={dialog?.kind === 'publish' ? dialog.semesterName : ''}
+        onSuccess={refetch}
       />
       <DeleteSemesterDialog
         open={dialog?.kind === 'delete'}
         onOpenChange={(next) => !next && setDialog(null)}
         semesterId={dialog?.kind === 'delete' ? dialog.semesterId : 0}
         semesterName={dialog?.kind === 'delete' ? dialog.semesterName : ''}
+        onSuccess={refetch}
       />
       <ReapplyDefaultsDialog
         open={dialog?.kind === 'reapply'}
@@ -168,6 +175,7 @@ export function ManageSemestersSheet({
         semesterUpdatedAt={
           dialog?.kind === 'reapply' ? dialog.semesterUpdatedAt : ''
         }
+        onSuccess={refetch}
       />
     </>
   )

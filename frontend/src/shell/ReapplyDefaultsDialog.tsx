@@ -15,6 +15,8 @@ interface ReapplyDefaultsDialogProps {
   semesterId: number
   semesterName: string
   semesterUpdatedAt: string
+  /** Called after a successful save, before `onOpenChange(false)` — lets a still-open host (e.g. `ManageSemestersSheet`) refetch its own now-stale rows. */
+  onSuccess?: () => void
 }
 
 /** What `POST /api/semesters/reapply-defaults/preview/` resolves to for `usePreviewOnOpen` (issue #329). */
@@ -41,6 +43,7 @@ export function ReapplyDefaultsDialog({
   semesterId,
   semesterName,
   semesterUpdatedAt,
+  onSuccess,
 }: ReapplyDefaultsDialogProps) {
   const [submitting, setSubmitting] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
@@ -96,6 +99,7 @@ export function ReapplyDefaultsDialog({
         )
         return
       }
+      onSuccess?.()
       onOpenChange(false)
     } finally {
       setSubmitting(false)

@@ -11,6 +11,8 @@ interface DeleteSemesterDialogProps {
   onOpenChange: (open: boolean) => void
   semesterId: number
   semesterName: string
+  /** Called after a successful delete, before `onOpenChange(false)` — lets a still-open host (e.g. `ManageSemestersSheet`) refetch its own now-stale rows. */
+  onSuccess?: () => void
 }
 
 /**
@@ -28,6 +30,7 @@ export function DeleteSemesterDialog({
   onOpenChange,
   semesterId,
   semesterName,
+  onSuccess,
 }: DeleteSemesterDialogProps) {
   const [submitting, setSubmitting] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
@@ -55,6 +58,7 @@ export function DeleteSemesterDialog({
         )
         return
       }
+      onSuccess?.()
       onOpenChange(false)
     } catch (thrown) {
       setDeleteError(

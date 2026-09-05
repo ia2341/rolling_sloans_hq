@@ -11,6 +11,8 @@ interface PublishSemesterDialogProps {
   onOpenChange: (open: boolean) => void
   semesterId: number
   semesterName: string
+  /** Called after a successful publish, before `onOpenChange(false)` — lets a still-open host (e.g. `ManageSemestersSheet`) refetch its own now-stale rows. */
+  onSuccess?: () => void
 }
 
 /**
@@ -29,6 +31,7 @@ export function PublishSemesterDialog({
   onOpenChange,
   semesterId,
   semesterName,
+  onSuccess,
 }: PublishSemesterDialogProps) {
   const [submitting, setSubmitting] = useState(false)
 
@@ -46,6 +49,7 @@ export function PublishSemesterDialog({
       await apiFetch<WriteEnvelope>(`/api/semesters/${semesterId}/publish/`, {
         method: 'POST',
       })
+      onSuccess?.()
       onOpenChange(false)
     } finally {
       setSubmitting(false)

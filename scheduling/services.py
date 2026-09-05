@@ -270,11 +270,19 @@ def create_semester(name: str, **timing_defaults) -> Semester:
     case-insensitively against every existing Semester, live or draft, so
     two terms an admin cannot tell apart by name is never possible; a blank
     or duplicate name raises `InvalidSemesterNameError` before anything is
-    written, and every other Semester is left untouched.
+    written, and every other Semester is left untouched. A name over
+    `Semester.name`'s `max_length` is likewise rejected here rather than
+    left to reach `.create()` and raise a `DataError` at the DB — `.create()`
+    never runs `full_clean()`, so this check is this function's only
+    enforcement of that bound for every caller (issue #329 added the first
+    form-free one, `SemesterCreateApiView`).
     """
     name = name.strip()
     if not name:
         raise InvalidSemesterNameError('Name your new semester before continuing.')
+    max_length = Semester._meta.get_field('name').max_length
+    if len(name) > max_length:
+        raise InvalidSemesterNameError(f'Semester names can be at most {max_length} characters.')
     if Semester.objects.filter(name__iexact=name).exists():
         raise InvalidSemesterNameError(f'A semester named "{name}" already exists — choose a different name.')
     return Semester.objects.create(name=name, **timing_defaults)

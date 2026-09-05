@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 
-import { apiFetch } from '../api/client'
+import { apiFetch, ApiError } from '../api/client'
 import { useAppContext } from '../api/ContextProvider'
 import type { ScheduleEditorPayload } from '../api/scheduleEditorTypes'
 import type {
@@ -66,6 +66,7 @@ export function NewSemesterDialog({
 
   const [name, setName] = useState('')
   const [nameError, setNameError] = useState<string | null>(null)
+  const [submitError, setSubmitError] = useState<string | null>(null)
   const [timingDefaults, setTimingDefaults] = useState<SemesterTimingDefaults>(
     FALLBACK_TIMING_DEFAULTS,
   )
@@ -75,6 +76,7 @@ export function NewSemesterDialog({
     if (!open) return
     setName(mostRecentNameRef.current)
     setNameError(null)
+    setSubmitError(null)
     void apiFetch<ReadEnvelope<ScheduleEditorPayload>>(
       '/api/schedule/editor/',
     ).then((envelope) => {
@@ -99,6 +101,7 @@ export function NewSemesterDialog({
   const submit = async () => {
     setSubmitting(true)
     setNameError(null)
+    setSubmitError(null)
     try {
       const body: CreateSemesterBody = { name, ...timingDefaults }
       const envelope = await apiFetch<WriteEnvelope>('/api/semesters/create/', {
@@ -112,6 +115,12 @@ export function NewSemesterDialog({
         return
       }
       onOpenChange(false)
+    } catch (thrown) {
+      setSubmitError(
+        thrown instanceof ApiError
+          ? 'This semester could not be created — check the timing defaults above.'
+          : 'Something went wrong.',
+      )
     } finally {
       setSubmitting(false)
     }
@@ -148,6 +157,7 @@ export function NewSemesterDialog({
           <input
             type="text"
             value={name}
+            maxLength={255}
             onChange={(event) => setName(event.target.value)}
             className="rounded border border-rs-border px-2 py-1 text-sm"
           />
@@ -157,6 +167,12 @@ export function NewSemesterDialog({
             </span>
           )}
         </label>
+
+        {submitError !== null && (
+          <p role="alert" className="text-sm text-rs-danger">
+            {submitError}
+          </p>
+        )}
 
         <Accordion
           items={[
@@ -176,11 +192,14 @@ export function NewSemesterDialog({
                       <input
                         type="number"
                         min={0}
+                        step={1}
                         value={timingDefaults[field.key]}
                         onChange={(event) =>
                           setTimingDefaults((previous) => ({
                             ...previous,
-                            [field.key]: Number(event.target.value),
+                            [field.key]: Math.trunc(
+                              Number(event.target.value) || 0,
+                            ),
                           }))
                         }
                         className="rounded border border-rs-border px-2 py-1 text-sm"
