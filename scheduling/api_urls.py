@@ -78,4 +78,17 @@ urlpatterns = [
         'schedule/editor/rehearsal/<int:rehearsal_id>/shuffle/',
         api_views.ScheduleEditorShuffleApiView.as_view(), name='api-schedule-editor-shuffle',
     ),
+    path('conflicts/', api_views.ConflictAdjudicationIndexApiView.as_view(), name='api-conflicts-index'),
+    path(
+        'conflicts/<int:rehearsal_id>/',
+        api_views.ConflictAdjudicationDetailApiView.as_view(), name='api-conflicts-detail',
+    ),
+    path(
+        'conflicts/<int:rehearsal_id>/preview/',
+        api_views.ConflictAdjudicationPreviewApiView.as_view(), name='api-conflicts-preview',
+    ),
+    path(
+        'conflicts/<int:rehearsal_id>/save/',
+        api_views.ConflictAdjudicationSaveApiView.as_view(), name='api-conflicts-save',
+    ),
 ]

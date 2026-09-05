@@ -11,7 +11,18 @@
  */
 export interface PreviewChange {
   /** A short verb token naming the kind of change, rendered as a badge. */
-  op: 'Re-time' | 'Remove' | 'Add' | 'Delete' | 'Move' | 'Edit' | 'Invite' | 'Roles' | 'Rename'
+  op:
+    | 'Re-time'
+    | 'Remove'
+    | 'Add'
+    | 'Delete'
+    | 'Move'
+    | 'Edit'
+    | 'Invite'
+    | 'Roles'
+    | 'Rename'
+    | 'Approve'
+    | 'Reject'
   /** The thing the change applies to (a Song title, a Person's name, a Rehearsal's date, ...). */
   object: string
   /** An optional, quieter explanation of why this change happens. */
