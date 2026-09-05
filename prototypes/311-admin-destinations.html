@@ -577,6 +577,28 @@
   .semdoor .car { grid-row: 1 / span 2; grid-column: 2; align-self: center;
     font-family: var(--mono); color: var(--ink-3); }
 
+  /* A's semester picker. Review split A's one sheet in two: this menu PICKS (and offers
+     creation), the manage sheet behind it does the destructive work. It opens upward from
+     the Viewing control, which sits at the bottom of the sidebar. */
+  .backdrop.anchor { align-items: flex-end; justify-content: flex-start; padding: 0; }
+  .semmenu { width: 288px; margin: 0 0 148px 14px; background: var(--surface);
+    border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
+    box-shadow: 0 10px 30px rgb(0 0 0 / 0.3); }
+  .frame.phone .semmenu { width: 100%; margin: 0; border-radius: 14px 14px 0 0; border-bottom: 0;
+    max-height: 70%; overflow-y: auto; }
+  .semmenu .mrule { height: 1px; background: var(--line); }
+  .semmenu .mcap { padding: 8px 12px 5px; font-size: 10.5px; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--ink-3); }
+  .semmenu .mitem { display: grid; grid-template-columns: 15px 1fr; gap: 2px 8px; width: 100%;
+    text-align: left; background: none; border: 0; color: var(--ink); font: inherit;
+    padding: 8px 12px; cursor: pointer; }
+  .semmenu .mitem:hover { background: var(--surface-2); }
+  .semmenu .mitem .tick { grid-row: 1 / span 2; font-family: var(--mono); color: var(--ink-3); }
+  .semmenu .mitem .nm { display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap;
+    font-size: 13px; font-weight: 600; }
+  .semmenu .mitem .sub { grid-column: 2; font-size: 11px; color: var(--ink-3); }
+  .semmenu .mitem.plain .nm { font-weight: 500; }
+
   /* A's create form: the wizard's step 1, with its page taken away. */
   .detbox { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
   .detbox > summary { padding: 8px 11px; cursor: pointer; font-size: 12.5px; font-weight: 600; }
@@ -819,7 +841,7 @@ const state = {
   rehearsal: 1,       /* which Rehearsal the adjudication surface is scoped to */
   wizStep: 1,         /* index into WIZ_STEPS */
   openRow: -1,
-  modal: null,        /* 'save'|'delete'|'publish'|'reapply'|'semsheet'|'more' | null */
+  modal: null,        /* 'save'|'delete'|'publish'|'reapply'|'semmenu'|'semsheet'|'more' | null */
   modalArg: null,
   sheetMode: 'list',  /* A's sheet is two-state: the list, or the create form */
   created: false,     /* true once this session has made a semester through A's flow */
@@ -884,7 +906,12 @@ function trySave() { if (!blocked() && dirty()) openModal('save'); }
    set_viewing_semester(). So you are dropped into editing the new draft, and the setup
    checklist appears because the draft is empty - not because a wizard sent you there. */
 function openNewSemester() { state.sheetMode = 'new'; state.modal = 'semsheet'; render(); }
-function backToSheetList() { state.sheetMode = 'list'; render(); }
+/* Review split the door's job in two. Both of these go BACK to the menu, not to each
+   other: the menu is the door, and the manage sheet is a room off it. */
+function openManageSheet() { state.sheetMode = 'list'; state.modal = 'semsheet'; render(); }
+function backToMenu() { state.modal = 'semmenu'; render(); }
+/* set_viewing_semester() again - the same call creation makes, from the picker. */
+function pickSemester(name) { state.semester = name; state.modal = null; state.buffer = 'clean'; render(); }
 function createSemester() {
   state.semester = SUGGESTED;   /* set_viewing_semester() - reads AND writes now land here */
   state.created = true;
@@ -920,9 +947,9 @@ function semesterPanel() {
      one door to semester management looked like a caption. It now reads as a control, and
      says what is behind it. */
   const viewing = V() === 'A'
-    ? `<button class="semdoor" onclick="openModal('semsheet')">
+    ? `<button class="semdoor" onclick="openModal('semmenu')">
          <span class="nm">${esc(state.semester)}</span>
-         <span class="sub">${semCount()} semesters &middot; manage</span>
+         <span class="sub">Switch semester</span>
          <span class="car">&#9662;</span></button>`
     : `<span class="field">${esc(state.semester)} &#9662;</span>`;
   return `<div class="sem-panel ${draft ? 'draft' : ''}">
@@ -999,7 +1026,7 @@ function phoneShell(body, toolbar, band) {
     ${isDraft() ? `<div class="sem-strip">
       <span>Viewing <b>${esc(state.semester)}</b> &mdash; not what members see</span>
       <span style="flex:1"></span>
-      <button class="btn sm" ${V() === 'A' ? `onclick="openModal('semsheet')"` : ''}>Switch</button></div>` : ''}
+      <button class="btn sm" ${V() === 'A' ? `onclick="openModal('semmenu')"` : ''}>Switch</button></div>` : ''}
     ${band || ''}
     ${toolbar || ''}
     <div class="frame-scroll"><div class="page">${body}</div></div>
@@ -1070,17 +1097,51 @@ function semActions(s, size) {
 function semesterSheet() {
   return state.sheetMode === 'new' ? newSemesterSheet() : listSemesterSheet();
 }
+/* The picker. Review: the Viewing control is a dropdown, so what falls out of it has to be
+   the list of semesters - nothing else. Creation is pinned above that list as its own item
+   rather than being what the control does, and the destructive actions are pinned below it
+   behind one more door. Everything here is a read or a set_viewing_semester(); nothing on
+   this menu writes a row. */
+function semesterMenu() {
+  const rows = SEMESTERS.slice();
+  if (state.created) rows.unshift({ name: SUGGESTED, published: null, members: 0, songs: 0, rehearsals: 0, recs: 0 });
+  return `<div class="backdrop ${isPhone() ? 'bottom' : 'anchor'}" onclick="closeModal()">
+    <div class="semmenu" onclick="event.stopPropagation()">
+      <button class="mitem" onclick="openNewSemester()">
+        <span class="tick">+</span>
+        <span class="nm">New semester</span>
+        <span class="sub">Names it, copies the timing defaults, switches you to it</span>
+      </button>
+      <div class="mrule"></div>
+      <div class="mcap">Switch to</div>
+      ${rows.map(r => {
+        const cur = r.name === state.semester;
+        return `<button class="mitem plain" onclick="${cur ? 'closeModal()' : `pickSemester(${JSON.stringify(r.name)})`}">
+          <span class="tick">${cur ? '&#10003;' : ''}</span>
+          <span class="nm">${esc(r.name)}${semStatusChip(r)}</span>
+          <span class="sub">${r.members} members &middot; ${r.songs} songs &middot; ${r.rehearsals} rehearsals</span>
+        </button>`;
+      }).join('')}
+      <div class="mrule"></div>
+      <button class="mitem" onclick="openManageSheet()">
+        <span class="tick">&#9881;</span>
+        <span class="nm">Manage semesters&hellip;</span>
+        <span class="sub">Publish, reapply defaults, delete</span>
+      </button>
+    </div></div>`;
+}
 function listSemesterSheet() {
   return `<div class="backdrop ${isPhone() ? 'bottom' : ''}" onclick="closeModal()">
     <div class="modal" style="max-width:540px" onclick="event.stopPropagation()">
-      <div class="m-head"><h3>Semesters</h3>
-        <button class="btn sm primary" onclick="openNewSemester()">+ New semester</button>
+      <div class="m-head">
+        <button class="btn sm ghost" onclick="backToMenu()" aria-label="Back to the semester list">&#9666;</button>
+        <h3>Manage semesters</h3>
         <button class="btn sm ghost" onclick="closeModal()" aria-label="Close">&times;</button></div>
       <div class="m-body tall">
         ${SEMESTERS.map(s => `<div class="sheetrow">
           <span class="hstack" style="gap:8px"><b>${esc(s.name)}</b>${semStatusChip(s)}
             ${s.name === state.semester ? '<span class="status viewing">Editing</span>' : ''}</span>
-          <span class="acts">${s.name === state.semester ? '' : '<button class="btn sm">Switch to</button>'}</span>
+          <span class="acts"></span>
           <span class="sub">${semCounts(s)}</span>
           <span class="sub acts" style="padding-top:4px">
             <button class="btn sm ${s.name === LIVE ? '' : 'primary'}"
@@ -1115,7 +1176,7 @@ function newSemesterSheet() {
   return `<div class="backdrop ${isPhone() ? 'bottom' : ''}" onclick="closeModal()">
     <div class="modal" style="max-width:480px" onclick="event.stopPropagation()">
       <div class="m-head">
-        <button class="btn sm ghost" onclick="backToSheetList()" aria-label="Back to the list">&#9666;</button>
+        <button class="btn sm ghost" onclick="backToMenu()" aria-label="Back to the semester list">&#9666;</button>
         <h3>New semester</h3>
         <button class="btn sm ghost" onclick="closeModal()" aria-label="Close">&times;</button></div>
       <div class="m-body tall">
@@ -1131,7 +1192,7 @@ function newSemesterSheet() {
               <span class="gb-label">${label}</span><span class="field mono">${val}</span></label>`).join('')}
             <p class="note">These set how long a rehearsal runs and how its songs are slotted.
             You can push changed defaults onto existing rehearsals later with
-            <b>Reapply defaults</b> &mdash; which is on this sheet, not somewhere else.</p>
+            <b>Reapply defaults</b>, under <b>Manage semesters</b>.</p>
           </div>
         </details>
         <div class="fo-doom" style="border-color:var(--line)">
@@ -1142,7 +1203,7 @@ function newSemesterSheet() {
         </div>
       </div>
       <div class="m-foot">
-        <button class="btn" onclick="backToSheetList()">Cancel</button>
+        <button class="btn" onclick="backToMenu()">Cancel</button>
         <button class="btn primary" onclick="createSemester()">Create ${SUGGESTED}</button>
       </div>
     </div></div>`;
@@ -1152,7 +1213,7 @@ function newSemesterSheet() {
    the draft-semester strip, which does not render while you are on the Live Semester, so
    there was no door at all from there. */
 function moreSheet() {
-  const items = [['Semesters', `${semCount()} &middot; you are editing ${esc(state.semester)}`, "openNewSemesterDoor()"],
+  const items = [['Semesters', `Switch, create or manage &mdash; editing ${esc(state.semester)}`, "openNewSemesterDoor()"],
                  ['Profile', 'Your roles and recordings', ''], ['Log out', '', '']];
   return `<div class="backdrop bottom" onclick="closeModal()">
     <div class="modal" onclick="event.stopPropagation()">
@@ -1166,18 +1227,33 @@ function moreSheet() {
       </div>
     </div></div>`;
 }
-function openNewSemesterDoor() { state.sheetMode = 'list'; state.modal = 'semsheet'; render(); }
+function openNewSemesterDoor() { state.modal = 'semmenu'; render(); }
 function semestersA() {
   return `<div class="stack">
     <div class="page-head"><h1>Home</h1></div>
     <div class="flaw"><b>Variant A&rsquo;s claim: <code>/manage/semesters/</code> does not survive.</b>
-      There is no Semesters page and no Semesters nav item. Everything the page did &mdash; switching,
-      publishing, reapplying defaults, deleting, <i>and creating</i> &mdash; hangs off the sidebar&rsquo;s
-      <b>Viewing</b> control, which opens the semester sheet. On phone it is the <b>More</b> tab.
+      There is no Semesters page and no Semesters nav item. Everything the page did hangs off the
+      sidebar&rsquo;s <b>Viewing</b> control; on phone it is the <b>More</b> tab. Review split that
+      control&rsquo;s job in two, because a dropdown that does not drop down a list of semesters is
+      not a dropdown:
       <div style="margin-top:7px" class="hstack">
-        <button class="btn sm primary" onclick="openModal('semsheet')">Open the sheet</button>
-        <button class="btn sm" onclick="openNewSemester()">Walk the New semester flow</button>
+        <button class="btn sm primary" onclick="openModal('semmenu')">Open the dropdown</button>
+        <button class="btn sm" onclick="openManageSheet()">Manage semesters</button>
+        <button class="btn sm" onclick="openNewSemester()">New semester</button>
       </div></div>
+    <div class="card stack">
+      <span class="section-head">The two doors</span>
+      <ul style="margin:0;padding-left:18px;display:grid;gap:6px;color:var(--ink-2);font-size:13px">
+        <li><b>The dropdown picks.</b> Every semester, newest first, with the one you are editing
+        ticked. Choosing one is <code>set_viewing_semester()</code> and nothing else &mdash; no writes,
+        so it needs no confirmation and can be a one-click menu.</li>
+        <li><b>&ldquo;New semester&rdquo; is pinned above the list</b>, not fused into it. It is an item on
+        the menu, so the control itself still reads as &ldquo;which semester am I editing&rdquo;.</li>
+        <li><b>&ldquo;Manage semesters&hellip;&rdquo; is pinned below it</b>, and is the only thing that writes:
+        Publish, Reapply defaults, Delete. Switching is gone from that sheet entirely &mdash; the menu
+        owns it, so A now has exactly one control per act.</li>
+      </ul>
+    </div>
     <div class="card stack">
       <span class="section-head">Why it can go</span>
       <ul style="margin:0;padding-left:18px;display:grid;gap:6px;color:var(--ink-2);font-size:13px">
@@ -1192,10 +1268,17 @@ function semestersA() {
     </div>
     <div class="card stack">
       <span class="section-head">What it costs</span>
-      <p class="note" style="border-color:var(--warn)">A sheet is a poor home for a <b>hard delete</b>.
-      ADR 0011 makes that confirmation the only safety net there is, and a sheet is dismissed by clicking
-      the backdrop. The delete confirmation stays a real dialog here, but it is now a dialog opened
-      from a sheet &mdash; two dismissible layers over an irreversible cascade.</p>
+      <p class="note" style="border-color:var(--warn)">Splitting the door fixed the picker and made the
+      <b>hard delete</b> worse. It is now: Viewing control &rarr; dropdown &rarr; Manage semesters
+      &rarr; Delete &rarr; confirm. ADR 0011 makes that last confirmation the only safety net there is,
+      and it is now reached through <b>three dismissible layers</b>, each of which closes on a
+      backdrop click. That is the sharpest argument for <code>/manage/semesters/</code> surviving as a
+      real route: not because a list of four names needs a page, but because a cascading delete of every
+      rehearsal, song and uploaded recording wants a URL you arrived at deliberately.</p>
+      <p class="note">The alternative inside A: leave Publish and Reapply defaults on the sheet and let
+      <b>Delete</b> be the one thing that navigates &mdash; a <code>/manage/semesters/&lt;pk&gt;/delete/</code>
+      page, which already exists today. A keeps its claim about the <i>index</i> and gives up its claim
+      about the <i>confirmation</i>.</p>
     </div>
   </div>`;
 }
@@ -1847,6 +1930,7 @@ function modalLayer() {
   if (state.modal === 'publish') return publishModal();
   if (state.modal === 'delete') return deleteModal();
   if (state.modal === 'reapply') return reapplyModal();
+  if (state.modal === 'semmenu') return semesterMenu();
   if (state.modal === 'semsheet') return semesterSheet();
   if (state.modal === 'more') return moreSheet();
   return '';
@@ -2031,7 +2115,7 @@ document.addEventListener('keydown', e => {
   take('vp', 'viewport', ['desktop', 'phone']);
   take('p', 'page', PAGES.map(x => x[0]));
   take('buf', 'buffer', BUFFERS.map(x => x[0]));
-  take('m', 'modal', ['save', 'publish', 'delete', 'reapply', 'semsheet', 'more']);
+  take('m', 'modal', ['save', 'publish', 'delete', 'reapply', 'semmenu', 'semsheet', 'more']);
   take('sheet', 'sheetMode', ['list', 'new']);
   if (q.get('created')) { state.created = true; state.semester = SUGGESTED; }
   if (q.get('open')) state.openRow = Number(q.get('open'));
