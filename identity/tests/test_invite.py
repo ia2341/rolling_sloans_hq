@@ -55,6 +55,15 @@ class InvitePersonTests(TestCase):
         self.assertIn(args['email'], sent.to)
         self.assertIn('set-password', sent.body)
 
+    def test_invite_email_never_carries_a_password(self):
+        """The invite mail carries a link, never a plaintext password or code (#327)."""
+        args = invite_args()
+        person = invite_person(**args)
+
+        sent = mail.outbox[0]
+        self.assertNotIn(person.password, sent.body)
+        self.assertNotRegex(sent.body, r'\b\d{6}\b')
+
     def test_rolls_back_person_when_send_mail_raises(self):
         """If send_mail raises, the exception propagates and no Person row is left committed."""
         args = invite_args()
