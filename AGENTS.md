@@ -38,7 +38,14 @@ Use Django's built-in test runner with `factory_boy` and `Faker`. Name test file
 
 ## Commit & Pull Request Guidelines
 
-Recent history uses short imperative subjects, such as `Add RehearsalSong with computed slot times` and `Handle the Dress Rehearsal in attendance_for`. Keep commits focused and describe the user-visible behavior. PRs should explain the change, link the relevant issue when available, include test/lint results, and attach screenshots for template or admin UI changes.
+Recent history uses short imperative subjects, such as `Add RehearsalSong with computed slot times` and `Handle the Dress Rehearsal in attendance_for`. Keep commits focused and describe the user-visible behavior. PRs should explain the change, include test/lint results, and attach screenshots for template or admin UI changes.
+
+**Every PR body must carry a closing keyword for each issue it resolves** — `Closes #123`, one per line, in the template's `## Closes` section. This is what closes the issue on merge and what clears it from the blocking issues' **Dependencies** tab; a PR that only names the issue in its title closes nothing. Use `Refs #123` for an issue the PR touches but does not resolve.
+
+Two caveats worth knowing before relying on it:
+
+- **GitHub only auto-closes on merge into the default branch (`main`).** A PR merged into a long-lived feature branch closes none of its issues. When work is staged on such a branch, carry the full list of `Closes #…` lines on the final PR into `main`.
+- **Issue dependencies are recorded on the issues themselves**, not inferred from PRs. When you file an issue that cannot start until another lands, add the relationship in the issue's **Dependencies** section (or via `gh api repos/{owner}/{repo}/issues/{n}/dependencies/blocked_by -F issue_id=<blocker's id>`), so the blocked issue clears itself the moment its blocker closes.
 
 ## Privacy & Configuration
 
