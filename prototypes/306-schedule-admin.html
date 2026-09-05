@@ -1,0 +1,1284 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+  Charset must be declared in the first 1024 bytes, ahead of this comment: opened over
+  file:// there is no Content-Type header, so without it the browser guesses windows-1252
+  and every en dash and middle dot below renders as mojibake.
+
+  PROTOTYPE v2 - throwaway. Ticket #306 on map #302.
+
+  v1 offered three variants that disagreed about where ADR 0008's Preview Fallout lives.
+  Review closed it, so v2 is a single converged build rather than an A/B/C:
+
+    Fallout     NO ambient rail and NO full-page review step. The grid stays clean while
+                you edit; Save opens ONE popup that summarises what changes and what it
+                costs, and you confirm there. The rail was rejected outright ("a running
+                track of the warnings is not necessary"); the full page was rejected in
+                favour of a popup.
+    Grid        shows WHAT YOU CHANGED (struck doomed rows, re-timed badges). The popup
+                shows WHAT IT COSTS. That split is the organising rule of this build.
+    Blocked     a stale Semester is not a fallout line - it is a fact about the Semester
+                you are editing, so it renders in the LEFT SIDEBAR directly above the
+                semester panel (a strip above the semester strip on phone).
+    Phone rows  rebuilt. v1 stacked date / times / flags / actions into four full-width
+                bands per rehearsal, whether or not you were touching that row, so six
+                rehearsals took several screens. v2 is an accordion: a two-line summary
+                row that expands, one at a time.
+
+    Ctx bar     running order and assignments are two MODES of one rehearsal, never one
+                editable table (a reorder moves the start times the availability check is
+                computed from). Both surfaces wear one shared context bar - the rehearsal
+                named, plus a Running order | Assignments segmented switch - so the way
+                across is the same control in both directions and keeps your place.
+
+  Surfaces: the rehearsal schedule editor, the Running Order sub-grid, the four-bucket
+  generation diff, the assignment grid edit mode and its two-section picker.
+
+  Greybox: structure only. No colour, type or theme is being proposed.
+  All data synthesized - no real member data (CONTRIBUTING.md).
+-->
+<title>Schedule Admin Greybox</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+  :root {
+    --paper:      #eef0f4;
+    --surface:    #ffffff;
+    --surface-2:  #f4f6f9;
+    --box:        #e3e7ee;
+    --line:       #c6ccd8;
+    --line-soft:  #dde2ea;
+    --ink:        #171a21;
+    --ink-2:      #4d5566;
+    --ink-3:      #79808f;
+    --chrome:     #1d2430;
+    --chrome-ink: #e9ecf2;
+    --mark:       #2f4fd0;   /* prototype chrome only, never inside a frame */
+    --warn:       #9a5a12;   /* semantic: a declared conflict */
+    --warn-bg:    #f7ecdc;
+    --ok:         #2f6b47;   /* semantic: your own slot / confirmed */
+    --ok-bg:      #e6f0e9;
+    /* Role hues. Hue = which role; border + marker = state. The two must stay
+       separate encodings or a backup on drums and a conflict on keys collide. */
+    --role-0:     #6d5bd0;   /* Lead Vocals */
+    --role-1:     #12776a;   /* Guitar */
+    --role-2:     #a3417e;   /* Bass */
+    --role-3:     #9c4a37;   /* Drums */
+    --role-4:     #2f5fa8;   /* Keys */
+    --radius:     6px;
+    --sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #14171d; --surface: #1c2029; --surface-2: #232833; --box: #2b313d;
+      --line: #414958; --line-soft: #333a47; --ink: #e7eaf0; --ink-2: #a8b0bf;
+      --ink-3: #7d8593; --chrome: #0d1015; --mark: #7f95ee;
+      --warn: #e0ac66; --warn-bg: #3a2c1633; --ok: #7fc39b; --ok-bg: #1d3128aa;
+      --role-0: #a99af0; --role-1: #6fc9b6; --role-2: #e08cc0;
+      --role-3: #dd9179; --role-4: #8fb4ec;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #14171d; --surface: #1c2029; --surface-2: #232833; --box: #2b313d;
+    --line: #414958; --line-soft: #333a47; --ink: #e7eaf0; --ink-2: #a8b0bf;
+    --ink-3: #7d8593; --chrome: #0d1015; --mark: #7f95ee;
+    --warn: #e0ac66; --warn-bg: #3a2c1633; --ok: #7fc39b; --ok-bg: #1d3128aa;
+    --role-0: #a99af0; --role-1: #6fc9b6; --role-2: #e08cc0;
+    --role-3: #dd9179; --role-4: #8fb4ec;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font-family: var(--sans); font-size: 14px; line-height: 1.45;
+    padding: 18px 18px 104px;
+  }
+  h1, h2, h3 { margin: 0; text-wrap: balance; font-weight: 600; }
+  button { font: inherit; color: inherit; }
+
+  /* ---- prototype chrome ---- */
+  .chrome-head { max-width: 1180px; margin: 0 auto 14px; display: flex; flex-wrap: wrap;
+    align-items: baseline; gap: 10px 16px; }
+  .chrome-head h1 { font-size: 15px; letter-spacing: -0.01em; }
+  .chrome-head .tag { font-family: var(--mono); font-size: 10px; letter-spacing: 0.09em;
+    text-transform: uppercase; color: var(--ink-3); border: 1px solid var(--line);
+    border-radius: 99px; padding: 2px 8px; }
+  .chrome-head p { margin: 0; color: var(--ink-2); font-size: 12.5px; max-width: 62ch; }
+  .stage { max-width: 1180px; margin: 0 auto; }
+
+  .frame { background: var(--surface); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; margin: 0 auto; }
+  .frame.desktop { width: 100%; min-height: 680px; }
+  .frame.phone { width: 390px; height: 780px; border-radius: 26px; border-width: 8px;
+    border-color: var(--chrome); box-shadow: 0 10px 34px rgb(0 0 0 / 0.18); }
+  .frame-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; }
+  .framewrap { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; }
+
+  .verdict { max-width: 1180px; margin: 16px auto 0; border: 1px solid var(--line-soft);
+    border-radius: var(--radius); background: var(--surface); padding: 14px 16px; }
+  .verdict h2 { font-size: 12px; font-family: var(--mono); letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--ink-3); margin-bottom: 8px; }
+  .verdict ul { margin: 0 0 12px; padding-left: 18px; display: grid; gap: 6px; }
+  .verdict li { color: var(--ink-2); font-size: 13px; }
+  .verdict li b { color: var(--ink); font-weight: 600; }
+  .verdict .cols { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+
+  /* ---- greybox primitives ---- */
+  .gb-label { font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--ink-3); }
+  .btn { border: 1px solid var(--line); background: var(--surface-2); color: var(--ink);
+    border-radius: var(--radius); padding: 6px 11px; font-size: 13px; cursor: pointer; white-space: nowrap; }
+  .btn.primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+  .btn.ghost { background: transparent; border-color: transparent; color: var(--ink-2); }
+  .btn.sm { padding: 3px 8px; font-size: 12px; }
+  .btn[disabled] { opacity: 0.4; cursor: not-allowed; }
+  .btn.icon { padding: 3px 7px; font-family: var(--mono); }
+  .field { border: 1px solid var(--line); border-radius: 4px; background: var(--surface);
+    padding: 4px 7px; font-size: 13px; min-height: 28px; display: flex; align-items: center; color: var(--ink-2); }
+  .muted { color: var(--ink-3); }
+  .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .card { border: 1px solid var(--line-soft); border-radius: var(--radius);
+    background: var(--surface); padding: 12px 14px; }
+  .stack { display: grid; gap: 12px; }
+  .row-between { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .scroll-x { overflow-x: auto; }
+  .hstack { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+
+  /* assignment pills — styled by state (review item 6) */
+  .chip { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line);
+    background: var(--surface-2); border-radius: 99px; padding: 2px 9px; font-size: 12px; white-space: nowrap; }
+  .chip.empty { border-style: dashed; color: var(--ink-3); background: transparent; }
+  .chip.backup { border-style: dashed; background: transparent; }
+  .chip.backup .tagm { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--ink-3); }
+  .chip.conflict { border-color: var(--warn); background: var(--warn-bg); color: var(--warn); }
+  .chip.mismatch { border-style: solid; box-shadow: inset 0 -2px 0 var(--line); }
+  .chip.you { border-color: var(--ok); background: var(--ok-bg); color: var(--ok); font-weight: 600; }
+  /* Role hue rides on a dot, so it never fights the state colours on the pill itself. */
+  .chip .rdot { width: 7px; height: 7px; border-radius: 50%; background: var(--rc, var(--ink-3));
+    flex-shrink: 0; }
+  .chip.empty .rdot { background: transparent; border: 1px solid var(--rc, var(--line)); }
+  .chip .rcode { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.04em;
+    color: var(--rc, var(--ink-3)); font-weight: 600; }
+  .legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 11.5px; color: var(--ink-3);
+    align-items: center; }
+  .legend .swatch { display: inline-flex; align-items: center; gap: 5px; }
+  .legend .swatch i { width: 8px; height: 8px; border-radius: 50%; background: var(--rc); }
+  .castline { display: flex; gap: 5px; flex-wrap: wrap; align-items: center; }
+
+  table.gb { border-collapse: collapse; width: 100%; font-size: 13px; }
+  table.gb th, table.gb td { border-bottom: 1px solid var(--line-soft); padding: 7px 10px;
+    text-align: left; vertical-align: middle; }
+  table.gb th { font-weight: 600; font-size: 11.5px; color: var(--ink-2); white-space: nowrap; }
+  table.gb td.num, table.gb th.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  table.gb tr.sub td { border-bottom: 1px solid var(--line-soft); padding-top: 0; }
+  /* The Songs table carries the most per row, so it gets the most air. */
+  table.gb.songs td { padding-top: 11px; padding-bottom: 11px; }
+  table.gb.songs tr.sub td { padding-top: 0; }
+  table.gb.songs td:nth-child(3) { min-width: 260px; }
+
+  .page { padding: 16px; display: grid; gap: 16px; }
+  .frame.desktop .page { padding: 22px 28px; }
+  .page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+  .page-head h1 { font-size: 20px; letter-spacing: -0.015em; }
+  .frame.phone .page-head h1 { font-size: 17px; }
+  .page-head .actions { display: flex; gap: 6px; flex-shrink: 0; }
+  .section-head { font-size: 13px; color: var(--ink-2); font-weight: 600; }
+
+  /* toggle (review item 8) */
+  .toggle { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px;
+    color: var(--ink-2); cursor: pointer; }
+  .toggle .track { width: 30px; height: 17px; border-radius: 99px; background: var(--box);
+    border: 1px solid var(--line); position: relative; flex-shrink: 0; }
+  .toggle .knob { position: absolute; top: 1px; left: 1px; width: 13px; height: 13px;
+    border-radius: 50%; background: var(--surface); border: 1px solid var(--line); }
+  .toggle[aria-pressed="true"] .track { background: var(--ink); border-color: var(--ink); }
+  .toggle[aria-pressed="true"] .knob { left: auto; right: 1px; background: var(--surface); border-color: var(--ink); }
+
+  /* segmented sub-view control */
+  .seg2 { display: inline-flex; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+  .seg2 button { border: 0; background: transparent; padding: 5px 12px; font-size: 12.5px; cursor: pointer; color: var(--ink-3); }
+  .seg2 button[aria-pressed="true"] { background: var(--ink); color: var(--surface); font-weight: 600; }
+
+  /* ---- the shell: collapsible left sidebar (review item 1) ---- */
+  .shell { display: flex; flex: 1; min-height: 0; }
+  .sidebar { flex-shrink: 0; border-right: 1px solid var(--line); background: var(--surface-2);
+    display: flex; flex-direction: column; width: 236px; }
+  .sidebar.rail { width: 60px; }
+  .sidebar .head { display: flex; align-items: center; gap: 8px; padding: 12px 14px; height: 52px; }
+  .sidebar .brand { font-weight: 700; font-size: 14px; letter-spacing: -0.01em; white-space: nowrap;
+    overflow: hidden; flex: 1; }
+  .sidebar nav { flex: 1; overflow-y: auto; padding: 4px 0; }
+  .sidebar .group { padding: 12px 14px 4px; }
+  .sidebar a { display: flex; align-items: center; gap: 10px; text-decoration: none;
+    color: var(--ink-2); padding: 7px 14px; font-size: 13px; white-space: nowrap; }
+  .sidebar a[aria-current] { color: var(--ink); font-weight: 600; background: var(--surface);
+    box-shadow: inset 2px 0 0 var(--ink); }
+  .sidebar .glyph { width: 18px; height: 18px; border: 1.5px solid currentColor;
+    border-radius: 5px; flex-shrink: 0; }
+  .sidebar .count { margin-left: auto; font-family: var(--mono); font-size: 11px;
+    border: 1px solid var(--line); border-radius: 99px; padding: 0 6px; }
+  .sidebar.rail a { justify-content: center; padding: 8px 0; }
+  .sidebar.rail .label, .sidebar.rail .count, .sidebar.rail .group, .sidebar.rail .brand { display: none; }
+
+  /* the semester control — the shell's one home for it (review item 13) */
+  .sem-panel { border-top: 1px solid var(--line); padding: 12px 14px; display: grid; gap: 8px; }
+  .sem-panel.draft { background: var(--warn-bg); }
+  .sem-panel .warnline { font-size: 11.5px; color: var(--warn); }
+  .sidebar.rail .sem-panel { padding: 10px 6px; justify-items: center; }
+  .sidebar.rail .sem-panel .hide-rail { display: none; }
+
+  .topline { display: flex; align-items: center; gap: 10px; padding: 0 20px; height: 52px;
+    border-bottom: 1px solid var(--line); background: var(--surface); flex-shrink: 0; }
+  .topline .title { font-weight: 600; flex: 1; }
+
+  /* phone */
+  .phonebar { display: flex; align-items: center; gap: 8px; padding: 0 12px; height: 50px;
+    border-bottom: 1px solid var(--line); background: var(--surface); flex-shrink: 0; }
+  .phonebar .title { font-weight: 600; font-size: 15px; flex: 1; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  .tabbar { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr;
+    border-top: 1px solid var(--line); background: var(--surface); flex-shrink: 0; padding-bottom: 6px; }
+  .tabbar a { text-decoration: none; color: var(--ink-3); display: grid; justify-items: center;
+    gap: 3px; padding: 7px 2px 3px; font-size: 10.5px; position: relative; }
+  .tabbar a[aria-current] { color: var(--ink); font-weight: 600; }
+  .tabbar .glyph { width: 20px; height: 20px; border: 1.5px solid currentColor; border-radius: 5px; }
+  .tabbar .dot { position: absolute; top: 5px; right: 50%; margin-right: -14px; width: 6px;
+    height: 6px; border-radius: 50%; background: var(--warn); }
+  .sem-strip { padding: 7px 12px; font-size: 12px; display: flex; align-items: center; gap: 8px;
+    border-bottom: 1px solid var(--line); background: var(--warn-bg); color: var(--warn); flex-shrink: 0; }
+
+  /* edit toolbar */
+  .edit-toolbar { background: var(--ink); color: var(--surface); padding: 8px 16px;
+    display: flex; align-items: center; gap: 8px; flex-shrink: 0; font-size: 13px; }
+  .edit-toolbar .grow { flex: 1; font-weight: 600; }
+  .edit-toolbar .btn { background: transparent; border-color: rgb(255 255 255 / 0.35); color: inherit; }
+  .edit-toolbar .btn.primary { background: var(--surface); color: var(--ink); border-color: var(--surface); }
+
+  /* the rehearsal-window timeline (review item 3) */
+  .timeline { display: grid; gap: 5px; }
+  .timeline .track { display: flex; height: 26px; border: 1px solid var(--line);
+    border-radius: 4px; overflow: hidden; background: var(--surface-2); }
+  .timeline .slot { border-right: 1px solid var(--line-soft); display: flex; align-items: center;
+    justify-content: center; font-size: 9.5px; overflow: hidden; padding: 0 2px;
+    font-family: var(--mono); color: var(--ink-3); }
+  .timeline .slot:last-child { border-right: 0; }
+  .timeline .slot.mine { background: var(--ok-bg); color: var(--ok); font-weight: 600; }
+  .timeline .slot.brk { background: repeating-linear-gradient(45deg,
+      transparent, transparent 3px, var(--box) 3px, var(--box) 6px); }
+  .timeline .ends { display: flex; justify-content: space-between; font-size: 11px; }
+
+  /* modal / sheet */
+  .backdrop { position: absolute; inset: 0; background: rgb(0 0 0 / 0.38); display: flex;
+    align-items: center; justify-content: center; padding: 20px; }
+  .backdrop.bottom { align-items: flex-end; padding: 0; }
+  .modal { background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+    width: 100%; max-width: 440px; max-height: 100%; overflow-y: auto; }
+  .backdrop.bottom .modal { border-radius: 14px 14px 0 0; max-width: none; border-bottom: 0; }
+  .modal .m-head { padding: 14px 16px; border-bottom: 1px solid var(--line-soft);
+    display: flex; align-items: center; gap: 10px; }
+  .modal .m-head h3 { font-size: 15px; flex: 1; }
+  .modal .m-body { padding: 14px 16px; display: grid; gap: 12px; }
+  .modal .m-foot { padding: 12px 16px; border-top: 1px solid var(--line-soft);
+    display: flex; gap: 8px; justify-content: flex-end; }
+  .radio { display: flex; gap: 9px; align-items: flex-start; padding: 8px 10px;
+    border: 1px solid var(--line); border-radius: var(--radius); cursor: pointer; }
+  .radio[aria-checked="true"] { border-color: var(--ink); background: var(--surface-2); }
+  .radio .dot { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--line);
+    flex-shrink: 0; margin-top: 2px; }
+  .radio[aria-checked="true"] .dot { border-color: var(--ink); box-shadow: inset 0 0 0 3px var(--surface),
+    inset 0 0 0 8px var(--ink); }
+  .radio .sub { font-size: 11.5px; color: var(--ink-3); }
+  .privacy { font-size: 11.5px; color: var(--ink-3); border-left: 2px solid var(--line);
+    padding-left: 8px; }
+
+  .songlist { display: grid; }
+  .songlist .item { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px;
+    align-items: center; padding: 9px 0; border-bottom: 1px solid var(--line-soft); }
+  .songlist .item .sub { grid-column: 1 / -1; }
+  .prog { display: flex; align-items: center; gap: 8px; }
+  .prog .track { flex: 1; height: 5px; background: var(--box); border-radius: 99px; min-width: 50px; }
+  .prog .fill { height: 100%; background: var(--ink-2); border-radius: 99px; }
+  .songcards { display: grid; gap: 8px; }
+  .songcards .kv { display: flex; justify-content: space-between; gap: 10px; font-size: 12.5px; padding: 3px 0; }
+  .matrix th:first-child, .matrix td:first-child { position: sticky; left: 0; background: var(--surface); z-index: 1; }
+  .matrix th:nth-child(2), .matrix td:nth-child(2) { position: sticky; left: 62px; background: var(--surface); z-index: 1; }
+
+  /* ---- bottom switcher ---- */
+  .switcher { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 50;
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: center;
+    background: var(--chrome); color: var(--chrome-ink); border-radius: 99px; padding: 7px 9px;
+    box-shadow: 0 6px 26px rgb(0 0 0 / 0.3); max-width: calc(100vw - 24px); }
+  .switcher button, .switcher select { font: inherit; font-size: 12.5px;
+    border: 1px solid rgb(255 255 255 / 0.22); background: rgb(255 255 255 / 0.06);
+    color: inherit; border-radius: 99px; padding: 4px 11px; cursor: pointer; }
+  .switcher select { padding: 4px 8px; }
+  .switcher .seg { display: inline-flex; border-radius: 99px; overflow: hidden;
+    border: 1px solid rgb(255 255 255 / 0.22); }
+  .switcher .seg button { border: 0; border-radius: 0; }
+  .switcher .seg button[aria-pressed="true"] { background: var(--mark); color: #fff; font-weight: 600; }
+  .switcher .divider { width: 1px; height: 20px; background: rgb(255 255 255 / 0.2); }
+
+  :focus-visible { outline: 2px solid var(--mark); outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<style>
+  /* ============================================================
+     #306 v2 additions. Everything above is #303's shell, verbatim.
+     ============================================================ */
+
+  /* ---- desktop: one dense row per Rehearsal ---- */
+  .redit { display: grid; gap: 8px; }
+  .rrow { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+  .rrow.doomed { border-color: var(--warn); background: var(--warn-bg); }
+  .rrow.doomed .rhead .rdate, .rrow.doomed .rhead .rtime { text-decoration: line-through;
+    text-decoration-color: var(--warn); }
+  .rhead { display: grid; align-items: center; gap: 8px; padding: 9px 11px;
+    grid-template-columns: 18px 118px 92px 12px 92px 1fr auto; }
+  .rhead .rgrip { font-family: var(--mono); color: var(--ink-3); cursor: grab; }
+  .rhead .dash { text-align: center; color: var(--ink-3); }
+  .rhead .flags { display: flex; gap: 10px; align-items: center; font-size: 12.5px; color: var(--ink-2); }
+  .rhead .acts { display: flex; gap: 5px; }
+  .rbody { border-top: 1px solid var(--line-soft); padding: 9px 11px; display: grid; gap: 9px; }
+  .disclose { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px;
+    color: var(--ink-2); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: none; }
+  .disclose .caret { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+
+  /* ---- phone: an accordion of two-line summary rows (v1's four stacked bands are gone) ----
+     A collapsed row states everything you scan for - when, how long, how many songs, and
+     whether you have edited it - in two lines. Editing opens one row at a time. */
+  .pcard { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+  .pcard.doomed { border-color: var(--warn); background: var(--warn-bg); }
+  .pcard.open { box-shadow: 0 1px 0 var(--line); }
+  .psum { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; align-items: center;
+    width: 100%; border: 0; background: none; padding: 9px 11px; text-align: left; cursor: pointer; }
+  .psum .pdate { font-weight: 600; font-size: 13.5px; }
+  .pcard.doomed .psum .pdate { text-decoration: line-through; text-decoration-color: var(--warn); }
+  .psum .pmeta { grid-column: 1; font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); }
+  .psum .pright { grid-row: 1 / span 2; grid-column: 2; display: flex; align-items: center; gap: 7px; }
+  .psum .caret { font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+  .pbody { border-top: 1px solid var(--line-soft); padding: 10px 11px; display: grid; gap: 10px; }
+  .pfields { display: grid; gap: 7px; }
+  .pfields .times { display: grid; grid-template-columns: 1fr 12px 1fr; gap: 6px; align-items: center; }
+  .pfields .dash { text-align: center; color: var(--ink-3); }
+  .plinks { display: grid; }
+  .plinks button, .plinks a { display: flex; align-items: center; gap: 8px; width: 100%;
+    border: 0; border-top: 1px solid var(--line-soft); background: none; padding: 9px 0;
+    font-size: 13px; cursor: pointer; color: var(--ink); text-decoration: none; }
+  .plinks .grow { flex: 1; }
+  .plinks .n { font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); }
+
+  /* a compact marker for an edited row, in both layouts */
+  .opflag { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--ink-2); border: 1px solid var(--line);
+    border-radius: 99px; padding: 0 6px; white-space: nowrap; }
+  .opflag.warn { color: var(--warn); border-color: var(--warn); }
+
+  /* ---- Running Order sub-grid ---- */
+  .rogrid { display: grid; gap: 3px; }
+  .rorow { display: grid; align-items: center; gap: 8px; padding: 5px 7px;
+    border: 1px solid var(--line-soft); border-radius: 4px; background: var(--surface-2);
+    grid-template-columns: 16px 18px 62px 1fr 88px 74px auto; font-size: 12.5px; }
+  .rorow.pinned { border-color: var(--line); background: var(--surface);
+    box-shadow: inset 3px 0 0 var(--ink-2); }
+  .rorow.struck { opacity: 0.5; text-decoration: line-through; }
+  .rorow .rgrip { font-family: var(--mono); color: var(--ink-3); cursor: grab; }
+  .rorow .idx { font-family: var(--mono); color: var(--ink-3); text-align: right; }
+  .rorow .win { font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+  .rorow .pin { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--ink-3); border: 1px solid var(--line);
+    border-radius: 99px; padding: 0 6px; }
+  .rorow .slots { display: flex; align-items: center; gap: 4px; }
+  .stepper { display: inline-flex; border: 1px solid var(--line); border-radius: 4px;
+    overflow: hidden; background: var(--surface); }
+  .stepper button { border: 0; background: transparent; padding: 1px 8px; cursor: pointer;
+    font-family: var(--mono); font-size: 12px; color: var(--ink-2); }
+  .stepper span { padding: 1px 9px; font-family: var(--mono); border-left: 1px solid var(--line-soft);
+    border-right: 1px solid var(--line-soft); }
+  /* Phone running order: two lines, and the move buttons are the PRIMARY affordance -
+     the drag grip is hidden, since native drag does not fire on mobile at all. */
+  .frame.phone .rorow { grid-template-columns: 20px 1fr auto; row-gap: 4px; padding: 7px 8px; }
+  .frame.phone .rorow .rgrip, .frame.phone .rorow .pin { display: none; }
+  .frame.phone .rorow .win { grid-column: 2 / -1; grid-row: 2; }
+  .frame.phone .rorow .slots { grid-column: 1 / -1; grid-row: 3; justify-content: space-between; }
+  .frame.phone .rorow .pinnote { grid-column: 1 / -1; grid-row: 4; }
+
+  /* ---- fallout: it lives in the Save popup and nowhere else ---- */
+  .fo { display: grid; gap: 11px; }
+  .fo h4 { margin: 0 0 5px; font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--ink-3); font-weight: 600; }
+  .fo ul { margin: 0; padding-left: 16px; display: grid; gap: 5px; font-size: 12.5px; color: var(--ink-2); }
+  .fo .loud li { color: var(--warn); }
+  .fo-doom { border: 1px solid var(--warn); border-radius: var(--radius); padding: 9px 11px;
+    display: grid; gap: 5px; font-size: 12.5px; }
+  .fo-empty { font-size: 12.5px; color: var(--ink-3); }
+  .changelist { display: grid; }
+  .changelist li { list-style: none; display: flex; gap: 9px; align-items: baseline;
+    padding: 6px 0; border-bottom: 1px solid var(--line-soft); font-size: 12.5px; }
+  .changelist li:last-child { border-bottom: 0; }
+  .changelist .op { font-family: var(--mono); font-size: 10px; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--ink-3); width: 56px; flex-shrink: 0; }
+  .changelist .why { color: var(--ink-3); font-size: 11.5px; }
+  .modal .m-body.tall { max-height: 52vh; overflow-y: auto; }
+  .frame.phone .modal .m-body.tall { max-height: 400px; }
+
+  /* ---- the stale-Semester notice: a fact about the Semester, so it sits with it ---- */
+  .blocknote { border-top: 1px solid var(--warn); background: var(--warn-bg); color: var(--warn);
+    padding: 10px 14px; display: grid; gap: 6px; font-size: 12px; }
+  .blocknote b { font-size: 12.5px; }
+  .sidebar.rail .blocknote { padding: 10px 6px; justify-items: center; }
+  .sidebar.rail .blocknote .hide-rail { display: none; }
+  .blocknote .bang { font-family: var(--mono); font-size: 15px; }
+  .block-strip { padding: 8px 12px; font-size: 12px; display: flex; align-items: center; gap: 8px;
+    border-bottom: 1px solid var(--warn); background: var(--warn-bg); color: var(--warn); flex-shrink: 0; }
+
+  /* ---- the four-bucket generation diff (#222) ---- */
+  .buckets { display: grid; gap: 10px; }
+  .bucket { border: 1px solid var(--line-soft); border-radius: var(--radius); }
+  .bucket > .bh { display: flex; align-items: center; gap: 8px; padding: 7px 11px;
+    background: var(--surface-2); border-bottom: 1px solid var(--line-soft); font-size: 12.5px; font-weight: 600; }
+  .bucket > .bh .n { font-family: var(--mono); color: var(--ink-3); font-weight: 400; }
+  .bucket ul { list-style: none; margin: 0; padding: 0; }
+  .bucket li { padding: 6px 11px; border-bottom: 1px solid var(--line-soft); font-size: 12.5px;
+    display: grid; grid-template-columns: 16px 1fr; gap: 3px 8px; align-items: baseline; }
+  .bucket li:last-child { border-bottom: 0; }
+  .bucket li .blast { grid-column: 2; font-size: 11.5px; color: var(--ink-3); }
+  .bucket li.locked { opacity: 0.62; }
+  .box { width: 13px; height: 13px; border: 1.5px solid var(--line); border-radius: 3px; flex-shrink: 0; }
+  .box.on { background: var(--ink); border-color: var(--ink); position: relative; }
+  .box.on::after { content: ''; position: absolute; left: 3.5px; top: 0.5px; width: 3px; height: 7px;
+    border: solid var(--surface); border-width: 0 1.6px 1.6px 0; transform: rotate(42deg); }
+  .box.off { opacity: 0.45; background: var(--box); }
+
+  /* ---- assignment grid edit mode ---- */
+  .agrid th.rolecol { text-align: left; }
+  .agrid td.cell { vertical-align: top; }
+  .cellwrap { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
+  .chip .x { font-family: var(--mono); font-size: 11px; color: var(--ink-3); cursor: pointer;
+    border: 0; background: none; padding: 0 0 0 2px; }
+  .addcell { border: 1px dashed var(--line); border-radius: 99px; background: transparent;
+    color: var(--ink-3); font-size: 12px; padding: 2px 9px; cursor: pointer; }
+  .scopebar { border: 1px solid var(--line); border-left: 3px solid var(--ink-2);
+    border-radius: var(--radius); background: var(--surface-2); padding: 9px 12px;
+    font-size: 12.5px; color: var(--ink-2); display: grid; gap: 3px; }
+  .scopebar b { color: var(--ink); }
+  .pick-sec { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+  .pick-sec > .ph { padding: 8px 12px; background: var(--surface-2);
+    border-bottom: 1px solid var(--line-soft); display: grid; gap: 2px; }
+  .pick-sec > .ph b { font-size: 13px; }
+  .pick-sec > .ph .scope { font-size: 11.5px; color: var(--ink-3); }
+  .pick-sec .plist { display: grid; }
+  .pick-sec .plist button { display: flex; align-items: center; gap: 8px; width: 100%;
+    border: 0; border-bottom: 1px solid var(--line-soft); background: none; padding: 8px 12px;
+    text-align: left; font-size: 13px; cursor: pointer; }
+  .pick-sec .plist button:last-child { border-bottom: 0; }
+  .pick-sec .plist .mm { margin-left: auto; font-size: 11px; color: var(--ink-3); }
+  .pick-sec .plist .busy { margin-left: auto; font-size: 11px; color: var(--warn); }
+
+  /* ---- the rehearsal context bar: the one way between Running Order and Assignments.
+     Both surfaces wear it, identically, so the move is the same gesture in both
+     directions and it is visibly a MODE SWITCH - which is the point, since the two
+     cannot be edited at the same time. ---- */
+  .ctxbar { display: flex; align-items: center; gap: 10px 14px; flex-wrap: wrap;
+    border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2);
+    padding: 8px 11px; }
+  .ctxbar .who { display: grid; gap: 1px; }
+  .ctxbar .who b { font-size: 13.5px; }
+  .ctxbar .who .when { font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); }
+  .ctxbar .spacer { flex: 1; }
+  .ctxbar .seg2 { flex-shrink: 0; }
+  .ctxbar .steppers { display: flex; gap: 4px; align-items: center; }
+  /* On phone the switch takes its own full-width line rather than fighting for space. */
+  .frame.phone .ctxbar { gap: 8px; }
+  .frame.phone .ctxbar .spacer { display: none; }
+  .frame.phone .ctxbar .who { flex: 1; }
+  .frame.phone .ctxbar .seg2 { width: 100%; }
+  .frame.phone .ctxbar .seg2 button { flex: 1; }
+  /* The legend gets its own line on phone; it used to be crushed against the cross-link. */
+  .legendrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+
+  .adminonly { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--ink-3); border: 1px solid var(--line);
+    border-radius: 99px; padding: 0 6px; }
+  .toolstrip { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+</style>
+
+<div class="chrome-head">
+  <h1>Rolling Sloans &mdash; schedule admin greybox v2</h1>
+  <span class="tag">Prototype &middot; #306</span>
+  <p>One converged build, not variants: review closed the structural question. <b>No fallout rail
+  and no review page</b> &mdash; the grid stays clean while you edit and <b>Save opens one popup</b>
+  that says what changes and what it costs. The stale-Semester notice moved into the sidebar, and the
+  phone rehearsal rows were rebuilt as a condensed accordion. Structure only. All data synthesized.</p>
+</div>
+
+<div class="stage" id="stage"></div>
+<div class="verdict" id="verdict"></div>
+
+<div class="switcher" role="group" aria-label="Prototype controls">
+  <span class="seg" id="viewportseg">
+    <button data-vp="desktop">Desktop</button>
+    <button data-vp="phone">Phone</button>
+  </span>
+  <span class="divider"></span>
+  <select id="bufsel" aria-label="Buffer state"></select>
+  <span class="divider"></span>
+  <button id="savebtn">Open the Save popup</button>
+  <select id="pagesel" aria-label="Surface"></select>
+</div>
+<script>
+/* ============================================================
+   Synthesized data - nothing here is a real person or setlist.
+   ============================================================ */
+const ROLES = ['Lead Vocals', 'Guitar', 'Bass', 'Drums', 'Keys'];
+const YOU = 'Avery Cho';
+
+const PEOPLE = [
+  { name: 'Avery Cho',      roles: 'Lead Vocals, Keys',     active: true },
+  { name: 'Dani Okafor',    roles: 'Drums',                 active: true },
+  { name: 'Priya Raman',    roles: 'Bass, Backing Vocals',  active: true },
+  { name: 'Marcus Vale',    roles: 'Guitar',                active: true },
+  { name: 'Nina Restrepo',  roles: 'Keys, Backing Vocals',  active: true },
+  { name: 'Theo Lindqvist', roles: 'Guitar, Bass',          active: true },
+  { name: 'Sam Aterlay',    roles: 'Lead Vocals',           active: true },
+  { name: 'Jules Marchetti', roles: 'Guitar',               active: false },
+];
+
+/* Cell forms: 'Name' | '~Name' backup | '!Name' role mismatch (ADR 0002) | '' unfilled */
+const SONGS = [
+  { pos: 1, title: 'Paper Lanterns',      artist: 'The Hollow Coast', len: '3:42', recs: 3,
+    note: 'Tighten the last chorus — come in a bar early.',
+    cast: ['Avery Cho', 'Marcus Vale', 'Priya Raman', 'Dani Okafor', 'Nina Restrepo'] },
+  { pos: 2, title: 'Riverbend',           artist: 'Junia Wolfe',      len: '4:15', recs: 1,
+    note: 'Key change still unsettled.',
+    cast: ['Sam Aterlay', 'Theo Lindqvist', '', 'Dani Okafor', ''] },
+  { pos: 3, title: 'Static Bloom',        artist: 'Ferris & Doe',     len: '2:58', recs: 4,
+    note: '',
+    cast: ['Avery Cho', 'Marcus Vale', 'Theo Lindqvist', 'Dani Okafor', 'Nina Restrepo'] },
+  { pos: 4, title: 'Two Weeks in June',   artist: 'Colma Park',       len: '5:07', recs: 0,
+    note: 'Not started — cast this first.',
+    cast: ['', '', '', '', ''] },
+  { pos: 5, title: 'Marigold',            artist: 'The Hollow Coast', len: '3:20', recs: 2,
+    note: 'Backup on drums while Dani is out.',
+    cast: ['Sam Aterlay', 'Marcus Vale', 'Priya Raman', '~Dani Okafor', '!Avery Cho'] },
+  { pos: 6, title: 'Cold Open',           artist: 'Nightjar',         len: '3:55', recs: 0,
+    note: '',
+    cast: ['Avery Cho', '', 'Priya Raman', '', 'Nina Restrepo'] },
+  { pos: 7, title: 'The Long Way Down',   artist: 'Junia Wolfe',      len: '6:12', recs: 5,
+    note: 'Locked. Recording is the reference take.',
+    cast: ['Sam Aterlay', 'Marcus Vale', 'Priya Raman', 'Dani Okafor', 'Avery Cho'] },
+  { pos: 8, title: 'Ninety-Nine Summers', artist: 'Colma Park',       len: '4:01', recs: 0,
+    note: '',
+    cast: ['', 'Theo Lindqvist', '', '', ''] },
+];
+const cast = s => s.cast.filter(Boolean).length;
+
+const REHEARSALS = [
+  { id: 1, date: 'Tue 15 Sep', time: '19:00–21:00', mine: '19:00–20:10', dress: false, conflicts: 2, songs: 5, past: false },
+  { id: 2, date: 'Thu 17 Sep', time: '19:00–21:00', mine: null,          dress: false, conflicts: 0, songs: 5, past: false },
+  { id: 3, date: 'Tue 22 Sep', time: '19:00–21:00', mine: '19:40–21:00', dress: false, conflicts: 1, songs: 6, past: false },
+  { id: 4, date: 'Thu 24 Sep', time: '19:00–21:00', mine: '19:00–21:00', dress: false, conflicts: 0, songs: 5, past: false },
+  { id: 5, date: 'Sat 26 Sep', time: '14:00–18:00', mine: '14:00–18:00', dress: true,  conflicts: 0, songs: 8, past: false },
+];
+
+/* Who has a declared conflict at rehearsal 1, and which slots it eats. */
+const CONFLICTED = { 'Nina Restrepo': 'arrives 19:40', 'Theo Lindqvist': 'leaves 20:15' };
+
+/* The next rehearsal's running order: song index + start time. */
+const ORDER1 = [
+  { song: 0, start: '19:00', end: '19:24' },
+  { song: 1, start: '19:24', end: '19:48' },
+  { song: 4, start: '19:48', end: '20:12' },
+  { song: 2, start: '20:12', end: '20:36', pinned: true },
+  { song: 5, start: '20:36', end: '21:00' },
+];
+
+/* ------------------------------------------------------------
+   The Pending Buffer, as a concrete synthesized set of edits.
+   Every variant renders THIS buffer; only its presentation moves.
+   ------------------------------------------------------------ */
+const PAST = [
+  { id: 0, date: '2026-09-08', dow: 'Tue 8 Sep', start: '19:00', end: '21:00', dress: false },
+];
+
+/* op: 'keep' | 'retime' | 'remove' | 'new' | 'dress' */
+const BUFFER_ROWS = [
+  { id: 1, dow: 'Tue 15 Sep', date: '2026-09-15', start: '19:00', end: '21:00', dress: false, op: 'keep',
+    order: 0, songs: 5,
+    notes: [['loud', 'Static Bloom is being dropped from this evening and carries 1 Recording.']] },
+  { id: 2, dow: 'Thu 17 Sep', date: '2026-09-17', start: '19:30', end: '21:00', dress: false, op: 'retime',
+    was: '19:00-21:00', order: 1, songs: 5,
+    notes: [['loud', 'Starting 30 min later moves every slot: Nina Restrepo is assigned Keys on Riverbend and leaves before it now starts.'],
+            ['quiet', '5 scheduled songs re-timed. 1 member conflict now overlaps a slot it did not before.']] },
+  { id: 3, dow: 'Tue 22 Sep', date: '2026-09-22', start: '19:00', end: '21:00', dress: false, op: 'remove',
+    order: 2, songs: 6,
+    notes: [['loud', 'Removing this Rehearsal destroys 2 Recordings from 2 uploaders. There is no undo.'],
+            ['quiet', '6 scheduled songs and 1 member conflict are dropped with it.']] },
+  { id: 4, dow: 'Thu 24 Sep', date: '2026-09-24', start: '19:00', end: '21:00', dress: false, op: 'keep',
+    order: 3, songs: 5, notes: [] },
+  { id: 9, dow: 'Sat 3 Oct', date: '2026-10-03', start: '19:00', end: '21:00', dress: false, op: 'new',
+    order: 4, songs: 0,
+    notes: [['quiet', 'New Rehearsal has an empty Running Order. Generate schedule will fill it.']] },
+  { id: 5, dow: 'Sat 10 Oct', date: '2026-10-10', start: '14:00', end: '18:00', dress: true, op: 'keep',
+    order: 5, songs: 8,
+    notes: [['quiet', 'Dress Rehearsal: songs derive from the Setlist at read time (ADR 0003), so it has no Running Order of its own.']] },
+];
+
+/* Fallout, in ADR 0008's two tiers. Neither ever blocks a save. */
+const FALLOUT = {
+  loud: [
+    'Thu 17 Sep 19:30 start: Nina Restrepo is assigned Keys on Riverbend and leaves before its new slot.',
+    'Tue 22 Sep removal destroys 2 Recordings from 2 uploaders.',
+    'Dropping Static Bloom from Tue 15 Sep destroys 1 Recording.',
+  ],
+  quiet: [
+    'Two Weeks in June still has no Drums assignment in this Semester.',
+    'Avery Cho is assigned Keys on Marigold but has not declared Keys.',
+    '11 scheduled songs change start time.',
+  ],
+  doomed: [
+    { what: 'Tue 22 Sep, whole Rehearsal', recs: 2, uploaders: 2 },
+    { what: 'Static Bloom on Tue 15 Sep', recs: 1, uploaders: 1 },
+  ],
+};
+const BLOCK_MSG = 'Someone else saved this Semester while you were editing. Reload to pick up their changes; nothing here has been saved.';
+
+/* The four-bucket generation diff (#222), computed against SAVED rehearsals only. */
+const DIFF = {
+  creates: [
+    { when: 'Tue 13 Oct 19:00-21:00', on: true },
+    { when: 'Thu 15 Oct 19:00-21:00', on: true },
+    { when: 'Tue 20 Oct 19:00-21:00', on: true },
+  ],
+  keeps: ['Tue 15 Sep 19:00-21:00', 'Thu 24 Sep 19:00-21:00'],
+  retimes: [
+    { when: 'Thu 17 Sep', from: '19:00-21:00', to: '19:00-21:30', on: false, songs: 5, conflicts: 1 },
+  ],
+  orphans: [
+    { when: 'Tue 22 Sep 19:00-21:00', on: false, songs: 6, conflicts: 1, recs: 2, locked: true },
+    { when: 'Thu 1 Oct 19:00-21:00', on: true, songs: 0, conflicts: 0, recs: 0, locked: false },
+  ],
+};
+
+/* ============================================================
+   State
+   ============================================================ */
+const LIVE = 'Fall 2026';
+const state = {
+  page: 'sched-edit', viewport: 'desktop', buffer: 'edits',
+  rail: false, semester: 'Spring 2027',
+  openRow: -1,            /* phone accordion + desktop running-order disclosure */
+  rehearsal: 0,           /* which Rehearsal the assignment grid is scoped to */
+  modal: null,            /* 'save' | 'generate' | 'picker' | null */
+  pickCell: null,
+};
+const PAGES = [
+  ['sched-edit', 'Rehearsal schedule editor  /schedule/edit/'],
+  ['generate',   'Generate rehearsal dates  (staging modal)'],
+  ['assign',     'Assignment grid edit mode  /schedule/<id>/assignments/'],
+];
+const BUFFERS = [
+  ['edits',   'Buffer: 4 edits'],
+  ['clean',   'Buffer: clean'],
+  ['blocked', 'Buffer: blocked (stale)'],
+];
+
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const isPhone = () => state.viewport === 'phone';
+const isDraft = () => state.semester !== LIVE;
+const dirty = () => state.buffer !== 'clean';
+const blocked = () => state.buffer === 'blocked';
+const editCount = () => dirty() ? 4 : 0;
+const doomedTakes = () => FALLOUT.doomed.reduce((a, d) => a + d.recs, 0);
+const rows = () => dirty() ? BUFFER_ROWS
+  : BUFFER_ROWS.filter(r => r.op !== 'new').map(r => ({ ...r, op: 'keep', notes: [] }));
+
+function go(p) {
+  state.page = p; state.openRow = -1;
+  state.modal = p === 'generate' ? 'generate' : null;
+  render();
+}
+/* The two halves of the round trip. Each remembers where you were, so moving
+   between Running Order and Assignments never costs you your place. */
+function toAssignments(i) { state.rehearsal = i; state.page = 'assign'; state.modal = null; render(); }
+function toRunningOrder() { state.page = 'sched-edit'; state.openRow = state.rehearsal; state.modal = null; render(); }
+function stepRehearsal(d) {
+  const list = rows(); const n = list.length;
+  let i = state.rehearsal;
+  for (let k = 0; k < n; k++) { i = (i + d + n) % n; if (!list[i].dress) break; }
+  state.rehearsal = i; render();
+}
+function setBuffer(b) { state.buffer = b; render(); }
+function toggleRail() { state.rail = !state.rail; render(); }
+function openRow(i) { state.openRow = state.openRow === i ? -1 : i; render(); }
+function openModal(m) { state.modal = m; render(); }
+function closeModal() { state.modal = null; render(); }
+function pick(song, role) { state.pickCell = { song, role }; state.modal = 'picker'; render(); }
+/* Save never commits straight from the toolbar: it opens the popup, always. */
+function trySave() { if (!blocked() && dirty()) openModal('save'); }
+
+/* ============================================================
+   The shell, from #303. The only change v2 makes to it is where
+   the stale-Semester notice lands.
+   ============================================================ */
+function blockNote() {
+  /* ADR 0008 keeps a Validation Error visually separate from Fallout. A stale stamp is
+     not a consequence of your edit at all - it is a fact about the Semester you are
+     editing - so it sits with the semester control rather than anywhere near the grid. */
+  return `<div class="blocknote" role="alert">
+    <div class="hstack" style="gap:7px"><span class="bang">&#9888;</span>
+      <b class="hide-rail">Can&rsquo;t save</b></div>
+    <span class="hide-rail">Someone else saved ${esc(state.semester)} while you were editing.
+      Your edits are still here and nothing has been written.</span>
+    <div class="hide-rail"><button class="btn sm">Reload and re-apply</button></div>
+  </div>`;
+}
+function semesterPanel() {
+  const draft = isDraft();
+  return `<div class="sem-panel ${draft ? 'draft' : ''}">
+    <div class="hide-rail stack" style="gap:6px">
+      <span class="gb-label">Viewing</span>
+      <span class="field">${esc(state.semester)} &#9662;</span>
+      ${draft ? `<span class="warnline">Not what members see &mdash; they see ${LIVE}.</span>` : ''}
+      <div class="hstack" style="gap:6px">
+        <button class="btn sm" ${dirty() && !blocked() ? '' : 'disabled'} onclick="trySave()">Save changes</button>
+        <button class="btn sm ${draft ? 'primary' : ''}" ${draft && !blocked() ? '' : 'disabled'}>Publish</button>
+      </div>
+    </div>
+  </div>`;
+}
+const NAV = [['overview', 'Home'], ['schedule', 'Schedule'], ['songs', 'Songs'],
+             ['members', 'Band'], ['conflicts', 'Conflicts']];
+function sidebar() {
+  return `<aside class="sidebar ${state.rail ? 'rail' : ''}">
+    <div class="head">
+      <span class="brand">Rolling Sloans</span>
+      <button class="btn sm icon" onclick="toggleRail()" title="Collapse sidebar">${state.rail ? '&raquo;' : '&laquo;'}</button>
+    </div>
+    <nav>
+      ${NAV.map(([k, l]) => `<a href="#" onclick="return false" ${k === 'schedule' ? 'aria-current="page"' : ''} title="${l}">
+        <span class="glyph"></span><span class="label">${l}</span>
+        ${k === 'conflicts' ? '<span class="count">3</span>' : ''}</a>`).join('')}
+      <div class="group"><span class="gb-label">Admin</span></div>
+      <a href="#" onclick="return false" title="Semesters"><span class="glyph"></span><span class="label">Semesters</span></a>
+    </nav>
+    ${blocked() ? blockNote() : ''}
+    ${semesterPanel()}
+    <div class="sem-panel"><button class="btn sm hide-rail">Log out</button></div>
+  </aside>`;
+}
+function editToolbar(what) {
+  const n = editCount();
+  return `<div class="edit-toolbar">
+    <span class="grow">Editing ${what} &mdash; ${n ? `${n} unsaved change${n === 1 ? '' : 's'}` : 'no changes yet'}</span>
+    <button class="btn sm">Discard</button>
+    <button class="btn sm primary" ${n && !blocked() ? '' : 'disabled'} onclick="trySave()">Save changes</button>
+  </div>`;
+}
+function desktopShell(body, toolbar) {
+  return `<div class="framewrap"><div class="shell">
+    ${sidebar()}
+    <div class="framewrap">${toolbar || ''}
+      <div class="frame-scroll"><div class="page">${body}</div></div>
+    </div>
+  </div>${modalLayer()}</div>`;
+}
+function phoneShell(body, toolbar) {
+  return `<div class="framewrap">
+    <div class="phonebar">
+      <span class="title">${esc(phoneTitle())}</span>
+      <button class="btn sm" ${dirty() && !blocked() ? '' : 'disabled'} onclick="trySave()">Save</button>
+      <button class="btn sm ${isDraft() ? 'primary' : ''}" ${isDraft() && !blocked() ? '' : 'disabled'}>Publish</button>
+    </div>
+    ${blocked() ? `<div class="block-strip"><span>&#9888;</span>
+      <span><b>Can&rsquo;t save</b> &mdash; someone else saved ${esc(state.semester)} while you were editing.</span>
+      <span style="flex:1"></span><button class="btn sm">Reload</button></div>` : ''}
+    ${isDraft() ? `<div class="sem-strip">
+      <span>Viewing <b>${esc(state.semester)}</b> &mdash; not what members see</span>
+      <span style="flex:1"></span><button class="btn sm">Switch</button></div>` : ''}
+    ${toolbar || ''}
+    <div class="frame-scroll"><div class="page">${body}</div></div>
+    <nav class="tabbar">
+      ${[['Home', 0], ['Schedule', 1], ['Songs', 0], ['Band', 0], ['More', 0]].map(([l, cur]) =>
+        `<a href="#" onclick="return false" ${cur ? 'aria-current="page"' : ''}><span class="glyph"></span>${l}</a>`).join('')}
+    </nav>
+    ${modalLayer()}
+  </div>`;
+}
+function phoneTitle() {
+  return ({ 'sched-edit': 'Edit schedule', generate: 'Edit schedule', assign: 'Tue 15 Sep' })[state.page];
+}
+
+/* ============================================================
+   Surface 1 - the rehearsal schedule editor.
+
+   The organising rule of v2: the GRID shows what you changed;
+   the SAVE POPUP shows what it costs. Nothing on the grid tracks
+   warnings while you type.
+   ============================================================ */
+const OPFLAG = {
+  keep: null, new: ['New', false], retime: ['Re-timed', false],
+  remove: ['Removing', true], dress: ['Dress', false],
+};
+function opFlag(r) {
+  const f = OPFLAG[r.op];
+  if (!f) return '';
+  return `<span class="opflag ${f[1] ? 'warn' : ''}">${f[0]}${r.was ? ' from ' + r.was : ''}</span>`;
+}
+
+function runningOrder(r) {
+  if (r.dress) {
+    return `<p class="fo-empty">A Dress Rehearsal plays the live Setlist, so it has no Running Order
+      of its own (ADR 0003). Nothing to order here, and no Backup can be anchored to it (ADR 0007).</p>`;
+  }
+  if (!r.songs) {
+    return `<div class="stack" style="gap:8px"><p class="fo-empty">No songs yet.</p>
+      <div class="toolstrip"><span class="field" style="width:170px">+ Add song&hellip; &#9662;</span></div></div>`;
+  }
+  const struck = r.op === 'remove';
+  return `<div class="stack" style="gap:8px">
+    <div class="rogrid">
+      ${ORDER1.map((o, i) => {
+        const s = SONGS[o.song];
+        const pinned = !!o.pinned;
+        return `<div class="rorow ${pinned ? 'pinned' : ''} ${struck ? 'struck' : ''}">
+          <span class="rgrip">&#10287;</span>
+          <span class="idx">${i + 1}</span>
+          <span class="win">${o.start}&ndash;${o.end}</span>
+          <span>${esc(s.title)}</span>
+          <span class="pin">${pinned ? 'Pinned &middot; recording' : ''}</span>
+          <span class="slots"><span class="gb-label">Slots</span>
+            <span class="stepper"><button>&minus;</button><span>${pinned ? 2 : 1}</span><button>+</button></span></span>
+          <span class="hstack" style="gap:3px">
+            <button class="btn sm icon" aria-label="Move up">&uarr;</button>
+            <button class="btn sm icon" aria-label="Move down">&darr;</button>
+            <button class="btn sm">Remove</button></span>
+          ${pinned && isPhone() ? '<span class="pinnote"><span class="opflag">Pinned &middot; carries a recording</span></span>' : ''}
+        </div>`;
+      }).join('')}
+    </div>
+    <div class="toolstrip">
+      <span class="field" style="width:170px">+ Add song&hellip; &#9662;</span>
+      <button class="btn sm">Shuffle</button>
+      <span class="muted" style="font-size:11.5px">Pinned rows hold their slot; the dealer fills around them.</span>
+    </div>
+  </div>`;
+}
+
+/* ---- The rehearsal context bar. Rendered by BOTH surfaces from one function, so
+       the way across is the same control in both directions. `mode` is which half is
+       currently live; the other half is one tap, and lands with your place kept. ---- */
+function contextBar(r, i, mode) {
+  const canAssign = !r.dress;
+  return `<div class="ctxbar">
+    <span class="who"><b>${r.dow}</b><span class="when">${r.start}&ndash;${r.end}${
+      r.dress ? ' &middot; Dress' : ` &middot; ${r.songs} song${r.songs === 1 ? '' : 's'}`}</span></span>
+    <span class="spacer"></span>
+    ${mode === 'assign' ? `<span class="steppers">
+      <button class="btn sm icon" onclick="stepRehearsal(-1)" aria-label="Previous rehearsal">&larr;</button>
+      <button class="btn sm icon" onclick="stepRehearsal(1)" aria-label="Next rehearsal">&rarr;</button></span>` : ''}
+    <span class="seg2" role="group" aria-label="What to edit for this rehearsal">
+      <button aria-pressed="${mode === 'order'}" onclick="toRunningOrder()">Running order</button>
+      <button aria-pressed="${mode === 'assign'}" ${canAssign ? `onclick="toAssignments(${i})"` : 'disabled'}
+        title="${canAssign ? '' : 'A Dress Rehearsal has no per-song slots to assign against (ADR 0003)'}">Assignments</button>
+    </span>
+  </div>`;
+}
+
+/* ---- desktop row: the dense seven-column grid, which works at this width ---- */
+function desktopRow(r, i) {
+  const open = state.openRow === i;
+  return `<div class="rrow ${r.op === 'remove' ? 'doomed' : ''}">
+    <div class="rhead">
+      <span class="rgrip">&#10287;</span>
+      <span class="rdate"><span class="field mono">${r.date}</span></span>
+      <span class="rtime field mono">${r.start}</span>
+      <span class="dash">&ndash;</span>
+      <span class="rtime field mono">${r.end}</span>
+      <span class="flags">
+        <span class="toggle" aria-pressed="${r.dress}"><span class="track"><span class="knob"></span></span>Dress</span>
+        ${opFlag(r)}
+      </span>
+      <span class="acts"><button class="btn sm">${r.op === 'remove' ? 'Undo remove' : 'Remove'}</button></span>
+    </div>
+    <div class="rbody">
+      <div class="hstack" style="gap:14px">
+        <button class="disclose" onclick="openRow(${i})">
+          <span class="caret">${open ? '&#9662;' : '&#9656;'}</span>
+          Running Order (${r.dress ? 'derived' : r.songs + ' song' + (r.songs === 1 ? '' : 's')})</button>
+        <button class="disclose"><span class="caret">&#9656;</span>Advanced timing</button>
+        ${r.dress ? '' : `<button class="disclose" onclick="toAssignments(${i})">
+          <span class="caret">&rarr;</span>Assignments</button>`}
+      </div>
+      ${open ? contextBar(r, i, 'order') + runningOrder(r) : ''}
+    </div>
+  </div>`;
+}
+
+/* ---- phone row: a two-line summary that expands. v1 stacked four full-width bands per
+       rehearsal whether or not you were touching it, so six rehearsals ran several
+       screens; here everything you scan for is on two lines and the fields are behind
+       a tap. Only one row opens at a time. ---- */
+function phoneRow(r, i) {
+  const open = state.openRow === i;
+  const meta = r.dress
+    ? `${r.start}&ndash;${r.end} &middot; Dress &middot; full setlist`
+    : `${r.start}&ndash;${r.end} &middot; ${r.songs} song${r.songs === 1 ? '' : 's'}`;
+  return `<div class="pcard ${r.op === 'remove' ? 'doomed' : ''} ${open ? 'open' : ''}">
+    <button class="psum" onclick="openRow(${i})" aria-expanded="${open}">
+      <span class="pdate">${r.dow}</span>
+      <span class="pmeta">${meta}</span>
+      <span class="pright">${opFlag(r)}<span class="caret">${open ? '&#9650;' : '&#9660;'}</span></span>
+    </button>
+    ${open ? `<div class="pbody">
+      <div class="pfields">
+        <span class="field mono">${r.date}</span>
+        <div class="times"><span class="field mono">${r.start}</span>
+          <span class="dash">&ndash;</span><span class="field mono">${r.end}</span></div>
+        <span class="toggle" aria-pressed="${r.dress}"><span class="track"><span class="knob"></span></span>Dress rehearsal</span>
+      </div>
+      <div class="plinks">
+        <button onclick="openRow(${i})"><span class="grow">Running Order</span>
+          <span class="n">${r.dress ? 'derived' : r.songs}</span><span class="caret">&#8250;</span></button>
+        <button><span class="grow">Advanced timing</span><span class="caret">&#8250;</span></button>
+        ${r.dress ? '' : `<button onclick="toAssignments(${i})"><span class="grow">Assignments</span><span class="caret">&#8250;</span></button>`}
+        <button><span class="grow" style="color:var(--warn)">${r.op === 'remove' ? 'Undo remove' : 'Remove this rehearsal'}</span></button>
+      </div>
+      ${r.dress || !r.songs ? runningOrder(r) : ''}
+      ${r.dress ? '' : contextBar(r, i, 'order')}
+    </div>` : ''}
+  </div>`;
+}
+
+function editorGrid() {
+  const list = rows();
+  return `<div class="stack">
+    <div class="redit">${list.map((r, i) => isPhone() ? phoneRow(r, i) : desktopRow(r, i)).join('')}</div>
+    ${isPhone() && state.openRow >= 0 && list[state.openRow] && !list[state.openRow].dress
+        && list[state.openRow].songs ? `<div class="card stack" style="gap:8px">
+      <div class="row-between"><b style="font-size:13px">Running Order &mdash; ${list[state.openRow].dow}</b>
+        <button class="btn sm" onclick="openRow(${state.openRow})">Done</button></div>
+      ${runningOrder(list[state.openRow])}
+      ${contextBar(list[state.openRow], state.openRow, 'order')}</div>` : ''}
+    <div class="toolstrip">
+      <button class="btn">+ Add rehearsal</button>
+      <button class="btn" onclick="openModal('generate')">Generate rehearsal dates&hellip;</button>
+      <span style="flex:1"></span>
+      <button class="btn">Generate schedule</button>
+      <button class="btn">Re-roll</button>
+    </div>
+    <details class="card" style="padding:9px 12px">
+      <summary style="cursor:pointer;font-size:12.5px;color:var(--ink-2)">Past rehearsals (1) &mdash; not editable</summary>
+      <ul style="margin:8px 0 0;padding-left:18px;font-size:12.5px;color:var(--ink-3)">
+        ${PAST.map(p => `<li>${p.dow} ${p.start}&ndash;${p.end}</li>`).join('')}</ul>
+      <p class="muted" style="font-size:11.5px;margin:6px 0 0">Generation never rewrites history, and the
+      dealer never re-deals a past Rehearsal.</p>
+    </details>
+  </div>`;
+}
+
+function schedEditPage() {
+  return `<div class="page-head">
+      <h1>Edit schedule</h1>
+      <div class="actions"><span class="muted" style="font-size:12.5px">${esc(state.semester)}</span></div>
+    </div>${editorGrid()}`;
+}
+
+/* ============================================================
+   The Save popup - the ONE place fallout appears.
+   Same shape whether or not anything is wrong; the content
+   escalates, so there is no second dialog to learn.
+   ============================================================ */
+const CHANGES = [
+  ['Re-time', 'Thu 17 Sep', '19:00&ndash;21:00 &rarr; 19:30&ndash;21:00'],
+  ['Remove', 'Tue 22 Sep', 'the whole Rehearsal, with its 6 songs'],
+  ['Add', 'Sat 3 Oct', '19:00&ndash;21:00, empty Running Order'],
+  ['Remove', 'Static Bloom', 'from Tue 15 Sep, position 4'],
+];
+function saveModal() {
+  const takes = doomedTakes();
+  return `<div class="backdrop ${isPhone() ? 'bottom' : ''}" onclick="closeModal()">
+    <div class="modal" style="${isPhone() ? '' : 'max-width:560px'}" onclick="event.stopPropagation()">
+      <div class="m-head"><h3>Save ${editCount()} changes to ${esc(state.semester)}?</h3>
+        <button class="btn sm ghost" onclick="closeModal()" aria-label="Close">&times;</button></div>
+      <div class="m-body tall">
+        <div><h4 class="gb-label" style="margin-bottom:6px">What changes</h4>
+          <ul class="changelist">${CHANGES.map(([op, what, why]) =>
+            `<li><span class="op">${op}</span><span><b>${esc(what)}</b>
+              <span class="why">${why}</span></span></li>`).join('')}</ul></div>
+        <div class="fo">
+          <div class="loud"><h4>Needs your attention &middot; ${FALLOUT.loud.length}</h4>
+            <ul>${FALLOUT.loud.map(l => `<li>${esc(l)}</li>`).join('')}</ul></div>
+          <div><h4>Also true &middot; ${FALLOUT.quiet.length}</h4>
+            <ul>${FALLOUT.quiet.map(l => `<li>${esc(l)}</li>`).join('')}</ul></div>
+          ${takes ? `<div class="fo-doom">
+            <b>${takes} Recordings are destroyed by this save</b>
+            <ul style="margin:0;padding-left:16px">${FALLOUT.doomed.map(d =>
+              `<li>${esc(d.what)} &mdash; ${d.recs} take${d.recs === 1 ? '' : 's'} from ${d.uploaders} uploader${d.uploaders === 1 ? '' : 's'}</li>`).join('')}</ul>
+            <span class="muted" style="font-size:11.5px">The files leave storage when this commits.
+            There is no undo and no export.</span></div>` : ''}
+        </div>
+        <p class="privacy">Computed by running the real save and rolling it back (ADR 0008).
+        Nothing has been written, and no file has been deleted, by opening this.</p>
+      </div>
+      <div class="m-foot">
+        <button class="btn" onclick="closeModal()">Keep editing</button>
+        <button class="btn primary" onclick="closeModal()">${takes ? 'Save anyway' : 'Save changes'}</button>
+      </div>
+    </div></div>`;
+}
+
+/* ============================================================
+   Surface 2 - Generate rehearsal dates. Applying the diff fills
+   the SAME Pending Buffer a hand-edit fills; it commits nothing,
+   so it still passes through the Save popup afterwards.
+   ============================================================ */
+function patternEditor() {
+  return `<div class="stack" style="gap:10px">
+    <div class="stack" style="gap:6px">
+      <span class="gb-label">Weekly pattern</span>
+      ${[['Tuesday', '19:00', '21:00'], ['Thursday', '19:00', '21:00']].map(([d, s, e]) => `
+        <div class="hstack" style="gap:6px">
+          <span class="field" style="flex:1">${d} &#9662;</span>
+          <span class="field mono">${s}</span><span class="muted">&ndash;</span>
+          <span class="field mono">${e}</span><button class="btn sm">&times;</button></div>`).join('')}
+      <div><button class="btn sm">+ Add a weekly time</button></div>
+    </div>
+    <div class="hstack" style="gap:6px">
+      <span class="stack" style="gap:4px;flex:1"><span class="gb-label">From</span><span class="field mono">2026-09-15</span></span>
+      <span class="stack" style="gap:4px;flex:1"><span class="gb-label">Until</span><span class="field mono">2026-10-20</span></span>
+    </div>
+    <div class="stack" style="gap:6px">
+      <span class="gb-label">Skip dates</span>
+      <div class="hstack"><span class="chip">2026-10-06 <button class="x">&times;</button></span>
+        <button class="addcell">+ Add a skip date</button></div>
+    </div>
+  </div>`;
+}
+function bucketList() {
+  const b = (t, n, inner) => `<div class="bucket"><div class="bh">${t} <span class="n">${n}</span></div>${inner}</div>`;
+  return `<div class="buckets">
+    ${b('Create', DIFF.creates.length, `<ul>${DIFF.creates.map(c =>
+      `<li><span class="box ${c.on ? 'on' : ''}"></span><span>${c.when}</span></li>`).join('')}</ul>`)}
+    ${b('Keep', DIFF.keeps.length, `<ul>${DIFF.keeps.map(k =>
+      `<li><span class="box off"></span><span class="muted">${k}</span></li>`).join('')}</ul>`)}
+    ${b('Re-time', DIFF.retimes.length, `<ul>${DIFF.retimes.map(r =>
+      `<li><span class="box ${r.on ? 'on' : ''}"></span><span>${r.when}: ${r.from} &rarr; ${r.to}</span>
+        <span class="blast">${r.songs} scheduled songs, ${r.conflicts} member conflict</span></li>`).join('')}</ul>`)}
+    ${b('Orphaned', DIFF.orphans.length, `<ul>${DIFF.orphans.map(o =>
+      `<li class="${o.locked ? 'locked' : ''}"><span class="box ${o.on ? 'on' : ''}"></span><span>${o.when}</span>
+        <span class="blast">Would lose ${o.songs} songs, ${o.conflicts} conflict, ${o.recs} recording${o.recs === 1 ? '' : 's'}${
+          o.locked ? ' &mdash; <b>carries Recordings, remove it by hand from the grid instead</b>' : ''}</span></li>`).join('')}</ul>`)}
+    <p class="muted" style="font-size:11.5px;margin:0">Computed against <b>saved</b> rehearsals. Any unsaved
+    edit still pending on the grid is ignored here, and Apply refuses to overwrite a row you already changed.</p>
+  </div>`;
+}
+function generateModal() {
+  return `<div class="backdrop ${isPhone() ? 'bottom' : ''}" onclick="closeModal()">
+    <div class="modal" style="${isPhone() ? '' : 'max-width:640px'}" onclick="event.stopPropagation()">
+      <div class="m-head"><h3>Generate rehearsal dates</h3>
+        <button class="btn sm ghost" onclick="closeModal()" aria-label="Close">&times;</button></div>
+      <div class="m-body tall">${patternEditor()}
+        <hr style="border:0;border-top:1px solid var(--line-soft);margin:2px 0">
+        <span class="gb-label">What this would do</span>${bucketList()}</div>
+      <div class="m-foot"><button class="btn" onclick="closeModal()">Cancel</button>
+        <button class="btn primary" onclick="closeModal()">Apply ticked to the grid</button></div>
+    </div></div>`;
+}
+
+/* ============================================================
+   Surface 3 - assignment grid edit mode, for ONE Rehearsal.
+   ============================================================ */
+function scopeBar() {
+  return `<div class="scopebar"><b>Editing standing assignments.</b>
+    <span>A change here applies to <b>every rehearsal and the concert</b>, not just this evening
+    (ADR 0009). To cover one evening only, add a <b>Backup</b> from the same picker.</span></div>`;
+}
+function assignChip(name, kind) {
+  const cls = kind === 'backup' ? 'chip backup' : kind === 'conflict' ? 'chip conflict'
+    : kind === 'mismatch' ? 'chip mismatch' : 'chip';
+  return `<span class="${cls}"><span class="rdot"></span>${esc(name)}${
+    kind === 'backup' ? ' <span class="tagm">backup</span>' : ''}${
+    kind === 'conflict' ? ' <span class="tagm">away</span>' : ''}<button class="x" aria-label="Remove">&times;</button></span>`;
+}
+const AGRID = [
+  { start: '19:00', song: 0, cells: [['Avery Cho', ''], ['Marcus Vale', ''], ['Priya Raman', ''], ['Dani Okafor', ''], ['Nina Restrepo', '']] },
+  { start: '19:24', song: 1, cells: [['Sam Aterlay', ''], ['Theo Lindqvist', ''], null, ['Dani Okafor', ''], ['Nina Restrepo', 'conflict']] },
+  { start: '19:48', song: 4, cells: [['Sam Aterlay', ''], ['Marcus Vale', ''], ['Priya Raman', ''], ['Dani Okafor', 'backup'], ['Avery Cho', 'mismatch']] },
+  { start: '20:12', song: 2, cells: [['Avery Cho', ''], ['Marcus Vale', ''], ['Theo Lindqvist', ''], ['Dani Okafor', ''], ['Nina Restrepo', '']] },
+  { start: '20:36', song: 5, cells: [['Avery Cho', ''], null, ['Priya Raman', ''], null, ['Nina Restrepo', '']] },
+];
+function assignDesktop() {
+  return `<div class="scroll-x"><table class="gb agrid">
+    <thead><tr><th class="num">Start</th><th>Song</th>
+      ${ROLES.map((r, i) => `<th class="rolecol" style="--rc:var(--role-${i})">${r}</th>`).join('')}</tr></thead>
+    <tbody>${AGRID.map((row, ri) => `<tr>
+      <td class="num muted">${row.start}</td><td><b>${esc(SONGS[row.song].title)}</b></td>
+      ${row.cells.map((c, ci) => `<td class="cell" style="--rc:var(--role-${ci})"><div class="cellwrap">
+        ${c ? assignChip(c[0], c[1]) : ''}
+        <button class="addcell" onclick="pick(${ri},${ci})">+</button></div></td>`).join('')}
+    </tr>`).join('')}</tbody></table></div>`;
+}
+function assignPhone() {
+  return `<div class="songcards">${AGRID.map((row, ri) => `<div class="card">
+    <div class="row-between"><b>${esc(SONGS[row.song].title)}</b>
+      <span class="mono muted" style="font-size:11.5px">${row.start}</span></div>
+    <div class="stack" style="gap:4px;margin-top:8px">
+      ${row.cells.map((c, ci) => `<div class="kv" style="--rc:var(--role-${ci})">
+        <span class="rcode">${ROLES[ci]}</span>
+        <span class="hstack" style="gap:4px">${c ? assignChip(c[0], c[1]) : ''}
+          <button class="addcell" onclick="pick(${ri},${ci})">+</button></span></div>`).join('')}
+    </div></div>`).join('')}</div>`;
+}
+function assignPage() {
+  const list = rows();
+  /* A Dress Rehearsal has no RehearsalSong rows to hang a grid off (ADR 0003), so the
+     grid can never be scoped to one - fall back to the nearest that can. */
+  let i = Math.min(state.rehearsal, list.length - 1);
+  if (list[i].dress) i = list.findIndex(x => !x.dress);
+  const r = list[i];
+  return `<div class="stack">
+    <div class="page-head"><h1>Assignments</h1></div>
+    ${contextBar(r, i, 'assign')}
+    ${scopeBar()}
+    <div class="legendrow">
+      <span class="legend">${ROLES.map((n, ci) =>
+        `<span class="swatch" style="--rc:var(--role-${ci})"><i></i>${n}</span>`).join('')}</span>
+      <span class="muted" style="font-size:11.5px">Order is fixed here &mdash; switch to
+      <b>Running order</b> above to change it.</span>
+    </div>
+    ${isPhone() ? assignPhone() : assignDesktop()}
+    <p class="muted" style="font-size:11.5px;margin:0">A past Rehearsal&rsquo;s grid is read-only, and the
+    Dress Rehearsal is the backstop. Adding a Role column here writes no Role Requirement.</p>
+  </div>`;
+}
+
+/* ---- the picker: two labelled sections, structural, never dismissible (ADR 0009) ---- */
+function pickerModal() {
+  const { song, role } = state.pickCell || { song: 0, role: 0 };
+  const roleName = ROLES[role], songName = SONGS[AGRID[song].song].title;
+  const declared = PEOPLE.filter(p => p.active && p.roles.includes(roleName));
+  const others = PEOPLE.filter(p => p.active && !p.roles.includes(roleName));
+  const list = (people, mismatch) => `<div class="plist">${people.map(p =>
+    `<button>${esc(p.name)}${mismatch ? `<span class="mm">Has not declared ${roleName}</span>`
+      : (CONFLICTED[p.name] ? `<span class="busy">${CONFLICTED[p.name]}</span>` : '')}</button>`).join('')}</div>`;
+  return `<div class="backdrop ${isPhone() ? 'bottom' : ''}" onclick="closeModal()">
+    <div class="modal" onclick="event.stopPropagation()">
+      <div class="m-head"><h3>${esc(roleName)} on ${esc(songName)}</h3>
+        <button class="btn sm ghost" onclick="closeModal()" aria-label="Close">&times;</button></div>
+      <div class="m-body tall">
+        <div class="pick-sec">
+          <div class="ph"><b>Assigned</b><span class="scope">Every rehearsal + concert</span></div>
+          ${list(declared, false)}
+          ${others.length ? `<details><summary style="padding:8px 12px;cursor:pointer;font-size:12.5px;color:var(--ink-3);border-top:1px solid var(--line-soft)">Show all members</summary>${list(others, true)}</details>` : ''}
+        </div>
+        <div class="pick-sec">
+          <div class="ph"><b>Backup</b><span class="scope">This rehearsal only &mdash; the standing assignment above is unaffected</span></div>
+          ${list(declared, false)}
+        </div>
+        <p class="privacy">Lists this Semester&rsquo;s rostered members only. Who a Backup is covering for
+        is shown to admins only (ADR 0005).</p>
+      </div>
+    </div></div>`;
+}
+
+function modalLayer() {
+  if (state.modal === 'save') return saveModal();
+  if (state.modal === 'generate') return generateModal();
+  if (state.modal === 'picker') return pickerModal();
+  return '';
+}
+
+/* ============================================================
+   Render
+   ============================================================ */
+const BODIES = { 'sched-edit': schedEditPage, generate: schedEditPage, assign: assignPage };
+function render() {
+  const what = state.page === 'assign' ? 'assignments' : 'schedule';
+  const body = BODIES[state.page]();
+  const toolbar = editToolbar(what);
+  document.getElementById('stage').innerHTML =
+    `<div class="frame ${state.viewport}">${isPhone() ? phoneShell(body, toolbar) : desktopShell(body, toolbar)}</div>`;
+  renderVerdict();
+  syncChrome();
+}
+
+function renderVerdict() {
+  document.getElementById('verdict').innerHTML = `
+    <div class="cols">
+      <div><h2>Settled by this review</h2><ul>
+        <li><b>No fallout rail.</b> A running track of the warnings beside the grid was rejected as
+        unnecessary, and it cost ~290px of the widest surface in the app.</li>
+        <li><b>A popup, not a page.</b> Save opens one dialog that names what changes and what it costs,
+        then commits. The full-page review step is gone.</li>
+        <li><b>One dialog, escalating content.</b> The same popup covers a harmless save and a save that
+        destroys Recordings &mdash; the doomed block appears and the button becomes <i>Save anyway</i>.
+        There is no separate destructive dialog to learn.</li>
+        <li><b>The stale-Semester notice moved to the sidebar</b>, above the semester panel. It is not a
+        consequence of your edit; it is a fact about the Semester you are editing, so it belongs with the
+        control that names it. On phone it is a strip above the semester strip.</li>
+        <li><b>Phone rehearsal rows rebuilt.</b> v1 stacked date, times, flags and actions into four
+        full-width bands per rehearsal whether or not you were touching that row, so six rehearsals took
+        several screens. Now a collapsed row is two lines &mdash; when, how long, how many songs, and
+        whether you have edited it &mdash; with the fields one tap away and one row open at a time.</li>
+      </ul></div>
+      <div><h2>The rule that fell out of it</h2><ul>
+        <li><b>The grid shows what you changed. The popup shows what it costs.</b> That is the whole
+        division, and it is what #310 and #311 inherit. A struck-through row and a <i>Re-timed</i> badge are
+        the edit itself, so they stay on the grid; &ldquo;Nina leaves before Riverbend now starts&rdquo; is a
+        consequence, so it waits for Save.</li>
+        <li><b>The debounced preview fetch goes away.</b> With no ambient region to feed, the preview endpoint
+        is called once, when the popup opens, rather than on every keystroke. Same endpoint, far less traffic.</li>
+        <li><b>Everything still holds:</b> Validation Error stays a separate region from Fallout (ADR 0008);
+        generation is staged into the same Pending Buffer and commits nothing; an orphan carrying Recordings
+        cannot be ticked; pinned rows hold their slot (#223); the picker keeps its two labelled sections
+        (ADR 0009); the Dress Rehearsal has no Running Order and no Backup anchor (ADR 0003, 0007).</li>
+        <li><b>Nothing needs SortableJS to function.</b> Every reorder has explicit up/down buttons, and on
+        phone those are the primary affordance with the drag grip hidden.</li>
+      </ul></div>
+    </div>
+    <h2 style="margin-top:6px">Running order vs assignments &mdash; settled</h2>
+    <ul>
+      <li><b>They are two modes of one rehearsal, not one editable table.</b> #303 merged them for
+      <i>reading</i>, keyed by start time. They cannot merge for <i>editing</i>: a reorder moves start times,
+      which moves which <code>ConflictWindow</code>s overlap a slot &mdash; and that overlap is exactly what
+      the loud tier is computed from, so editing both live would compute availability against a moving
+      target. Ratified in review: a revision to #303&rsquo;s merge, scoped to edit mode only.</li>
+      <li><b>So the split needed a way across, and now has one.</b> Both surfaces wear the same
+      <b>rehearsal context bar</b> &mdash; the rehearsal named on the left, a
+      <b>Running order | Assignments</b> segmented switch on the right &mdash; rendered from one function,
+      so the move is the same control and the same gesture in both directions. Being a segmented control
+      rather than a link is the point: it reads as a <i>mode switch</i>, which is what it is.</li>
+      <li><b>The round trip keeps your place.</b> Going to Assignments carries which rehearsal you were on;
+      coming back re-opens that row. The assignment grid also gets &larr;/&rarr; to walk rehearsals without
+      returning to the editor at all.</li>
+      <li><b>Fixed a real bug found in review:</b> v2&rsquo;s cross-link sat in a non-wrapping flex row beside
+      five role swatches, so on a 390px phone it was crushed against the edge. The legend now has its own
+      line and the switch is full-width above it.</li>
+      <li>The Dress Rehearsal has no assignment grid to switch to &mdash; no <code>RehearsalSong</code> rows
+      to hang one off (ADR 0003) &mdash; so its Assignments half is disabled and says why.</li>
+    </ul>`;
+}
+function syncChrome() {
+  document.querySelectorAll('#viewportseg button').forEach(b =>
+    b.setAttribute('aria-pressed', String(b.dataset.vp === state.viewport)));
+  document.getElementById('pagesel').value = state.page;
+  document.getElementById('bufsel').value = state.buffer;
+  document.getElementById('savebtn').disabled = !dirty() || blocked();
+}
+
+document.getElementById('pagesel').innerHTML = PAGES.map(([k, l]) => `<option value="${k}">${l}</option>`).join('');
+document.getElementById('bufsel').innerHTML = BUFFERS.map(([k, l]) => `<option value="${k}">${l}</option>`).join('');
+document.getElementById('pagesel').onchange = e => go(e.target.value);
+document.getElementById('bufsel').onchange = e => setBuffer(e.target.value);
+document.getElementById('savebtn').onclick = () => trySave();
+document.querySelectorAll('#viewportseg button').forEach(b =>
+  b.onclick = () => { state.viewport = b.dataset.vp; state.openRow = -1; render(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && state.modal) closeModal(); });
+
+render();
+</script>
