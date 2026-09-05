@@ -1,4 +1,10 @@
-"""The retired `/manage/setlist/*` screens: their routes no longer resolve, with no redirect shim (issue #182)."""
+"""The retired `/manage/setlist/*` screens: their routes no longer resolve, with no redirect shim (issue #182).
+
+Since issue #325's catch-all, a GET to one of these paths reaches the SPA
+shell (a 200) rather than a Django 404 — the client now owns deciding a path
+is not found. A POST still gets no write surface: the catch-all is GET-only,
+so it 405s instead.
+"""
 
 from django.test import TestCase, override_settings
 from django.urls import NoReverseMatch, reverse
@@ -43,18 +49,19 @@ class RemovedPathsTests(TestCase):
         """Log in as the synthetic admin Person before each test."""
         self.client.login(username=self.admin.email, password=PASSWORD)
 
-    def test_the_removed_paths_404_for_an_admin_with_no_redirect(self):
-        """Each retired path 404s outright for a logged-in admin; nothing redirects it elsewhere."""
+    def test_the_removed_paths_reach_the_spa_shell_for_an_admin(self):
+        """Each retired path reaches the SPA's catch-all shell for a logged-in admin; nothing Django-side handles it."""
         for path in REMOVED_PATHS:
             with self.subTest(path=path):
                 response = self.client.get(path)
 
-                self.assertEqual(response.status_code, 404)
+                self.assertEqual(response.status_code, 200)
+                self.assertContains(response, '<div id="root">')
 
-    def test_a_post_to_the_removed_paths_also_404s(self):
-        """A POST (the verb every retired write used) also 404s rather than resolving to anything."""
+    def test_a_post_to_the_removed_paths_405s(self):
+        """A POST (the verb every retired write used) gets no write surface — the catch-all is GET-only."""
         for path in REMOVED_PATHS:
             with self.subTest(path=path):
                 response = self.client.post(path)
 
-                self.assertEqual(response.status_code, 404)
+                self.assertEqual(response.status_code, 405)

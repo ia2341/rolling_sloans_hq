@@ -8,7 +8,7 @@ This is a Django backend for a private, auth-gated band portal. Project configur
 - `scheduling/` owns semester-scoped band and rehearsal models.
 - Each app keeps tests in `<app>/tests/`, factories in `<app>/factories.py`, and schema changes in `<app>/migrations/`.
 
-Frontend assets are vendored, pinned and committed under the top-level `static/` directory (Pico.css, HTMX, Alpine, SortableJS), with one hand-written override sheet at `static/css/app.css`. Never add a `package.json`, a bundler, a node toolchain, a CDN reference or DRF; bump a vendored library by committing the new file under its new version-stamped name and updating the `{% static %}` reference. WhiteNoise serves `STATIC_ROOT` in production, so the deploy build has to run `collectstatic` (`build.sh`).
+The project is mid-migration from server-rendered Django templates to a React/TypeScript SPA (issue #325, part of map #302), on a single long-lived branch landed in one cutover PR (no feature flag) once every surface is rebuilt — see `CLAUDE.md` for the full architecture. `frontend/` is an ordinary Vite + React + TypeScript app with pinned npm dependencies and a committed lockfile; `npm run build` writes `frontend/dist/`, which a Django view (`SpaIndexView`) serves via Vite's build manifest, never as a static file. Never add a CDN reference or DRF — those calls stand. Until the cutover PR, the old stack coexists unchanged: frontend assets vendored, pinned and committed under the top-level `static/` directory (Pico.css, HTMX, Alpine, SortableJS), with one hand-written override sheet at `static/css/app.css`; bump a vendored library by committing the new file under its new version-stamped name and updating the `{% static %}` reference. WhiteNoise serves `STATIC_ROOT` in production, so the deploy build has to run `collectstatic` (`build.sh`), which now also runs the frontend's `npm ci && npm run build` first.
 
 Read `CONTEXT.md` before changing scheduling concepts, and read the relevant `docs/adr/` decision record before changing behavior it covers. Never call an irreversible side effect (mail, R2 deletion, any external API) inline inside a service function — register it with `transaction.on_commit()`, since admin previews run the real save and roll it back (ADR 0008).
 
@@ -24,7 +24,9 @@ python manage.py migrate
 python manage.py runserver
 ```
 
-Run all tests with `python manage.py test`; narrow feedback with, for example, `python manage.py test identity.tests.test_login`. Run `ruff check .` before submitting changes. Use `python manage.py check --deploy` when touching settings or deployment configuration.
+Run all tests with `python manage.py test`; narrow feedback with, for example, `python manage.py test identity.tests.test_login`. Run `ruff check .` before submitting changes. Use `python manage.py check --deploy` when touching settings or deployment configuration. The Django test suite passes on a checkout that has never run `npm install`.
+
+For `frontend/`: `npm ci`, then `npm run build` (writes `frontend/dist/`, which `SpaIndexView` needs on disk), `npm run lint`, `npm run typecheck`, `npm run test`, and `npm run format:check`. `npm run dev` starts a standalone Vite dev server for iterating on components; point Django at it via `VITE_DEV_SERVER_URL` in `.env` for hot module replacement against the real app.
 
 ## Coding Style & Naming Conventions
 

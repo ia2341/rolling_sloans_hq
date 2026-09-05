@@ -1,4 +1,10 @@
-"""The self-serve password reset flow (issue #26): request + confirm views."""
+"""The self-serve password reset flow (issue #26, reworked by #327).
+
+Reset now shares one token route with the invite flow
+(`identity:set-password-confirm`) rather than a dedicated confirm route,
+and the request page renders its result inline instead of redirecting to a
+separate "done" page.
+"""
 
 import re
 from urllib.parse import urlsplit
@@ -10,6 +16,7 @@ from faker import Faker
 
 from identity.factories import PersonFactory
 from identity.models import Person
+from identity.services import MAX_AUTH_EMAILS
 
 fake = Faker()
 
@@ -31,7 +38,8 @@ class PasswordResetRequestTests(TestCase):
 
         response = self.client.post(reverse('identity:password-reset'), {'email': person.email})
 
-        self.assertRedirects(response, reverse('identity:password-reset-done'))
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.context['sent'])
         self.assertEqual(len(mail.outbox), 1)
         sent = mail.outbox[0]
         self.assertIn(person.email, sent.to)
@@ -43,10 +51,62 @@ class PasswordResetRequestTests(TestCase):
             {'email': fake.email(domain='example.com')},
         )
 
-        # Same redirect as the known-email case: the response must not leak
+        # Same in-page response as the known-email case: it must not leak
         # whether the address exists.
-        self.assertRedirects(response, reverse('identity:password-reset-done'))
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.context['sent'])
         self.assertEqual(len(mail.outbox), 0)
+
+    def test_link_points_at_the_merged_set_password_route(self):
+        """The reset email's link resolves to identity:set-password-confirm, the same route the invite uses."""
+        person = PersonFactory(password=OLD_PASSWORD)
+
+        self.client.post(reverse('identity:password-reset'), {'email': person.email})
+
+        reset_path = extract_reset_path(mail.outbox[0].body)
+        self.assertIn('set-password', reset_path)
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class PasswordResetRateLimitTests(TestCase):
+    """Limit two: outbound auth email, keyed on address and on IP (#327)."""
+
+    def test_under_the_limit_still_sends(self):
+        person = PersonFactory(password=OLD_PASSWORD)
+        for _ in range(MAX_AUTH_EMAILS - 1):
+            self.client.post(reverse('identity:password-reset'), {'email': person.email})
+        mail.outbox = []
+
+        response = self.client.post(reverse('identity:password-reset'), {'email': person.email})
+
+        self.assertTrue(response.context['sent'])
+        self.assertEqual(len(mail.outbox), 1)
+
+    def test_over_the_limit_is_refused_and_sends_nothing(self):
+        person = PersonFactory(password=OLD_PASSWORD)
+        for _ in range(MAX_AUTH_EMAILS):
+            self.client.post(reverse('identity:password-reset'), {'email': person.email})
+        mail.outbox = []
+
+        response = self.client.post(reverse('identity:password-reset'), {'email': person.email})
+
+        self.assertTrue(response.context['throttled'])
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_throttle_message_is_identical_for_a_real_and_an_unknown_address(self):
+        person = PersonFactory(password=OLD_PASSWORD)
+        for _ in range(MAX_AUTH_EMAILS):
+            self.client.post(reverse('identity:password-reset'), {'email': person.email})
+        known_response = self.client.post(reverse('identity:password-reset'), {'email': person.email})
+
+        self.client.cookies.clear()
+        unknown_email = fake.email(domain='example.com')
+        for _ in range(MAX_AUTH_EMAILS):
+            self.client.post(reverse('identity:password-reset'), {'email': unknown_email})
+        unknown_response = self.client.post(reverse('identity:password-reset'), {'email': unknown_email})
+
+        self.assertTrue(known_response.context['throttled'])
+        self.assertTrue(unknown_response.context['throttled'])
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)
@@ -54,6 +114,7 @@ class PasswordResetConfirmFlowTests(TestCase):
     @classmethod
     def setUpTestData(cls):
         """Request a reset once and extract the reset link every test in this class reuses."""
+        mail.outbox = []
         cls.person = PersonFactory(password=OLD_PASSWORD)
         cls.client_class().post(reverse('identity:password-reset'), {'email': cls.person.email})
         cls.reset_path = extract_reset_path(mail.outbox[0].body)
@@ -64,6 +125,12 @@ class PasswordResetConfirmFlowTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.context['validlink'])
 
+    def test_reset_confirm_uses_the_new_password_copy_not_the_invite_copy(self):
+        """A Person who already has a usable password sees "Choose a new password", not invite wording."""
+        response = self.client.get(self.reset_path, follow=True)
+
+        self.assertTrue(response.context['has_usable_password'])
+
     def test_submitting_new_password_allows_login_with_it(self):
         get_response = self.client.get(self.reset_path, follow=True)
         form_url = get_response.request['PATH_INFO']
@@ -73,7 +140,8 @@ class PasswordResetConfirmFlowTests(TestCase):
             {'new_password1': NEW_PASSWORD, 'new_password2': NEW_PASSWORD},
         )
 
-        self.assertRedirects(post_response, reverse('identity:password-reset-complete'))
+        self.assertEqual(post_response.status_code, 200)
+        self.assertTrue(post_response.context['done'])
         self.client.logout()
         login_response = self.client.post(
             reverse('identity:login'),
@@ -118,3 +186,14 @@ class PasswordResetConfirmFlowTests(TestCase):
         reloaded = Person.objects.get(pk=self.person.pk)
         self.assertTrue(reloaded.check_password(NEW_PASSWORD))
         self.assertFalse(reloaded.check_password('yet-another-password-789'))
+
+    def test_expired_or_invalid_link_shows_a_plain_message(self):
+        bogus_path = reverse(
+            'identity:set-password-confirm',
+            kwargs={'uidb64': 'bogus', 'token': 'bogus-token'},
+        )
+
+        response = self.client.get(bogus_path)
+
+        self.assertFalse(response.context['validlink'])
+        self.assertContains(response, 'invalid or has expired')

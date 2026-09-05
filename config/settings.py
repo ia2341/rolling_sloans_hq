@@ -116,6 +116,16 @@ AUTH_USER_MODEL = 'identity.Person'
 LOGIN_URL = reverse_lazy('identity:login')
 LOGIN_REDIRECT_URL = reverse_lazy('scheduling:overview')
 
+# Declared explicitly (issue #327) rather than inherited from Django's own
+# default (which happens to also be three days): this value governs BOTH
+# the invite link and the forgot-password link, since they share one token
+# route (`identity:set-password-confirm`). Don't raise it to suit the
+# invite — the same value would leave a multi-week account-takeover token
+# sitting in inboxes for the reset case. Short is correct for reset, and
+# `resend_invite()` (not a longer timeout) is what makes the invite's
+# expiry survivable.
+PASSWORD_RESET_TIMEOUT = 60 * 60 * 24 * 3  # 3 days
+
 
 # Password validation
 # https://docs.djangoproject.com/en/6.1/ref/settings/#auth-password-validators
@@ -150,6 +160,18 @@ if 'test' in sys.argv:
 SESSION_COOKIE_AGE = 60 * 60 * 24 * 30  # 30 days
 SESSION_SAVE_EVERY_REQUEST = True
 
+# Stated explicitly rather than inherited (issue #326 user story 24): both
+# already equal Django's own default, but a same-origin Django + React SPA
+# with session cookies (#307) makes a silent Django default change a
+# decision we'd rather make ourselves than have happen to us.
+SESSION_COOKIE_SAMESITE = 'Lax'
+CSRF_COOKIE_SAMESITE = 'Lax'
+
+# CSRF_COOKIE_HTTPONLY is left at its default (False) and that default is
+# load-bearing, not incidental: the SPA's fetch wrapper (issue #326) reads
+# the csrftoken cookie from script and sends it back as X-CSRFToken on
+# every unsafe request. Setting this True would make every write 403.
+
 
 # Internationalization
 # https://docs.djangoproject.com/en/6.1/topics/i18n/
@@ -172,11 +194,42 @@ STATIC_URL = 'static/'
 # Alpine, Pico.css, SortableJS — each pinned by version in its filename) and
 # the hand-written override sheet. Per-app static/ directories are still
 # picked up by AppDirectoriesFinder; this only adds the project-wide one.
-STATICFILES_DIRS = [BASE_DIR / 'static']
+# The Vite build output is a second, physically separate STATICFILES_DIRS
+# entry (issue #325): it coexists with the vendored static/ tree above until
+# issue #341 deletes the old frontend, and Vite's own assets/ subdirectory
+# guarantees neither can shadow the other's filenames.
+FRONTEND_DIR = BASE_DIR / 'frontend'
+FRONTEND_BUILD_DIR = FRONTEND_DIR / 'dist'
+STATICFILES_DIRS = [BASE_DIR / 'static', FRONTEND_BUILD_DIR]
 
 # collectstatic target. Not committed; the deploy build regenerates it (see
 # build.sh), and WhiteNoise serves it from there.
 STATIC_ROOT = BASE_DIR / 'staticfiles'
+
+# config.spa reads the manifest from the filesystem directly, rather than
+# from STATIC_ROOT, so it resolves identically before and after
+# collectstatic and in local development, where collectstatic never runs.
+# The manifest is keyed by the source entry Vite crawled from
+# frontend/index.html — Vite's own build (not this Django project) owns
+# that key's exact spelling.
+FRONTEND_MANIFEST_PATH = FRONTEND_BUILD_DIR / 'manifest.json'
+FRONTEND_ENTRY = 'index.html'
+
+# The same entry module, addressed the way a running Vite dev server (see
+# VITE_DEV_SERVER_URL below) expects it — a source path, not a manifest key.
+FRONTEND_DEV_ENTRY = 'src/main.tsx'
+
+# Names a running `vite` dev server (e.g. "http://localhost:5173") so
+# SpaIndexView emits that server's client and entry module tags instead of
+# reading the build manifest, giving hot module replacement. The app is
+# still served from Django's origin — only asset tags point elsewhere — so
+# session cookies and relative /api/ calls are unaffected. Refused outside
+# DEBUG so it can never leak into production (issue #325).
+VITE_DEV_SERVER_URL = env('VITE_DEV_SERVER_URL', default=None)
+if not DEBUG and VITE_DEV_SERVER_URL:
+    raise ImproperlyConfigured(
+        'VITE_DEV_SERVER_URL must not be set when DJANGO_DEBUG is False.'
+    )
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
@@ -276,3 +329,12 @@ if not DEBUG:
     SECURE_HSTS_SECONDS = 60 * 60 * 24 * 365  # 1 year
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
+
+
+# Registers config.checks.spa_build_output_exists with Django's system-check
+# framework (issue #325). Imported here, not from config/urls.py, so it's
+# registered before `manage.py check` runs its first pass — registering it
+# as a side effect of resolving the URLConf would be too late, since the
+# check framework snapshots the registry before running checks that import
+# the URLConf themselves.
+from config import checks  # noqa: F401

@@ -1,4 +1,16 @@
-"""Member recording upload self-service: /me/recordings/ + /me/recordings/presign/ (issue #61)."""
+"""Member recording upload self-service: /me/recordings/ + /me/recordings/presign/ (issue #61).
+
+Issue #333 adds the JSON siblings of this old server-rendered flow —
+`RecordingPresignApiView`/`RecordingConfirmApiView`/`RecordingDeleteApiView`
+under `/api/members/recordings/...` — for the Profile page's Upload-a-take
+card. This module keeps every test above unchanged (the old views stay in
+scope until #341 deletes them) and adds the JSON-endpoint classes below,
+covering the same failure paths: an unsupported content type, an oversized
+file, a missing `recordings/` prefix, a duplicate key, and an object that
+never actually landed in the bucket. `preview_helpers.py`'s
+`assert_preview_writes_nothing` does not apply here — issue #333 explicitly
+has no preview endpoint on this surface.
+"""
 
 import json
 from unittest.mock import patch
@@ -358,5 +370,242 @@ class RecordingDeleteViewTests(TestCase):
     def test_unknown_recording_returns_404(self):
         """A delete POST for a nonexistent Recording id 404s."""
         response = self.client.post(reverse('scheduling:recordings-delete', args=[999999]))
+
+        self.assertEqual(response.status_code, 404)
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class RecordingPresignApiViewTests(TestCase):
+    """`POST /api/members/recordings/presign/` (issue #333): the JSON sibling of `RecordingPresignViewTests` above."""
+
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic Person to log in as before each test."""
+        cls.person = PersonFactory(password=PASSWORD)
+
+    def setUp(self):
+        """Log in as the synthetic Person before each test."""
+        self.client.login(username=self.person.email, password=PASSWORD)
+
+    @patch('scheduling.services._recording_storage')
+    def test_valid_parameters_return_an_upload_reservation(self, recording_storage):
+        """A supported content type and in-range size return 200 with the upload_url/fields/object_key, in the read envelope."""
+        storage = recording_storage.return_value
+        storage.connection.meta.client.generate_presigned_post.return_value = {
+            'url': 'https://r2.example/upload-bucket',
+            'fields': {'key': 'recordings/whatever.mp3', 'Content-Type': 'audio/mpeg'},
+        }
+
+        response = self.client.post(
+            reverse('api-recordings-presign'),
+            data=json.dumps({'content_type': 'audio/mpeg', 'file_size': 1_024}),
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertIn('context', body)
+        self.assertEqual(body['data']['upload_url'], 'https://r2.example/upload-bucket')
+        self.assertTrue(body['data']['object_key'].startswith('recordings/'))
+
+    @patch('scheduling.services._recording_storage')
+    def test_unsupported_content_type_returns_a_4xx_without_contacting_r2(self, recording_storage):
+        """An unsupported content type is rejected before the real R2 client is ever touched."""
+        storage = recording_storage.return_value
+
+        response = self.client.post(
+            reverse('api-recordings-presign'),
+            data=json.dumps({'content_type': 'video/quicktime', 'file_size': 1_024}),
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        storage.connection.meta.client.generate_presigned_post.assert_not_called()
+
+    @patch('scheduling.services._recording_storage')
+    def test_oversized_file_returns_a_4xx_without_contacting_r2(self, recording_storage):
+        """A file_size beyond the recording-upload limit is rejected before the real R2 client is ever touched."""
+        storage = recording_storage.return_value
+
+        response = self.client.post(
+            reverse('api-recordings-presign'),
+            data=json.dumps({'content_type': 'audio/mpeg', 'file_size': 51 * 1024 * 1024}),
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        storage.connection.meta.client.generate_presigned_post.assert_not_called()
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class RecordingConfirmApiViewTests(TestCase):
+    """`POST /api/members/recordings/confirm/` (issue #333): the JSON sibling of the old confirm-POST tests above."""
+
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic Person and a viewing-Semester RehearsalSong."""
+        cls.person = PersonFactory(password=PASSWORD)
+        cls.semester = SemesterFactory()
+        cls.rehearsal_song = RehearsalSongFactory(rehearsal__semester=cls.semester, song__semester=cls.semester)
+
+    def setUp(self):
+        """Log in as the synthetic Person before each test."""
+        self.client.login(username=self.person.email, password=PASSWORD)
+
+    @patch('scheduling.services._recording_storage')
+    def test_confirm_creates_a_recording_and_returns_the_requesters_updated_recordings_block(self, recording_storage):
+        """A valid confirm POST creates a Recording and returns the requester's updated self-only Recordings block."""
+        storage = recording_storage.return_value
+        storage.connection.meta.client.head_object.return_value = {
+            'ContentType': 'audio/mpeg', 'ContentLength': 2_048,
+        }
+        storage.connection.meta.client.generate_presigned_url.return_value = 'https://r2.example/playback'
+
+        response = self.client.post(
+            reverse('api-recordings-confirm'),
+            data=json.dumps({
+                'rehearsal_song_id': self.rehearsal_song.pk,
+                'object_key': 'recordings/take-one.mp3',
+                'note': 'First take',
+            }),
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body['ok'])
+        recording = Recording.objects.get()
+        self.assertEqual(recording.rehearsal_song, self.rehearsal_song)
+        self.assertEqual(recording.uploaded_by, self.person)
+        self.assertEqual(recording.note, 'First take')
+        self.assertEqual(body['data']['count'], 1)
+
+    def test_object_key_missing_the_recordings_prefix_is_rejected(self):
+        """An object_key outside the recordings/ namespace is rejected as a non-field error, creating nothing."""
+        response = self.client.post(
+            reverse('api-recordings-confirm'),
+            data=json.dumps({
+                'rehearsal_song_id': self.rehearsal_song.pk,
+                'object_key': 'not-the-right-prefix/take.mp3',
+                'note': '',
+            }),
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertFalse(body['ok'])
+        self.assertTrue(body['non_field_errors'])
+        self.assertFalse(Recording.objects.exists())
+
+    @patch('scheduling.services._recording_storage')
+    def test_object_never_uploaded_is_rejected_without_creating_a_recording(self, recording_storage):
+        """An object_key that was never actually uploaded to R2 reports a non-field error instead of creating a Recording."""
+        storage = recording_storage.return_value
+        storage.connection.meta.client.head_object.side_effect = ClientError(
+            {'Error': {'Code': '404', 'Message': 'Not Found'}}, 'HeadObject',
+        )
+
+        response = self.client.post(
+            reverse('api-recordings-confirm'),
+            data=json.dumps({
+                'rehearsal_song_id': self.rehearsal_song.pk,
+                'object_key': 'recordings/never-uploaded.mp3',
+                'note': '',
+            }),
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertFalse(body['ok'])
+        self.assertTrue(body['non_field_errors'])
+        self.assertFalse(Recording.objects.exists())
+
+    @patch('scheduling.services._recording_storage')
+    def test_duplicate_object_key_is_rejected_without_creating_a_second_recording(self, recording_storage):
+        """Confirming an already-confirmed object_key a second time is rejected, leaving exactly one Recording."""
+        storage = recording_storage.return_value
+        RecordingFactory(rehearsal_song=self.rehearsal_song, file='recordings/already-confirmed.mp3')
+
+        response = self.client.post(
+            reverse('api-recordings-confirm'),
+            data=json.dumps({
+                'rehearsal_song_id': self.rehearsal_song.pk,
+                'object_key': 'recordings/already-confirmed.mp3',
+                'note': '',
+            }),
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertFalse(body['ok'])
+        self.assertEqual(Recording.objects.count(), 1)
+        storage.connection.meta.client.head_object.assert_not_called()
+
+    def test_rehearsal_song_outside_the_viewing_semester_404s(self):
+        """A rehearsal_song_id from a different Semester than the viewing one 404s (ADR 0001)."""
+        other_semester_rehearsal_song = RehearsalSongFactory()
+
+        response = self.client.post(
+            reverse('api-recordings-confirm'),
+            data=json.dumps({
+                'rehearsal_song_id': other_semester_rehearsal_song.pk,
+                'object_key': 'recordings/take.mp3',
+                'note': '',
+            }),
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertFalse(Recording.objects.exists())
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class RecordingDeleteApiViewTests(TestCase):
+    """`POST /api/members/recordings/<pk>/delete/` (issue #333): the JSON sibling of `RecordingDeleteViewTests` above.
+
+    Ownership stays scoped by `uploaded_by`: a non-uploader's request 404s
+    rather than 403ing, so the response never confirms the row exists.
+    Unlike the old view, this one returns the requester's updated Recordings
+    block instead of redirecting — there is nowhere sensible to redirect to
+    from the Profile page.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        """Build a synthetic Person to log in as before each test."""
+        cls.person = PersonFactory(password=PASSWORD)
+
+    def setUp(self):
+        """Log in as the synthetic Person before each test."""
+        self.client.login(username=self.person.email, password=PASSWORD)
+
+    def test_deletes_the_requesting_users_own_recording_and_returns_the_updated_block(self):
+        """A member deleting their own Recording removes it and gets back their updated Recordings block."""
+        rehearsal_song = RehearsalSongFactory()
+        recording = RecordingFactory(rehearsal_song=rehearsal_song, uploaded_by=self.person)
+
+        response = self.client.post(reverse('api-recordings-delete', args=[recording.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body['ok'])
+        self.assertEqual(body['data']['count'], 0)
+        self.assertFalse(Recording.objects.filter(pk=recording.pk).exists())
+
+    def test_rejects_deletion_of_another_members_recording_with_a_404_not_a_403(self):
+        """A member cannot delete a Recording they did not upload; the row survives and the request 404s, not 403s."""
+        other_recording = RecordingFactory()
+
+        response = self.client.post(reverse('api-recordings-delete', args=[other_recording.pk]))
+
+        self.assertEqual(response.status_code, 404)
+        self.assertTrue(Recording.objects.filter(pk=other_recording.pk).exists())
+
+    def test_unknown_recording_id_returns_404(self):
+        """A delete POST for a nonexistent Recording id 404s."""
+        response = self.client.post(reverse('api-recordings-delete', args=[999999]))
 
         self.assertEqual(response.status_code, 404)

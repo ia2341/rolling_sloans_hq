@@ -15,7 +15,8 @@ admin-status field.
 {% endfor %}
 {% if is_self %}
   <p>Email: {{ person.email }}</p>
-  <p><a href="{% url 'identity:password-change' %}">Change password</a></p>
+  {# Change password is relocated into the SPA by #333 (issue #327); #}
+  {# identity:password-change no longer exists as a server-rendered route. #}
 {% endif %}
 
 {% if semester %}

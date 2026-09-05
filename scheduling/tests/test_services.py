@@ -24,11 +24,13 @@ from scheduling.factories import (
 from scheduling.models import Conflict, ConflictWindow
 from scheduling.services import (
     AssignmentMatrixEntryKind,
+    active_roles_for,
     addable_roles_for,
     assignment_grid_is_editable,
     assignment_matrix_for,
     assignment_picker_for,
     breaks_for,
+    cast_line_for,
     conflict_history_for,
     declare_conflict,
     fill_status_for,
@@ -36,8 +38,12 @@ from scheduling.services import (
     performers_for,
     recording_count_for,
     rehearsal_schedule_for,
+    rehearsed_at_for,
+    role_codes_for,
+    setlist_total_running_time,
     song_rehearsal_progress,
     songs_with_progress_for,
+    timeline_for,
 )
 
 
@@ -377,6 +383,71 @@ class BreaksForTests(TestCase):
         SongRoleAssignmentFactory(song=song, role=self.role, person=self.person)
 
         self.assertEqual(breaks_for(dress_rehearsal, self.person), [])
+
+
+class TimelineForTests(TestCase):
+    """`timeline_for()`: the "You at this rehearsal" picture (issue #331)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        """Build a Person and a Role to attach RehearsalSong rows to."""
+        cls.person = PersonFactory()
+        cls.role = RoleFactory()
+
+    def _slot(self, rehearsal, order, *, assign=False):
+        """Build a RehearsalSong at `order` in `rehearsal`, optionally assigning self.person to its Song."""
+        song = SongFactory(semester=rehearsal.semester)
+        if assign:
+            SongRoleAssignmentFactory(song=song, role=self.role, person=self.person)
+        return RehearsalSongFactory(rehearsal=rehearsal, song=song, order=order)
+
+    def test_viewer_on_no_slots(self):
+        """A viewer on none of the Rehearsal's slots gets every slot flagged False and no viewer start/end."""
+        rehearsal = RehearsalFactory(is_full_setlist=False)
+        self._slot(rehearsal, 1)
+        self._slot(rehearsal, 2)
+
+        timeline = timeline_for(rehearsal, self.person)
+
+        self.assertEqual(len(timeline.slots), 2)
+        self.assertTrue(all(not slot.is_viewer for slot in timeline.slots))
+        self.assertEqual(timeline.viewer_song_count, 0)
+        self.assertEqual(timeline.total_song_count, 2)
+        self.assertIsNone(timeline.viewer_start_time)
+        self.assertIsNone(timeline.viewer_end_time)
+        self.assertEqual(timeline.window_start, rehearsal.start_time)
+        self.assertEqual(timeline.window_end, rehearsal.end_time)
+        self.assertFalse(timeline.is_dress_rehearsal)
+
+    def test_viewer_on_first_and_last_slot_only(self):
+        """The viewer's start/end span the first and last slot they're on, skipping the unassigned middle one."""
+        rehearsal = RehearsalFactory(is_full_setlist=False)
+        first = self._slot(rehearsal, 1, assign=True)
+        self._slot(rehearsal, 2)
+        last = self._slot(rehearsal, 3, assign=True)
+
+        timeline = timeline_for(rehearsal, self.person)
+
+        self.assertEqual([slot.is_viewer for slot in timeline.slots], [True, False, True])
+        self.assertEqual(timeline.viewer_song_count, 2)
+        self.assertEqual(timeline.total_song_count, 3)
+        self.assertEqual(timeline.viewer_start_time, first.start_time)
+        self.assertEqual(timeline.viewer_end_time, last.end_time)
+
+    def test_dress_rehearsal_degenerates_to_the_whole_window_and_setlist(self):
+        """The Dress Rehearsal has no RehearsalSong rows: the picture is the whole window, for every viewer (ADR-0006)."""
+        dress_rehearsal = RehearsalFactory(is_full_setlist=True)
+        SongFactory(semester=dress_rehearsal.semester)
+        SongFactory(semester=dress_rehearsal.semester)
+
+        timeline = timeline_for(dress_rehearsal, self.person)
+
+        self.assertEqual(timeline.slots, [])
+        self.assertEqual(timeline.viewer_song_count, 2)
+        self.assertEqual(timeline.total_song_count, 2)
+        self.assertEqual(timeline.viewer_start_time, dress_rehearsal.start_time)
+        self.assertEqual(timeline.viewer_end_time, dress_rehearsal.end_time)
+        self.assertTrue(timeline.is_dress_rehearsal)
 
 
 class AssignmentMatrixForTests(TestCase):
@@ -978,3 +1049,160 @@ class RehearsalScheduleForTests(TestCase):
 
         self.assertEqual(schedule.past, [])
         self.assertEqual(schedule.future, [])
+
+
+class ActiveRolesForTests(TestCase):
+    def test_only_active_roles_in_name_order(self):
+        """Returns only is_active Roles, ordered by name, regardless of creation order."""
+        RoleFactory(name='Zither', is_active=False)
+        drummer = RoleFactory(name='Drummer')
+        bassist = RoleFactory(name='Bassist')
+        semester = SemesterFactory()
+
+        roles = active_roles_for(semester)
+
+        self.assertEqual(roles, [bassist, drummer])
+
+
+class RoleCodesForTests(TestCase):
+    def test_multi_word_name_codes_by_initials(self):
+        """A multi-word Role name codes to the uppercased initials of its first three words."""
+        role = RoleFactory(name='Lead Guitar')
+
+        codes = role_codes_for([role])
+
+        self.assertEqual(codes[role.id], 'LG')
+
+    def test_single_word_name_codes_to_first_three_letters(self):
+        """A single-word Role name codes to its first three letters, uppercased."""
+        role = RoleFactory(name='Drummer')
+
+        codes = role_codes_for([role])
+
+        self.assertEqual(codes[role.id], 'DRU')
+
+    def test_colliding_codes_fall_back_to_the_full_name(self):
+        """Two Roles whose derived codes collide both fall back to their full names, so the code stays unambiguous."""
+        first = RoleFactory(name='Bass Guitar')
+        second = RoleFactory(name='Backing Guitar')
+
+        codes = role_codes_for([first, second])
+
+        self.assertEqual(codes[first.id], 'Bass Guitar')
+        self.assertEqual(codes[second.id], 'Backing Guitar')
+
+
+class CastLineForTests(TestCase):
+    def test_includes_an_empty_entry_for_an_unfilled_role(self):
+        """A Role in the given role set with nobody assigned still gets an entry, with an empty performers list."""
+        song = SongFactory()
+        singer = RoleFactory(name='Singer')
+        drummer = RoleFactory(name='Drummer')
+        codes = role_codes_for([drummer, singer])
+
+        entries = cast_line_for(song, [drummer, singer], codes)
+
+        self.assertEqual([entry.role for entry in entries], [drummer, singer])
+        self.assertEqual(entries[0].performers, [])
+        self.assertEqual(entries[1].performers, [])
+
+    def test_shape_is_constant_regardless_of_the_songs_own_requirements(self):
+        """The entries follow the given role set, not the Song's own SongRoleRequirements."""
+        song = SongFactory()
+        singer = RoleFactory(name='Singer')
+        drummer = RoleFactory(name='Drummer')
+        SongRoleRequirementFactory(song=song, role=singer)  # Song only requests Singer
+        codes = role_codes_for([drummer, singer])
+
+        entries = cast_line_for(song, [drummer, singer], codes)
+
+        self.assertEqual(len(entries), 2)
+
+    def test_a_filled_role_carries_its_performer_and_mismatch_flag(self):
+        """A filled Role's entry carries the assigned Person and their is_role_mismatch flag for that Role (ADR-0002)."""
+        song = SongFactory()
+        role = RoleFactory(name='Bassist')
+        person = PersonFactory()
+        SongRoleAssignmentFactory(song=song, role=role, person=person)
+        codes = role_codes_for([role])
+
+        entries = cast_line_for(song, [role], codes)
+
+        self.assertEqual(len(entries[0].performers), 1)
+        self.assertEqual(entries[0].performers[0].person, person)
+        self.assertTrue(entries[0].performers[0].is_role_mismatch)
+
+    def test_a_backup_only_person_is_excluded(self):
+        """A Backup-only Person (no SongRoleAssignment) does not appear in the cast line (ADR-0007)."""
+        song = SongFactory()
+        role = RoleFactory()
+        rehearsal_song = RehearsalSongFactory(song=song, rehearsal=RehearsalFactory(semester=song.semester))
+        BackupFactory(rehearsal_song=rehearsal_song, role=role)
+        codes = role_codes_for([role])
+
+        entries = cast_line_for(song, [role], codes)
+
+        self.assertEqual(entries[0].performers, [])
+
+
+class SetlistTotalRunningTimeForTests(TestCase):
+    def test_empty_setlist_returns_zero(self):
+        """A Semester with no Songs returns "0:00", not an error."""
+        semester = SemesterFactory()
+
+        self.assertEqual(setlist_total_running_time(semester), '0:00')
+
+    def test_sums_every_songs_length(self):
+        """Sums every Song's length in the Semester, formatted as a display string."""
+        semester = SemesterFactory()
+        SongFactory(semester=semester, length=timedelta(minutes=3, seconds=30))
+        SongFactory(semester=semester, length=timedelta(minutes=4, seconds=15))
+
+        self.assertEqual(setlist_total_running_time(semester), '7:45')
+
+    def test_scoped_to_the_given_semester_only(self):
+        """A Song in a different Semester is not summed in."""
+        semester = SemesterFactory()
+        SongFactory(semester=semester, length=timedelta(minutes=3))
+        SongFactory(length=timedelta(minutes=10))  # different semester
+
+        self.assertEqual(setlist_total_running_time(semester), '3:00')
+
+
+class RehearsedAtForTests(TestCase):
+    def test_includes_each_scheduled_slot_with_its_times(self):
+        """Each RehearsalSong slot the Song is scheduled at appears with the Rehearsal and its slot times."""
+        song = SongFactory()
+        rehearsal = RehearsalFactory(semester=song.semester)
+        rehearsal_song = RehearsalSongFactory(song=song, rehearsal=rehearsal, order=1)
+
+        rows = rehearsed_at_for(song)
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].rehearsal, rehearsal)
+        self.assertFalse(rows[0].is_dress_rehearsal)
+        self.assertEqual(rows[0].start_time, rehearsal_song.start_time)
+        self.assertEqual(rows[0].end_time, rehearsal_song.end_time)
+
+    def test_appends_the_dress_rehearsal_as_a_live_whole_setlist_row(self):
+        """The Semester's Dress Rehearsal is appended with no slot time, even though it carries no RehearsalSong row (ADR-0003)."""
+        song = SongFactory()
+        dress_rehearsal = RehearsalFactory(semester=song.semester, is_full_setlist=True)
+
+        rows = rehearsed_at_for(song)
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].rehearsal, dress_rehearsal)
+        self.assertTrue(rows[0].is_dress_rehearsal)
+        self.assertIsNone(rows[0].start_time)
+        self.assertIsNone(rows[0].end_time)
+
+    def test_no_dress_rehearsal_yields_only_scheduled_slots(self):
+        """A Semester with no Dress Rehearsal yields only the Song's scheduled slots, no extra row."""
+        song = SongFactory()
+        RehearsalSongFactory(song=song, rehearsal=RehearsalFactory(semester=song.semester), order=1)
+
+        rows = rehearsed_at_for(song)
+
+        self.assertEqual(len(rows), 1)
+        self.assertFalse(rows[0].is_dress_rehearsal)

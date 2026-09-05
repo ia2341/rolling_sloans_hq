@@ -10,7 +10,7 @@ from datetime import time
 from unittest.mock import patch
 
 from django.test import TestCase, override_settings
-from django.urls import reverse
+from django.urls import NoReverseMatch, reverse
 
 from identity.factories import PersonFactory
 from scheduling.factories import (
@@ -119,11 +119,10 @@ class TeammateViewTests(TestCase):
 
         self.assertNotContains(response, self.teammate.email)
 
-    def test_no_change_password_link_on_a_teammates_page(self):
-        """The change-password link is a self-only affordance."""
-        response = self.client.get(member_detail_url(self.teammate))
-
-        self.assertNotContains(response, reverse('identity:password-change'))
+    def test_no_password_change_route_exists(self):
+        """identity:password-change no longer exists: change password moved into the SPA (#327, built by #333)."""
+        with self.assertRaises(NoReverseMatch):
+            reverse('identity:password-change')
 
     def test_teammates_page_exposes_no_roles_form(self):
         """A teammate's page carries no MembershipRolesForm and no roles input at all."""
@@ -281,23 +280,48 @@ class NeverRenderedFieldTests(TestCase):
                 self.assertNotContains(response, 'last_login')
                 self.assertNotContains(response, 'is_active')
 
-    def test_recordings_are_never_rendered_on_either_page(self):
-        """A Recording is reached from the Song side only; neither page lists a Person's uploads."""
+    def test_recordings_are_never_rendered_on_a_teammates_page(self):
+        """A teammate's Recordings are reached from the Song side only; this server-rendered page lists none of them.
+
+        The self half of this used to assert the same never-verdict, but
+        `docs/person-page-visibility.md`'s `Recording` row now reads
+        `never | self only | never` (issue #333/#312) — split out below into
+        a positive assertion that your own uploads *do* render.
+        """
         song = SongFactory(semester=self.semester, title='Song R')
         rehearsal_song = RehearsalSongFactory(song=song, rehearsal=RehearsalFactory(semester=self.semester))
+        recording = RecordingFactory(
+            rehearsal_song=rehearsal_song, uploaded_by=self.teammate, note=f'Upload note for {self.teammate.name}',
+        )
+        SongRoleAssignmentFactory(song=song, person=self.teammate)
 
-        for person in (self.teammate, self.viewer):
-            with self.subTest(person=person.name):
-                recording = RecordingFactory(
-                    rehearsal_song=rehearsal_song, uploaded_by=person, note=f'Upload note for {person.name}',
-                )
-                SongRoleAssignmentFactory(song=song, person=person)
+        response = self.client.get(member_detail_url(self.teammate))
 
-                response = self.client.get(member_detail_url(person))
+        self.assertNotContains(response, recording.note)
+        self.assertNotContains(response, str(recording.file))
+        self.assertNotIn('recording_groups', response.context)
 
-                self.assertNotContains(response, recording.note)
-                self.assertNotContains(response, str(recording.file))
-                self.assertNotIn('recording_groups', response.context)
+    def test_own_recordings_are_never_rendered_on_this_old_server_rendered_page(self):
+        """This pre-#333 server-rendered page still shows nothing about your own Recordings either.
+
+        Issue #333's positive self-only Recordings assertion belongs to the
+        new `/api/members/<pk>/` payload (`PersonApiViewerStateTests` in
+        `test_person_page_visibility.py`), not to this old page — #333
+        explicitly leaves this server-rendered view alone, and #341 is what
+        removes it.
+        """
+        song = SongFactory(semester=self.semester, title='Song R')
+        rehearsal_song = RehearsalSongFactory(song=song, rehearsal=RehearsalFactory(semester=self.semester))
+        recording = RecordingFactory(
+            rehearsal_song=rehearsal_song, uploaded_by=self.viewer, note=f'Upload note for {self.viewer.name}',
+        )
+        SongRoleAssignmentFactory(song=song, person=self.viewer)
+
+        response = self.client.get(member_detail_url(self.viewer))
+
+        self.assertNotContains(response, recording.note)
+        self.assertNotContains(response, str(recording.file))
+        self.assertNotIn('recording_groups', response.context)
 
     def test_song_detail_fields_beyond_title_and_role_are_never_rendered(self):
         """Song detail (artist, notes) belongs on the Song page, not on a Person's."""
@@ -326,8 +350,13 @@ class SelfViewGetTests(TestCase):
         """Log in as the synthetic Person before each test."""
         self.client.login(username=self.person.email, password=PASSWORD)
 
-    def test_renders_own_name_email_and_change_password_link(self):
-        """Your own page shows your name, your email, and the change-password link — the self-only fields."""
+    def test_renders_own_name_and_email(self):
+        """Your own page shows your name and your email — self-only fields.
+
+        The change-password link used to live here too (issue #90); #327
+        removes it from this server-rendered page in favor of an SPA
+        affordance #333 builds.
+        """
         MembershipFactory(person=self.person, semester=self.semester)
 
         response = self.client.get(member_detail_url(self.person))
@@ -336,7 +365,6 @@ class SelfViewGetTests(TestCase):
         self.assertTrue(response.context['is_self'])
         self.assertContains(response, 'Owner Placeholder')
         self.assertContains(response, self.person.email)
-        self.assertContains(response, reverse('identity:password-change'))
 
     def test_renders_the_roles_form_always_inline(self):
         """The MembershipRolesForm renders inline with a Save button — no edit toggle."""

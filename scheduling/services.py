@@ -9,12 +9,14 @@ from itertools import pairwise, permutations
 from uuid import uuid4
 
 from botocore.exceptions import BotoCoreError, ClientError
+from django.contrib.auth.hashers import UNUSABLE_PASSWORD_PREFIX
 from django.core.files.storage import storages
 from django.db import IntegrityError, models, transaction
 from django.db.models import Count, Q
 from django.utils import timezone
 
 from identity.models import Person
+from scheduling.fields import format_song_length
 from scheduling.models import (
     Backup,
     Conflict,
@@ -69,11 +71,21 @@ class RecordingUploadError(ValueError):
 
 @dataclass(frozen=True)
 class SemesterOption:
-    """One entry in the admin's Semester dropdown: a Semester, its Live/Draft/Previously-published label, and whether it's the one on screen."""
+    """One entry in the admin's Semester dropdown: a Semester, its Live/Draft/Previously-published label, whether it's the one on screen, and its counts.
+
+    `member_count`, `song_count` and `rehearsal_count` are the three counts
+    the `/api/` sidebar's dropdown wants on every entry without a per-option
+    query (issue #326) — `semester_options_for()` annotates them onto the
+    single queryset it already builds, rather than issuing one query per
+    Semester per count.
+    """
 
     semester: Semester
     status: str
     is_viewing: bool
+    member_count: int
+    song_count: int
+    rehearsal_count: int
 
 
 @dataclass(frozen=True)
@@ -564,13 +576,21 @@ def semester_options_for(request) -> list['SemesterOption']:
         return []
     live = get_live_semester()
     viewing = get_viewing_semester(request)
+    semesters = Semester.objects.order_by('-created_at', '-id').annotate(
+        member_count=Count('membership', distinct=True),
+        song_count=Count('song', distinct=True),
+        rehearsal_count=Count('rehearsal', distinct=True),
+    )
     return [
         SemesterOption(
             semester=semester,
             status=_semester_status(semester, live),
             is_viewing=viewing is not None and semester.pk == viewing.pk,
+            member_count=semester.member_count,
+            song_count=semester.song_count,
+            rehearsal_count=semester.rehearsal_count,
         )
-        for semester in Semester.objects.order_by('-created_at', '-id')
+        for semester in semesters
     ]
 
 
@@ -650,6 +670,118 @@ def roster_for(memberships):
             distinct=True,
         ),
     ).order_by('person__name')
+
+
+def active_roster_for(memberships):
+    """Return `roster_for(memberships)`, excluding anyone who hasn't set a password yet (issue #333).
+
+    "Active" means `has_usable_password()` — a Person who has completed
+    their invite — never `Person.is_active` (the separate Django-auth
+    flag). An invited-but-not-yet-active Person stays off the Band page's
+    read surface; they appear only in the Roster editor (#336), which is
+    the only place that needs to offer "Invite again".
+    """
+    return roster_for(memberships).exclude(person__password__startswith=UNUSABLE_PASSWORD_PREFIX)
+
+
+@dataclass(frozen=True)
+class PersonRecording:
+    """One row in a Person's own Recordings list on `/members/<pk>/` (issue #333, self only).
+
+    Never carries the object key (ADR 0004) — `playback_url` is a freshly
+    issued short-lived signed GET instead, and `song_title`/`rehearsal_date`
+    name the slot rather than leaving the row meaningless on its own.
+    """
+
+    id: int
+    song_title: str
+    rehearsal_date: date
+    start_time: time | None
+    end_time: time | None
+    note: str
+    file_size: int
+    uploaded_at: datetime
+    playback_url: str
+
+
+def person_recordings_for(person, semester) -> list[PersonRecording]:
+    """Return `person`'s own uploaded Recordings scoped to `semester`, newest first (issue #333).
+
+    This is the self-only counterpart to `recording_groups_for()`, which is
+    Song-scoped. A `Recording` has no direct Semester FK, so this scopes
+    through `rehearsal_song -> rehearsal -> semester`, the only path it has
+    to one — a Person with no rows on this path (e.g. no Membership in
+    `semester` yet) gets an empty list rather than an error.
+    """
+    if semester is None:
+        return []
+    recordings = (
+        Recording.objects.filter(uploaded_by=person, rehearsal_song__rehearsal__semester=semester)
+        .select_related('rehearsal_song__rehearsal', 'rehearsal_song__song')
+        .order_by('-uploaded_at')
+    )
+    return [
+        PersonRecording(
+            id=recording.pk,
+            song_title=recording.rehearsal_song.song.title,
+            rehearsal_date=recording.rehearsal_song.rehearsal.date,
+            start_time=recording.rehearsal_song.start_time,
+            end_time=recording.rehearsal_song.end_time,
+            note=recording.note,
+            file_size=recording.file_size,
+            uploaded_at=recording.uploaded_at,
+            playback_url=create_recording_playback_url(recording),
+        )
+        for recording in recordings
+    ]
+
+
+@dataclass(frozen=True)
+class RecordingSlotOption:
+    """One RehearsalSong slot as an Upload-a-take picker option (issue #333).
+
+    Deliberately not scoped to slots the uploader attended — "slots you
+    weren't at are listed too" is the picker's documented behaviour, not an
+    oversight, since a member may be uploading someone else's take.
+    """
+
+    id: int
+    song_id: int
+    song_title: str
+    rehearsal_date: date
+    start_time: time | None
+    end_time: time | None
+
+
+def recording_slot_options_for(semester, song=None) -> list[RecordingSlotOption]:
+    """Return `semester`'s RehearsalSong slots as Upload-a-take picker options, optionally narrowed to one Song (issue #333).
+
+    Ordered by Rehearsal date then slot order, mirroring
+    `RecordingUploadView`'s existing picker. Returns every slot in the
+    Semester regardless of who was cast on it — the note the picker itself
+    renders is what tells an uploader they might be uploading someone
+    else's take.
+    """
+    if semester is None:
+        return []
+    rehearsal_songs = (
+        RehearsalSong.objects.filter(rehearsal__semester=semester)
+        .select_related('rehearsal', 'song')
+        .order_by('rehearsal__date', 'order')
+    )
+    if song is not None:
+        rehearsal_songs = rehearsal_songs.filter(song=song)
+    return [
+        RecordingSlotOption(
+            id=rehearsal_song.pk,
+            song_id=rehearsal_song.song_id,
+            song_title=rehearsal_song.song.title,
+            rehearsal_date=rehearsal_song.rehearsal.date,
+            start_time=rehearsal_song.start_time,
+            end_time=rehearsal_song.end_time,
+        )
+        for rehearsal_song in rehearsal_songs
+    ]
 
 
 def declared_roles_for(membership):
@@ -841,6 +973,144 @@ def rehearsal_count_target(song) -> int:
     re-derive it.
     """
     return song.semester.rehearsal_set.filter(is_full_setlist=False).count()
+
+
+def active_roles_for(semester) -> list[Role]:
+    """Return `semester`'s active Roles, in a stable name order — the fixed Role set every cast line in the Semester shares.
+
+    Computed once per payload, not per Song (issue #330): deriving the
+    set from each Song's own Role Requirements instead would make a Role's
+    hue and position shift row to row, the exact property the Setlist's
+    constant cast line exists to avoid.
+    """
+    return list(Role.objects.filter(is_active=True).order_by('name'))
+
+
+def _derive_role_code(name: str) -> str:
+    """Derive a short presentational code from a Role's name: initials of up to 3 words, else its first 3 letters, uppercased.
+
+    Never persisted (issue #330) — `Role` has no `code` field, and adding
+    one would be a second name column to keep in sync for something purely
+    presentational.
+    """
+    words = name.split()
+    if len(words) >= 2:
+        return ''.join(word[0] for word in words[:3]).upper()
+    return name[:3].upper()
+
+
+def role_codes_for(roles: list[Role]) -> dict[int, str]:
+    """Return a short code per Role id, derived from its name, falling back to the full name wherever two Roles' derived codes would collide.
+
+    A pill's `title` always names the Role in full regardless (issue
+    #330) — this code is a scannable accelerator, never the only channel
+    carrying the meaning.
+    """
+    codes_by_role_id = {role.id: _derive_role_code(role.name) for role in roles}
+    code_counts: dict[str, int] = defaultdict(int)
+    for code in codes_by_role_id.values():
+        code_counts[code] += 1
+    roles_by_id = {role.id: role for role in roles}
+    return {
+        role_id: (roles_by_id[role_id].name if code_counts[code] > 1 else code)
+        for role_id, code in codes_by_role_id.items()
+    }
+
+
+@dataclass(frozen=True)
+class CastPerformer:
+    """One Person filling one Role in a Song's cast line, carrying the ADR-0002 mismatch flag for that Role (issue #330)."""
+
+    person: object
+    is_role_mismatch: bool
+
+
+@dataclass(frozen=True)
+class CastRoleEntry:
+    """One Role's slot in a Song's cast line: its code and every Person who fills it — empty when nobody does (issue #330)."""
+
+    role: Role
+    code: str
+    performers: list[CastPerformer]
+
+
+def cast_line_for(song, roles: list[Role], codes: dict[int, str]) -> list[CastRoleEntry]:
+    """Return `song`'s cast as one entry per `roles`, in that fixed order, including an empty entry for an unfilled Role.
+
+    Reshapes `performers_for(song)` — person-first — into the Role-first
+    shape the Setlist and Song page need (issue #330): a Role in `roles`
+    with nobody assigned still gets an entry with an empty performer list,
+    a rendered empty rather than an omission. `roles`/`codes` are computed
+    once per payload by the caller (`active_roles_for`/`role_codes_for`),
+    never re-derived per Song.
+    """
+    mismatch_by_role_and_person = {
+        (role_id, person_id): is_role_mismatch
+        for role_id, person_id, is_role_mismatch in SongRoleAssignment.objects.filter(
+            song=song,
+        ).values_list('role_id', 'person_id', 'is_role_mismatch')
+    }
+    performers_by_role_id: dict[int, list[CastPerformer]] = defaultdict(list)
+    for performer in performers_for(song):
+        for role in performer.roles:
+            performers_by_role_id[role.id].append(
+                CastPerformer(
+                    person=performer.person,
+                    is_role_mismatch=mismatch_by_role_and_person.get((role.id, performer.person.id), False),
+                ),
+            )
+    return [
+        CastRoleEntry(role=role, code=codes[role.id], performers=performers_by_role_id.get(role.id, []))
+        for role in roles
+    ]
+
+
+def setlist_total_running_time(semester) -> str:
+    """Return the Setlist's total running time as a musician-readable display string, summed server-side across every Song's length.
+
+    Never a client-side reduce (issue #330): the client renders what this
+    returns and derives nothing. A Semester with no Songs returns
+    `"0:00"`.
+    """
+    total = Song.objects.filter(semester=semester).aggregate(total=models.Sum('length'))['total'] or timedelta()
+    return format_song_length(total)
+
+
+@dataclass(frozen=True)
+class RehearsedAtRow:
+    """One Rehearsal `song` is worked at: a scheduled slot with its times, or the Dress Rehearsal's live "whole setlist" row (ADR-0003, issue #330)."""
+
+    rehearsal: Rehearsal
+    is_dress_rehearsal: bool
+    start_time: time | None
+    end_time: time | None
+
+
+def rehearsed_at_for(song) -> list[RehearsedAtRow]:
+    """Return the Rehearsals `song` is worked at: each RehearsalSong slot's Rehearsal with its slot times, plus the Semester's Dress Rehearsal (if any) as a live "whole setlist" row.
+
+    The Dress Rehearsal carries no persisted RehearsalSong row for any Song
+    (ADR-0003) — every Song in the Semester "rehearses" there by
+    definition, so it's appended here rather than surfacing from the
+    RehearsalSong query.
+    """
+    rows = [
+        RehearsedAtRow(
+            rehearsal=rehearsal_song.rehearsal,
+            is_dress_rehearsal=False,
+            start_time=rehearsal_song.start_time,
+            end_time=rehearsal_song.end_time,
+        )
+        for rehearsal_song in RehearsalSong.objects.filter(song=song)
+        .select_related('rehearsal')
+        .order_by('rehearsal__date')
+    ]
+    dress_rehearsal = Rehearsal.objects.filter(semester=song.semester, is_full_setlist=True).first()
+    if dress_rehearsal is not None:
+        rows.append(
+            RehearsedAtRow(rehearsal=dress_rehearsal, is_dress_rehearsal=True, start_time=None, end_time=None),
+        )
+    return rows
 
 
 @dataclass(frozen=True)
@@ -1643,6 +1913,86 @@ def breaks_for(rehearsal, person) -> list[Break]:
     return breaks
 
 
+@dataclass(frozen=True)
+class TimelineSlot:
+    """One slot of `timeline_for()`'s rehearsal-window picture: a Song's timed span and whether the viewer is on it (issue #331)."""
+
+    song: Song
+    start_time: time
+    end_time: time
+    is_viewer: bool
+
+
+@dataclass(frozen=True)
+class Timeline:
+    """The viewer's "You at this rehearsal" picture: the Rehearsal's ordered slots, plus the viewer's own span and counts (issue #331).
+
+    `slots` is empty for the Dress Rehearsal (ADR-0003, no persisted
+    RehearsalSong rows) — its picture degenerates to the whole window, so
+    `viewer_start_time`/`viewer_end_time` are the Rehearsal's own
+    start_time/end_time and both counts are the live setlist's song count,
+    for every viewer alike (attendance there is mandatory, ADR-0006).
+    `viewer_start_time`/`viewer_end_time` are None for a regular Rehearsal
+    the viewer is on no slot of — an empty timeline is itself the answer,
+    not a missing one.
+    """
+
+    slots: list[TimelineSlot]
+    window_start: time
+    window_end: time
+    viewer_song_count: int
+    total_song_count: int
+    viewer_start_time: time | None
+    viewer_end_time: time | None
+    is_dress_rehearsal: bool
+
+
+def timeline_for(rehearsal, person) -> Timeline:
+    """Build `person`'s "You at this rehearsal" timeline for `rehearsal` (issue #331).
+
+    Derives slot membership from `slots_for_person()` — the union of
+    standing assignments and Backups (ADR-0007) — never from `Song.length`,
+    which carries no scheduling authority (a slot is an equal share of the
+    Rehearsal's window, not the song's running time).
+    """
+    if rehearsal.is_full_setlist:
+        song_count = Song.objects.filter(semester=rehearsal.semester).count()
+        return Timeline(
+            slots=[],
+            window_start=rehearsal.start_time,
+            window_end=rehearsal.end_time,
+            viewer_song_count=song_count,
+            total_song_count=song_count,
+            viewer_start_time=rehearsal.start_time,
+            viewer_end_time=rehearsal.end_time,
+            is_dress_rehearsal=True,
+        )
+    rehearsal_songs = list(
+        RehearsalSong.objects.filter(rehearsal=rehearsal).select_related('song').order_by('order'),
+    )
+    viewer_slot_ids = set(slots_for_person(rehearsal, person).values_list('pk', flat=True))
+    slots = [
+        TimelineSlot(
+            song=rehearsal_song.song,
+            start_time=rehearsal_song.start_time,
+            end_time=rehearsal_song.end_time,
+            is_viewer=rehearsal_song.pk in viewer_slot_ids,
+        )
+        for rehearsal_song in rehearsal_songs
+    ]
+    viewer_slots = [slot for slot in slots if slot.is_viewer]
+    return Timeline(
+        slots=slots,
+        window_start=rehearsal.start_time,
+        window_end=rehearsal.end_time,
+        viewer_song_count=len(viewer_slots),
+        total_song_count=len(slots),
+        viewer_start_time=viewer_slots[0].start_time if viewer_slots else None,
+        viewer_end_time=viewer_slots[-1].end_time if viewer_slots else None,
+        is_dress_rehearsal=False,
+    )
+
+
 CONFLICT_FULL_ABSENCE = 'full_absence'
 CONFLICT_LATE_ARRIVAL = 'late_arrival'
 CONFLICT_EARLY_DEPARTURE = 'early_departure'
@@ -1707,6 +2057,20 @@ def conflict_adjudication_index_for(semester) -> list[ConflictAdjudicationRow]:
         ConflictAdjudicationRow(rehearsal=rehearsal, pending_count=pending_counts.get(rehearsal.pk, 0))
         for rehearsal in rehearsals
     ]
+
+
+def pending_conflict_count_for(semester) -> int:
+    """Return `semester`'s total pending-Conflict count across every adjudicatable Rehearsal (issue #326).
+
+    The ambient count the `/api/` envelope's `context.pending_conflict_count`
+    carries for an admin — its one consumer is the admin Conflicts index
+    (issue #340); #328 must not render it on the Conflicts nav item, which
+    #311 removed deliberately. Shares `conflict_adjudication_index_for()`'s
+    future/non-Dress Rehearsal scope (ADR 0006), summed rather than broken
+    out per Rehearsal.
+    """
+    rehearsals = future_rehearsals_for(semester)
+    return Conflict.objects.filter(rehearsal__in=rehearsals, status=Conflict.PENDING).count()
 
 
 @dataclass(frozen=True)
@@ -3037,6 +3401,53 @@ def preview_setlist_edits(buffer: SetlistEditBuffer, *, viewing_semester: Semest
         loud=loud,
         quiet=quiet,
     )
+
+
+@dataclass(frozen=True)
+class SpotifyImportCandidate:
+    """One playlist track offered in the + Add sheet's Spotify section, with server-computed duplicate detection (issue #335).
+
+    `scheduling.spotify` performs no de-duplication of any kind — it only
+    turns a playlist into rows. Whether a candidate is "already in this
+    setlist" is a question about saved data, so it's answered here rather
+    than in the client: the wire carries what the admin reads and types,
+    and anything derived from saved state stays server-side (issue #335's
+    wire-primitives rule). A duplicate still ticks and adds normally — a
+    Setlist may legitimately repeat a title (issue #335 user story 25) —
+    this only supplies the sheet's grey/"Already in this setlist" label.
+    """
+
+    title: str
+    artist: str
+    length: timedelta
+    already_in_setlist: bool
+
+
+def spotify_import_candidates_for(semester: Semester | None, songs) -> list[SpotifyImportCandidate]:
+    """Return Spotify-imported rows as + Add sheet candidates, flagging each whose title already exists in `semester`'s Setlist.
+
+    `songs` is `PlaylistImportResult.songs` (a list of `scheduling.spotify.ImportedSong`,
+    accessed here only by `title`/`artist`/`length` duck typing, so this
+    function stays free of a dependency on `scheduling.spotify`'s types).
+    The duplicate check is case-insensitive and title-only, matching the
+    sheet's greyed "Already in this setlist" label (issue #335) — an
+    artist or length difference never suppresses the flag. `semester=None`
+    (nothing published/selected) flags nothing as a duplicate.
+    """
+    existing_titles = (
+        {title.casefold() for title in Song.objects.filter(semester=semester).values_list('title', flat=True)}
+        if semester is not None
+        else set()
+    )
+    return [
+        SpotifyImportCandidate(
+            title=song.title,
+            artist=song.artist,
+            length=song.length,
+            already_in_setlist=song.title.casefold() in existing_titles,
+        )
+        for song in songs
+    ]
 
 
 class StaleSongRoleRequirementsError(ValueError):
