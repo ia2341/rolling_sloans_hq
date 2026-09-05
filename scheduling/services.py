@@ -9,6 +9,7 @@ from itertools import pairwise, permutations
 from uuid import uuid4
 
 from botocore.exceptions import BotoCoreError, ClientError
+from django.contrib.auth.hashers import UNUSABLE_PASSWORD_PREFIX
 from django.core.files.storage import storages
 from django.db import IntegrityError, models, transaction
 from django.db.models import Count, Q
@@ -669,6 +670,118 @@ def roster_for(memberships):
             distinct=True,
         ),
     ).order_by('person__name')
+
+
+def active_roster_for(memberships):
+    """Return `roster_for(memberships)`, excluding anyone who hasn't set a password yet (issue #333).
+
+    "Active" means `has_usable_password()` — a Person who has completed
+    their invite — never `Person.is_active` (the separate Django-auth
+    flag). An invited-but-not-yet-active Person stays off the Band page's
+    read surface; they appear only in the Roster editor (#336), which is
+    the only place that needs to offer "Invite again".
+    """
+    return roster_for(memberships).exclude(person__password__startswith=UNUSABLE_PASSWORD_PREFIX)
+
+
+@dataclass(frozen=True)
+class PersonRecording:
+    """One row in a Person's own Recordings list on `/members/<pk>/` (issue #333, self only).
+
+    Never carries the object key (ADR 0004) — `playback_url` is a freshly
+    issued short-lived signed GET instead, and `song_title`/`rehearsal_date`
+    name the slot rather than leaving the row meaningless on its own.
+    """
+
+    id: int
+    song_title: str
+    rehearsal_date: date
+    start_time: time | None
+    end_time: time | None
+    note: str
+    file_size: int
+    uploaded_at: datetime
+    playback_url: str
+
+
+def person_recordings_for(person, semester) -> list[PersonRecording]:
+    """Return `person`'s own uploaded Recordings scoped to `semester`, newest first (issue #333).
+
+    This is the self-only counterpart to `recording_groups_for()`, which is
+    Song-scoped. A `Recording` has no direct Semester FK, so this scopes
+    through `rehearsal_song -> rehearsal -> semester`, the only path it has
+    to one — a Person with no rows on this path (e.g. no Membership in
+    `semester` yet) gets an empty list rather than an error.
+    """
+    if semester is None:
+        return []
+    recordings = (
+        Recording.objects.filter(uploaded_by=person, rehearsal_song__rehearsal__semester=semester)
+        .select_related('rehearsal_song__rehearsal', 'rehearsal_song__song')
+        .order_by('-uploaded_at')
+    )
+    return [
+        PersonRecording(
+            id=recording.pk,
+            song_title=recording.rehearsal_song.song.title,
+            rehearsal_date=recording.rehearsal_song.rehearsal.date,
+            start_time=recording.rehearsal_song.start_time,
+            end_time=recording.rehearsal_song.end_time,
+            note=recording.note,
+            file_size=recording.file_size,
+            uploaded_at=recording.uploaded_at,
+            playback_url=create_recording_playback_url(recording),
+        )
+        for recording in recordings
+    ]
+
+
+@dataclass(frozen=True)
+class RecordingSlotOption:
+    """One RehearsalSong slot as an Upload-a-take picker option (issue #333).
+
+    Deliberately not scoped to slots the uploader attended — "slots you
+    weren't at are listed too" is the picker's documented behaviour, not an
+    oversight, since a member may be uploading someone else's take.
+    """
+
+    id: int
+    song_id: int
+    song_title: str
+    rehearsal_date: date
+    start_time: time | None
+    end_time: time | None
+
+
+def recording_slot_options_for(semester, song=None) -> list[RecordingSlotOption]:
+    """Return `semester`'s RehearsalSong slots as Upload-a-take picker options, optionally narrowed to one Song (issue #333).
+
+    Ordered by Rehearsal date then slot order, mirroring
+    `RecordingUploadView`'s existing picker. Returns every slot in the
+    Semester regardless of who was cast on it — the note the picker itself
+    renders is what tells an uploader they might be uploading someone
+    else's take.
+    """
+    if semester is None:
+        return []
+    rehearsal_songs = (
+        RehearsalSong.objects.filter(rehearsal__semester=semester)
+        .select_related('rehearsal', 'song')
+        .order_by('rehearsal__date', 'order')
+    )
+    if song is not None:
+        rehearsal_songs = rehearsal_songs.filter(song=song)
+    return [
+        RecordingSlotOption(
+            id=rehearsal_song.pk,
+            song_id=rehearsal_song.song_id,
+            song_title=rehearsal_song.song.title,
+            rehearsal_date=rehearsal_song.rehearsal.date,
+            start_time=rehearsal_song.start_time,
+            end_time=rehearsal_song.end_time,
+        )
+        for rehearsal_song in rehearsal_songs
+    ]
 
 
 def declared_roles_for(membership):

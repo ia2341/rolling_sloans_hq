@@ -224,3 +224,126 @@ def serialize_song(song, *, is_admin: bool, next_rehearsal) -> dict:
     if is_admin:
         data['next_rehearsal'] = _serialize_next_rehearsal(next_rehearsal) if next_rehearsal is not None else None
     return data
+
+
+def _serialize_roster_entry(membership):
+    """Return one Band-page row: `Person.name` (never the object, per `.name`-not-`Person` rule), declared Role names, and the annotated Song count (issue #333)."""
+    return {
+        'id': membership.person_id,
+        'name': membership.person.name,
+        'roles': [role.role.name for role in membership.membershiprole_set.all()],
+        'song_count': membership.songs_count,
+    }
+
+
+def serialize_band(memberships, semester) -> dict:
+    """Return the `/api/members/` `data` shape (issue #333): the viewing Semester's active Roster, or the empty/no-Semester shape.
+
+    Carries no admin-only field — `can_edit_roster` isn't needed on the
+    wire since the "Edit roster" button is unconditionally rendered for an
+    admin viewer by `context.viewer.is_admin`, matching how Setlist's "Edit
+    setlist" button reads that same flag rather than a per-payload one.
+    """
+    if semester is None:
+        return {'semester_name': None, 'member_count': 0, 'members': []}
+    entries = list(memberships)
+    return {
+        'semester_name': semester.name,
+        'member_count': len(entries),
+        'members': [_serialize_roster_entry(membership) for membership in entries],
+    }
+
+
+def _serialize_role(role) -> dict:
+    """Return one Role as `id`/`name`, for a Person page's declared-Roles chips and its editable Role catalog (issue #333)."""
+    return {'id': role.pk, 'name': role.name}
+
+
+def _serialize_person_song(assignment) -> dict:
+    """Return one Person-page Songs row: the Song's title and the Role filled — never `is_role_mismatch` (ADR 0002, issue #333)."""
+    return {
+        'song_id': assignment.song_id,
+        'song_title': assignment.song.title,
+        'artist': assignment.song.artist,
+        'role_name': assignment.role.name,
+    }
+
+
+def _serialize_person_recording(recording) -> dict:
+    """Return one row of a Person's own Recordings list: everything but the object key (ADR 0004, issue #333)."""
+    return {
+        'id': recording.id,
+        'song_title': recording.song_title,
+        'rehearsal_date': recording.rehearsal_date.isoformat(),
+        'start_time': recording.start_time.isoformat() if recording.start_time else None,
+        'end_time': recording.end_time.isoformat() if recording.end_time else None,
+        'note': recording.note,
+        'file_size': recording.file_size,
+        'uploaded_at': recording.uploaded_at.isoformat(),
+        'playback_url': recording.playback_url,
+    }
+
+
+def _serialize_slot_option(option) -> dict:
+    """Return one Upload-a-take picker option, naming the Song and Rehearsal slot it belongs to (issue #333)."""
+    return {
+        'id': option.id,
+        'song_id': option.song_id,
+        'song_title': option.song_title,
+        'rehearsal_date': option.rehearsal_date.isoformat(),
+        'start_time': option.start_time.isoformat() if option.start_time else None,
+        'end_time': option.end_time.isoformat() if option.end_time else None,
+    }
+
+
+def serialize_person(person, *, semester, is_self: bool, can_edit_roles: bool, membership) -> dict:
+    """Return the `/api/members/<pk>/` `data` shape for `person` (issue #333), computed for exactly one of the three viewer states.
+
+    Follows `docs/person-page-visibility.md`'s "absent, not null" contract
+    strictly: `email` and the whole `recordings` block are present only in
+    the self payload, `available_roles` only when `can_edit_roles`, and
+    `roles`/`songs` only when `person` holds a saved `Membership` in
+    `semester` — the not-yet-rostered self case renders name, email and an
+    editable (empty) Roles card with no declared-Roles list and no Songs
+    section at all, never a zero (issue #333 user stories 23-24). Carries
+    no `Conflict`, `Backup`, `is_role_mismatch` or attendance-inference
+    field anywhere, for any viewer, including an admin (ADR 0005, ADR
+    0007, ADR 0002) — the boundary is drawn around this surface, not the
+    viewer.
+    """
+    has_membership = membership is not None and membership.pk is not None
+    data = {
+        'id': person.pk,
+        'name': person.name,
+        'is_self': is_self,
+        'can_edit_roles': can_edit_roles,
+        'has_membership': has_membership,
+        'semester_name': semester.name if semester is not None else None,
+    }
+    if is_self:
+        data['email'] = person.email
+    if can_edit_roles:
+        data['available_roles'] = [_serialize_role(role) for role in services.active_roles_for(semester)] if semester is not None else []
+    if has_membership:
+        data['roles'] = [_serialize_role(role) for role in services.declared_roles_for(membership)]
+        data['songs'] = [_serialize_person_song(assignment) for assignment in services.assigned_songs_for(person, semester)]
+    if is_self and has_membership:
+        data['recordings'] = serialize_person_recordings(person, semester)
+    return data
+
+
+def serialize_person_recordings(person, semester) -> dict:
+    """Return the self-only Recordings block (issue #333): its count, its rows, and the Upload-a-take slot picker's options.
+
+    Shared by `serialize_person()` and the upload-confirm/delete `/api/`
+    endpoints, which both return this same shape as their "updated state"
+    after a write — so a confirm or delete never has to disagree with what
+    a fresh page load would show.
+    """
+    recordings = services.person_recordings_for(person, semester)
+    upload_slots = services.recording_slot_options_for(semester)
+    return {
+        'count': len(recordings),
+        'items': [_serialize_person_recording(recording) for recording in recordings],
+        'upload_slots': [_serialize_slot_option(option) for option in upload_slots],
+    }
