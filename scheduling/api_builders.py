@@ -45,6 +45,7 @@ from django.core.exceptions import ValidationError
 from django.utils.dateparse import parse_datetime
 
 from scheduling.fields import parse_song_length
+from scheduling.models import Song
 from scheduling.services import SetlistEditBuffer, SetlistEditRow
 
 #: Field-level messages shared by every row/field validation failure below.
@@ -53,6 +54,7 @@ _MUST_BE_INTEGER_MESSAGE = 'Enter a whole number.'
 _MUST_BE_STRING_MESSAGE = 'Enter a string.'
 _MUST_BE_LIST_MESSAGE = 'Expected a list.'
 _MUST_BE_OBJECT_MESSAGE = 'Expected an object.'
+_SONG_NOT_FOUND_MESSAGE = 'This song no longer exists in the current semester.'
 
 
 class SetlistBufferValidationError(ValidationError):
@@ -110,11 +112,15 @@ def build_setlist_buffer_from_request(request, *, viewing_semester) -> SetlistEd
 
     `viewing_semester` is accepted (rather than read internally) so this
     function stays a pure translation of one request body into one
-    Buffer, with no `services.get_viewing_semester()` call of its own;
-    it's threaded through only so `semester_id`/`semester_updated_at`
-    parsing has no other use for it today, kept as a parameter for
-    parity with every other `apply_*`/`preview_*` pairing's calling
-    convention and in case a later row-level check needs it.
+    Buffer, with no `services.get_viewing_semester()` call of its own.
+    It scopes the one row-level existence check this function does perform:
+    each row's non-null `song_id` must name a `Song` that actually belongs
+    to `viewing_semester`, mirroring the pre-SPA formset's
+    `_scoped_to_viewing_semester(Song, semester)` queryset binding — a
+    stale or foreign-semester `song_id` is reported as a per-row
+    `SetlistBufferValidationError` here rather than reaching
+    `_apply_setlist_edit_row()`'s `Song.objects.get()` and raising
+    `Song.DoesNotExist` (issue #334 PR #345 review).
 
     Raises `SetlistBufferValidationError` (a `ValidationError` subclass)
     carrying `row_errors`/`non_field_errors`/`raw_rows` for anything this
@@ -168,6 +174,16 @@ def build_setlist_buffer_from_request(request, *, viewing_semester) -> SetlistEd
             else:
                 deleted_song_ids.add(song_id)
 
+    candidate_song_ids = set()
+    for raw_row in rows_raw:
+        if isinstance(raw_row, dict) and raw_row.get('song_id') is not None:
+            candidate_song_id = _expect_int(raw_row.get('song_id'))
+            if candidate_song_id is not None:
+                candidate_song_ids.add(candidate_song_id)
+    existing_song_ids = set(
+        Song.objects.filter(semester=viewing_semester, pk__in=candidate_song_ids).values_list('pk', flat=True)
+    ) if candidate_song_ids else set()
+
     row_errors = {}
     seen_row_keys = set()
     rows = []
@@ -190,6 +206,8 @@ def build_setlist_buffer_from_request(request, *, viewing_semester) -> SetlistEd
             song_id = _expect_int(raw_row.get('song_id'))
             if song_id is None:
                 field_errors.setdefault('song_id', []).append(_MUST_BE_INTEGER_MESSAGE)
+            elif song_id not in existing_song_ids:
+                field_errors.setdefault('song_id', []).append(_SONG_NOT_FOUND_MESSAGE)
 
         title = _expect_string(raw_row.get('title'))
         if title is None:

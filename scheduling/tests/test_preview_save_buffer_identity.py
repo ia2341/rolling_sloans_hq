@@ -125,6 +125,30 @@ class BuilderIsTheOneConstructionPathTests(TestCase):
 
         self.assertEqual(first, second)
 
+    def test_song_id_from_a_foreign_semester_raises_a_structured_row_error(self):
+        """A `song_id` naming a Song scoped to a different Semester fails as a per-row error, not a `Song.DoesNotExist`."""
+        other_semester = SemesterFactory()
+        foreign_song = SongFactory(semester=other_semester, position=1)
+        body = self._valid_body()
+        body['rows'][0]['song_id'] = foreign_song.pk
+
+        with self.assertRaises(SetlistBufferValidationError) as capture:
+            build_setlist_buffer_from_request(_fake_request(body), viewing_semester=self.semester)
+
+        self.assertIn('song_id', capture.exception.row_errors['r1'])
+
+    def test_stale_song_id_raises_a_structured_row_error(self):
+        """A `song_id` that no longer exists at all fails as a per-row error, not a `Song.DoesNotExist`."""
+        stale_song_id = self.song.pk
+        self.song.delete()
+        body = self._valid_body()
+        body['rows'][0]['song_id'] = stale_song_id
+
+        with self.assertRaises(SetlistBufferValidationError) as capture:
+            build_setlist_buffer_from_request(_fake_request(body), viewing_semester=self.semester)
+
+        self.assertIn('song_id', capture.exception.row_errors['r1'])
+
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class LiveEndpointsDelegateToTheSameBuilderTests(TestCase):
