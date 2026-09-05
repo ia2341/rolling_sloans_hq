@@ -714,6 +714,10 @@
   .chk .ci:last-child { border-bottom: 0; }
   .chk .ci .sub { grid-column: 2 / -1; font-size: 11.5px; color: var(--ink-3); }
   .chk .ci.done b { color: var(--ink-3); font-weight: 400; text-decoration: line-through; }
+  /* Approved: the checklist states the order, so the number and the dependency both render. */
+  .chk .ci .ord { font-family: var(--mono); color: var(--ink-3); font-weight: 400; }
+  .chk .ci .needs { border: 1px solid var(--line); border-radius: 99px; padding: 0 6px;
+    margin-left: 4px; font-size: 10.5px; color: var(--ink-2); white-space: nowrap; }
 
   /* a fake page underneath, so C's band can be judged against something real */
   .ghost { display: grid; gap: 7px; opacity: 0.98; }
@@ -1644,16 +1648,25 @@ function wizardA() {
   /* A brand-new Semester has nothing done; the mid-setup case has the roster in. The
      checklist is DERIVED from what is empty, which is why it needs no stored step state
      and is correct whenever you come back to it. */
+  /* Approved shape: the checklist STATES THE ORDER. The wizard's one real service was telling a
+     first-time admin that the roster comes before casting and the pattern before dates, and a bare
+     list of items throws that away. So each item carries its number and, where one genuinely depends
+     on another, what it is waiting for. The dependency is real, not decorative: the date generator
+     reads a saved RehearsalPattern, and casting a Song needs people on the Membership to cast. */
   const items = state.created ? [
-    ['Roster', false, `Empty &mdash; import ${LIVE}&rsquo;s roster, or invite people`, 'Band'],
-    ['Setlist', false, 'Empty &mdash; paste a Spotify playlist, or add songs by hand', 'Songs'],
-    ['Rehearsal pattern', false, 'Not set &mdash; the days and times rehearsals happen', 'Schedule'],
-    ['Rehearsal dates', false, 'Nothing scheduled &mdash; generated from the pattern', 'Schedule'],
+    ['Roster', false, `Empty &mdash; import ${LIVE}&rsquo;s roster, or invite people`, 'Band', ''],
+    ['Setlist', false, 'Empty &mdash; paste a Spotify playlist, or add songs by hand', 'Songs', ''],
+    ['Rehearsal pattern', false, 'Not set &mdash; the days and times rehearsals happen', 'Schedule', ''],
+    ['Rehearsal dates', false, 'Nothing scheduled &mdash; generated from the pattern', 'Schedule',
+     'Needs the pattern first'],
+    ['Casting', false, 'Nobody assigned to a song yet', 'Schedule', 'Needs the roster and the setlist'],
   ] : [
-    ['Roster', true,  '9 members imported from Fall 2026', 'Band'],
-    ['Setlist', false, 'No songs yet', 'Songs'],
-    ['Rehearsal pattern', false, 'No pattern saved', 'Schedule'],
-    ['Rehearsal dates', false, 'Nothing scheduled &mdash; generate them from the pattern', 'Schedule'],
+    ['Roster', true,  '9 members imported from Fall 2026', 'Band', ''],
+    ['Setlist', false, 'No songs yet', 'Songs', ''],
+    ['Rehearsal pattern', false, 'No pattern saved', 'Schedule', ''],
+    ['Rehearsal dates', false, 'Nothing scheduled &mdash; generate them from the pattern', 'Schedule',
+     'Needs the pattern first'],
+    ['Casting', false, 'Nobody assigned to a song yet', 'Schedule', 'Needs the setlist'],
   ];
   return `<div class="stack">
     <div class="page-head"><h1>Home</h1></div>
@@ -1667,12 +1680,13 @@ function wizardA() {
     <div class="card stack" style="gap:10px">
       <div class="row-between"><span class="section-head">Setting up ${esc(state.semester)}</span>
         <span class="status draft">Draft</span></div>
-      <p class="note">It is a draft until you publish it, so members see nothing yet. Do these in any
-      order, or not at all &mdash; each one is just its ordinary tab.</p>
-      <div class="chk">${items.map(([label, done, sub, where]) => `<div class="ci ${done ? 'done' : ''}">
-        <span class="box ${done ? 'on' : ''}"></span><b>${label}</b>
+      <p class="note">It is a draft until you publish it, so members see nothing yet. They are numbered
+      because two of them genuinely wait on the others &mdash; but nothing is locked, and you can do
+      them in any order, or not at all. Each one is just its ordinary tab.</p>
+      <div class="chk">${items.map(([label, done, sub, where, needs], i) => `<div class="ci ${done ? 'done' : ''}">
+        <span class="box ${done ? 'on' : ''}"></span><b><span class="ord">${i + 1}.</span> ${label}</b>
         <button class="btn sm">${done ? 'Review' : 'Open ' + where}</button>
-        <span class="sub">${sub}</span></div>`).join('')}</div>
+        <span class="sub">${sub}${needs ? ` <span class="needs">${needs}</span>` : ''}</span></div>`).join('')}</div>
       <div class="hstack"><button class="btn primary" onclick="openModal('publish', ${JSON.stringify(state.semester)})">
         Publish ${esc(state.semester)}</button>
         <button class="btn ghost">Dismiss this panel</button></div>
@@ -1690,9 +1704,11 @@ function wizardA() {
         whenever you come back, from wherever you left.</li>
       </ul>
     </div>
-    <div class="flaw"><b>What A gives up.</b> A first-time admin gets no order at all. The current
-    wizard&rsquo;s one real service is telling you that the roster comes before casting and the
-    pattern before dates &mdash; a checklist states the items but not the sequence.</div>
+    <div class="flaw"><b>Resolved, not given up.</b> The first draft of this checklist stated the items
+    but not the sequence, which threw away the wizard&rsquo;s one real service to a first-time admin.
+    The items are numbered now, and the two that genuinely wait on another say so. Nothing is locked:
+    the order is <i>advice derived from the data model</i>, not a gate, which is the difference between
+    a checklist that states an order and a wizard that enforces one.</div>
   </div>`;
 }
 
