@@ -1,0 +1,1896 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+  Charset must be declared in the first 1024 bytes, ahead of this comment: opened over
+  file:// there is no Content-Type header, so without it the browser guesses windows-1252
+  and every en dash and middle dot below renders as mojibake.
+
+  PROTOTYPE v1 - throwaway. Ticket #311 on map #302.
+
+  The ADMIN DESTINATIONS: the three surfaces that are their own PLACE rather than an edit
+  mode on a member page - Semester management, Conflict adjudication, and the Semester
+  setup wizard. #306 decided the edit-mode chrome; this decides what a destination IS now
+  that edit-in-place won and the sidebar owns the semester control.
+
+  Three variants, and they disagree about exactly that - how much of a PLACE a destination
+  gets. The switch is philosophical rather than per-surface, because the answer has to be
+  the same in all three or the admin learns three patterns:
+
+    A - DISSOLVE   A destination is the smallest thing that works, and the shell absorbs it.
+                   No /manage/semesters/ page at all (the sidebar's Viewing field opens a
+                   semester sheet); Conflicts is one flat cross-rehearsal queue adjudicated
+                   inline, with no per-rehearsal route; the wizard is a setup checklist that
+                   links out to the real editors.
+    B - PLACES     A destination is a proper page with its own table and its own frame.
+                   /manage/semesters/ survives as a dense lifecycle table; Conflicts keeps
+                   index -> per-rehearsal detail as two routes, as ADR 0005 has it today;
+                   the wizard is a real linear wizard with a step rail, Back/Next and a
+                   Finish screen.
+    C - WORKSPACE  A destination is ONE working surface keyed to the object it is about.
+                   Conflicts is a single route, rehearsal rail + adjudication pane;
+                   Semesters is a lifecycle timeline; and the wizard DRIVES THE REAL PAGES -
+                   a pinned setup band above the ordinary roster / setlist / rehearsal
+                   editors, so no step is a copy of an editor and resume is free.
+
+  Inherited from #306 and NOT re-decided here (its resolution says a surface that cannot
+  wear this chrome is a finding to raise back there, not a licence to fork the pattern):
+    - the sticky dark edit toolbar (what is being edited + pending change count)
+    - the Save popup as the ONLY home for ADR 0008 Fallout
+    - "the grid shows what you changed, the popup shows what it costs"
+    - the sidebar as the home for a stale-Semester notice
+  Inherited from #303: collapsible left sidebar / phone tab bar, and the sidebar semester
+  panel carrying Viewing + draft warning + Save changes / Publish.
+
+  Greybox: structure only. No colour, type or theme is being proposed.
+  All data synthesized - no real member data (CONTRIBUTING.md).
+-->
+<title>Admin Destinations Greybox</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+  :root {
+    --paper:      #eef0f4;
+    --surface:    #ffffff;
+    --surface-2:  #f4f6f9;
+    --box:        #e3e7ee;
+    --line:       #c6ccd8;
+    --line-soft:  #dde2ea;
+    --ink:        #171a21;
+    --ink-2:      #4d5566;
+    --ink-3:      #79808f;
+    --chrome:     #1d2430;
+    --chrome-ink: #e9ecf2;
+    --mark:       #2f4fd0;   /* prototype chrome only, never inside a frame */
+    --warn:       #9a5a12;   /* semantic: a declared conflict */
+    --warn-bg:    #f7ecdc;
+    --ok:         #2f6b47;   /* semantic: your own slot / confirmed */
+    --ok-bg:      #e6f0e9;
+    /* Role hues. Hue = which role; border + marker = state. The two must stay
+       separate encodings or a backup on drums and a conflict on keys collide. */
+    --role-0:     #6d5bd0;   /* Lead Vocals */
+    --role-1:     #12776a;   /* Guitar */
+    --role-2:     #a3417e;   /* Bass */
+    --role-3:     #9c4a37;   /* Drums */
+    --role-4:     #2f5fa8;   /* Keys */
+    --radius:     6px;
+    --sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #14171d; --surface: #1c2029; --surface-2: #232833; --box: #2b313d;
+      --line: #414958; --line-soft: #333a47; --ink: #e7eaf0; --ink-2: #a8b0bf;
+      --ink-3: #7d8593; --chrome: #0d1015; --mark: #7f95ee;
+      --warn: #e0ac66; --warn-bg: #3a2c1633; --ok: #7fc39b; --ok-bg: #1d3128aa;
+      --role-0: #a99af0; --role-1: #6fc9b6; --role-2: #e08cc0;
+      --role-3: #dd9179; --role-4: #8fb4ec;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #14171d; --surface: #1c2029; --surface-2: #232833; --box: #2b313d;
+    --line: #414958; --line-soft: #333a47; --ink: #e7eaf0; --ink-2: #a8b0bf;
+    --ink-3: #7d8593; --chrome: #0d1015; --mark: #7f95ee;
+    --warn: #e0ac66; --warn-bg: #3a2c1633; --ok: #7fc39b; --ok-bg: #1d3128aa;
+    --role-0: #a99af0; --role-1: #6fc9b6; --role-2: #e08cc0;
+    --role-3: #dd9179; --role-4: #8fb4ec;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font-family: var(--sans); font-size: 14px; line-height: 1.45;
+    padding: 18px 18px 104px;
+  }
+  h1, h2, h3 { margin: 0; text-wrap: balance; font-weight: 600; }
+  button { font: inherit; color: inherit; }
+
+  /* ---- prototype chrome ---- */
+  .chrome-head { max-width: 1180px; margin: 0 auto 14px; display: flex; flex-wrap: wrap;
+    align-items: baseline; gap: 10px 16px; }
+  .chrome-head h1 { font-size: 15px; letter-spacing: -0.01em; }
+  .chrome-head .tag { font-family: var(--mono); font-size: 10px; letter-spacing: 0.09em;
+    text-transform: uppercase; color: var(--ink-3); border: 1px solid var(--line);
+    border-radius: 99px; padding: 2px 8px; }
+  .chrome-head p { margin: 0; color: var(--ink-2); font-size: 12.5px; max-width: 62ch; }
+  .stage { max-width: 1180px; margin: 0 auto; }
+
+  .frame { background: var(--surface); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; margin: 0 auto; }
+  .frame.desktop { width: 100%; min-height: 680px; }
+  .frame.phone { width: 390px; height: 780px; border-radius: 26px; border-width: 8px;
+    border-color: var(--chrome); box-shadow: 0 10px 34px rgb(0 0 0 / 0.18); }
+  .frame-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; }
+  .framewrap { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; }
+
+  .verdict { max-width: 1180px; margin: 16px auto 0; border: 1px solid var(--line-soft);
+    border-radius: var(--radius); background: var(--surface); padding: 14px 16px; }
+  .verdict h2 { font-size: 12px; font-family: var(--mono); letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--ink-3); margin-bottom: 8px; }
+  .verdict ul { margin: 0 0 12px; padding-left: 18px; display: grid; gap: 6px; }
+  .verdict li { color: var(--ink-2); font-size: 13px; }
+  .verdict li b { color: var(--ink); font-weight: 600; }
+  .verdict .cols { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+
+  /* ---- greybox primitives ---- */
+  .gb-label { font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--ink-3); }
+  .btn { border: 1px solid var(--line); background: var(--surface-2); color: var(--ink);
+    border-radius: var(--radius); padding: 6px 11px; font-size: 13px; cursor: pointer; white-space: nowrap; }
+  .btn.primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+  .btn.ghost { background: transparent; border-color: transparent; color: var(--ink-2); }
+  .btn.sm { padding: 3px 8px; font-size: 12px; }
+  .btn[disabled] { opacity: 0.4; cursor: not-allowed; }
+  .btn.icon { padding: 3px 7px; font-family: var(--mono); }
+  .field { border: 1px solid var(--line); border-radius: 4px; background: var(--surface);
+    padding: 4px 7px; font-size: 13px; min-height: 28px; display: flex; align-items: center; color: var(--ink-2); }
+  .muted { color: var(--ink-3); }
+  .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .card { border: 1px solid var(--line-soft); border-radius: var(--radius);
+    background: var(--surface); padding: 12px 14px; }
+  .stack { display: grid; gap: 12px; }
+  .row-between { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .scroll-x { overflow-x: auto; }
+  .hstack { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+
+  /* assignment pills — styled by state (review item 6) */
+  .chip { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line);
+    background: var(--surface-2); border-radius: 99px; padding: 2px 9px; font-size: 12px; white-space: nowrap; }
+  .chip.empty { border-style: dashed; color: var(--ink-3); background: transparent; }
+  .chip.backup { border-style: dashed; background: transparent; }
+  .chip.backup .tagm { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--ink-3); }
+  .chip.conflict { border-color: var(--warn); background: var(--warn-bg); color: var(--warn); }
+  .chip.mismatch { border-style: solid; box-shadow: inset 0 -2px 0 var(--line); }
+  .chip.you { border-color: var(--ok); background: var(--ok-bg); color: var(--ok); font-weight: 600; }
+  /* Role hue rides on a dot, so it never fights the state colours on the pill itself. */
+  .chip .rdot { width: 7px; height: 7px; border-radius: 50%; background: var(--rc, var(--ink-3));
+    flex-shrink: 0; }
+  .chip.empty .rdot { background: transparent; border: 1px solid var(--rc, var(--line)); }
+  .chip .rcode { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.04em;
+    color: var(--rc, var(--ink-3)); font-weight: 600; }
+  .legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 11.5px; color: var(--ink-3);
+    align-items: center; }
+  .legend .swatch { display: inline-flex; align-items: center; gap: 5px; }
+  .legend .swatch i { width: 8px; height: 8px; border-radius: 50%; background: var(--rc); }
+  .castline { display: flex; gap: 5px; flex-wrap: wrap; align-items: center; }
+
+  table.gb { border-collapse: collapse; width: 100%; font-size: 13px; }
+  table.gb th, table.gb td { border-bottom: 1px solid var(--line-soft); padding: 7px 10px;
+    text-align: left; vertical-align: middle; }
+  table.gb th { font-weight: 600; font-size: 11.5px; color: var(--ink-2); white-space: nowrap; }
+  table.gb td.num, table.gb th.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  table.gb tr.sub td { border-bottom: 1px solid var(--line-soft); padding-top: 0; }
+  /* The Songs table carries the most per row, so it gets the most air. */
+  table.gb.songs td { padding-top: 11px; padding-bottom: 11px; }
+  table.gb.songs tr.sub td { padding-top: 0; }
+  table.gb.songs td:nth-child(3) { min-width: 260px; }
+
+  .page { padding: 16px; display: grid; gap: 16px; }
+  .frame.desktop .page { padding: 22px 28px; }
+  .page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+  .page-head h1 { font-size: 20px; letter-spacing: -0.015em; }
+  .frame.phone .page-head h1 { font-size: 17px; }
+  .page-head .actions { display: flex; gap: 6px; flex-shrink: 0; }
+  .section-head { font-size: 13px; color: var(--ink-2); font-weight: 600; }
+
+  /* toggle (review item 8) */
+  .toggle { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px;
+    color: var(--ink-2); cursor: pointer; }
+  .toggle .track { width: 30px; height: 17px; border-radius: 99px; background: var(--box);
+    border: 1px solid var(--line); position: relative; flex-shrink: 0; }
+  .toggle .knob { position: absolute; top: 1px; left: 1px; width: 13px; height: 13px;
+    border-radius: 50%; background: var(--surface); border: 1px solid var(--line); }
+  .toggle[aria-pressed="true"] .track { background: var(--ink); border-color: var(--ink); }
+  .toggle[aria-pressed="true"] .knob { left: auto; right: 1px; background: var(--surface); border-color: var(--ink); }
+
+  /* segmented sub-view control */
+  .seg2 { display: inline-flex; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+  .seg2 button { border: 0; background: transparent; padding: 5px 12px; font-size: 12.5px; cursor: pointer; color: var(--ink-3); }
+  .seg2 button[aria-pressed="true"] { background: var(--ink); color: var(--surface); font-weight: 600; }
+
+  /* ---- the shell: collapsible left sidebar (review item 1) ---- */
+  .shell { display: flex; flex: 1; min-height: 0; }
+  .sidebar { flex-shrink: 0; border-right: 1px solid var(--line); background: var(--surface-2);
+    display: flex; flex-direction: column; width: 236px; }
+  .sidebar.rail { width: 60px; }
+  .sidebar .head { display: flex; align-items: center; gap: 8px; padding: 12px 14px; height: 52px; }
+  .sidebar .brand { font-weight: 700; font-size: 14px; letter-spacing: -0.01em; white-space: nowrap;
+    overflow: hidden; flex: 1; }
+  .sidebar nav { flex: 1; overflow-y: auto; padding: 4px 0; }
+  .sidebar .group { padding: 12px 14px 4px; }
+  .sidebar a { display: flex; align-items: center; gap: 10px; text-decoration: none;
+    color: var(--ink-2); padding: 7px 14px; font-size: 13px; white-space: nowrap; }
+  .sidebar a[aria-current] { color: var(--ink); font-weight: 600; background: var(--surface);
+    box-shadow: inset 2px 0 0 var(--ink); }
+  .sidebar .glyph { width: 18px; height: 18px; border: 1.5px solid currentColor;
+    border-radius: 5px; flex-shrink: 0; }
+  .sidebar .count { margin-left: auto; font-family: var(--mono); font-size: 11px;
+    border: 1px solid var(--line); border-radius: 99px; padding: 0 6px; }
+  .sidebar.rail a { justify-content: center; padding: 8px 0; }
+  .sidebar.rail .label, .sidebar.rail .count, .sidebar.rail .group, .sidebar.rail .brand { display: none; }
+
+  /* the semester control — the shell's one home for it (review item 13) */
+  .sem-panel { border-top: 1px solid var(--line); padding: 12px 14px; display: grid; gap: 8px; }
+  .sem-panel.draft { background: var(--warn-bg); }
+  .sem-panel .warnline { font-size: 11.5px; color: var(--warn); }
+  .sidebar.rail .sem-panel { padding: 10px 6px; justify-items: center; }
+  .sidebar.rail .sem-panel .hide-rail { display: none; }
+
+  .topline { display: flex; align-items: center; gap: 10px; padding: 0 20px; height: 52px;
+    border-bottom: 1px solid var(--line); background: var(--surface); flex-shrink: 0; }
+  .topline .title { font-weight: 600; flex: 1; }
+
+  /* phone */
+  .phonebar { display: flex; align-items: center; gap: 8px; padding: 0 12px; height: 50px;
+    border-bottom: 1px solid var(--line); background: var(--surface); flex-shrink: 0; }
+  .phonebar .title { font-weight: 600; font-size: 15px; flex: 1; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  .tabbar { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr;
+    border-top: 1px solid var(--line); background: var(--surface); flex-shrink: 0; padding-bottom: 6px; }
+  .tabbar a { text-decoration: none; color: var(--ink-3); display: grid; justify-items: center;
+    gap: 3px; padding: 7px 2px 3px; font-size: 10.5px; position: relative; }
+  .tabbar a[aria-current] { color: var(--ink); font-weight: 600; }
+  .tabbar .glyph { width: 20px; height: 20px; border: 1.5px solid currentColor; border-radius: 5px; }
+  .tabbar .dot { position: absolute; top: 5px; right: 50%; margin-right: -14px; width: 6px;
+    height: 6px; border-radius: 50%; background: var(--warn); }
+  .sem-strip { padding: 7px 12px; font-size: 12px; display: flex; align-items: center; gap: 8px;
+    border-bottom: 1px solid var(--line); background: var(--warn-bg); color: var(--warn); flex-shrink: 0; }
+
+  /* edit toolbar */
+  .edit-toolbar { background: var(--ink); color: var(--surface); padding: 8px 16px;
+    display: flex; align-items: center; gap: 8px; flex-shrink: 0; font-size: 13px; }
+  .edit-toolbar .grow { flex: 1; font-weight: 600; }
+  .edit-toolbar .btn { background: transparent; border-color: rgb(255 255 255 / 0.35); color: inherit; }
+  .edit-toolbar .btn.primary { background: var(--surface); color: var(--ink); border-color: var(--surface); }
+
+  /* the rehearsal-window timeline (review item 3) */
+  .timeline { display: grid; gap: 5px; }
+  .timeline .track { display: flex; height: 26px; border: 1px solid var(--line);
+    border-radius: 4px; overflow: hidden; background: var(--surface-2); }
+  .timeline .slot { border-right: 1px solid var(--line-soft); display: flex; align-items: center;
+    justify-content: center; font-size: 9.5px; overflow: hidden; padding: 0 2px;
+    font-family: var(--mono); color: var(--ink-3); }
+  .timeline .slot:last-child { border-right: 0; }
+  .timeline .slot.mine { background: var(--ok-bg); color: var(--ok); font-weight: 600; }
+  .timeline .slot.brk { background: repeating-linear-gradient(45deg,
+      transparent, transparent 3px, var(--box) 3px, var(--box) 6px); }
+  .timeline .ends { display: flex; justify-content: space-between; font-size: 11px; }
+
+  /* modal / sheet */
+  .backdrop { position: absolute; inset: 0; background: rgb(0 0 0 / 0.38); display: flex;
+    align-items: center; justify-content: center; padding: 20px; }
+  .backdrop.bottom { align-items: flex-end; padding: 0; }
+  .modal { background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+    width: 100%; max-width: 440px; max-height: 100%; overflow-y: auto; }
+  .backdrop.bottom .modal { border-radius: 14px 14px 0 0; max-width: none; border-bottom: 0; }
+  .modal .m-head { padding: 14px 16px; border-bottom: 1px solid var(--line-soft);
+    display: flex; align-items: center; gap: 10px; }
+  .modal .m-head h3 { font-size: 15px; flex: 1; }
+  .modal .m-body { padding: 14px 16px; display: grid; gap: 12px; }
+  .modal .m-foot { padding: 12px 16px; border-top: 1px solid var(--line-soft);
+    display: flex; gap: 8px; justify-content: flex-end; }
+  .radio { display: flex; gap: 9px; align-items: flex-start; padding: 8px 10px;
+    border: 1px solid var(--line); border-radius: var(--radius); cursor: pointer; }
+  .radio[aria-checked="true"] { border-color: var(--ink); background: var(--surface-2); }
+  .radio .dot { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--line);
+    flex-shrink: 0; margin-top: 2px; }
+  .radio[aria-checked="true"] .dot { border-color: var(--ink); box-shadow: inset 0 0 0 3px var(--surface),
+    inset 0 0 0 8px var(--ink); }
+  .radio .sub { font-size: 11.5px; color: var(--ink-3); }
+  .privacy { font-size: 11.5px; color: var(--ink-3); border-left: 2px solid var(--line);
+    padding-left: 8px; }
+
+  .songlist { display: grid; }
+  .songlist .item { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px;
+    align-items: center; padding: 9px 0; border-bottom: 1px solid var(--line-soft); }
+  .songlist .item .sub { grid-column: 1 / -1; }
+  .prog { display: flex; align-items: center; gap: 8px; }
+  .prog .track { flex: 1; height: 5px; background: var(--box); border-radius: 99px; min-width: 50px; }
+  .prog .fill { height: 100%; background: var(--ink-2); border-radius: 99px; }
+  .songcards { display: grid; gap: 8px; }
+  .songcards .kv { display: flex; justify-content: space-between; gap: 10px; font-size: 12.5px; padding: 3px 0; }
+  .matrix th:first-child, .matrix td:first-child { position: sticky; left: 0; background: var(--surface); z-index: 1; }
+  .matrix th:nth-child(2), .matrix td:nth-child(2) { position: sticky; left: 62px; background: var(--surface); z-index: 1; }
+
+  /* ---- bottom switcher ---- */
+  .switcher { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 50;
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: center;
+    background: var(--chrome); color: var(--chrome-ink); border-radius: 99px; padding: 7px 9px;
+    box-shadow: 0 6px 26px rgb(0 0 0 / 0.3); max-width: calc(100vw - 24px); }
+  .switcher button, .switcher select { font: inherit; font-size: 12.5px;
+    border: 1px solid rgb(255 255 255 / 0.22); background: rgb(255 255 255 / 0.06);
+    color: inherit; border-radius: 99px; padding: 4px 11px; cursor: pointer; }
+  .switcher select { padding: 4px 8px; }
+  .switcher .seg { display: inline-flex; border-radius: 99px; overflow: hidden;
+    border: 1px solid rgb(255 255 255 / 0.22); }
+  .switcher .seg button { border: 0; border-radius: 0; }
+  .switcher .seg button[aria-pressed="true"] { background: var(--mark); color: #fff; font-weight: 600; }
+  .switcher .divider { width: 1px; height: 20px; background: rgb(255 255 255 / 0.2); }
+
+  :focus-visible { outline: 2px solid var(--mark); outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<style>
+  /* ============================================================
+     #306 v2 additions. Everything above is #303's shell, verbatim.
+     ============================================================ */
+
+  /* ---- desktop: one dense row per Rehearsal ---- */
+  .redit { display: grid; gap: 8px; }
+  .rrow { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+  .rrow.doomed { border-color: var(--warn); background: var(--warn-bg); }
+  .rrow.doomed .rhead .rdate, .rrow.doomed .rhead .rtime { text-decoration: line-through;
+    text-decoration-color: var(--warn); }
+  .rhead { display: grid; align-items: center; gap: 8px; padding: 9px 11px;
+    grid-template-columns: 18px 118px 92px 12px 92px 1fr auto; }
+  .rhead .rgrip { font-family: var(--mono); color: var(--ink-3); cursor: grab; }
+  .rhead .dash { text-align: center; color: var(--ink-3); }
+  .rhead .flags { display: flex; gap: 10px; align-items: center; font-size: 12.5px; color: var(--ink-2); }
+  .rhead .acts { display: flex; gap: 5px; }
+  .rbody { border-top: 1px solid var(--line-soft); padding: 9px 11px; display: grid; gap: 9px; }
+  .disclose { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px;
+    color: var(--ink-2); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: none; }
+  .disclose .caret { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+
+  /* ---- phone: an accordion of two-line summary rows (v1's four stacked bands are gone) ----
+     A collapsed row states everything you scan for - when, how long, how many songs, and
+     whether you have edited it - in two lines. Editing opens one row at a time. */
+  .pcard { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+  .pcard.doomed { border-color: var(--warn); background: var(--warn-bg); }
+  .pcard.open { box-shadow: 0 1px 0 var(--line); }
+  .psum { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; align-items: center;
+    width: 100%; border: 0; background: none; padding: 9px 11px; text-align: left; cursor: pointer; }
+  .psum .pdate { font-weight: 600; font-size: 13.5px; }
+  .pcard.doomed .psum .pdate { text-decoration: line-through; text-decoration-color: var(--warn); }
+  .psum .pmeta { grid-column: 1; font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); }
+  .psum .pright { grid-row: 1 / span 2; grid-column: 2; display: flex; align-items: center; gap: 7px; }
+  .psum .caret { font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+  .pbody { border-top: 1px solid var(--line-soft); padding: 10px 11px; display: grid; gap: 10px; }
+  .pfields { display: grid; gap: 7px; }
+  .pfields .times { display: grid; grid-template-columns: 1fr 12px 1fr; gap: 6px; align-items: center; }
+  .pfields .dash { text-align: center; color: var(--ink-3); }
+  .plinks { display: grid; }
+  .plinks button, .plinks a { display: flex; align-items: center; gap: 8px; width: 100%;
+    border: 0; border-top: 1px solid var(--line-soft); background: none; padding: 9px 0;
+    font-size: 13px; cursor: pointer; color: var(--ink); text-decoration: none; }
+  .plinks .grow { flex: 1; }
+  .plinks .n { font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); }
+
+  /* a compact marker for an edited row, in both layouts */
+  .opflag { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--ink-2); border: 1px solid var(--line);
+    border-radius: 99px; padding: 0 6px; white-space: nowrap; }
+  .opflag.warn { color: var(--warn); border-color: var(--warn); }
+
+  /* ---- Running Order sub-grid ---- */
+  .rogrid { display: grid; gap: 3px; }
+  .rorow { display: grid; align-items: center; gap: 8px; padding: 5px 7px;
+    border: 1px solid var(--line-soft); border-radius: 4px; background: var(--surface-2);
+    grid-template-columns: 16px 18px 62px 1fr 88px 74px auto; font-size: 12.5px; }
+  .rorow.pinned { border-color: var(--line); background: var(--surface);
+    box-shadow: inset 3px 0 0 var(--ink-2); }
+  .rorow.struck { opacity: 0.5; text-decoration: line-through; }
+  .rorow .rgrip { font-family: var(--mono); color: var(--ink-3); cursor: grab; }
+  .rorow .idx { font-family: var(--mono); color: var(--ink-3); text-align: right; }
+  .rorow .win { font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+  .rorow .pin { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--ink-3); border: 1px solid var(--line);
+    border-radius: 99px; padding: 0 6px; }
+  .rorow .slots { display: flex; align-items: center; gap: 4px; }
+  .stepper { display: inline-flex; border: 1px solid var(--line); border-radius: 4px;
+    overflow: hidden; background: var(--surface); }
+  .stepper button { border: 0; background: transparent; padding: 1px 8px; cursor: pointer;
+    font-family: var(--mono); font-size: 12px; color: var(--ink-2); }
+  .stepper span { padding: 1px 9px; font-family: var(--mono); border-left: 1px solid var(--line-soft);
+    border-right: 1px solid var(--line-soft); }
+  /* Phone running order: two lines, and the move buttons are the PRIMARY affordance -
+     the drag grip is hidden, since native drag does not fire on mobile at all. */
+  .frame.phone .rorow { grid-template-columns: 20px 1fr auto; row-gap: 4px; padding: 7px 8px; }
+  .frame.phone .rorow .rgrip, .frame.phone .rorow .pin { display: none; }
+  .frame.phone .rorow .win { grid-column: 2 / -1; grid-row: 2; }
+  .frame.phone .rorow .slots { grid-column: 1 / -1; grid-row: 3; justify-content: space-between; }
+  .frame.phone .rorow .pinnote { grid-column: 1 / -1; grid-row: 4; }
+
+  /* ---- fallout: it lives in the Save popup and nowhere else ---- */
+  .fo { display: grid; gap: 11px; }
+  .fo h4 { margin: 0 0 5px; font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--ink-3); font-weight: 600; }
+  .fo ul { margin: 0; padding-left: 16px; display: grid; gap: 5px; font-size: 12.5px; color: var(--ink-2); }
+  .fo .loud li { color: var(--warn); }
+  .fo-doom { border: 1px solid var(--warn); border-radius: var(--radius); padding: 9px 11px;
+    display: grid; gap: 5px; font-size: 12.5px; }
+  .fo-empty { font-size: 12.5px; color: var(--ink-3); }
+  .changelist { display: grid; }
+  .changelist li { list-style: none; display: flex; gap: 9px; align-items: baseline;
+    padding: 6px 0; border-bottom: 1px solid var(--line-soft); font-size: 12.5px; }
+  .changelist li:last-child { border-bottom: 0; }
+  .changelist .op { font-family: var(--mono); font-size: 10px; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--ink-3); width: 56px; flex-shrink: 0; }
+  .changelist .why { color: var(--ink-3); font-size: 11.5px; }
+  .modal .m-body.tall { max-height: 52vh; overflow-y: auto; }
+  .frame.phone .modal .m-body.tall { max-height: 400px; }
+
+  /* ---- the stale-Semester notice: a fact about the Semester, so it sits with it ---- */
+  .blocknote { border-top: 1px solid var(--warn); background: var(--warn-bg); color: var(--warn);
+    padding: 10px 14px; display: grid; gap: 6px; font-size: 12px; }
+  .blocknote b { font-size: 12.5px; }
+  .sidebar.rail .blocknote { padding: 10px 6px; justify-items: center; }
+  .sidebar.rail .blocknote .hide-rail { display: none; }
+  .blocknote .bang { font-family: var(--mono); font-size: 15px; }
+  .block-strip { padding: 8px 12px; font-size: 12px; display: flex; align-items: center; gap: 8px;
+    border-bottom: 1px solid var(--warn); background: var(--warn-bg); color: var(--warn); flex-shrink: 0; }
+
+  /* ---- the four-bucket generation diff (#222) ---- */
+  .buckets { display: grid; gap: 10px; }
+  .bucket { border: 1px solid var(--line-soft); border-radius: var(--radius); }
+  .bucket > .bh { display: flex; align-items: center; gap: 8px; padding: 7px 11px;
+    background: var(--surface-2); border-bottom: 1px solid var(--line-soft); font-size: 12.5px; font-weight: 600; }
+  .bucket > .bh .n { font-family: var(--mono); color: var(--ink-3); font-weight: 400; }
+  .bucket ul { list-style: none; margin: 0; padding: 0; }
+  .bucket li { padding: 6px 11px; border-bottom: 1px solid var(--line-soft); font-size: 12.5px;
+    display: grid; grid-template-columns: 16px 1fr; gap: 3px 8px; align-items: baseline; }
+  .bucket li:last-child { border-bottom: 0; }
+  .bucket li .blast { grid-column: 2; font-size: 11.5px; color: var(--ink-3); }
+  .bucket li.locked { opacity: 0.62; }
+  .box { width: 13px; height: 13px; border: 1.5px solid var(--line); border-radius: 3px; flex-shrink: 0; }
+  .box.on { background: var(--ink); border-color: var(--ink); position: relative; }
+  .box.on::after { content: ''; position: absolute; left: 3.5px; top: 0.5px; width: 3px; height: 7px;
+    border: solid var(--surface); border-width: 0 1.6px 1.6px 0; transform: rotate(42deg); }
+  .box.off { opacity: 0.45; background: var(--box); }
+
+  /* ---- assignment grid edit mode ---- */
+  .agrid th.rolecol { text-align: left; }
+  .agrid td.cell { vertical-align: top; }
+  .cellwrap { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
+  .chip .x { font-family: var(--mono); font-size: 11px; color: var(--ink-3); cursor: pointer;
+    border: 0; background: none; padding: 0 0 0 2px; }
+  .addcell { border: 1px dashed var(--line); border-radius: 99px; background: transparent;
+    color: var(--ink-3); font-size: 12px; padding: 2px 9px; cursor: pointer; }
+  .scopebar { border: 1px solid var(--line); border-left: 3px solid var(--ink-2);
+    border-radius: var(--radius); background: var(--surface-2); padding: 9px 12px;
+    font-size: 12.5px; color: var(--ink-2); display: grid; gap: 3px; }
+  .scopebar b { color: var(--ink); }
+  .pick-sec { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+  .pick-sec > .ph { padding: 8px 12px; background: var(--surface-2);
+    border-bottom: 1px solid var(--line-soft); display: grid; gap: 2px; }
+  .pick-sec > .ph b { font-size: 13px; }
+  .pick-sec > .ph .scope { font-size: 11.5px; color: var(--ink-3); }
+  .pick-sec .plist { display: grid; }
+  .pick-sec .plist button { display: flex; align-items: center; gap: 8px; width: 100%;
+    border: 0; border-bottom: 1px solid var(--line-soft); background: none; padding: 8px 12px;
+    text-align: left; font-size: 13px; cursor: pointer; }
+  .pick-sec .plist button:last-child { border-bottom: 0; }
+  .pick-sec .plist .mm { margin-left: auto; font-size: 11px; color: var(--ink-3); }
+  .pick-sec .plist .busy { margin-left: auto; font-size: 11px; color: var(--warn); }
+
+  /* ---- the rehearsal context bar: the one way between Running Order and Assignments.
+     Both surfaces wear it, identically, so the move is the same gesture in both
+     directions and it is visibly a MODE SWITCH - which is the point, since the two
+     cannot be edited at the same time. ---- */
+  .ctxbar { display: flex; align-items: center; gap: 10px 14px; flex-wrap: wrap;
+    border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2);
+    padding: 8px 11px; }
+  .ctxbar .who { display: grid; gap: 1px; }
+  .ctxbar .who b { font-size: 13.5px; }
+  .ctxbar .who .when { font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); }
+  .ctxbar .spacer { flex: 1; }
+  .ctxbar .seg2 { flex-shrink: 0; }
+  .ctxbar .steppers { display: flex; gap: 4px; align-items: center; }
+  /* On phone the switch takes its own full-width line rather than fighting for space. */
+  .frame.phone .ctxbar { gap: 8px; }
+  .frame.phone .ctxbar .spacer { display: none; }
+  .frame.phone .ctxbar .who { flex: 1; }
+  .frame.phone .ctxbar .seg2 { width: 100%; }
+  .frame.phone .ctxbar .seg2 button { flex: 1; }
+  /* The legend gets its own line on phone; it used to be crushed against the cross-link. */
+  .legendrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+
+  .adminonly { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--ink-3); border: 1px solid var(--line);
+    border-radius: 99px; padding: 0 6px; }
+  .toolstrip { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+</style>
+
+<style>
+  /* ============================================================
+     #311 additions. Everything above is #303's shell and #306's
+     edit chrome, verbatim.
+     ============================================================ */
+
+  /* ---- the admin-only boundary, made structural rather than styled ----
+     ADR 0005 draws the line around the SURFACE, not the viewer, so the
+     boundary has to be a visible region an admin can point at - not a
+     colour a future template can quietly drop. Everything inside a
+     .adminwrap is data that must never reach a member-facing route. */
+  .adminwrap { border: 1px solid var(--line); border-left: 3px solid var(--ink-2);
+    border-radius: var(--radius); background: var(--surface); }
+  .adminwrap > .ah { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 7px 11px; border-bottom: 1px solid var(--line-soft); background: var(--surface-2); }
+  .adminwrap > .ah .why { font-size: 11.5px; color: var(--ink-3); }
+  .adminwrap > .ab { padding: 0; }
+  .adminwrap > .ab.pad { padding: 11px; }
+  /* a single admin-only FIELD inside an otherwise ordinary row */
+  .adminfield { border-left: 2px solid var(--ink-2); padding-left: 7px; display: grid; gap: 1px; }
+  .adminfield .rz { font-size: 12.5px; color: var(--ink-2); }
+  table.gb th.adm, table.gb td.adm { background: var(--surface-2); }
+  table.gb th.adm { position: relative; }
+
+  /* ---- semester rows, shared by all three variants but arranged differently ---- */
+  .semrow { display: grid; align-items: center; gap: 8px; }
+  .status { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.06em;
+    text-transform: uppercase; border: 1px solid var(--line); border-radius: 99px;
+    padding: 0 7px; color: var(--ink-3); white-space: nowrap; }
+  .status.live { color: var(--ok); border-color: var(--ok); background: var(--ok-bg); font-weight: 600; }
+  .status.draft { color: var(--warn); border-color: var(--warn); background: var(--warn-bg); }
+  .status.viewing { color: var(--ink); border-color: var(--ink); }
+  .counts { display: flex; gap: 10px; flex-wrap: wrap; font-family: var(--mono);
+    font-size: 11.5px; color: var(--ink-3); }
+  .counts b { color: var(--ink-2); font-weight: 600; }
+
+  /* C: the lifecycle timeline. A semester's story is chronological, so the rail is
+     the layout rather than a sort order on a table. */
+  .tline { display: grid; gap: 0; }
+  .tnode { display: grid; grid-template-columns: 22px 1fr; gap: 0 12px; }
+  .tnode .spine { display: grid; justify-items: center; grid-template-rows: 14px 1fr; }
+  .tnode .knob { width: 11px; height: 11px; border-radius: 50%; border: 2px solid var(--line);
+    background: var(--surface); margin-top: 8px; }
+  .tnode.is-live .knob { border-color: var(--ok); background: var(--ok); }
+  .tnode.is-draft .knob { border-color: var(--warn); border-style: dashed; }
+  .tnode .wire { width: 2px; background: var(--line-soft); height: 100%; }
+  .tnode:last-child .wire { background: transparent; }
+  .tnode .tbody { padding: 4px 0 16px; display: grid; gap: 7px; }
+  .tnode .tbody > .th { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .tnode .tbody > .th b { font-size: 14px; }
+  .tnode .tbody > .th .when { font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+
+  /* A: the semester sheet, opened from the sidebar's Viewing field. */
+  .sheetrow { display: grid; grid-template-columns: 1fr auto; gap: 3px 10px; align-items: center;
+    padding: 10px 0; border-bottom: 1px solid var(--line-soft); }
+  .sheetrow:last-child { border-bottom: 0; }
+  .sheetrow .sub { grid-column: 1 / -1; }
+  .sheetrow .acts { display: flex; gap: 5px; flex-wrap: wrap; }
+
+  /* ---- conflicts ---- */
+  /* the rehearsal rail (C) and the index table (B) */
+  .rail2 { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden;
+    background: var(--surface); align-self: start; }
+  .rail2 button { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; width: 100%;
+    border: 0; border-bottom: 1px solid var(--line-soft); background: none; padding: 9px 11px;
+    text-align: left; cursor: pointer; font-size: 13px; }
+  .rail2 button:last-child { border-bottom: 0; }
+  .rail2 button[aria-current] { background: var(--surface-2); box-shadow: inset 3px 0 0 var(--ink); font-weight: 600; }
+  .rail2 button .sub { grid-column: 1; font-family: var(--mono); font-size: 11px; color: var(--ink-3); font-weight: 400; }
+  .rail2 button .n { grid-row: 1 / span 2; grid-column: 2; align-self: center; }
+  .pend { font-family: var(--mono); font-size: 11px; border: 1px solid var(--line);
+    border-radius: 99px; padding: 0 7px; color: var(--ink-3); }
+  .pend.some { color: var(--warn); border-color: var(--warn); background: var(--warn-bg); font-weight: 600; }
+  .split { display: grid; grid-template-columns: 258px 1fr; gap: 16px; align-items: start; }
+
+  /* the verdict control - three states, so a segmented control rather than a select:
+     the whole point of adjudication is that you see every row's verdict at a glance. */
+  .verd { display: inline-flex; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+  .verd button { border: 0; background: transparent; padding: 3px 9px; font-size: 12px;
+    cursor: pointer; color: var(--ink-3); border-right: 1px solid var(--line-soft); white-space: nowrap; }
+  .verd button:last-child { border-right: 0; }
+  .verd button[aria-pressed="true"] { background: var(--ink); color: var(--surface); font-weight: 600; }
+  .verd button[aria-pressed="true"].no { background: var(--warn); color: #fff; }
+  .verd button[aria-pressed="true"].yes { background: var(--ok); color: #fff; }
+  .feas { font-family: var(--mono); font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase;
+    border: 1px solid var(--line); border-radius: 99px; padding: 0 7px; color: var(--ink-3); white-space: nowrap; }
+  .feas.bad { color: var(--warn); border-color: var(--warn); background: var(--warn-bg); }
+  .feas.ok { color: var(--ok); border-color: var(--ok); }
+  .advis { display: grid; gap: 5px; font-size: 11.5px; color: var(--warn); }
+  .advis .doors { display: flex; gap: 6px; flex-wrap: wrap; }
+
+  /* A's flat queue row + the phone card every variant falls back to */
+  .qrow { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface);
+    display: grid; gap: 8px; padding: 10px 11px; }
+  .qrow .qh { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .qrow .qh b { font-size: 13.5px; }
+  .qrow .qh .when { font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); }
+  .qrow .qfoot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .groupbar { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; padding: 4px 0 2px;
+    border-bottom: 1px solid var(--line); }
+  .groupbar b { font-size: 13px; }
+  .groupbar .when { font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); }
+
+  /* ---- the wizard ---- */
+  /* B: a step rail across the top of its own frame */
+  .steprail { display: flex; align-items: stretch; gap: 0; border: 1px solid var(--line);
+    border-radius: var(--radius); overflow: hidden; background: var(--surface); }
+  /* Colour is set explicitly rather than inherited: these are <button>s, and a UA
+     buttontext default is nearly invisible on the dark ground. */
+  .steprail .st { flex: 1; display: grid; gap: 2px; padding: 8px 11px; font-size: 12.5px;
+    border-right: 1px solid var(--line-soft); min-width: 0; color: var(--ink); background: transparent; }
+  .steprail .st:not([aria-current]) b { color: var(--ink-2); font-weight: 500; }
+  .steprail .st:last-child { border-right: 0; }
+  .steprail .st .n { font-family: var(--mono); font-size: 10px; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--ink-3); }
+  .steprail .st b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .steprail .st[aria-current] { background: var(--ink); color: var(--surface); }
+  .steprail .st[aria-current] .n { color: var(--surface); opacity: 0.7; }
+  .steprail .st.done .n { color: var(--ok); }
+  .steprail .st.skipped b { color: var(--ink-3); font-weight: 400; }
+  .wizfoot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .wizfoot .spacer { flex: 1; }
+  /* phone step rail collapses to a progress line - five columns do not fit at 390px */
+  .steppips { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2); }
+  .steppips .pips { display: flex; gap: 4px; flex: 1; }
+  .steppips .pip { flex: 1; height: 4px; border-radius: 99px; background: var(--box); }
+  .steppips .pip.on { background: var(--ink); }
+  .steppips .pip.done { background: var(--ok); }
+
+  /* C: the setup band, pinned above the REAL editor underneath it. Deliberately a
+     different colour of chrome from the #306 edit toolbar, because it is a different
+     thing - the toolbar owns your unsaved buffer, the band owns where you are in setup. */
+  .setupband { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap;
+    padding: 8px 16px; border-bottom: 1px solid var(--line); background: var(--surface-2);
+    flex-shrink: 0; font-size: 12.5px; }
+  .setupband .who { display: grid; gap: 1px; min-width: 0; }
+  .setupband .who b { font-size: 13px; }
+  .setupband .who .n { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.05em;
+    text-transform: uppercase; color: var(--ink-3); }
+  .setupband .spacer { flex: 1; }
+  .setupband .acts { display: flex; gap: 6px; align-items: center; }
+  .frame.phone .setupband { padding: 8px 12px; }
+  .frame.phone .setupband .spacer { display: none; }
+  .frame.phone .setupband .acts { width: 100%; }
+  .frame.phone .setupband .acts .btn { flex: 1; }
+
+  /* A: the setup checklist */
+  .chk { display: grid; }
+  .chk .ci { display: grid; grid-template-columns: 15px 1fr auto; gap: 3px 10px;
+    align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line-soft); }
+  .chk .ci:last-child { border-bottom: 0; }
+  .chk .ci .sub { grid-column: 2 / -1; font-size: 11.5px; color: var(--ink-3); }
+  .chk .ci.done b { color: var(--ink-3); font-weight: 400; text-decoration: line-through; }
+
+  /* a fake page underneath, so C's band can be judged against something real */
+  .ghost { display: grid; gap: 7px; opacity: 0.98; }
+  .ghost .gline { height: 34px; border: 1px solid var(--line-soft); border-radius: 4px;
+    background: var(--surface-2); display: flex; align-items: center; padding: 0 10px;
+    gap: 10px; font-size: 12.5px; color: var(--ink-2); }
+  .ghost .gline .gbox { width: 13px; height: 13px; border: 1.5px solid var(--line); border-radius: 3px; }
+
+  .note { font-size: 11.5px; color: var(--ink-3); border-left: 2px solid var(--line);
+    padding-left: 8px; margin: 0; }
+  /* Not a grid: these blocks carry inline <b> mid-sentence, and a grid would put every
+     bold phrase on a line of its own. */
+  .flaw { border: 1px solid var(--warn); border-radius: var(--radius); background: var(--warn-bg);
+    color: var(--warn); padding: 9px 11px; font-size: 12.5px; }
+  .flaw b { font-size: 12.5px; }
+
+  /* phone: every desktop two-pane layout becomes one column */
+  .frame.phone .split { grid-template-columns: 1fr; }
+  .frame.phone .steprail { display: none; }
+</style>
+
+<div class="chrome-head">
+  <h1>Rolling Sloans &mdash; admin destinations greybox</h1>
+  <span class="tag">Prototype &middot; #311</span>
+  <p>The three surfaces that are their own <b>place</b> rather than an edit mode on a member page.
+  The three variants disagree about exactly one thing &mdash; <b>how much of a place a destination gets</b>
+  now that edit-in-place won and the sidebar owns the semester control. <b>&larr;/&rarr; cycles variants.</b>
+  Structure only. All data synthesized.</p>
+</div>
+
+<div class="stage" id="stage"></div>
+<div class="verdict" id="verdict"></div>
+
+<div class="switcher" role="group" aria-label="Prototype controls">
+  <span class="seg" id="varseg">
+    <button data-v="A">A</button><button data-v="B">B</button><button data-v="C">C</button>
+  </span>
+  <span class="divider"></span>
+  <span class="seg" id="viewportseg">
+    <button data-vp="desktop">Desktop</button>
+    <button data-vp="phone">Phone</button>
+  </span>
+  <span class="divider"></span>
+  <select id="pagesel" aria-label="Surface"></select>
+  <select id="bufsel" aria-label="Buffer state"></select>
+</div>
+<script>
+/* ============================================================
+   Synthesized data - nothing here is a real person, semester or
+   setlist. CONTRIBUTING.md forbids real member data anywhere in
+   this repo, prototypes included.
+   ============================================================ */
+const LIVE = 'Fall 2026';
+
+/* Semester.published_at is the ONLY lifecycle field (ADR 0010): no status enum, no
+   start_date/end_date, no unpublish. "Live" = greatest published_at. Everything below
+   is derived, exactly as the template derives it today. */
+const SEMESTERS = [
+  { name: 'Spring 2027', created: '2 Sep 2026', published: null,          members: 9,  songs: 8,  rehearsals: 6, recs: 3 },
+  { name: 'Fall 2026',   created: '4 Aug 2026', published: '11 Aug 2026', members: 11, songs: 12, rehearsals: 14, recs: 21 },
+  { name: 'Spring 2026', created: '3 Jan 2026', published: '9 Jan 2026',  members: 10, songs: 11, rehearsals: 13, recs: 17 },
+  { name: 'Fall 2025',   created: '2 Aug 2025', published: '8 Aug 2025',  members: 12, songs: 10, rehearsals: 12, recs: 9 },
+];
+const semStatus = s => s.name === LIVE ? 'live' : (s.published ? 'past' : 'draft');
+const STATUS_LABEL = { live: 'Live', past: 'Previously published', draft: 'Draft' };
+
+/* Future, non-Dress rehearsals only: ADR 0006 forbids a Conflict against a Dress
+   Rehearsal, so it never appears in this index at all. */
+const RHS = [
+  { id: 1, dow: 'Tue 15 Sep', win: '19:00-21:00', pending: 3, approved: 1, rejected: 0 },
+  { id: 2, dow: 'Thu 17 Sep', win: '19:00-21:00', pending: 0, approved: 0, rejected: 0 },
+  { id: 3, dow: 'Tue 22 Sep', win: '19:00-21:00', pending: 2, approved: 2, rejected: 1 },
+  { id: 4, dow: 'Thu 24 Sep', win: '19:00-21:00', pending: 0, approved: 1, rejected: 0 },
+];
+const TOTAL_PENDING = RHS.reduce((a, r) => a + r.pending, 0);
+
+/* CONFLICT_TYPE_LABELS, verbatim from the codebase. */
+const TYPES = { full: 'Full absence', late: 'Late arrival', early: 'Early departure', part: 'Partial (custom)' };
+
+/* One row per Conflict. `reason` is the free text ADR 0005 keeps off every member-facing
+   surface - it renders here and on no other route in the app. `status` is the SAVED
+   verdict; `pick` is the unsaved one in the Pending Buffer. */
+const CONFLICTS = [
+  { id: 11, rh: 1, person: 'Nina Restrepo',  type: 'late',  time: 'from 19:40', status: 'pending',
+    reason: 'Section runs until 19:20 on Tuesdays this term.', note: '',
+    feas: 'feasible',   overlap: null },
+  { id: 12, rh: 1, person: 'Theo Lindqvist', type: 'early', time: 'until 20:15', status: 'pending',
+    reason: 'Shift at the co-op, every other Tuesday.', note: '',
+    feas: 'infeasible', overlap: { song: 'Riverbend', role: 'Bass' } },
+  { id: 13, rh: 1, person: 'Priya Raman',    type: 'full',  time: null,         status: 'pending',
+    reason: 'Away for a family wedding.', note: '',
+    feas: 'not_applicable', overlap: { song: 'Marigold', role: 'Bass' } },
+  { id: 14, rh: 1, person: 'Sam Aterlay',    type: 'part',  time: '19:30-20:00', status: 'approved',
+    reason: 'Advising appointment, moves week to week.', note: 'Fine - you are not on until 20:12.',
+    feas: 'feasible',   overlap: null },
+  { id: 21, rh: 3, person: 'Dani Okafor',    type: 'full',  time: null,          status: 'pending',
+    reason: 'Travelling for a conference.', note: '',
+    feas: 'not_applicable', overlap: { song: 'Static Bloom', role: 'Drums' } },
+  { id: 22, rh: 3, person: 'Marcus Vale',    type: 'late',  time: 'from 20:00',  status: 'pending',
+    reason: 'Lab section overruns most weeks.', note: '',
+    feas: 'feasible',   overlap: null },
+];
+const FEAS_LABEL = { feasible: 'Feasible', infeasible: 'Infeasible', not_applicable: 'Not applicable', unchecked: 'Not checked' };
+
+/* Adjudication Fallout, in ADR 0008's two tiers, phrased exactly as
+   _feasibility_fallout_lines() phrases it. Neither tier ever blocks a save. */
+const ADJ_FALLOUT = {
+  loud: ["Approving Theo Lindqvist's Conflict leaves no Running Order that works for tonight."],
+  quiet: ['Priya Raman is still assigned to a Song during their approved absence, with no Backup covering it.'],
+};
+/* Reapply-defaults Fallout. This one is a REAL write rolled back (ADR 0008), unlike
+   adjudication's preview, which is a pure read. */
+const REAPPLY_FALLOUT = {
+  changed: 6,
+  loud: ['Two Weeks in June on Tue 22 Sep carries 1 Recording and its slot moves by 10 minutes.'],
+  quiet: ["Nina Restrepo's declared late arrival no longer overlaps any slot on Thu 17 Sep."],
+};
+const WIZ_STEPS = [
+  { key: 'name',   label: 'Name & defaults', done: true,  req: true },
+  { key: 'roster', label: 'Roster',          done: false, req: false },
+  { key: 'set',    label: 'Setlist',         done: false, req: false },
+  { key: 'pat',    label: 'Rehearsal pattern', done: false, req: false },
+  { key: 'fin',    label: 'Finish',          done: false, req: false },
+];
+
+/* ============================================================
+   State
+   ============================================================ */
+const state = {
+  variant: 'A', viewport: 'desktop', page: 'semesters', buffer: 'edits',
+  rail: false, semester: 'Spring 2027',
+  rehearsal: 1,       /* which Rehearsal the adjudication surface is scoped to */
+  wizStep: 1,         /* index into WIZ_STEPS */
+  openRow: -1,
+  modal: null,        /* 'save' | 'delete' | 'publish' | 'reapply' | 'semsheet' | null */
+  modalArg: null,
+};
+const VARIANTS = {
+  A: 'Dissolve — the shell absorbs the destination',
+  B: 'Places — a destination is a proper page',
+  C: 'Workspace — one surface keyed to its object',
+};
+const PAGES = [
+  ['semesters', 'Semester management'],
+  ['conflicts', 'Conflicts — the way in'],
+  ['adjudicate', 'Conflicts — adjudicating a rehearsal'],
+  ['wizard', 'Setup wizard — a step'],
+  ['wizfin', 'Setup wizard — finish'],
+];
+const BUFFERS = [
+  ['edits',   'Buffer: 3 edits'],
+  ['clean',   'Buffer: clean'],
+  ['blocked', 'Buffer: blocked (stale)'],
+];
+
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const isPhone = () => state.viewport === 'phone';
+const isDraft = () => state.semester !== LIVE;
+const dirty = () => state.buffer !== 'clean';
+const blocked = () => state.buffer === 'blocked';
+const editCount = () => dirty() ? 3 : 0;
+const V = () => state.variant;
+const conflictsAt = id => CONFLICTS.filter(c => c.rh === id);
+const rh = id => RHS.find(r => r.id === id);
+/* Unsaved verdicts: only rendered when the buffer is dirty, so the "clean" state
+   shows the surface as an admin first meets it. */
+const PICKS = { 11: 'approved', 12: 'rejected', 13: 'approved' };
+const pickOf = c => (dirty() && PICKS[c.id]) ? PICKS[c.id] : c.status;
+const isEdited = c => dirty() && PICKS[c.id] && PICKS[c.id] !== c.status;
+
+function setVariant(v) { state.variant = v; state.modal = null; state.openRow = -1; render(); }
+function cycleVariant(d) {
+  const ks = Object.keys(VARIANTS);
+  setVariant(ks[(ks.indexOf(state.variant) + d + ks.length) % ks.length]);
+}
+function go(p) { state.page = p; state.modal = null; state.openRow = -1; render(); }
+function setBuffer(b) { state.buffer = b; render(); }
+function toggleRail() { state.rail = !state.rail; render(); }
+function openModal(m, arg) { state.modal = m; state.modalArg = arg ?? null; render(); }
+function closeModal() { state.modal = null; state.modalArg = null; render(); }
+function pickRehearsal(id) { state.rehearsal = id; if (V() !== 'C') state.page = 'adjudicate'; render(); }
+function openRow(i) { state.openRow = state.openRow === i ? -1 : i; render(); }
+function stepWizard(d) { state.wizStep = Math.max(0, Math.min(WIZ_STEPS.length - 1, state.wizStep + d)); render(); }
+function gotoStep(i) { state.wizStep = i; state.page = i === 4 ? 'wizfin' : 'wizard'; render(); }
+/* Save never commits from the toolbar: it opens the popup, always (#306). */
+function trySave() { if (!blocked() && dirty()) openModal('save'); }
+
+/* ============================================================
+   The shell, from #303 / #306. The one thing #311 changes about
+   it is the Admin group: whether "Semesters" is a nav item at
+   all is exactly variant A's claim.
+   ============================================================ */
+function blockNote() {
+  /* #306: a stale stamp is not a consequence of your edit, it is a fact about the
+     Semester you are editing, so it sits with the control that names that Semester -
+     never near the surface. Inherited verbatim; not re-decided here. */
+  return `<div class="blocknote" role="alert">
+    <div class="hstack" style="gap:7px"><span class="bang">&#9888;</span>
+      <b class="hide-rail">Can&rsquo;t save</b></div>
+    <span class="hide-rail">Someone else saved ${esc(state.semester)} while you were editing.
+      Your edits are still here and nothing has been written.</span>
+    <div class="hide-rail"><button class="btn sm">Reload and re-apply</button></div>
+  </div>`;
+}
+function semesterPanel() {
+  const draft = isDraft();
+  /* Variant A hangs the whole of semester management off this one field: the Viewing
+     control is not a dropdown of names, it is the door to the semester sheet. */
+  const viewing = V() === 'A'
+    ? `<button class="field" style="width:100%;justify-content:space-between;cursor:pointer"
+         onclick="openModal('semsheet')">${esc(state.semester)} <span>&#9662;</span></button>`
+    : `<span class="field">${esc(state.semester)} &#9662;</span>`;
+  return `<div class="sem-panel ${draft ? 'draft' : ''}">
+    <div class="hide-rail stack" style="gap:6px">
+      <span class="gb-label">Viewing</span>
+      ${viewing}
+      ${draft ? `<span class="warnline">Not what members see &mdash; they see ${LIVE}.</span>` : ''}
+      <div class="hstack" style="gap:6px">
+        <button class="btn sm" ${dirty() && !blocked() ? '' : 'disabled'} onclick="trySave()">Save changes</button>
+        <button class="btn sm ${draft ? 'primary' : ''}" ${draft && !blocked() ? '' : 'disabled'}
+          onclick="openModal('publish', ${JSON.stringify(state.semester)})">Publish</button>
+      </div>
+    </div>
+  </div>`;
+}
+const NAV = [['overview', 'Home'], ['schedule', 'Schedule'], ['songs', 'Songs'], ['members', 'Band']];
+function sidebar() {
+  const onConf = state.page === 'conflicts' || state.page === 'adjudicate';
+  /* #303 put Conflicts directly under Home WITH A PENDING COUNT. All three variants
+     render it without one, and the verdict block below says why: ADR 0005 is explicit
+     that the count belongs on the admin route that already shows it, and the sidebar
+     renders on every route including the member-facing ones. */
+  return `<aside class="sidebar ${state.rail ? 'rail' : ''}">
+    <div class="head">
+      <span class="brand">Rolling Sloans</span>
+      <button class="btn sm icon" onclick="toggleRail()" title="Collapse sidebar">${state.rail ? '&raquo;' : '&laquo;'}</button>
+    </div>
+    <nav>
+      ${NAV.map(([k, l]) => `<a href="#" onclick="return false" title="${l}">
+        <span class="glyph"></span><span class="label">${l}</span></a>`).join('')}
+      <a href="#" onclick="go('conflicts');return false" ${onConf ? 'aria-current="page"' : ''} title="Conflicts">
+        <span class="glyph"></span><span class="label">Conflicts</span></a>
+      ${V() === 'A' ? '' : `<div class="group"><span class="gb-label">Admin</span></div>
+      <a href="#" onclick="go('semesters');return false" ${state.page === 'semesters' ? 'aria-current="page"' : ''}
+        title="Semesters"><span class="glyph"></span><span class="label">Semesters</span></a>`}
+    </nav>
+    ${blocked() ? blockNote() : ''}
+    ${semesterPanel()}
+    <div class="sem-panel"><button class="btn sm hide-rail">Log out</button></div>
+  </aside>`;
+}
+function editToolbar(what, noun) {
+  const n = editCount();
+  const unit = noun || 'change';
+  return `<div class="edit-toolbar">
+    <span class="grow">Editing ${what} &mdash; ${n ? `${n} unsaved ${unit}${n === 1 ? '' : 's'}` : 'no changes yet'}</span>
+    <button class="btn sm">Discard</button>
+    <button class="btn sm primary" ${n && !blocked() ? '' : 'disabled'} onclick="trySave()">Save changes</button>
+  </div>`;
+}
+function desktopShell(body, toolbar, band) {
+  return `<div class="framewrap"><div class="shell">
+    ${sidebar()}
+    <div class="framewrap">${band || ''}${toolbar || ''}
+      <div class="frame-scroll"><div class="page">${body}</div></div>
+    </div>
+  </div>${modalLayer()}</div>`;
+}
+function phoneShell(body, toolbar, band) {
+  /* Phone keeps five tabs; for an admin the fifth is More, holding the admin-only
+     destinations (#303). In variant A, Semesters is not among them - there is no page. */
+  const more = V() === 'A' ? 'More' : 'More';
+  return `<div class="framewrap">
+    <div class="phonebar">
+      <span class="title">${esc(phoneTitle())}</span>
+      <button class="btn sm" ${dirty() && !blocked() ? '' : 'disabled'} onclick="trySave()">Save</button>
+      <button class="btn sm ${isDraft() ? 'primary' : ''}" ${isDraft() && !blocked() ? '' : 'disabled'}
+        onclick="openModal('publish', ${JSON.stringify(state.semester)})">Publish</button>
+    </div>
+    ${blocked() ? `<div class="block-strip"><span>&#9888;</span>
+      <span><b>Can&rsquo;t save</b> &mdash; someone else saved ${esc(state.semester)} while you were editing.</span>
+      <span style="flex:1"></span><button class="btn sm">Reload</button></div>` : ''}
+    ${isDraft() ? `<div class="sem-strip">
+      <span>Viewing <b>${esc(state.semester)}</b> &mdash; not what members see</span>
+      <span style="flex:1"></span>
+      <button class="btn sm" ${V() === 'A' ? `onclick="openModal('semsheet')"` : ''}>Switch</button></div>` : ''}
+    ${band || ''}
+    ${toolbar || ''}
+    <div class="frame-scroll"><div class="page">${body}</div></div>
+    <nav class="tabbar">
+      ${[['Home', 0], ['Schedule', 0], ['Songs', 0], ['Conflicts', state.page === 'conflicts' || state.page === 'adjudicate' ? 1 : 0], [more, 0]]
+        .map(([l, cur]) => `<a href="#" onclick="return false" ${cur ? 'aria-current="page"' : ''}>
+          <span class="glyph"></span>${l}</a>`).join('')}
+    </nav>
+    ${modalLayer()}
+  </div>`;
+}
+function phoneTitle() {
+  /* Only B has a per-rehearsal ROUTE, so only B titles the phone bar with a rehearsal.
+     A's queue and C's workspace are both "Conflicts" - the rehearsal is a heading or a
+     pane inside the page, not the page itself. */
+  if (state.page === 'adjudicate') return V() === 'B' ? rh(state.rehearsal).dow : 'Conflicts';
+  return ({ semesters: 'Semesters', conflicts: 'Conflicts', wizard: 'New semester', wizfin: 'New semester' })[state.page];
+}
+
+/* ============================================================
+   Surface 1 - Semester management.
+
+   The ticket's sharpest question: #303 already moved the switcher and the draft warning
+   into the sidebar semester panel, so what is LEFT for /manage/semesters/, and does it
+   survive as a page at all? Three answers.
+
+   Four actions exist regardless of layout, and each is a different weight of thing:
+     Switch to        a session preference. Governs reads AND writes (ADR 0010).
+     Publish          changes what every member sees. No confirmation today - one click.
+     Reapply defaults a real bulk write with ADR 0008 Fallout.
+     Delete           a hard cascade with no undo and no export (ADR 0011).
+   Whatever the layout, those four must not read as four equivalent buttons in a row.
+   ============================================================ */
+function semStatusChip(s) {
+  const k = semStatus(s);
+  return `<span class="status ${k === 'past' ? '' : k}">${STATUS_LABEL[k]}</span>`;
+}
+function semCounts(s) {
+  return `<span class="counts"><span><b>${s.members}</b> members</span><span><b>${s.songs}</b> songs</span>
+    <span><b>${s.rehearsals}</b> rehearsals</span><span><b>${s.recs}</b> recordings</span></span>`;
+}
+/* The action set, ordered by weight. Delete is separated from the others everywhere,
+   because ADR 0011 makes the confirmation the only safety net there is. */
+function semActions(s, size) {
+  const viewing = s.name === state.semester;
+  const live = s.name === LIVE;
+  const c = size === 'sm' ? 'btn sm' : 'btn';
+  return `<span class="acts">
+    <button class="${c}" ${viewing ? 'disabled' : ''}
+      title="${viewing ? 'Already the Semester you are editing' : 'Edit this Semester everywhere'}">
+      ${viewing ? 'Viewing' : 'Switch to'}</button>
+    <button class="${c} ${live ? '' : 'primary'}" onclick="openModal('publish', ${JSON.stringify(s.name)})"
+      title="${live ? 'Re-publishing the Live Semester is harmless; it just re-stamps published_at' : 'Make this what members see'}">
+      ${live ? 'Re-publish' : 'Publish'}</button>
+    <button class="${c}" onclick="openModal('reapply', ${JSON.stringify(s.name)})">Reapply defaults</button>
+    ${live ? `<button class="${c}" disabled title="The Live Semester cannot be deleted - publish another one first (ADR 0011)">Delete</button>`
+           : `<button class="${c}" onclick="openModal('delete', ${JSON.stringify(s.name)})">Delete</button>`}
+  </span>`;
+}
+
+/* ---- A: there is no page. The sidebar's Viewing field opens this sheet. ---- */
+function semesterSheet() {
+  return `<div class="backdrop ${isPhone() ? 'bottom' : ''}" onclick="closeModal()">
+    <div class="modal" style="max-width:540px" onclick="event.stopPropagation()">
+      <div class="m-head"><h3>Semesters</h3>
+        <button class="btn sm" >+ New semester</button>
+        <button class="btn sm ghost" onclick="closeModal()" aria-label="Close">&times;</button></div>
+      <div class="m-body tall">
+        ${SEMESTERS.map(s => `<div class="sheetrow">
+          <span class="hstack" style="gap:8px"><b>${esc(s.name)}</b>${semStatusChip(s)}
+            ${s.name === state.semester ? '<span class="status viewing">Editing</span>' : ''}</span>
+          <span class="acts">${s.name === state.semester ? '' : '<button class="btn sm">Switch to</button>'}</span>
+          <span class="sub">${semCounts(s)}</span>
+          <span class="sub acts" style="padding-top:4px">
+            <button class="btn sm ${s.name === LIVE ? '' : 'primary'}"
+              onclick="openModal('publish', ${JSON.stringify(s.name)})">${s.name === LIVE ? 'Re-publish' : 'Publish'}</button>
+            <button class="btn sm" onclick="openModal('reapply', ${JSON.stringify(s.name)})">Reapply defaults</button>
+            ${s.name === LIVE ? '<button class="btn sm" disabled title="The Live Semester cannot be deleted (ADR 0011)">Delete</button>'
+              : `<button class="btn sm" onclick="openModal('delete', ${JSON.stringify(s.name)})">Delete</button>`}
+          </span>
+        </div>`).join('')}
+        <p class="privacy">Publishing changes what every member sees. Deleting is permanent and
+        cascades to uploaded recordings (ADR 0011).</p>
+      </div>
+    </div></div>`;
+}
+function semestersA() {
+  return `<div class="stack">
+    <div class="page-head"><h1>Home</h1></div>
+    <div class="flaw"><b>Variant A&rsquo;s claim: <code>/manage/semesters/</code> does not survive.</b>
+      There is no Semesters page and no Semesters nav item. Everything the page did now hangs off the
+      sidebar&rsquo;s <b>Viewing</b> field, which opens a semester sheet &mdash; open it from the sidebar
+      (or the phone&rsquo;s Switch strip) to see it.</div>
+    <div class="card stack">
+      <span class="section-head">Why it can go</span>
+      <ul style="margin:0;padding-left:18px;display:grid;gap:6px;color:var(--ink-2);font-size:13px">
+        <li><b>Nothing links to it today.</b> The only inbound links in the whole codebase are the
+        Cancel links on its own delete and reapply confirmations. It is already an orphan.</li>
+        <li><b>#303 took its reason for existing.</b> The switcher and the draft warning moved to the
+        sidebar. What was left was a list of names with four buttons each &mdash; and the sidebar
+        already names semesters.</li>
+        <li><b>Two places stating semester state is the thing #303 deleted.</b> Re-adding a page that
+        lists every semester next to a panel that names one re-creates it.</li>
+      </ul>
+    </div>
+    <div class="card stack">
+      <span class="section-head">What it costs</span>
+      <p class="note" style="border-color:var(--warn)">A sheet is a poor home for a <b>hard delete</b>.
+      ADR 0011 makes that confirmation the only safety net there is, and a sheet is dismissed by clicking
+      the backdrop. The delete confirmation stays a real dialog here, but it is now a dialog opened
+      from a sheet &mdash; two dismissible layers over an irreversible cascade.</p>
+    </div>
+  </div>`;
+}
+
+/* ---- B: a real page. A dense lifecycle table, which is what the data actually is. ---- */
+function semestersB() {
+  const rows = SEMESTERS.map(s => `<tr>
+    <td><b>${esc(s.name)}</b>${s.name === state.semester ? ' <span class="status viewing">Editing</span>' : ''}</td>
+    <td>${semStatusChip(s)}</td>
+    <td class="num">${s.created}</td>
+    <td class="num">${s.published || '&mdash;'}</td>
+    <td class="num">${s.members}</td><td class="num">${s.songs}</td>
+    <td class="num">${s.rehearsals}</td><td class="num">${s.recs}</td>
+    <td>${semActions(s, 'sm')}</td></tr>`).join('');
+  return `<div class="stack">
+    <div class="page-head"><h1>Semesters</h1>
+      <span class="actions"><button class="btn primary">+ New semester</button></span></div>
+    <p class="note">Ordered newest-created first. &ldquo;Live&rdquo; is the greatest
+    <code>published_at</code> &mdash; there is no status field, no unpublish, and rollback is
+    publishing an older one through this same button (ADR 0010).</p>
+    ${isPhone() ? `<div class="stack" style="gap:8px">
+      ${SEMESTERS.map(s => `<div class="card stack" style="gap:8px">
+        <div class="row-between"><b>${esc(s.name)}</b>${semStatusChip(s)}</div>
+        ${semCounts(s)}
+        <span class="muted" style="font-size:11.5px">Created ${s.created}${s.published ? ` &middot; published ${s.published}` : ''}</span>
+        ${semActions(s, 'sm')}
+      </div>`).join('')}</div>`
+    : `<div class="scroll-x"><table class="gb"><thead><tr>
+        <th>Semester</th><th>Status</th><th class="num">Created</th><th class="num">Published</th>
+        <th class="num">Members</th><th class="num">Songs</th><th class="num">Rehearsals</th>
+        <th class="num">Recordings</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div>`}
+    <div class="flaw"><b>The flaw to look for.</b> Nine columns and four buttons per row makes
+    <b>Delete</b> a peer of <b>Switch to</b>. The one irreversible action in the app sits in a
+    button strip with three reversible ones, at the same size, on every row.</div>
+  </div>`;
+}
+
+/* ---- C: a lifecycle timeline. A semester's story is chronological. ---- */
+function semestersC() {
+  return `<div class="stack">
+    <div class="page-head"><h1>Semesters</h1>
+      <span class="actions"><button class="btn primary">+ New semester</button></span></div>
+    <p class="note">Newest first. The band has one Live Semester at a time and rolls back by publishing
+    an older one, so what an admin reads here is a <b>sequence</b>, not a set of rows to sort.</p>
+    <div class="tline">
+      ${SEMESTERS.map((s, i) => {
+        const k = semStatus(s);
+        const open = state.openRow === i;
+        return `<div class="tnode ${k === 'live' ? 'is-live' : ''} ${k === 'draft' ? 'is-draft' : ''}">
+          <span class="spine"><span class="knob"></span><span class="wire"></span></span>
+          <div class="tbody">
+            <div class="th"><b>${esc(s.name)}</b>${semStatusChip(s)}
+              ${s.name === state.semester ? '<span class="status viewing">Editing</span>' : ''}
+              <span class="when">${s.published ? `published ${s.published}` : `created ${s.created}, never published`}</span>
+              <span style="flex:1"></span>
+              <button class="disclose" onclick="openRow(${i})">
+                <span class="caret">${open ? '&#9660;' : '&#9654;'}</span>${open ? 'Hide' : 'Manage'}</button>
+            </div>
+            ${semCounts(s)}
+            ${open ? `<div class="card stack" style="gap:10px">
+              <div class="hstack" style="gap:6px">
+                <button class="btn sm" ${s.name === state.semester ? 'disabled' : ''}>
+                  ${s.name === state.semester ? 'Editing this one' : 'Switch to it'}</button>
+                <button class="btn sm ${s.name === LIVE ? '' : 'primary'}"
+                  onclick="openModal('publish', ${JSON.stringify(s.name)})">${s.name === LIVE ? 'Re-publish' : 'Publish'}</button>
+                <button class="btn sm" onclick="openModal('reapply', ${JSON.stringify(s.name)})">Reapply timing defaults</button>
+              </div>
+              <div class="fo-doom" style="border-color:var(--line)">
+                <b>Delete ${esc(s.name)}</b>
+                <span class="muted" style="font-size:11.5px">Permanent, cascading to
+                ${s.recs} recording${s.recs === 1 ? '' : 's'}. No undo, no export.</span>
+                ${s.name === LIVE
+                  ? '<span class="muted" style="font-size:11.5px">The Live Semester cannot be deleted &mdash; publish another one first.</span>'
+                  : `<div><button class="btn sm" onclick="openModal('delete', ${JSON.stringify(s.name)})">Delete&hellip;</button></div>`}
+              </div>
+            </div>` : ''}
+          </div></div>`;
+      }).join('')}
+    </div>
+    <p class="note">Each node&rsquo;s actions are behind <b>Manage</b> rather than always on, so the
+    default read is &ldquo;which one is live, and what is in each&rdquo; &mdash; and <b>Delete</b> is
+    never a peer of the three reversible actions.</p>
+  </div>`;
+}
+const SEMESTER_PAGE = { A: semestersA, B: semestersB, C: semestersC };
+
+/* ============================================================
+   Surface 2 - Conflict adjudication.
+
+   The one place a Conflict's free-text `reason` is legitimately rendered anywhere in the
+   app (ADR 0005), so the layout has to make the admin-only boundary OBVIOUS - and make it
+   structural, not a colour a future template can drop. Every variant wraps the admin-only
+   data in a marked region rather than tinting a column.
+
+   The other constraint is domain, not layout, and it is what breaks variant A:
+   CONTEXT.md defines Accommodation as a question about the set of Conflicts approved
+   TOGETHER at one Rehearsal - "is there a Running Order that works for everyone approved"
+   - which is why the live preview re-renders the whole table when any one verdict changes.
+   ============================================================ */
+function feasChip(c) {
+  const cls = c.feas === 'infeasible' ? 'bad' : (c.feas === 'feasible' ? 'ok' : '');
+  return `<span class="feas ${cls}">${FEAS_LABEL[c.feas]}</span>`;
+}
+function verdictControl(c) {
+  const p = pickOf(c);
+  return `<span class="verd" role="group" aria-label="Verdict for ${esc(c.person)}">
+    <button aria-pressed="${p === 'pending'}">Pending</button>
+    <button class="yes" aria-pressed="${p === 'approved'}">Approve</button>
+    <button class="no" aria-pressed="${p === 'rejected'}">Reject</button>
+  </span>`;
+}
+/* The advisory door into the assignment grid. It already exists in the codebase and
+   already carries covering_for_id but never a NAME, because the URL would otherwise
+   leak the covered person onto a member-facing route (ADR 0005 / 0007). Keep that. */
+function advisory(c) {
+  if (!c.overlap) return '<span class="muted" style="font-size:11.5px">&mdash;</span>';
+  return `<span class="advis">
+    <span>Still assigned <b>${esc(c.overlap.role)}</b> on <b>${esc(c.overlap.song)}</b> during this
+      window, with no Backup.</span>
+    <span class="doors">
+      <button class="btn sm">Add a Backup&hellip;</button>
+      <button class="btn sm ghost">Re-order the evening</button>
+    </span></span>`;
+}
+
+/* ---- the adjudication table itself, shared by B and C ----
+   Eight columns today: Person / Declaration / Declared time / Reason / Verdict / Note /
+   Feasibility / Advisory. Reason and Note are the admin-only pair, so they are pulled
+   under one marked band rather than left as two tinted cells. */
+function adjTable(list) {
+  /* FIVE columns, not the eight the template has today. The build forced this twice over:
+     at C's two-pane width, eight columns pushed Feasibility and Advisory off the right
+     edge behind a scrollbar, and six still lost Advisory.
+
+     The split it settled on is better than a narrower column would have been, because it
+     is the actual shape of the decision. The row is what you DECIDE - who, what they
+     declared, your verdict, and whether the evening still works. Everything else drops to
+     a sub-row underneath: the admin-only pair (their reason, your note back) as ONE marked
+     region spanning the row rather than two tinted cells, and the advisory door, which is
+     a consequence of the verdict rather than a fact about the person. */
+  return `<div class="scroll-x"><table class="gb"><thead><tr>
+      <th>Person</th><th>Declaration</th><th class="num">Declared</th>
+      <th>Verdict</th><th>Feasibility</th></tr></thead><tbody>
+    ${list.map(c => `<tr>
+      <td><b>${esc(c.person)}</b>${isEdited(c) ? ' <span class="opflag">Changed</span>' : ''}</td>
+      <td>${TYPES[c.type]}</td>
+      <td class="num">${c.time || '&mdash;'}</td>
+      <td>${verdictControl(c)}</td>
+      <td>${feasChip(c)}</td></tr>
+    <tr class="sub"><td colspan="5">
+      <div class="stack" style="gap:8px">
+        <div class="adminwrap"><div class="ah"><span class="adminonly">Admin only</span>
+          <span class="why">Never rendered on any member-facing route, for any viewer.</span></div>
+          <div class="ab pad" style="display:grid;grid-template-columns:1fr 1fr;gap:11px">
+            <span class="adminfield"><span class="gb-label">Their reason</span>
+              <span class="rz">${esc(c.reason)}</span></span>
+            <span class="adminfield"><span class="gb-label">Note back to ${esc(c.person.split(' ')[0])}</span>
+              <span class="field">${esc(c.note) || '&nbsp;'}</span></span>
+          </div></div>
+        ${c.overlap ? advisory(c) : ''}
+      </div></td></tr>`).join('')}
+  </tbody></table></div>`;
+}
+/* Phone: eight columns cannot become eight stacked bands per person - that is exactly the
+   mistake #306 fixed on the rehearsal rows. One card per Conflict, verdict-first, with the
+   admin-only text in its own marked block. */
+function adjCards(list) {
+  return `<div class="stack" style="gap:8px">${list.map(c => `<div class="qrow">
+    <div class="qh"><b>${esc(c.person)}</b><span class="when">${TYPES[c.type]}${c.time ? ' &middot; ' + c.time : ''}</span>
+      ${isEdited(c) ? '<span class="opflag">Changed</span>' : ''}</div>
+    ${verdictControl(c)}
+    <div class="adminwrap"><div class="ah"><span class="adminonly">Admin only</span>
+        <span class="why">Never shown to any member, including this one.</span></div>
+      <div class="ab pad stack" style="gap:7px">
+        <span class="adminfield"><span class="gb-label">Their reason</span><span class="rz">${esc(c.reason)}</span></span>
+        <span class="adminfield"><span class="gb-label">Note back to ${esc(c.person.split(' ')[0])}</span>
+          <span class="field">${esc(c.note) || '&nbsp;'}</span></span>
+      </div></div>
+    <div class="qfoot">${feasChip(c)}<span style="flex:1"></span></div>
+    ${c.overlap ? advisory(c) : ''}
+  </div>`).join('')}</div>`;
+}
+/* One line an admin needs before touching a verdict: the note they type is read by the
+   Conflict's owner and by nobody else (ADR 0005 - the outcome flows back across the
+   boundary the other way). Rendered on every variant. */
+const NOTE_RULE = `<p class="privacy">Everything in the marked regions is admin-only and renders
+  on this route and nowhere else in the app. A <b>Note</b> is the exception that travels: its
+  Conflict&rsquo;s owner reads it on their own row at <code>/schedule/</code>, and no other member
+  ever does.</p>`;
+
+/* ---- A: one flat cross-rehearsal queue, adjudicated inline. No detail route. ---- */
+function conflictsA() {
+  const pending = CONFLICTS.filter(c => c.status === 'pending');
+  let lastRh = null;
+  return `<div class="stack">
+    <div class="page-head"><h1>Conflicts</h1>
+      <span class="actions"><span class="pend some">${TOTAL_PENDING} pending</span></span></div>
+    <p class="note">One queue across every future rehearsal, newest first, adjudicated in place.
+    No index, no per-rehearsal page: a Conflict is a thing a person declared, so the person is the
+    row and the rehearsal is a heading.</p>
+    ${NOTE_RULE}
+    <div class="stack" style="gap:10px">
+      ${pending.map(c => {
+        const r = rh(c.rh);
+        const head = r.dow !== lastRh ? (lastRh = r.dow, `<div class="groupbar"><b>${r.dow}</b>
+          <span class="when">${r.win}</span><span style="flex:1"></span>
+          <span class="pend some">${r.pending} pending</span></div>`) : '';
+        return head + `<div class="qrow">
+          <div class="qh"><b>${esc(c.person)}</b>
+            <span class="when">${TYPES[c.type]}${c.time ? ' &middot; ' + c.time : ''}</span>
+            ${isEdited(c) ? '<span class="opflag">Changed</span>' : ''}</div>
+          <div class="adminwrap"><div class="ah"><span class="adminonly">Admin only</span>
+            <span class="why">Never rendered on any member-facing route.</span></div>
+            <div class="ab pad"><span class="rz">${esc(c.reason)}</span></div></div>
+          <div class="qfoot">${verdictControl(c)}<span style="flex:1"></span>${feasChip(c)}</div>
+          ${c.overlap ? advisory(c) : ''}
+        </div>`;
+      }).join('')}
+    </div>
+    <div class="flaw"><b>The flaw that probably kills A.</b> Feasibility is a question about the
+      Conflicts approved <b>together at one Rehearsal</b> &mdash; &ldquo;is there any Running Order
+      that works for everyone approved?&rdquo; A flat per-person queue invites you to answer it one
+      row at a time, and the chips above are computed against a set the layout never shows you.
+      Approve Nina here and Theo&rsquo;s chip changes; nothing on this screen says so.</div>
+  </div>`;
+}
+
+/* ---- B: an index page of rehearsals, then a detail page. Two routes, as today. ---- */
+function conflictsB() {
+  return `<div class="stack">
+    <div class="page-head"><h1>Conflicts</h1></div>
+    <p class="note">Every future rehearsal, including the ones with nothing pending &mdash; an admin
+    reads this to confirm a quiet week as much as to find a busy one. The Dress Rehearsal is absent
+    because attendance there is mandatory, so no Conflict can point at it (ADR 0006).</p>
+    ${isPhone()
+      ? `<div class="stack" style="gap:8px">${RHS.map(r => `<button class="card row-between"
+          style="text-align:left;cursor:pointer;width:100%" onclick="pickRehearsal(${r.id})">
+          <span class="stack" style="gap:2px"><b>${r.dow}</b>
+            <span class="mono muted" style="font-size:11.5px">${r.win}</span></span>
+          <span class="hstack"><span class="pend ${r.pending ? 'some' : ''}">${r.pending} pending</span>
+            <span class="caret muted">&#9656;</span></span></button>`).join('')}</div>`
+      : `<table class="gb"><thead><tr><th>Rehearsal</th><th class="num">Window</th>
+          <th class="num">Pending</th><th class="num">Approved</th><th class="num">Rejected</th><th></th>
+        </tr></thead><tbody>${RHS.map(r => `<tr>
+          <td><b>${r.dow}</b></td><td class="num">${r.win}</td>
+          <td class="num"><span class="pend ${r.pending ? 'some' : ''}">${r.pending}</span></td>
+          <td class="num">${r.approved}</td><td class="num">${r.rejected}</td>
+          <td><button class="btn sm" onclick="pickRehearsal(${r.id})">
+            ${r.pending ? 'Adjudicate' : 'Open'}</button></td></tr>`).join('')}</tbody></table>`}
+    <p class="note">Approved and Rejected are counts only. Who and why lives one click in, on the
+    admin-only detail route &mdash; this index carries no member&rsquo;s Conflict text at all.</p>
+  </div>`;
+}
+function adjudicateB() {
+  const r = rh(state.rehearsal), list = conflictsAt(r.id);
+  return `<div class="stack">
+    <div class="page-head">
+      <span class="stack" style="gap:3px">
+        <button class="disclose" onclick="go('conflicts')"><span class="caret">&#9666;</span>All rehearsals</button>
+        <h1>${r.dow} <span class="muted mono" style="font-size:14px">${r.win}</span></h1></span>
+      <span class="actions"><span class="pend ${r.pending ? 'some' : ''}">${r.pending} pending</span></span>
+    </div>
+    ${NOTE_RULE}
+    ${list.length ? (isPhone() ? adjCards(list) : adjTable(list))
+      : '<p class="fo-empty">No Conflicts declared against this rehearsal.</p>'}
+    <p class="note">Changing any verdict re-computes <b>every</b> row&rsquo;s feasibility, because the
+    question is whether one Running Order accommodates everyone approved together &mdash; not whether
+    each Conflict is individually survivable.</p>
+  </div>`;
+}
+
+/* ---- C: one route. Rehearsal rail on the left, that rehearsal's table on the right. ---- */
+function conflictsC() {
+  const r = rh(state.rehearsal), list = conflictsAt(r.id);
+  const rail = `<div class="rail2">${RHS.map(x => `<button ${x.id === state.rehearsal ? 'aria-current="true"' : ''}
+      onclick="pickRehearsal(${x.id})"><span>${x.dow}</span>
+      <span class="sub">${x.win}</span>
+      <span class="n"><span class="pend ${x.pending ? 'some' : ''}">${x.pending}</span></span></button>`).join('')}</div>`;
+  const pane = `<div class="stack">
+    <div class="row-between"><h2 style="font-size:16px">${r.dow}
+      <span class="muted mono" style="font-size:13px">${r.win}</span></h2>
+      <span class="hstack"><span class="pend ${r.pending ? 'some' : ''}">${r.pending} pending</span>
+      <span class="muted" style="font-size:11.5px">${r.approved} approved &middot; ${r.rejected} rejected</span></span></div>
+    ${NOTE_RULE}
+    ${list.length ? (isPhone() ? adjCards(list) : adjTable(list))
+      : '<p class="fo-empty">No Conflicts declared against this rehearsal.</p>'}
+    <p class="note">Every verdict here is decided against the others: changing one re-computes them all.
+    That is why the rail moves you between rehearsals rather than between people.</p>
+  </div>`;
+  if (isPhone()) {
+    /* Phone has no room for two panes, so the rail becomes a horizontal strip of the
+       thing you are switching between, and the pane fills the screen. */
+    return `<div class="stack">
+      <div class="page-head"><h1>Conflicts</h1></div>
+      <div class="scroll-x"><div class="hstack" style="flex-wrap:nowrap;gap:6px">
+        ${RHS.map(x => `<button class="btn sm ${x.id === state.rehearsal ? 'primary' : ''}"
+          onclick="pickRehearsal(${x.id})">${x.dow} &middot; ${x.pending}</button>`).join('')}</div></div>
+      ${pane}</div>`;
+  }
+  return `<div class="stack">
+    <div class="page-head"><h1>Conflicts</h1>
+      <span class="actions"><span class="pend some">${TOTAL_PENDING} pending in ${state.semester}</span></span></div>
+    <div class="split">${rail}${pane}</div>
+  </div>`;
+}
+
+/* ============================================================
+   Surface 3 - the Semester setup wizard.
+
+   The ticket asks for the FRAME, not the editors: the step indicator, forward/back, what
+   "finish" commits, and how a half-built draft is resumed. Four facts about the code
+   constrain every answer, and three of them are bugs the frame has to face:
+
+     1. There is no step-indicator component. Each template hardcodes a sentence, and they
+        disagree: "Step 1-2 of 5", "Step 3 of 5", step 4 has no number at all, "Step 5 of 5"
+        - across four screens plus a finish page. CLAUDE.md calls it four steps.
+     2. There is no Back on any step. Navigation is submit-or-skip, forward only.
+     3. FINISH COMMITS NOTHING. Every step commits at its own POST; the finish screen is a
+        summary of what is still empty. So this is not a transaction - it is a guided tour
+        of surfaces that each save themselves.
+     4. The happy path never reaches Finish. Saving the rehearsal pattern redirects to
+        /schedule/edit/; only the Skip link lands on /finish/.
+   And there is deliberately no resume: an abandoned draft is finished from the ordinary tabs.
+   ============================================================ */
+function stepRail() {
+  return `<div class="steprail">${WIZ_STEPS.map((s, i) => `<button class="st ${s.done ? 'done' : ''}"
+    ${i === state.wizStep ? 'aria-current="step"' : ''} onclick="gotoStep(${i})"
+    style="border:0;cursor:pointer;text-align:left;font:inherit">
+    <span class="n">${s.done ? 'Done' : (i === state.wizStep ? `Step ${i + 1} of 5` : `Step ${i + 1}`)}</span>
+    <b>${s.label}</b></button>`).join('')}</div>`;
+}
+function stepPips() {
+  return `<div class="steppips"><span class="mono" style="font-size:11.5px">${state.wizStep + 1}/5</span>
+    <span class="pips">${WIZ_STEPS.map((s, i) =>
+      `<span class="pip ${i === state.wizStep ? 'on' : (s.done ? 'done' : '')}"></span>`).join('')}</span>
+    <b>${WIZ_STEPS[state.wizStep].label}</b></div>`;
+}
+/* A stand-in for the real roster-import editor, so the FRAME is what gets judged rather
+   than the editor inside it. #310 owns what this actually looks like. */
+function rosterStub() {
+  return `<div class="stack" style="gap:9px">
+    <div class="hstack"><span class="field" style="width:180px">Filter by name</span>
+      <button class="btn sm">Select all</button><button class="btn sm">Select none</button></div>
+    <div class="ghost">${PEOPLE_STUB.map(p => `<div class="gline"><span class="gbox"></span>
+      <b style="font-weight:600">${p[0]}</b><span class="muted" style="font-size:11.5px">${p[1]}</span></div>`).join('')}</div>
+  </div>`;
+}
+const PEOPLE_STUB = [['Avery Cho', 'Lead Vocals, Keys'], ['Dani Okafor', 'Drums'],
+  ['Priya Raman', 'Bass, Backing Vocals'], ['Marcus Vale', 'Guitar'], ['Nina Restrepo', 'Keys, Backing Vocals']];
+
+/* ---- A: no wizard past "name it". A setup checklist that links out to the real editors. ---- */
+function wizardA() {
+  const items = [
+    ['Roster', true,  '9 members imported from Fall 2026', 'Band'],
+    ['Setlist', false, 'No songs yet', 'Songs'],
+    ['Rehearsal pattern', false, 'No pattern saved', 'Schedule'],
+    ['Rehearsal dates', false, 'Nothing scheduled &mdash; generate them from the pattern', 'Schedule'],
+  ];
+  return `<div class="stack">
+    <div class="page-head"><h1>Home</h1></div>
+    <div class="card stack" style="gap:10px">
+      <div class="row-between"><span class="section-head">Setting up ${esc(state.semester)}</span>
+        <span class="status draft">Draft</span></div>
+      <p class="note">It is a draft until you publish it, so members see nothing yet. Do these in any
+      order, or not at all &mdash; each one is just its ordinary tab.</p>
+      <div class="chk">${items.map(([label, done, sub, where]) => `<div class="ci ${done ? 'done' : ''}">
+        <span class="box ${done ? 'on' : ''}"></span><b>${label}</b>
+        <button class="btn sm">${done ? 'Review' : 'Open ' + where}</button>
+        <span class="sub">${sub}</span></div>`).join('')}</div>
+      <div class="hstack"><button class="btn primary" onclick="openModal('publish', ${JSON.stringify(state.semester)})">
+        Publish ${esc(state.semester)}</button>
+        <button class="btn ghost">Dismiss this panel</button></div>
+    </div>
+    <div class="card stack">
+      <span class="section-head">Why A deletes the wizard</span>
+      <ul style="margin:0;padding-left:18px;display:grid;gap:6px;color:var(--ink-2);font-size:13px">
+        <li><b>Finish already commits nothing.</b> Each step saves itself, so the wizard is a tour,
+        not a transaction &mdash; and a tour with no Back and no resume is worse than a checklist,
+        which has both for free.</li>
+        <li><b>Three of the four steps are already the ordinary editor.</b> The setlist step literally
+        includes the Setlist tab&rsquo;s own template. A checklist stops maintaining a second frame
+        around it.</li>
+        <li><b>Resume becomes free.</b> The panel is derived from what is empty, so it is correct
+        whenever you come back, from wherever you left.</li>
+      </ul>
+    </div>
+    <div class="flaw"><b>What A gives up.</b> A first-time admin gets no order at all. The current
+    wizard&rsquo;s one real service is telling you that the roster comes before casting and the
+    pattern before dates &mdash; a checklist states the items but not the sequence.</div>
+  </div>`;
+}
+
+/* ---- B: a genuine linear wizard with its own frame, a step rail, Back and Next. ---- */
+function wizardB() {
+  const s = WIZ_STEPS[state.wizStep];
+  return `<div class="stack">
+    <div class="page-head"><h1>New semester</h1>
+      <span class="actions"><span class="status draft">${esc(state.semester)} &middot; Draft</span></span></div>
+    ${isPhone() ? stepPips() : stepRail()}
+    <div class="card stack" style="gap:12px">
+      <div class="stack" style="gap:4px">
+        <h2 style="font-size:16px">${s.label}</h2>
+        <p class="note">Bring Fall 2026&rsquo;s roster into ${esc(state.semester)}. Everyone is ticked by
+        default, since the common edit is unticking the few who graduated. Nothing here links back to
+        Fall 2026 &mdash; it creates fresh Membership rows for this Semester only.</p>
+      </div>
+      ${rosterStub()}
+    </div>
+    <div class="wizfoot">
+      <button class="btn" ${state.wizStep === 0 ? 'disabled' : ''} onclick="stepWizard(-1)">&larr; Back</button>
+      <span class="spacer"></span>
+      <button class="btn ghost" onclick="stepWizard(1)">Skip this step</button>
+      <button class="btn primary" onclick="stepWizard(1)">Import roster and continue &rarr;</button>
+    </div>
+    <p class="note">Each step still commits at its own Save &mdash; Back walks you to a step you have
+    already written, never unwinds it. That is not what a wizard&rsquo;s Back usually means, and it is
+    the thing to look at hardest here.</p>
+    <div class="flaw"><b>The flaw to look for.</b> A wizard frame implies a transaction it does not
+    have. Abandon this at step 3 and the Semester and its roster are already written &mdash; there is
+    no Cancel that undoes them, and there is no way back INTO this frame afterwards.</div>
+  </div>`;
+}
+
+/* ---- C: the wizard drives the REAL pages. A pinned band, no copied editors. ---- */
+function setupBand() {
+  if (state.page !== 'wizard' || V() !== 'C') return '';
+  const s = WIZ_STEPS[state.wizStep];
+  return `<div class="setupband">
+    <span class="who"><span class="n">Setting up ${esc(state.semester)} &middot; step ${state.wizStep + 1} of 5</span>
+      <b>${s.label}</b></span>
+    <span class="spacer"></span>
+    ${isPhone() ? '' : `<span class="pips" style="display:flex;gap:4px;width:120px">
+      ${WIZ_STEPS.map((x, i) => `<span class="pip ${i === state.wizStep ? 'on' : (x.done ? 'done' : '')}"
+        style="flex:1;height:4px;border-radius:99px;background:${i === state.wizStep ? 'var(--ink)' : (x.done ? 'var(--ok)' : 'var(--box)')}"></span>`).join('')}</span>`}
+    <span class="acts">
+      <button class="btn sm" ${state.wizStep === 0 ? 'disabled' : ''} onclick="stepWizard(-1)">&larr;</button>
+      <button class="btn sm ghost" onclick="stepWizard(1)">Skip</button>
+      <button class="btn sm primary" onclick="stepWizard(1)">Next &rarr;</button>
+      <button class="btn sm ghost" title="The band comes back whenever this draft is the Semester you are editing">Leave setup</button>
+    </span>
+  </div>`;
+}
+function wizardC() {
+  /* The page underneath is the ORDINARY Band tab in its ordinary edit mode - not a copy of
+     it. That is the whole claim: a wizard step is a place you are, not a page that exists. */
+  return `<div class="stack">
+    <div class="page-head"><h1>Band</h1>
+      <span class="actions"><button class="btn sm">+ Invite someone</button></span></div>
+    <p class="note">This is the ordinary Band tab, in the ordinary roster edit mode #310 designs.
+    The band above is the only thing setup adds &mdash; there is no second roster editor to build
+    or to keep in step with this one.</p>
+    <div class="card stack" style="gap:10px">
+      <div class="row-between"><span class="section-head">Import Fall 2026&rsquo;s roster</span>
+        <span class="muted" style="font-size:11.5px">Offered because ${esc(state.semester)} has no members yet</span></div>
+      ${rosterStub()}
+    </div>
+    <div class="card stack">
+      <span class="section-head">What the band buys</span>
+      <ul style="margin:0;padding-left:18px;display:grid;gap:6px;color:var(--ink-2);font-size:13px">
+        <li><b>No step is a copy of an editor.</b> The setlist step already includes the Setlist
+        tab&rsquo;s own template today; C makes that the rule rather than the exception.</li>
+        <li><b>Resume is free and needs no stored state.</b> The band renders whenever the Semester
+        you are editing is an unpublished draft with something still empty &mdash; so leaving and
+        coming back a week later puts you back in it, from any tab.</li>
+        <li><b>&ldquo;Finish&rdquo; stops pretending to commit.</b> Each step already commits itself;
+        the band just stops appearing once nothing is empty, and offers Publish.</li>
+      </ul>
+    </div>
+    <div class="flaw"><b>The flaw to look for, and it is real.</b> Because this step <i>is</i> the
+    ordinary Band tab, it carries #306&rsquo;s edit toolbar too &mdash; so setup chrome and edit chrome
+    stack. Switch the buffer to <b>3 edits</b> on the <b>phone</b> frame and count: title bar, semester
+    strip, setup band, edit toolbar. Four bars, roughly a third of the screen, before the page starts.
+    If C wins, one of those four has to give.</div>
+  </div>`;
+}
+
+/* ---- Finish, three ways ---- */
+function wizFin() {
+  const empties = [['setlist', 'no setlist yet', 'Songs'], ['rehearsals', 'no rehearsals scheduled yet', 'Schedule']];
+  if (V() === 'A') {
+    return `<div class="stack">
+      <div class="page-head"><h1>Home</h1></div>
+      <div class="flaw"><b>Variant A has no finish screen.</b> There is nothing for it to say that the
+      checklist is not already saying, and nothing for it to commit. Switch the surface back to
+      <b>Setup wizard &mdash; a step</b> to see the checklist it replaces.</div>
+      ${wizardA()}</div>`;
+  }
+  const body = `<div class="card stack" style="gap:11px">
+    <div class="stack" style="gap:3px">
+      <h2 style="font-size:17px">${esc(state.semester)} is ready to publish</h2>
+      <p class="note">It has been a draft since you created it &mdash; every step saved itself as you
+      went, so there is nothing here left to commit. Publishing is the only thing that changes what
+      members see.</p>
+    </div>
+    <div class="counts" style="font-size:12.5px"><span><b>9</b> members</span><span><b>8</b> songs</span>
+      <span><b>6</b> rehearsals</span><span><b>0</b> recordings</span></div>
+    <div class="stack" style="gap:7px">
+      <span class="gb-label">Still empty</span>
+      ${empties.map(([, text, where]) => `<div class="row-between" style="font-size:12.5px">
+        <span class="muted">${text}</span><button class="btn sm">Open ${where}</button></div>`).join('')}
+      <p class="note">None of these blocks publishing &mdash; a Semester with an empty setlist is a
+      legal thing to show members, just a thin one.</p>
+    </div>
+    <div class="hstack">
+      <button class="btn primary" onclick="openModal('publish', ${JSON.stringify(state.semester)})">
+        Publish ${esc(state.semester)}</button>
+      <button class="btn">Keep it a draft</button>
+    </div>
+  </div>`;
+  return `<div class="stack">
+    <div class="page-head"><h1>New semester</h1>
+      <span class="actions"><span class="status draft">Draft</span></span></div>
+    ${V() === 'B' ? (isPhone() ? stepPips() : stepRail()) : ''}
+    ${body}
+    ${V() === 'C' ? `<p class="note">In C this is not a route you can miss: the setup band&rsquo;s last
+      step lands here, and the band keeps offering it until the draft is published or dismissed. Today
+      the happy path never reaches Finish at all &mdash; saving the rehearsal pattern redirects to the
+      Rehearsals surface, and only the <i>Skip</i> link lands on <code>/finish/</code>.</p>` : ''}
+  </div>`;
+}
+
+/* ============================================================
+   Modals.
+
+   #306 settled that the Save popup is the ONLY home for ADR 0008 Fallout, and that one
+   dialog with escalating content covers both a harmless save and a destructive one. All
+   three variants wear that unchanged - it is inherited, not re-decided.
+
+   What #311 has to add is that the semester ACTIONS are the same shape of thing: publish,
+   reapply and delete each have consequences an admin should read before committing, and
+   each is today a bare button or a standalone confirmation page with ambient fallout.
+   Making them popups on the same pattern is the point.
+   ============================================================ */
+function modalShell(title, body, foot, wide) {
+  return `<div class="backdrop ${isPhone() ? 'bottom' : ''}" onclick="closeModal()">
+    <div class="modal" ${wide ? 'style="max-width:520px"' : ''} onclick="event.stopPropagation()">
+      <div class="m-head"><h3>${title}</h3>
+        <button class="btn sm ghost" onclick="closeModal()" aria-label="Close">&times;</button></div>
+      <div class="m-body tall">${body}</div>
+      <div class="m-foot">${foot}</div>
+    </div></div>`;
+}
+/* The adjudication Save popup. Same shape as #306's, with adjudication's own two tiers. */
+function saveModal() {
+  const changed = CONFLICTS.filter(isEdited);
+  const body = `<div class="fo">
+    <div><h4>What you changed</h4><ul class="changelist" style="padding:0">
+      ${changed.map(c => `<li><span class="op">${pickOf(c)}</span>
+        <span>${esc(c.person)}<span class="why"> &mdash; ${TYPES[c.type]}${c.time ? ', ' + c.time : ''}</span></span></li>`).join('')}
+    </ul></div>
+    ${ADJ_FALLOUT.loud.length ? `<div><h4>This will</h4><ul class="loud">
+      ${ADJ_FALLOUT.loud.map(l => `<li>${esc(l)}</li>`).join('')}</ul></div>` : ''}
+    ${ADJ_FALLOUT.quiet.length ? `<div><h4>Worth noting</h4><ul>
+      ${ADJ_FALLOUT.quiet.map(l => `<li>${esc(l)}</li>`).join('')}</ul></div>` : ''}
+    <p class="privacy">Neither tier blocks the save. Feasibility is computed for everyone approved
+    <b>together</b>, so these lines describe the evening, not any one person&rsquo;s row.</p>
+  </div>`;
+  return modalShell('Save 3 verdicts', body,
+    `<button class="btn" onclick="closeModal()">Back to editing</button>
+     <button class="btn primary" onclick="closeModal()">Save changes</button>`);
+}
+/* Publish: today this is a bare one-click POST with no confirmation anywhere. It is the
+   single action in the app that changes what every member sees, so it gets a popup. */
+function publishModal() {
+  const name = state.modalArg || state.semester;
+  const s = SEMESTERS.find(x => x.name === name) || SEMESTERS[0];
+  const incumbent = SEMESTERS.find(x => x.name === LIVE);
+  const isLive = name === LIVE;
+  const body = `<div class="fo">
+    ${isLive ? `<p style="margin:0">${esc(name)} is already what members see. Publishing again just
+      re-stamps it, which is harmless.</p>`
+    : `<div><h4>This will</h4><ul class="loud">
+        <li>Make <b>${esc(name)}</b> what every member sees, immediately.</li>
+        <li>Stop showing them <b>${esc(incumbent.name)}</b> &mdash; its ${incumbent.rehearsals} rehearsals
+          and ${incumbent.songs} songs come off the member-facing pages.</li>
+      </ul></div>
+      <div><h4>Worth noting</h4><ul>
+        <li>${esc(incumbent.name)} is not deleted or changed. Publishing it again puts it back &mdash;
+          that is how a rollback works (ADR 0010).</li>
+        ${s.songs === 0 ? '<li>This Semester has no setlist yet. Members will see an empty Songs page.</li>' : ''}
+        ${s.rehearsals === 0 ? '<li>This Semester has no rehearsals scheduled yet.</li>' : ''}
+      </ul></div>`}
+    <p class="privacy">Publishing is visibility only. It never locks a Semester for editing, and there
+    is no unpublish &mdash; you roll back by publishing an older one through this same button.</p>
+  </div>`;
+  return modalShell(isLive ? `Re-publish ${esc(name)}?` : `Publish ${esc(name)}?`, body,
+    `<button class="btn" onclick="closeModal()">Cancel</button>
+     <button class="btn primary" onclick="closeModal()">${isLive ? 'Re-publish' : 'Publish ' + esc(name)}</button>`);
+}
+/* Delete: the escalating end of #306's one dialog. ADR 0011 forbids an export branch and
+   there is no undo, so this confirmation is the only safety net that exists. */
+function deleteModal() {
+  const name = state.modalArg || state.semester;
+  const s = SEMESTERS.find(x => x.name === name) || SEMESTERS[0];
+  const body = `<div class="fo">
+    <div class="fo-doom">
+      <b>${s.recs} recording${s.recs === 1 ? '' : 's'} are destroyed</b>
+      <span>Members&rsquo; uploaded audio, deleted from storage as well as from the database.
+      There is no undo and no export.</span>
+    </div>
+    <div><h4>This permanently deletes</h4><ul>
+      <li><b>${s.members}</b> membership${s.members === 1 ? '' : 's'}</li>
+      <li><b>${s.songs}</b> song${s.songs === 1 ? '' : 's'}, with their role requirements and assignments</li>
+      <li><b>${s.rehearsals}</b> rehearsal${s.rehearsals === 1 ? '' : 's'}, with their running orders and declared conflicts</li>
+      <li><b>${s.recs}</b> recording${s.recs === 1 ? '' : 's'}</li>
+    </ul></div>
+    <p class="privacy">Person accounts are untouched &mdash; a member of a deleted term still logs in,
+    simply with no roster entry for that term.</p>
+  </div>`;
+  return modalShell(`Delete ${esc(name)}?`, body,
+    `<button class="btn" onclick="closeModal()">Cancel</button>
+     <button class="btn primary" onclick="closeModal()">Delete ${esc(name)} permanently</button>`, true);
+}
+/* Reapply defaults: a real bulk write, previewed by running it and rolling it back
+   (ADR 0008). Today it is a standalone page with two unstyled lists; here it is the
+   same Save popup every other admin write in the app now uses. */
+function reapplyModal() {
+  const name = state.modalArg || state.semester;
+  const f = REAPPLY_FALLOUT;
+  const body = `<div class="fo">
+    <p style="margin:0">Pushes ${esc(name)}&rsquo;s current setup and teardown grace, arrival and
+    departure buffers, and duration defaults onto its <b>${f.changed}</b> upcoming rehearsals, and
+    re-times each one&rsquo;s songs against them. Past rehearsals are untouched.</p>
+    <div><h4>This will</h4><ul class="loud">${f.loud.map(l => `<li>${esc(l)}</li>`).join('')}</ul></div>
+    <div><h4>Worth noting</h4><ul>${f.quiet.map(l => `<li>${esc(l)}</li>`).join('')}</ul></div>
+    <p class="privacy">Hand-raised slot counts are never touched, so a song someone widened stays wide.</p>
+  </div>`;
+  return modalShell(`Reapply ${esc(name)}&rsquo;s timing defaults?`, body,
+    `<button class="btn" onclick="closeModal()">Cancel</button>
+     <button class="btn primary" onclick="closeModal()">Reapply defaults</button>`, true);
+}
+function modalLayer() {
+  if (state.modal === 'save') return saveModal();
+  if (state.modal === 'publish') return publishModal();
+  if (state.modal === 'delete') return deleteModal();
+  if (state.modal === 'reapply') return reapplyModal();
+  if (state.modal === 'semsheet') return semesterSheet();
+  return '';
+}
+
+/* ============================================================
+   Render
+   ============================================================ */
+function bodyFor() {
+  const v = V();
+  switch (state.page) {
+    case 'semesters':  return SEMESTER_PAGE[v]();
+    case 'conflicts':  return v === 'A' ? conflictsA() : (v === 'B' ? conflictsB() : conflictsC());
+    /* B is the only variant with a separate adjudication ROUTE. A adjudicates in the queue
+       and C adjudicates in the pane, so for both, "adjudicating a rehearsal" IS the way in. */
+    case 'adjudicate': return v === 'B' ? adjudicateB() : (v === 'A' ? conflictsA() : conflictsC());
+    case 'wizard':     return v === 'A' ? wizardA() : (v === 'B' ? wizardB() : wizardC());
+    case 'wizfin':     return wizFin();
+  }
+}
+/* The #306 edit toolbar appears only where there is a Pending Buffer to own. Semester
+   management has none - its actions commit one at a time through their own popups - and
+   neither does the wizard frame, whose steps each own their editor's buffer. */
+function toolbarFor() {
+  if (state.page === 'conflicts' || state.page === 'adjudicate') return editToolbar('conflict verdicts', 'verdict');
+  /* C's wizard step is not a frame around a copy of an editor - it IS the ordinary Band
+     tab in edit mode, so it carries #306's toolbar like any other edit surface. Which
+     means C is the one variant where setup chrome and edit chrome stack. Rendered rather
+     than described, because that stack is the thing worth judging. */
+  if (V() === 'C' && state.page === 'wizard' && dirty()) return editToolbar('the roster', 'change');
+  return '';
+}
+function render() {
+  const body = bodyFor();
+  const toolbar = toolbarFor();
+  const band = setupBand();
+  document.getElementById('stage').innerHTML =
+    `<div class="frame ${state.viewport}">${isPhone() ? phoneShell(body, toolbar, band) : desktopShell(body, toolbar, band)}</div>`;
+  renderVerdict();
+  syncChrome();
+  if (typeof pushParams === 'function') pushParams();
+}
+
+function renderVerdict() {
+  const v = V();
+  const CASE = {
+    A: {
+      for: `<li><b>It deletes an orphan.</b> Nothing in the codebase links to
+        <code>/manage/semesters/</code> today except its own confirmations&rsquo; Cancel links.</li>
+        <li><b>It refuses to state semester state twice.</b> A page listing every semester beside a
+        sidebar panel naming one re-creates exactly the duplication #303 deleted.</li>
+        <li><b>Resume comes free.</b> A checklist derived from what is empty is correct whenever you
+        come back, from wherever you left &mdash; which is more than the wizard manages today.</li>`,
+      against: `<li><b>A sheet is the wrong home for a hard delete.</b> ADR 0011 makes that confirmation
+        the only safety net there is, and a sheet is dismissed by clicking the backdrop.</li>
+        <li><b>The flat conflict queue computes the wrong thing.</b> Feasibility is a question about the
+        Conflicts approved <i>together at one Rehearsal</i>; a person-per-row queue invites answering it
+        one row at a time and never shows the set it is computed against.</li>
+        <li><b>A checklist states the items but not the sequence</b>, which is the wizard&rsquo;s one
+        real service to a first-time admin.</li>`,
+    },
+    B: {
+      for: `<li><b>Every surface is where its URL says it is</b>, deep-linkable and back-buttonable
+        &mdash; and the two conflict routes are the ones ADR 0005 already names.</li>
+        <li><b>The index earns its keep</b>: pending, approved and rejected counts per rehearsal, with
+        no member&rsquo;s Conflict text on the index at all.</li>
+        <li><b>A step rail is the one thing the wizard has never had.</b> Today each template hardcodes
+        a sentence and they disagree with each other and with CLAUDE.md.</li>`,
+      against: `<li><b>The semester table makes Delete a peer of Switch to.</b> Four buttons at one size
+        on every row, one of which is an irreversible cascade.</li>
+        <li><b>A wizard frame implies a transaction it does not have.</b> Every step already commits at
+        its own POST, so Back walks to a step you have written, and abandoning at step 3 leaves the
+        Semester and its roster behind with no Cancel that undoes them.</li>
+        <li><b>Two routes for conflicts means two page loads to answer one question</b>, and the index
+        exists mostly to say which rehearsal has a number on it.</li>`,
+    },
+    C: {
+      for: `<li><b>Adjudication reads as what it is.</b> The rail moves you between <i>rehearsals</i>,
+        because the verdicts at one rehearsal are decided against each other &mdash; the layout matches
+        the computation instead of fighting it.</li>
+        <li><b>The timeline puts Delete behind Manage</b>, so the default read is &ldquo;which one is
+        live and what is in each&rdquo; and the irreversible action is never a peer of the reversible
+        three.</li>
+        <li><b>The wizard stops copying editors.</b> The setlist step already <i>is</i> the Setlist
+        tab&rsquo;s own template today; C makes that the rule, so there is no second frame to keep in
+        step, and resume needs no stored state at all.</li>`,
+      against: `<li><b>Chrome stacks, and it is worse than it sounds.</b> Because a wizard step is the
+        real editor, it wears #306&rsquo;s edit toolbar as well as the setup band. On the phone frame with
+        <i>3 edits</i> that is four bars &mdash; title, semester strip, setup band, edit toolbar &mdash;
+        before the page starts. Flip to it and count.</li>
+        <li><b>One conflicts route means the rehearsal is in a query param</b>, not the path, unless it
+        keeps <code>/manage/conflicts/&lt;id&gt;/</code> as a deep link into the same page.</li>
+        <li><b>A timeline is a worse table.</b> If the real job is comparing four semesters&rsquo;
+        counts, B&rsquo;s columns win and C&rsquo;s vertical rail is decoration.</li>`,
+    },
+  }[v];
+
+  document.getElementById('verdict').innerHTML = `
+    <h2>Variant ${v} &mdash; ${VARIANTS[v]}</h2>
+    <div class="cols">
+      <div><h2>The case for</h2><ul>${CASE.for}</ul></div>
+      <div><h2>The case against</h2><ul>${CASE.against}</ul></div>
+    </div>
+    <h2 style="margin-top:6px">Two findings that need a call whichever variant wins</h2>
+    <ul>
+      <li><b>#303&rsquo;s pending count on the Conflicts nav item contradicts ADR 0005</b>, and all three
+      variants above render the nav item without one. The ADR is explicit: the link to the adjudication
+      route is &ldquo;unconditional and carries no pending count, since the count is itself
+      Conflict-derived and belongs on the admin route that already shows it.&rdquo; #303 put the count in
+      the <i>sidebar</i>, which renders on every route &mdash; including <code>/schedule/</code> and
+      <code>/members/&lt;pk&gt;/</code>, the member-facing surfaces the ADR draws its boundary around.
+      Either the count goes, or ADR 0005 gets amended to say that admin-only <i>chrome</i> is judged by
+      who sees it rather than which route it renders on. <b>My read: the count goes.</b> The ADR&rsquo;s
+      test is deliberately a property of the route, not of <code>request.user.is_admin</code>, precisely
+      so no future surface can argue itself an exception &mdash; and a badge that says &ldquo;3&rdquo;
+      beside Conflicts on a page a member is looking at over your shoulder is the disclosure it guards
+      against, in miniature.</li>
+      <li><b>Adjudication renders ambient Fallout today, which #306 abolished.</b> Its two tiers sit
+      under the table and re-render by HTMX on <i>every</i> verdict change &mdash; exactly the running
+      commentary #306 rejected, and exactly the debounced fetch it deleted. All three variants move it
+      into the Save popup. That is not free: adjudication&rsquo;s preview is a <i>pure read</i>, unlike
+      every other preview in the app, so it is the one surface where an ambient region cost nothing to
+      compute. Worth pressing on: is &ldquo;approving this leaves no Running Order that works&rdquo;
+      really a cost you read at Save, or is it the thing you are deciding with?</li>
+    </ul>
+    <h2 style="margin-top:6px">Three bugs in the wizard the frame has to answer for</h2>
+    <ul>
+      <li><b>The step numbers are incoherent.</b> The templates say &ldquo;Step 1&ndash;2 of 5&rdquo;,
+      &ldquo;Step 3 of 5&rdquo;, nothing at all on the setlist step, and &ldquo;Step 5 of 5&rdquo;
+      &mdash; across four screens plus a finish page, while CLAUDE.md calls it a four-step wizard.
+      There is no step-indicator component; each template hardcodes a sentence.</li>
+      <li><b>The happy path never reaches Finish.</b> Saving the rehearsal pattern redirects to
+      <code>/schedule/edit/</code>; only the <i>Skip</i> link lands on <code>/finish/</code>. An admin
+      who completes every step is the one who never sees the completion screen.</li>
+      <li><b>There is no Back, and no resume by design.</b> Navigation is submit-or-skip, forward only,
+      and an abandoned draft is finished from the ordinary tabs. Both A and C turn that from a gap into
+      the actual design; B is the only variant that has to build a Back that means something.</li>
+    </ul>
+    <h2 style="margin-top:6px">Inherited from #306 and #303, not re-decided here</h2>
+    <ul>
+      <li>The <b>sticky edit toolbar</b>, the <b>Save popup as the only home for Fallout</b>, the
+      <b>grid shows what you changed / popup shows what it costs</b> rule, and the <b>sidebar</b> as the
+      home for a stale-Semester notice. Flip the buffer to <i>blocked</i> on any surface to see it.</li>
+      <li>The semester panel, the collapsible sidebar and the phone tab bar. One change proposed:
+      in variant A the sidebar&rsquo;s <b>Viewing</b> field becomes a button rather than a label, because
+      it is the only door to semester management.</li>
+      <li><b>What #311 adds:</b> Publish, Reapply defaults and Delete become popups on the same pattern.
+      Publish has <i>no</i> confirmation at all today &mdash; one click changes what every member sees.</li>
+    </ul>`;
+}
+
+function syncChrome() {
+  document.querySelectorAll('#varseg button').forEach(b =>
+    b.setAttribute('aria-pressed', String(b.dataset.v === state.variant)));
+  document.querySelectorAll('#viewportseg button').forEach(b =>
+    b.setAttribute('aria-pressed', String(b.dataset.vp === state.viewport)));
+  document.getElementById('pagesel').value = state.page;
+  document.getElementById('bufsel').value = state.buffer;
+}
+
+document.getElementById('pagesel').innerHTML = PAGES.map(([k, l]) => `<option value="${k}">${l}</option>`).join('');
+document.getElementById('bufsel').innerHTML = BUFFERS.map(([k, l]) => `<option value="${k}">${l}</option>`).join('');
+document.getElementById('pagesel').onchange = e => go(e.target.value);
+document.getElementById('bufsel').onchange = e => setBuffer(e.target.value);
+document.querySelectorAll('#varseg button').forEach(b => b.onclick = () => setVariant(b.dataset.v));
+document.querySelectorAll('#viewportseg button').forEach(b =>
+  b.onclick = () => { state.viewport = b.dataset.vp; state.openRow = -1; render(); });
+document.addEventListener('keydown', e => {
+  const t = e.target;
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+  if (e.key === 'Escape' && state.modal) { closeModal(); return; }
+  if (e.key === 'ArrowLeft') { e.preventDefault(); cycleVariant(-1); }
+  if (e.key === 'ArrowRight') { e.preventDefault(); cycleVariant(1); }
+});
+
+/* Reload-stable and shareable: the switcher's state rides in the query string, so a
+   review comment can link straight at "variant C, phone, the wizard". */
+(function readParams() {
+  const q = new URLSearchParams(location.search);
+  const take = (k, field, ok) => { const x = q.get(k); if (x && ok.includes(x)) state[field] = x; };
+  take('v', 'variant', ['A', 'B', 'C']);
+  take('vp', 'viewport', ['desktop', 'phone']);
+  take('p', 'page', PAGES.map(x => x[0]));
+  take('buf', 'buffer', BUFFERS.map(x => x[0]));
+  take('m', 'modal', ['save', 'publish', 'delete', 'reapply', 'semsheet']);
+  if (q.get('open')) state.openRow = Number(q.get('open'));
+  if (q.get('rail')) state.rail = true;
+})();
+function pushParams() {
+  const q = new URLSearchParams({ v: state.variant, vp: state.viewport, p: state.page, buf: state.buffer });
+  history.replaceState(null, '', location.pathname + '?' + q);
+}
+
+render();
+</script>
