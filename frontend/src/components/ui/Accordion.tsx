@@ -12,6 +12,15 @@ export interface AccordionItem {
 interface AccordionProps {
   items: AccordionItem[]
   defaultOpenKey?: string
+  /**
+   * Controlled mode (issue #337): pass alongside `onOpenKeyChange` when a
+   * caller needs to read or drive which row is open itself — e.g. to keep
+   * the open row in sync with the URL so a round trip elsewhere re-opens
+   * the same row. `''` means "nothing open". Omit both to keep the
+   * original uncontrolled behaviour (`defaultOpenKey` only).
+   */
+  openKey?: string
+  onOpenKeyChange?: (key: string) => void
 }
 
 /**
@@ -20,13 +29,19 @@ interface AccordionProps {
  * — it was chosen because a draft that gave every rehearsal a full-width
  * band made a six-rehearsal editor take several screens.
  */
-export function Accordion({ items, defaultOpenKey }: AccordionProps) {
+export function Accordion({
+  items,
+  defaultOpenKey,
+  openKey,
+  onOpenKeyChange,
+}: AccordionProps) {
+  const controlledProps =
+    openKey !== undefined
+      ? { value: openKey, onValueChange: onOpenKeyChange }
+      : { defaultValue: defaultOpenKey }
+
   return (
-    <RadixAccordion.Root
-      type="single"
-      collapsible
-      defaultValue={defaultOpenKey}
-    >
+    <RadixAccordion.Root type="single" collapsible {...controlledProps}>
       {items.map((item) => (
         <RadixAccordion.Item
           key={item.key}

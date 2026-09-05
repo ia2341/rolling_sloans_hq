@@ -250,3 +250,42 @@ class BandPersonApiRouteCoverageTests(SimpleTestCase):
                 offenders.append((path, response.status_code))
 
         self.assertEqual(offenders, [], f'The following routes did not answer anonymously with a bare 401: {offenders}')
+
+
+# The rehearsal editor's routes (issue #337). `_iter_api_leaf_paths` above
+# already sweeps every zero-argument route here (the editor read, its
+# Preview/Save, the Pattern-save, the generation-diff, and the deal) via
+# the generic `AdminApiView`-coverage tests; the per-Rehearsal shuffle
+# route is parameterised, so it needs its own explicit 401 coverage, named
+# here so this module documents the whole surface in one place.
+class ScheduleEditorApiRouteCoverageTests(SimpleTestCase):
+    """Issue #337's schedule-editor routes: every view is `AdminApiView`/`AdminPreviewApiView`, and a bare 401 anonymously."""
+
+    def test_shuffle_route_401s_anonymously_and_never_302s(self):
+        """An anonymous GET to the parameterised per-Rehearsal shuffle route answers 401, never a redirect."""
+        client = Client()
+
+        response = client.get(reverse('api-schedule-editor-shuffle', args=[1]))
+
+        self.assertEqual(response.status_code, 401)
+        self.assertNotIn('Location', response)
+
+    def test_every_schedule_editor_view_is_admin_gated(self):
+        """Every schedule-editor view (read, Preview, Save, Pattern-save, generation-diff, deal, shuffle) is an `AdminApiView`."""
+        from scheduling.api_views import (
+            RehearsalGenerationDiffApiView,
+            RehearsalPatternSaveApiView,
+            ScheduleEditorApiView,
+            ScheduleEditorDealApiView,
+            ScheduleEditorPreviewApiView,
+            ScheduleEditorSaveApiView,
+            ScheduleEditorShuffleApiView,
+        )
+
+        for view_class in (
+            ScheduleEditorApiView, ScheduleEditorPreviewApiView, ScheduleEditorSaveApiView,
+            RehearsalPatternSaveApiView, RehearsalGenerationDiffApiView,
+            ScheduleEditorDealApiView, ScheduleEditorShuffleApiView,
+        ):
+            with self.subTest(view=view_class.__name__):
+                self.assertTrue(issubclass(view_class, AdminApiView), f'{view_class.__name__} must inherit AdminApiView')

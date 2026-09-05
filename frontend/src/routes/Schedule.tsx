@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 
 import { apiFetch } from '../api/client'
 import { useAppContext } from '../api/ContextProvider'
@@ -94,7 +94,11 @@ export function Schedule() {
   ) {
     return (
       <div>
-        <PageHead title="Schedule" subline={data.semester_name ?? undefined} />
+        <PageHead
+          title="Schedule"
+          subline={data.semester_name ?? undefined}
+          action={appContext?.viewer.is_admin ? <EditRehearsalsButton /> : undefined}
+        />
         <p className="text-sm text-rs-muted">
           {data.semester_name === null
             ? 'No Semester published yet.'
@@ -119,15 +123,20 @@ export function Schedule() {
             : undefined
         }
         action={
-          appContext?.viewer.is_admin && selected !== null ? (
-            <button
-              type="button"
-              disabled={!selected.can_edit_assignments}
-              title="Assignment editing (issue #338)"
-              className="rounded bg-rs-accent px-3 py-1.5 text-sm font-medium text-rs-accent-fg disabled:opacity-50"
-            >
-              Edit assignments
-            </button>
+          appContext?.viewer.is_admin ? (
+            <div className="flex gap-2">
+              <EditRehearsalsButton />
+              {selected !== null && (
+                <button
+                  type="button"
+                  disabled={!selected.can_edit_assignments}
+                  title="Assignment editing (issue #338)"
+                  className="rounded border border-rs-border px-3 py-1.5 text-sm font-medium disabled:opacity-50"
+                >
+                  Edit assignments
+                </button>
+              )}
+            </div>
           ) : undefined
         }
       />
@@ -902,5 +911,17 @@ function AllRehearsals({
         ))}
       </tbody>
     </table>
+  )
+}
+
+/** The Schedule surface's single admin entry point into `/schedule/edit/` (issue #337 user story 1). */
+function EditRehearsalsButton() {
+  return (
+    <Link
+      to="/schedule/edit"
+      className="rounded bg-rs-accent px-3 py-1.5 text-sm font-medium text-rs-accent-fg"
+    >
+      Edit rehearsals
+    </Link>
   )
 }

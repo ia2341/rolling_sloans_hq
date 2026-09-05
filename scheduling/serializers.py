@@ -11,12 +11,22 @@ filtering all stay in `services.py`; a serializer names fields and
 nothing more.
 """
 
+from collections import defaultdict
+
+from django.db.models import Count
 from django.utils import timezone
 
 from identity.serializers import serialize_viewer
 from scheduling import services
 from scheduling.fields import format_song_length
-from scheduling.models import Conflict, Rehearsal, Song
+from scheduling.models import (
+    Conflict,
+    Recording,
+    Rehearsal,
+    RehearsalPattern,
+    RehearsalSong,
+    Song,
+)
 from scheduling.services import (
     SetlistEditBuffer,
     SetlistEditFallout,
@@ -641,3 +651,309 @@ def serialize_person_recordings(person, semester) -> dict:
         'items': [_serialize_person_recording(recording) for recording in recordings],
         'upload_slots': [_serialize_slot_option(option) for option in upload_slots],
     }
+
+
+def _pinned_reasons_for(rehearsal_song, recording_counts) -> list[str]:
+    """Return which of the two independent pin reasons apply to `rehearsal_song` (issue #223, #337): `recording`, `manual_slot_count`, both, or neither."""
+    reasons = []
+    if recording_counts.get(rehearsal_song.pk, 0) > 0:
+        reasons.append('recording')
+    if rehearsal_song.slot_count > 1:
+        reasons.append('manual_slot_count')
+    return reasons
+
+
+def _serialize_running_order_row(rehearsal_song, recording_counts) -> dict:
+    """Return one Running Order sub-grid row: its Song, slot, derived times, and (issue #223) why it's pinned, if it is."""
+    reasons = _pinned_reasons_for(rehearsal_song, recording_counts)
+    return {
+        'rehearsal_song_id': rehearsal_song.pk,
+        'song_id': rehearsal_song.song_id,
+        'song_title': rehearsal_song.song.title,
+        'slot_count': rehearsal_song.slot_count,
+        'start_time': rehearsal_song.start_time.isoformat(),
+        'end_time': rehearsal_song.end_time.isoformat(),
+        'is_pinned': bool(reasons),
+        'pinned_reasons': reasons,
+    }
+
+
+def _serialize_editable_rehearsal(rehearsal, running_order_rows, recording_counts) -> dict:
+    """Return one editable-grid Rehearsal row: its own fields (never re-derived), and its Running Order sub-grid (issue #337)."""
+    return {
+        'id': rehearsal.pk,
+        'date': rehearsal.date.isoformat(),
+        'start_time': rehearsal.start_time.isoformat(),
+        'end_time': rehearsal.end_time.isoformat() if rehearsal.end_time else None,
+        'is_full_setlist': rehearsal.is_full_setlist,
+        'setup_grace_minutes': rehearsal.setup_grace_minutes,
+        'teardown_grace_minutes': rehearsal.teardown_grace_minutes,
+        'arrival_buffer_minutes': rehearsal.arrival_buffer_minutes,
+        'departure_buffer_minutes': rehearsal.departure_buffer_minutes,
+        'running_order': [
+            _serialize_running_order_row(rehearsal_song, recording_counts) for rehearsal_song in running_order_rows
+        ],
+    }
+
+
+def _serialize_past_rehearsal(rehearsal, song_count: int) -> dict:
+    """Return one read-only past-Rehearsal disclosure row: identity and window only, no inputs (issue #337)."""
+    return {
+        'id': rehearsal.pk,
+        'date': rehearsal.date.isoformat(),
+        'start_time': rehearsal.start_time.isoformat(),
+        'end_time': rehearsal.end_time.isoformat() if rehearsal.end_time else None,
+        'is_full_setlist': rehearsal.is_full_setlist,
+        'song_count': song_count,
+    }
+
+
+def _serialize_editor_setlist_song(song) -> dict:
+    """Return one "+ Add song" picker option: identity only, scoped to the viewing Semester's own setlist (ADR 0001)."""
+    return {'id': song.pk, 'title': song.title, 'artist': song.artist, 'position': song.position}
+
+
+def _serialize_semester_defaults(semester) -> dict:
+    """Return the Semester's timing/slot defaults the editor needs to render "inherit" placeholders and the slot budget."""
+    return {
+        'default_rehearsal_duration_minutes': semester.default_rehearsal_duration_minutes,
+        'default_setup_grace_minutes': semester.default_setup_grace_minutes,
+        'default_teardown_grace_minutes': semester.default_teardown_grace_minutes,
+        'default_song_slot_count': semester.default_song_slot_count,
+        'default_arrival_buffer_minutes': semester.default_arrival_buffer_minutes,
+        'default_departure_buffer_minutes': semester.default_departure_buffer_minutes,
+        'default_dress_rehearsal_count': semester.default_dress_rehearsal_count,
+    }
+
+
+def _serialize_rehearsal_time_row(rehearsal_time) -> dict:
+    """Return one saved Rehearsal Time as the Pattern editor's prefill shape."""
+    return {
+        'day_of_week': rehearsal_time.day_of_week,
+        'start_time': rehearsal_time.start_time.isoformat(),
+        'end_time': rehearsal_time.end_time.isoformat(),
+    }
+
+
+def _serialize_skip_date_row(skip_date) -> dict:
+    """Return one saved Skip Date as the Pattern editor's prefill shape."""
+    return {
+        'start_date': skip_date.start_date.isoformat(),
+        'end_date': skip_date.end_date.isoformat() if skip_date.end_date else None,
+    }
+
+
+def _serialize_rehearsal_pattern(pattern) -> dict | None:
+    """Return `semester`'s saved RehearsalPattern as the modal's prefill shape, or `None` if it has never saved one."""
+    if pattern is None:
+        return None
+    return {
+        'start_date': pattern.start_date.isoformat(),
+        'end_date': pattern.end_date.isoformat(),
+        'rehearsal_times': [_serialize_rehearsal_time_row(rehearsal_time) for rehearsal_time in pattern.rehearsal_times.all()],
+        'skip_dates': [_serialize_skip_date_row(skip_date) for skip_date in pattern.skip_dates.all()],
+    }
+
+
+def serialize_schedule_editor(semester) -> dict:
+    """Return the `/api/schedule/editor/` `data` shape for `semester` (issue #337): one round trip for the whole rehearsal editor.
+
+    Carries every future-or-today Rehearsal with its Running Order and
+    per-row pinned flags, the read-only past-Rehearsal list (no inputs,
+    the reason stated once client-side), the Semester's own setlist (for
+    the Running Order "+ Add song" picker), its timing/slot defaults, and
+    its saved RehearsalPattern (or `None`) for the generation modal's
+    prefill. The Semester staleness stamp itself travels on `context`
+    (`viewing_semester.updated_at`), not duplicated here.
+    """
+    if semester is None:
+        return {
+            'semester_name': None, 'rehearsals': [], 'past_rehearsals': [],
+            'setlist_songs': [], 'semester_defaults': None, 'pattern': None,
+        }
+    today = timezone.localdate()
+    rehearsals = list(
+        Rehearsal.objects.filter(semester=semester, date__gte=today).order_by('date', 'start_time')
+    )
+    past_rehearsals = list(
+        Rehearsal.objects.filter(semester=semester, date__lt=today).order_by('date', 'start_time')
+    )
+    rehearsal_ids = [rehearsal.pk for rehearsal in rehearsals]
+    rehearsal_songs = list(
+        RehearsalSong.objects.filter(rehearsal_id__in=rehearsal_ids)
+        .select_related('song').order_by('rehearsal_id', 'order')
+    )
+    rows_by_rehearsal = defaultdict(list)
+    for rehearsal_song in rehearsal_songs:
+        rows_by_rehearsal[rehearsal_song.rehearsal_id].append(rehearsal_song)
+    recording_counts = dict(
+        Recording.objects.filter(rehearsal_song__rehearsal_id__in=rehearsal_ids)
+        .values('rehearsal_song_id').annotate(count=Count('pk')).values_list('rehearsal_song_id', 'count')
+    )
+    past_song_counts = dict(
+        RehearsalSong.objects.filter(rehearsal_id__in=[rehearsal.pk for rehearsal in past_rehearsals])
+        .values('rehearsal_id').annotate(count=Count('pk')).values_list('rehearsal_id', 'count')
+    )
+    setlist_songs = Song.objects.filter(semester=semester).order_by('position')
+    pattern = RehearsalPattern.objects.filter(semester=semester).prefetch_related(
+        'rehearsal_times', 'skip_dates',
+    ).first()
+    return {
+        'semester_name': semester.name,
+        'rehearsals': [
+            _serialize_editable_rehearsal(rehearsal, rows_by_rehearsal.get(rehearsal.pk, []), recording_counts)
+            for rehearsal in rehearsals
+        ],
+        'past_rehearsals': [
+            _serialize_past_rehearsal(rehearsal, past_song_counts.get(rehearsal.pk, 0))
+            for rehearsal in past_rehearsals
+        ],
+        'setlist_songs': [_serialize_editor_setlist_song(song) for song in setlist_songs],
+        'semester_defaults': _serialize_semester_defaults(semester),
+        'pattern': _serialize_rehearsal_pattern(pattern),
+    }
+
+
+def _serialize_doomed_recording_group(group) -> dict:
+    """Return one `DoomedRecordingGroup`: its label and counts only — never a Conflict, a name or a reason (ADR 0005)."""
+    return {
+        'label': group.label,
+        'recording_count': group.recording_count,
+        'uploader_count': group.uploader_count,
+    }
+
+
+def serialize_rehearsal_edit_fallout(fallout) -> dict:
+    """Return a `RehearsalEditFallout` as the `/api/schedule/editor/preview/` response's `fallout` value (issue #337).
+
+    Named field-by-field, matching `serialize_setlist_edit_fallout()` —
+    `doomed_recording_groups` is what the Save popup's destructive block
+    reads; there is no second, separately-fetched destructive-confirm
+    endpoint (that dialog is deleted by this issue, per its spec).
+    """
+    return {
+        'is_blocked': fallout.is_blocked,
+        'block_message': fallout.block_message,
+        'is_stale': fallout.is_stale,
+        'loud': list(fallout.loud),
+        'quiet': list(fallout.quiet),
+        'doomed_recording_groups': [
+            _serialize_doomed_recording_group(group) for group in fallout.doomed_recording_groups
+        ],
+    }
+
+
+def _serialize_running_order_row_echo(row) -> dict:
+    """Return one `RunningOrderRow` echoed back in `build_rehearsal_buffer_from_request()`'s wire shape."""
+    return {'rehearsal_song_id': row.rehearsal_song_id, 'song_id': row.song_id, 'slot_count': row.slot_count}
+
+
+def _serialize_rehearsal_edit_row_echo(row, index: int) -> dict:
+    """Return one `RehearsalEditRow` echoed back in `build_rehearsal_buffer_from_request()`'s wire shape.
+
+    `row_key` indexes positionally (`row-0`, `row-1`, ...), matching
+    `_serialize_setlist_edit_row_echo()` — it was never stored on the
+    Buffer, only used transiently to key a validation failure.
+    """
+    return {
+        'row_key': f'row-{index}',
+        'rehearsal_id': row.rehearsal_id,
+        'date': row.date.isoformat(),
+        'start_time': row.start_time.isoformat(),
+        'end_time': row.end_time.isoformat() if row.end_time else None,
+        'is_full_setlist': row.is_full_setlist,
+        'setup_grace_minutes': row.setup_grace_minutes,
+        'teardown_grace_minutes': row.teardown_grace_minutes,
+        'arrival_buffer_minutes': row.arrival_buffer_minutes,
+        'departure_buffer_minutes': row.departure_buffer_minutes,
+        'running_order': [_serialize_running_order_row_echo(running_order_row) for running_order_row in row.running_order],
+    }
+
+
+def serialize_rehearsal_edit_buffer(buffer) -> dict:
+    """Return a `RehearsalEditBuffer` echoed back in `build_rehearsal_buffer_from_request()`'s wire shape (issue #337).
+
+    Used only by `/api/schedule/editor/preview/`'s `values` field on a
+    successful build — `/api/schedule/editor/save/` drops `values` per
+    #326's rule that a write response echoes nothing back.
+    """
+    return {
+        'semester_id': buffer.semester_id,
+        'semester_updated_at': buffer.semester_updated_at.isoformat() if buffer.semester_updated_at else None,
+        'rows': [_serialize_rehearsal_edit_row_echo(row, index) for index, row in enumerate(buffer.rows)],
+        'deleted_rehearsal_ids': sorted(buffer.deleted_rehearsal_ids),
+    }
+
+
+def _serialize_generation_create_item(item) -> dict:
+    """Return one `GenerationCreateItem`: the date the Pattern would generate a brand-new Rehearsal for."""
+    return {
+        'date': item.date.isoformat(), 'start_time': item.start_time.isoformat(), 'end_time': item.end_time.isoformat(),
+        'is_dress_rehearsal': item.is_dress_rehearsal,
+    }
+
+
+def _serialize_generation_keep_item(item) -> dict:
+    """Return one `GenerationKeepItem`: a re-run's no-op case, whose existing Rehearsal already matches the Pattern."""
+    return {
+        'rehearsal_id': item.rehearsal_id, 'date': item.date.isoformat(),
+        'start_time': item.start_time.isoformat(), 'end_time': item.end_time.isoformat(),
+    }
+
+
+def _serialize_generation_retime_item(item) -> dict:
+    """Return one `GenerationRetimeItem`, with its blast radius (`song_count`/`conflict_count`) for the opt-in checkbox."""
+    return {
+        'rehearsal_id': item.rehearsal_id, 'date': item.date.isoformat(),
+        'old_start_time': item.old_start_time.isoformat(), 'old_end_time': item.old_end_time.isoformat(),
+        'new_start_time': item.new_start_time.isoformat(), 'new_end_time': item.new_end_time.isoformat(),
+        'song_count': item.song_count, 'conflict_count': item.conflict_count,
+    }
+
+
+def _serialize_generation_orphan_item(item) -> dict:
+    """Return one `GenerationOrphanItem`, including the computed `delete_disabled` gate for a Recording-carrying orphan."""
+    return {
+        'rehearsal_id': item.rehearsal_id, 'date': item.date.isoformat(),
+        'start_time': item.start_time.isoformat(), 'end_time': item.end_time.isoformat(),
+        'song_count': item.song_count, 'conflict_count': item.conflict_count,
+        'recording_count': item.recording_count, 'delete_disabled': item.delete_disabled,
+    }
+
+
+def serialize_rehearsal_generation_diff(diff) -> dict:
+    """Return a `RehearsalGenerationDiff` as the `/api/schedule/editor/generate/preview/` response's `data` value (issue #337).
+
+    A pure read's answer, not a Pending-Buffer write — carries no
+    `errors`/`fallout`/`values`, per #307's envelope boundary rule for an
+    endpoint that answers a question rather than taking a Buffer.
+    """
+    return {
+        'creates': [_serialize_generation_create_item(item) for item in diff.creates],
+        'keeps': [_serialize_generation_keep_item(item) for item in diff.keeps],
+        'retimes': [_serialize_generation_retime_item(item) for item in diff.retimes],
+        'orphans': [_serialize_generation_orphan_item(item) for item in diff.orphans],
+    }
+
+
+def _serialize_dealt_row(row) -> dict:
+    """Return one `DealtRow` proposed by the dealer/shuffle, mirroring `RunningOrderRow`'s wire shape."""
+    return {'rehearsal_song_id': row.rehearsal_song_id, 'song_id': row.song_id, 'slot_count': row.slot_count}
+
+
+def _serialize_dealt_rehearsal(dealt_rehearsal) -> dict:
+    """Return one `DealtRehearsal`: its target Rehearsal and its proposed Running Order rows, in final order."""
+    return {
+        'rehearsal_id': dealt_rehearsal.rehearsal_id,
+        'rows': [_serialize_dealt_row(row) for row in dealt_rehearsal.rows],
+    }
+
+
+def serialize_rehearsal_deal(deal) -> dict:
+    """Return a `RehearsalDeal` as the `/api/schedule/editor/deal/` response's `data` value (issue #337, #223)."""
+    return {'rehearsals': [_serialize_dealt_rehearsal(dealt_rehearsal) for dealt_rehearsal in deal.rehearsals]}
+
+
+def serialize_shuffle_rows(rows) -> dict:
+    """Return a shuffled `list[DealtRow]` as the per-Rehearsal shuffle endpoint's `data` value (issue #337, #223)."""
+    return {'rows': [_serialize_dealt_row(row) for row in rows]}

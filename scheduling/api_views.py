@@ -27,7 +27,12 @@ from config.views import AdminApiView, AdminPreviewApiView, ApiView
 from identity.models import Person
 from scheduling import serializers, services
 from scheduling.api_builders import (
+    RehearsalBufferValidationError,
+    RehearsalPatternInputError,
     SetlistBufferValidationError,
+    build_generation_date_range_from_body,
+    build_rehearsal_buffer_from_request,
+    build_rehearsal_pattern_input_from_body,
     build_setlist_buffer_from_request,
 )
 from scheduling.forms import DeclareConflictForm, MembershipRolesForm
@@ -40,7 +45,14 @@ from scheduling.models import (
     Song,
 )
 from scheduling.services import (
+    DealInfeasibleError,
+    EmptySetlistError,
+    NoEligibleRehearsalsError,
+    PastRehearsalEditError,
     RecordingUploadError,
+    RehearsalPatternCollisionError,
+    RunningOrderValidationError,
+    StaleRehearsalSemesterError,
     StaleSetlistSemesterError,
     WrongViewingSemesterError,
 )
@@ -468,3 +480,215 @@ class RecordingDeleteApiView(ApiView, View):
         semester = services.get_viewing_semester(request)
         data = serializers.serialize_person_recordings(request.user, semester)
         return self.write_response(request, ok=True, data=data)
+
+
+class ScheduleEditorApiView(AdminApiView, View):
+    """`GET /api/schedule/editor/`: the whole rehearsal editor's read model, in one round trip (issue #337).
+
+    Admin-only, unlike `ScheduleApiView`: this is the `Edit schedule` route,
+    reached only from the Schedule surface's admin action. The
+    `context` block's `viewing_semester.updated_at` is what the editor's
+    write endpoints stamp a submitted Buffer against, so this view carries
+    no separate staleness field of its own.
+    """
+
+    def get(self, request):
+        """Return the schedule-editor envelope for `get_viewing_semester(request)`, or its empty shape when nothing is selected."""
+        semester = services.get_viewing_semester(request)
+        return self.read_response(request, serializers.serialize_schedule_editor(semester))
+
+
+class ScheduleEditorPreviewApiView(AdminPreviewApiView):
+    """`POST /api/schedule/editor/preview/`: the rehearsal editor's Preview, run for real and rolled back (issue #337, ADR 0008).
+
+    Fires exactly once, when the Save popup opens (issue #337's "the
+    debounced preview fetch goes away" decision) — there is no ambient
+    Fallout region on this surface to keep fed.
+    """
+
+    def run_preview(self, request):
+        """Build the Rehearsal edit Buffer from the JSON body and return its rendered Fallout envelope.
+
+        Mirrors `SetlistPreviewApiView.run_preview()` exactly:
+        `build_rehearsal_buffer_from_request()` is the same function
+        `ScheduleEditorSaveApiView.post()` calls, so Preview and Save of an
+        identical body can never disagree about what Buffer they
+        describe. A wrong `semester_id` is answered as the shared 409
+        before `preview_rehearsal_edits()` is ever called, rather than
+        being swallowed into an `is_blocked` Fallout.
+        """
+        viewing_semester = services.get_viewing_semester(request)
+        try:
+            buffer = build_rehearsal_buffer_from_request(request, viewing_semester=viewing_semester)
+        except RehearsalBufferValidationError as error:
+            return self.write_response(
+                request,
+                ok=False,
+                errors=error.row_errors,
+                non_field_errors=error.non_field_errors,
+                fallout=None,
+                values=error.raw_body,
+            )
+
+        if viewing_semester is None or buffer.semester_id != viewing_semester.pk:
+            return _wrong_semester_response(
+                "This Rehearsal edit Buffer's Semester doesn't match the Semester you're currently viewing."
+            )
+
+        fallout = services.preview_rehearsal_edits(buffer, viewing_semester=viewing_semester)
+        return self.write_response(
+            request,
+            ok=True,
+            fallout=serializers.serialize_rehearsal_edit_fallout(fallout),
+            values=serializers.serialize_rehearsal_edit_buffer(buffer),
+        )
+
+
+class ScheduleEditorSaveApiView(AdminApiView, View):
+    """`POST /api/schedule/editor/save/`: the rehearsal editor's Save — the real, committing write (issue #337)."""
+
+    def post(self, request):
+        """Build the Rehearsal edit Buffer from the JSON body and apply it, or report why it couldn't be applied.
+
+        Mirrors `SetlistSaveApiView.post()`: the same
+        `build_rehearsal_buffer_from_request()` the Preview endpoint calls,
+        then the unchanged `apply_rehearsal_edits()`. A `PastRehearsalEditError`
+        or `RunningOrderValidationError` is a genuine 4xx-shaped hard
+        failure in the service layer, but is reported here the same way a
+        `StaleRehearsalSemesterError` is — `ok: false` with
+        `non_field_errors` — since none of the three ever leaves partial
+        writes behind (`apply_rehearsal_edits()`'s own transaction has
+        already rolled back by the time any of these `except` clauses
+        run), and a client already renders `non_field_errors` for exactly
+        this kind of surface-wide refusal.
+        """
+        viewing_semester = services.get_viewing_semester(request)
+        try:
+            buffer = build_rehearsal_buffer_from_request(request, viewing_semester=viewing_semester)
+        except RehearsalBufferValidationError as error:
+            return self.write_response(
+                request,
+                ok=False,
+                errors=error.row_errors,
+                non_field_errors=error.non_field_errors,
+                fallout=None,
+                values=None,
+            )
+
+        if viewing_semester is None or buffer.semester_id != viewing_semester.pk:
+            return _wrong_semester_response(
+                "This Rehearsal edit Buffer's Semester doesn't match the Semester you're currently viewing."
+            )
+
+        try:
+            services.apply_rehearsal_edits(buffer, viewing_semester=viewing_semester)
+        except WrongViewingSemesterError as error:
+            return _wrong_semester_response(str(error))
+        except (StaleRehearsalSemesterError, PastRehearsalEditError, RunningOrderValidationError) as error:
+            return self.write_response(
+                request, ok=False, non_field_errors=[str(error)], fallout=None, values=None,
+            )
+
+        return self.write_response(request, ok=True, values=None)
+
+
+class RehearsalPatternSaveApiView(AdminApiView, View):
+    """`POST /api/schedule/editor/pattern/save/`: persists the generate-dates modal's Pattern editor state (issue #337, #222).
+
+    Writes no Rehearsal — `save_rehearsal_pattern()` is input history with
+    no downstream authority (CONTEXT.md). Never surfaced to the admin as
+    its own button: the modal's own "Preview" action calls this first, so
+    the Pattern is remembered between runs, then calls the generation-diff
+    endpoint only if this succeeds.
+    """
+
+    def post(self, request):
+        """Save the submitted Pattern, or report a Validation Error / day-of-week collision."""
+        semester = services.get_viewing_semester(request)
+        if semester is None:
+            return self.write_response(request, ok=False, non_field_errors=['No Semester is being edited.'])
+        body = self.parse_json_body(request)
+        try:
+            pattern_input = build_rehearsal_pattern_input_from_body(body)
+        except RehearsalPatternInputError as error:
+            return self.write_response(request, ok=False, non_field_errors=error.non_field_errors)
+        try:
+            services.save_rehearsal_pattern(semester, pattern_input)
+        except RehearsalPatternCollisionError as error:
+            return self.write_response(request, ok=False, non_field_errors=[str(error)])
+        return self.write_response(request, ok=True, values=None)
+
+
+class RehearsalGenerationDiffApiView(AdminApiView, View):
+    """`POST /api/schedule/editor/generate/diff/`: the four-bucket diff for the modal's current Pattern editor state (issue #337, #222).
+
+    `preview_rehearsal_generation()` is a pure read that writes nothing at
+    all — this endpoint therefore answers a question rather than taking a
+    Pending Buffer (#307's envelope boundary rule), wearing the read
+    envelope (`{context, data}`) despite being a POST, the same as
+    `RecordingPresignApiView`. The Pattern itself is never saved here —
+    `RehearsalPatternSaveApiView` owns that, called first by the modal's
+    own "Preview" action.
+    """
+
+    def post(self, request):
+        """Return the four-bucket diff for the submitted Pattern editor state, or a 400 naming why it couldn't be computed."""
+        semester = services.get_viewing_semester(request)
+        if semester is None:
+            return JsonResponse({'error': 'No Semester is being edited.'}, status=400)
+        body = self.parse_json_body(request)
+        try:
+            pattern_input = build_rehearsal_pattern_input_from_body(body)
+            date_range = build_generation_date_range_from_body(body)
+        except RehearsalPatternInputError as error:
+            return JsonResponse(
+                {'context': self.build_context(request), 'error': '; '.join(error.non_field_errors)}, status=400,
+            )
+        try:
+            diff = services.preview_rehearsal_generation(semester, pattern_input, date_range=date_range)
+        except RehearsalPatternCollisionError as error:
+            return JsonResponse({'context': self.build_context(request), 'error': str(error)}, status=400)
+        return self.read_response(request, serializers.serialize_rehearsal_generation_diff(diff))
+
+
+class ScheduleEditorDealApiView(AdminApiView, View):
+    """`POST /api/schedule/editor/deal/`: proposes a fresh balanced Running Order deal for the viewing Semester (issue #337, #223).
+
+    A pure read against the database's current Rehearsals and setlist, not
+    the admin's on-screen Buffer — backs both "Generate schedule" and
+    "Re-roll" (a re-roll is simply calling this again). Wears the read
+    envelope, per #307's envelope boundary rule, since there is no
+    `apply_schedule_generation` (see `RehearsalDeal`'s docstring): the
+    result fills the Pending Buffer client-side, and only
+    `apply_rehearsal_edits()` ever writes it.
+    """
+
+    def post(self, request):
+        """Return the fresh deal, or a 400 naming why it was refused."""
+        semester = services.get_viewing_semester(request)
+        if semester is None:
+            return JsonResponse({'error': 'No Semester is being edited.'}, status=400)
+        try:
+            deal = services.deal_running_orders(semester)
+        except (EmptySetlistError, NoEligibleRehearsalsError, DealInfeasibleError) as error:
+            return JsonResponse({'context': self.build_context(request), 'error': str(error)}, status=400)
+        return self.read_response(request, serializers.serialize_rehearsal_deal(deal))
+
+
+class ScheduleEditorShuffleApiView(AdminApiView, View):
+    """`POST /api/schedule/editor/rehearsal/<rehearsal_id>/shuffle/`: proposes a reorder of one Rehearsal's own Running Order (issue #337, #223).
+
+    `rehearsal_id` is scoped to the viewing Semester, 404ing otherwise —
+    there is no submitted Buffer here to reject as a Validation Error
+    instead. A Rehearsal with no Running Order rows yet returns an empty
+    `rows` list, a no-op the client renders as such rather than an error.
+    """
+
+    def post(self, request, rehearsal_id):
+        """Return the reordered rows for `rehearsal_id`, scoped to the viewing Semester."""
+        semester = services.get_viewing_semester(request)
+        if semester is None:
+            return JsonResponse({'error': 'No Semester is being edited.'}, status=400)
+        rehearsal = get_object_or_404(Rehearsal, pk=rehearsal_id, semester=semester)
+        rows = services.shuffle_rehearsal_running_order(rehearsal)
+        return self.read_response(request, serializers.serialize_shuffle_rows(rows))

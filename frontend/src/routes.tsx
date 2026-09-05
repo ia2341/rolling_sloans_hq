@@ -6,6 +6,7 @@ import { Person } from './routes/Person'
 import { PlaceholderPage } from './routes/PlaceholderPage'
 import { ProfileRedirect } from './routes/ProfileRedirect'
 import { Schedule } from './routes/Schedule'
+import { ScheduleEdit } from './routes/ScheduleEdit'
 import { Setlist } from './routes/Setlist'
 import { Song } from './routes/Song'
 import { AppShell } from './shell/AppShell'
@@ -15,7 +16,8 @@ import { AppShell } from './shell/AppShell'
  * (`router.tsx`) and tests (which mount it in a `MemoryRouter` instead).
  * `AppShell` wraps every route via a layout route, so nav chrome is never a
  * per-page concern. Home is still a placeholder (#332); Setlist, Song detail
- * (#330), Schedule (#331) and Band/Person (#333) are built end to end.
+ * (#330), Schedule (#331), Band/Person (#333) and the rehearsal schedule
+ * editor (#337) are built end to end.
  * `/schedule` absorbed `/me/conflicts/` outright (issue #190) — there is no
  * `/conflicts` route at all, and no redirect from one.
  */
@@ -28,6 +30,7 @@ export const routes: RouteObject[] = [
         element: <PlaceholderPage title="Home" owningIssue="#332" />,
       },
       { path: '/schedule', element: <Schedule /> },
+      { path: '/schedule/edit', element: <ScheduleEdit /> },
       { path: '/setlist', element: <Setlist /> },
       { path: '/songs/:songId', element: <Song /> },
       { path: '/members', element: <Band /> },
