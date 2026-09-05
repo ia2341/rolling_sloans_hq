@@ -2828,6 +2828,20 @@ class RosterEditEntry:
 
 
 @dataclass(frozen=True)
+class RosterInvite:
+    """One not-yet-existing Person a Roster edit Buffer proposes to create and roster (issue #336).
+
+    Carries no `Person` id — there is none yet. Mirrors `RosterEditEntry`'s
+    shape but with no Role set: an invited Person's declared Roles are
+    theirs to set once they sign in (issue #336 user story 36), so this
+    Buffer never carries `role_ids` for a pending invite.
+    """
+
+    name: str
+    email: str
+
+
+@dataclass(frozen=True)
 class RosterEditBuffer:
     """The whole diff `apply_roster_edits()` commits in one transaction (issue #226).
 
@@ -2839,16 +2853,24 @@ class RosterEditBuffer:
     wants rostered afterward — existing or newly added — with the name and
     Role set to save; `removed_person_ids` names every Person to purge from
     the Roster. A Person id appearing in neither is left untouched.
+
+    `pending_invites` (issue #336) carries every not-yet-existing Person to
+    create and roster in the same transaction — folded in here rather than
+    committed by a separate view, so an invite can no longer jump the
+    Buffer and silently discard an admin's other unsaved edits. Defaults to
+    empty so every pre-SPA caller built before issue #336 keeps working
+    unchanged.
     """
 
     semester_id: int
     semester_updated_at: datetime
     entries: list[RosterEditEntry]
     removed_person_ids: frozenset[int]
+    pending_invites: list[RosterInvite] = field(default_factory=list)
 
 
 def apply_roster_edits(buffer: RosterEditBuffer, *, viewing_semester: Semester, requesting_admin: Person) -> None:
-    """Apply a whole Roster Pending Buffer — adds, removals, Role sets and name edits — in one transaction (issue #226).
+    """Apply a whole Roster Pending Buffer — adds, removals, Role sets, name edits and invites — in one transaction (issue #226, #336).
 
     The single write the Roster edit surface and its Preview both run
     (ADR-0008, issue #185): a failure anywhere leaves nothing applied.
@@ -2867,14 +2889,24 @@ def apply_roster_edits(buffer: RosterEditBuffer, *, viewing_semester: Semester, 
     every affected `SongRoleAssignment`/`Backup` — this function never
     recomputes that flag by hand.
 
+    Each of `buffer.pending_invites` (issue #336) is created via
+    `identity.services.invite_person(..., send_via_on_commit=True)` and
+    immediately rostered with no declared Roles — the same transaction as
+    every other edit in this Buffer, so an invite either lands with the
+    rest of the batch or not at all. `send_via_on_commit=True` is
+    load-bearing under ADR 0008: `preview_roster_edits()` runs this exact
+    function and the caller rolls the transaction back, so an inline
+    `send_mail()` would mail a real person during a Preview,
+    unrecoverably — registering the send with `transaction.on_commit()`
+    makes rollback discard it for free.
+
     Raises `WrongViewingSemesterError` if `buffer.semester_id` doesn't match
     `viewing_semester`, or `SelfRemovalError` if the Buffer would remove
     `requesting_admin`'s own Person — both checked, and both writing
     nothing, before any transaction opens. Raises `StaleRosterSemesterError`
     inside the transaction if the Semester's `updated_at` no longer matches
     `buffer.semester_updated_at`, rolling back whatever this call had
-    already applied. Makes no external call (no mail, no object storage),
-    so nothing here needs `transaction.on_commit()`.
+    already applied.
     """
     if viewing_semester is None or buffer.semester_id != viewing_semester.pk:
         raise WrongViewingSemesterError(
@@ -2892,6 +2924,8 @@ def apply_roster_edits(buffer: RosterEditBuffer, *, viewing_semester: Semester, 
             _purge_person_from_semester(person_id, semester)
         for entry in buffer.entries:
             _apply_roster_edit_entry(entry, semester)
+        for invite in buffer.pending_invites:
+            _apply_roster_invite(invite, semester)
 
         semester.updated_at = timezone.now()
         semester.save(update_fields=['updated_at'])
@@ -2927,6 +2961,21 @@ def _apply_roster_edit_entry(entry: RosterEditEntry, semester: Semester) -> None
         ).delete()
 
 
+def _apply_roster_invite(invite: RosterInvite, semester: Semester) -> None:
+    """Create `invite`'s Person via `invite_person()` and roster them into `semester` with no declared Roles (issue #336).
+
+    Reuses `invite_person(..., send_via_on_commit=True)` rather than
+    reimplementing the create — the one path to a loggable-in Person stays
+    single. The Membership is created bare (no `MembershipRole` rows): a
+    pending invite's Roles are theirs to declare once they sign in, not an
+    admin's to guess on their behalf.
+    """
+    from identity.services import invite_person
+
+    person = invite_person(name=invite.name, email=invite.email, send_via_on_commit=True)
+    Membership.objects.create(person=person, semester=semester)
+
+
 @dataclass(frozen=True)
 class RosterRemoval:
     """One Person a Roster edit Buffer removes, carrying the name/email its removal confirm dialog needs (issue #228).
@@ -2949,7 +2998,10 @@ class RosterEditFallout:
     WrongViewingSemesterError or SelfRemovalError) — a Validation Error in
     ADR 0008's terms, never blended with Fallout; `pending_*` and
     `loud`/`quiet` are all empty when blocked, since nothing was computed.
-    `pending_*` name every row's outcome for the Preview's summary list.
+    `pending_invites` (issue #336) names every Buffer-staged invite by
+    the name it will roster under; no email travels in this list (ADR
+    0005 keeps email off every Roster surface but the removal lines
+    below). `pending_*` name every row's outcome for the Preview's summary list.
     `loud`/`quiet` are human-readable Fallout messages in the two ADR
     0002/issue #228 tiers; neither ever blocks a save. `is_stale` flags a
     `Semester.updated_at` mismatch — reported, never refused, per ADR 0008.
@@ -2959,6 +3011,7 @@ class RosterEditFallout:
     block_message: str
     is_stale: bool
     pending_adds: list[str]
+    pending_invites: list[str]
     pending_removals: list[RosterRemoval]
     pending_role_changes: list[str]
     pending_name_edits: list[str]
@@ -2973,6 +3026,7 @@ def _blocked_roster_fallout(block_message: str, *, is_stale: bool = False) -> Ro
         block_message=block_message,
         is_stale=is_stale,
         pending_adds=[],
+        pending_invites=[],
         pending_removals=[],
         pending_role_changes=[],
         pending_name_edits=[],
@@ -3001,6 +3055,15 @@ def preview_roster_edits(buffer: RosterEditBuffer, *, viewing_semester: Semester
     `SelfRemovalError` from `apply_roster_edits()` is reported as
     `is_blocked` with no Fallout computed at all, rather than
     re-implementing either check here.
+
+    `buffer.pending_invites` (issue #336) rides along with the real
+    `apply_roster_edits()` call below like everything else in the Buffer —
+    each invite really is created and really is sent via
+    `transaction.on_commit()`, and it is the caller's rollback (ADR 0008)
+    that discards both the Person row and the deferred send. This is the
+    one thing that makes a Preview of a Buffer containing an invite safe:
+    `assert_preview_writes_nothing()`'s `mail.outbox` assertion is what
+    verifies it.
     """
     if viewing_semester is None:
         return _blocked_roster_fallout(
@@ -3047,6 +3110,7 @@ def preview_roster_edits(buffer: RosterEditBuffer, *, viewing_semester: Semester
         return _blocked_roster_fallout(str(error), is_stale=is_stale)
 
     pending_adds = []
+    pending_invites = [invite.name for invite in buffer.pending_invites]
     pending_removals = [
         RosterRemoval(person_id=person_id, name=person.name, email=person.email)
         for person_id, person in removed_people_by_id.items()
@@ -3113,6 +3177,7 @@ def preview_roster_edits(buffer: RosterEditBuffer, *, viewing_semester: Semester
         block_message='',
         is_stale=is_stale,
         pending_adds=pending_adds,
+        pending_invites=pending_invites,
         pending_removals=pending_removals,
         pending_role_changes=pending_role_changes,
         pending_name_edits=pending_name_edits,

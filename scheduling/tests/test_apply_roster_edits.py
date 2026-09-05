@@ -2,9 +2,12 @@
 
 from datetime import date
 
-from django.test import TestCase
+from django.core import mail
+from django.db import transaction
+from django.test import TestCase, TransactionTestCase
 
 from identity.factories import PersonFactory
+from identity.models import Person
 from scheduling.factories import (
     ConflictFactory,
     MembershipFactory,
@@ -19,6 +22,7 @@ from scheduling.models import Conflict, Membership, MembershipRole, SongRoleAssi
 from scheduling.services import (
     RosterEditBuffer,
     RosterEditEntry,
+    RosterInvite,
     SelfRemovalError,
     StaleRosterSemesterError,
     WrongViewingSemesterError,
@@ -34,7 +38,7 @@ class ApplyRosterEditsTests(TestCase):
         cls.role = RoleFactory()
         cls.admin = PersonFactory(is_admin=True)
 
-    def _buffer(self, entries=(), removed_person_ids=(), semester=None, updated_at=None):
+    def _buffer(self, entries=(), removed_person_ids=(), semester=None, updated_at=None, pending_invites=()):
         """Build a RosterEditBuffer against self.semester unless overridden."""
         semester = semester or self.semester
         return RosterEditBuffer(
@@ -42,6 +46,7 @@ class ApplyRosterEditsTests(TestCase):
             semester_updated_at=updated_at if updated_at is not None else semester.updated_at,
             entries=list(entries),
             removed_person_ids=frozenset(removed_person_ids),
+            pending_invites=list(pending_invites),
         )
 
     def test_adds_a_new_person_with_declared_roles(self):
@@ -217,3 +222,52 @@ class ApplyRosterEditsTests(TestCase):
 
         self.semester.refresh_from_db()
         self.assertGreater(self.semester.updated_at, original_stamp)
+
+
+class ApplyRosterEditsInviteTests(TransactionTestCase):
+    """A `RosterEditBuffer.pending_invites` entry creates and rosters a Person, with the mail deferred to on_commit (issue #336).
+
+    `TransactionTestCase` (not `TestCase`) because the invite mail is
+    registered with `transaction.on_commit()` — a plain `TestCase` wraps
+    every test in a transaction that never really commits, so an
+    `on_commit()` callback would never fire and this test would pass for
+    the wrong reason.
+    """
+
+    def setUp(self):
+        """Build a Semester and one admin Person to submit Buffers as."""
+        self.semester = SemesterFactory()
+        self.admin = PersonFactory(is_admin=True)
+
+    def _buffer(self, pending_invites):
+        """Build a RosterEditBuffer against self.semester carrying only the given invites."""
+        return RosterEditBuffer(
+            semester_id=self.semester.pk,
+            semester_updated_at=self.semester.updated_at,
+            entries=[],
+            removed_person_ids=frozenset(),
+            pending_invites=list(pending_invites),
+        )
+
+    def test_invite_creates_a_person_and_rosters_them_with_no_roles(self):
+        """A staged invite creates a Person with an unusable password and a bare Membership, no declared Roles."""
+        buffer = self._buffer([RosterInvite(name='New Member', email='new-member@example.com')])
+
+        apply_roster_edits(buffer, viewing_semester=self.semester, requesting_admin=self.admin)
+
+        person = Person.objects.get(email='new-member@example.com')
+        self.assertEqual(person.name, 'New Member')
+        self.assertFalse(person.has_usable_password())
+        membership = Membership.objects.get(person=person, semester=self.semester)
+        self.assertEqual(MembershipRole.objects.filter(membership=membership).count(), 0)
+
+    def test_invite_sends_mail_only_after_the_transaction_commits(self):
+        """The invite email is deferred via transaction.on_commit(), landing in the outbox only once this call's own transaction has committed."""
+        buffer = self._buffer([RosterInvite(name='Deferred Person', email='deferred@example.com')])
+
+        with transaction.atomic():
+            apply_roster_edits(buffer, viewing_semester=self.semester, requesting_admin=self.admin)
+            self.assertEqual(len(mail.outbox), 0)
+
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn('deferred@example.com', mail.outbox[0].to)
