@@ -1,0 +1,1236 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+  Charset must be declared in the first 1024 bytes, ahead of this comment: opened over
+  file:// there is no Content-Type header, so without it the browser guesses windows-1252
+  and every en dash and middle dot below renders as mojibake.
+
+  PROTOTYPE - throwaway. Ticket #310 on map #302.
+
+  Two admin surfaces: the SETLIST EDITOR (/setlist/edit/) and the ROSTER in edit mode
+  (/members/). Both wear #306's edit-mode chrome unchanged, which is deliberately NOT
+  on the ballot here:
+
+    Toolbar   sticky, names what is being edited and the pending change count.
+    Grid      shows WHAT YOU CHANGED - struck rows, Moved 5->3, New, Removing.
+    Popup     shows WHAT IT COSTS. It is the only home for ADR 0008 Fallout, and it
+              escalates rather than spawning a second dialog: the setlist's
+              delete-confirm and the roster's removal-confirm both fold into it.
+    Stale     a stale Semester is a fact about the Semester, not a consequence of your
+              edit, so it renders in the sidebar above the semester panel.
+
+  The one contested question, and the switcher's A/B/C axis, is WHERE NEW ROWS COME FROM,
+  which is the same question on both surfaces (a Song arrives by hand or from Spotify; a
+  Person arrives from a prior Semester, from members who exist, or by invite):
+
+    A  inline append - new rows land in the grid; sources sit under it.
+    B  staged pane   - tick candidates in a source region; ticking fills the buffer.
+    C  add sheet     - one + Add opens a modal/bottom sheet whose sections are the sources.
+
+  Greybox: structure only. No colour, type or theme is being proposed.
+  All data synthesized - no real member data (CONTRIBUTING.md).
+-->
+<title>Setlist &amp; Roster Greybox</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+  :root {
+    --paper:      #eef0f4;
+    --surface:    #ffffff;
+    --surface-2:  #f4f6f9;
+    --box:        #e3e7ee;
+    --line:       #c6ccd8;
+    --line-soft:  #dde2ea;
+    --ink:        #171a21;
+    --ink-2:      #4d5566;
+    --ink-3:      #79808f;
+    --chrome:     #1d2430;
+    --chrome-ink: #e9ecf2;
+    --mark:       #2f4fd0;   /* prototype chrome only, never inside a frame */
+    --warn:       #9a5a12;   /* semantic: a declared conflict */
+    --warn-bg:    #f7ecdc;
+    --ok:         #2f6b47;   /* semantic: your own slot / confirmed */
+    --ok-bg:      #e6f0e9;
+    /* Role hues. Hue = which role; border + marker = state. The two must stay
+       separate encodings or a backup on drums and a conflict on keys collide. */
+    --role-0:     #6d5bd0;   /* Lead Vocals */
+    --role-1:     #12776a;   /* Guitar */
+    --role-2:     #a3417e;   /* Bass */
+    --role-3:     #9c4a37;   /* Drums */
+    --role-4:     #2f5fa8;   /* Keys */
+    --radius:     6px;
+    --sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #14171d; --surface: #1c2029; --surface-2: #232833; --box: #2b313d;
+      --line: #414958; --line-soft: #333a47; --ink: #e7eaf0; --ink-2: #a8b0bf;
+      --ink-3: #7d8593; --chrome: #0d1015; --mark: #7f95ee;
+      --warn: #e0ac66; --warn-bg: #3a2c1633; --ok: #7fc39b; --ok-bg: #1d3128aa;
+      --role-0: #a99af0; --role-1: #6fc9b6; --role-2: #e08cc0;
+      --role-3: #dd9179; --role-4: #8fb4ec;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #14171d; --surface: #1c2029; --surface-2: #232833; --box: #2b313d;
+    --line: #414958; --line-soft: #333a47; --ink: #e7eaf0; --ink-2: #a8b0bf;
+    --ink-3: #7d8593; --chrome: #0d1015; --mark: #7f95ee;
+    --warn: #e0ac66; --warn-bg: #3a2c1633; --ok: #7fc39b; --ok-bg: #1d3128aa;
+    --role-0: #a99af0; --role-1: #6fc9b6; --role-2: #e08cc0;
+    --role-3: #dd9179; --role-4: #8fb4ec;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font-family: var(--sans); font-size: 14px; line-height: 1.45;
+    padding: 18px 18px 104px;
+  }
+  h1, h2, h3 { margin: 0; text-wrap: balance; font-weight: 600; }
+  button { font: inherit; color: inherit; }
+
+  /* ---- prototype chrome ---- */
+  .chrome-head { max-width: 1180px; margin: 0 auto 14px; display: flex; flex-wrap: wrap;
+    align-items: baseline; gap: 10px 16px; }
+  .chrome-head h1 { font-size: 15px; letter-spacing: -0.01em; }
+  .chrome-head .tag { font-family: var(--mono); font-size: 10px; letter-spacing: 0.09em;
+    text-transform: uppercase; color: var(--ink-3); border: 1px solid var(--line);
+    border-radius: 99px; padding: 2px 8px; }
+  .chrome-head p { margin: 0; color: var(--ink-2); font-size: 12.5px; max-width: 62ch; }
+  .stage { max-width: 1180px; margin: 0 auto; }
+
+  .frame { background: var(--surface); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; margin: 0 auto; }
+  .frame.desktop { width: 100%; min-height: 680px; }
+  .frame.phone { width: 390px; height: 780px; border-radius: 26px; border-width: 8px;
+    border-color: var(--chrome); box-shadow: 0 10px 34px rgb(0 0 0 / 0.18); }
+  .frame-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; }
+  .framewrap { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; }
+
+  .verdict { max-width: 1180px; margin: 16px auto 0; border: 1px solid var(--line-soft);
+    border-radius: var(--radius); background: var(--surface); padding: 14px 16px; }
+  .verdict h2 { font-size: 12px; font-family: var(--mono); letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--ink-3); margin-bottom: 8px; }
+  .verdict ul { margin: 0 0 12px; padding-left: 18px; display: grid; gap: 6px; }
+  .verdict li { color: var(--ink-2); font-size: 13px; }
+  .verdict li b { color: var(--ink); font-weight: 600; }
+  .verdict .cols { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+
+  /* ---- greybox primitives ---- */
+  .gb-label { font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--ink-3); }
+  .btn { border: 1px solid var(--line); background: var(--surface-2); color: var(--ink);
+    border-radius: var(--radius); padding: 6px 11px; font-size: 13px; cursor: pointer; white-space: nowrap; }
+  .btn.primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+  .btn.ghost { background: transparent; border-color: transparent; color: var(--ink-2); }
+  .btn.sm { padding: 3px 8px; font-size: 12px; }
+  .btn[disabled] { opacity: 0.4; cursor: not-allowed; }
+  .btn.icon { padding: 3px 7px; font-family: var(--mono); }
+  .field { border: 1px solid var(--line); border-radius: 4px; background: var(--surface);
+    padding: 4px 7px; font-size: 13px; min-height: 28px; display: flex; align-items: center; color: var(--ink-2); }
+  .muted { color: var(--ink-3); }
+  .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .card { border: 1px solid var(--line-soft); border-radius: var(--radius);
+    background: var(--surface); padding: 12px 14px; }
+  .stack { display: grid; gap: 12px; }
+  .row-between { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .scroll-x { overflow-x: auto; }
+  .hstack { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+
+  /* assignment pills — styled by state (review item 6) */
+  .chip { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line);
+    background: var(--surface-2); border-radius: 99px; padding: 2px 9px; font-size: 12px; white-space: nowrap; }
+  .chip.empty { border-style: dashed; color: var(--ink-3); background: transparent; }
+  .chip.backup { border-style: dashed; background: transparent; }
+  .chip.backup .tagm { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--ink-3); }
+  .chip.conflict { border-color: var(--warn); background: var(--warn-bg); color: var(--warn); }
+  .chip.mismatch { border-style: solid; box-shadow: inset 0 -2px 0 var(--line); }
+  .chip.you { border-color: var(--ok); background: var(--ok-bg); color: var(--ok); font-weight: 600; }
+  /* Role hue rides on a dot, so it never fights the state colours on the pill itself. */
+  .chip .rdot { width: 7px; height: 7px; border-radius: 50%; background: var(--rc, var(--ink-3));
+    flex-shrink: 0; }
+  .chip.empty .rdot { background: transparent; border: 1px solid var(--rc, var(--line)); }
+  .chip .rcode { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.04em;
+    color: var(--rc, var(--ink-3)); font-weight: 600; }
+  .legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 11.5px; color: var(--ink-3);
+    align-items: center; }
+  .legend .swatch { display: inline-flex; align-items: center; gap: 5px; }
+  .legend .swatch i { width: 8px; height: 8px; border-radius: 50%; background: var(--rc); }
+  .castline { display: flex; gap: 5px; flex-wrap: wrap; align-items: center; }
+
+  table.gb { border-collapse: collapse; width: 100%; font-size: 13px; }
+  table.gb th, table.gb td { border-bottom: 1px solid var(--line-soft); padding: 7px 10px;
+    text-align: left; vertical-align: middle; }
+  table.gb th { font-weight: 600; font-size: 11.5px; color: var(--ink-2); white-space: nowrap; }
+  table.gb td.num, table.gb th.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  table.gb tr.sub td { border-bottom: 1px solid var(--line-soft); padding-top: 0; }
+  /* The Songs table carries the most per row, so it gets the most air. */
+  table.gb.songs td { padding-top: 11px; padding-bottom: 11px; }
+  table.gb.songs tr.sub td { padding-top: 0; }
+  table.gb.songs td:nth-child(3) { min-width: 260px; }
+
+  .page { padding: 16px; display: grid; gap: 16px; }
+  .frame.desktop .page { padding: 22px 28px; }
+  .page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+  .page-head h1 { font-size: 20px; letter-spacing: -0.015em; }
+  .frame.phone .page-head h1 { font-size: 17px; }
+  .page-head .actions { display: flex; gap: 6px; flex-shrink: 0; }
+  .section-head { font-size: 13px; color: var(--ink-2); font-weight: 600; }
+
+  /* toggle (review item 8) */
+  .toggle { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px;
+    color: var(--ink-2); cursor: pointer; }
+  .toggle .track { width: 30px; height: 17px; border-radius: 99px; background: var(--box);
+    border: 1px solid var(--line); position: relative; flex-shrink: 0; }
+  .toggle .knob { position: absolute; top: 1px; left: 1px; width: 13px; height: 13px;
+    border-radius: 50%; background: var(--surface); border: 1px solid var(--line); }
+  .toggle[aria-pressed="true"] .track { background: var(--ink); border-color: var(--ink); }
+  .toggle[aria-pressed="true"] .knob { left: auto; right: 1px; background: var(--surface); border-color: var(--ink); }
+
+  /* segmented sub-view control */
+  .seg2 { display: inline-flex; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+  .seg2 button { border: 0; background: transparent; padding: 5px 12px; font-size: 12.5px; cursor: pointer; color: var(--ink-3); }
+  .seg2 button[aria-pressed="true"] { background: var(--ink); color: var(--surface); font-weight: 600; }
+
+  /* ---- the shell: collapsible left sidebar (review item 1) ---- */
+  .shell { display: flex; flex: 1; min-height: 0; }
+  .sidebar { flex-shrink: 0; border-right: 1px solid var(--line); background: var(--surface-2);
+    display: flex; flex-direction: column; width: 236px; }
+  .sidebar.rail { width: 60px; }
+  .sidebar .head { display: flex; align-items: center; gap: 8px; padding: 12px 14px; height: 52px; }
+  .sidebar .brand { font-weight: 700; font-size: 14px; letter-spacing: -0.01em; white-space: nowrap;
+    overflow: hidden; flex: 1; }
+  .sidebar nav { flex: 1; overflow-y: auto; padding: 4px 0; }
+  .sidebar .group { padding: 12px 14px 4px; }
+  .sidebar a { display: flex; align-items: center; gap: 10px; text-decoration: none;
+    color: var(--ink-2); padding: 7px 14px; font-size: 13px; white-space: nowrap; }
+  .sidebar a[aria-current] { color: var(--ink); font-weight: 600; background: var(--surface);
+    box-shadow: inset 2px 0 0 var(--ink); }
+  .sidebar .glyph { width: 18px; height: 18px; border: 1.5px solid currentColor;
+    border-radius: 5px; flex-shrink: 0; }
+  .sidebar .count { margin-left: auto; font-family: var(--mono); font-size: 11px;
+    border: 1px solid var(--line); border-radius: 99px; padding: 0 6px; }
+  .sidebar.rail a { justify-content: center; padding: 8px 0; }
+  .sidebar.rail .label, .sidebar.rail .count, .sidebar.rail .group, .sidebar.rail .brand { display: none; }
+
+  /* the semester control — the shell's one home for it (review item 13) */
+  .sem-panel { border-top: 1px solid var(--line); padding: 12px 14px; display: grid; gap: 8px; }
+  .sem-panel.draft { background: var(--warn-bg); }
+  .sem-panel .warnline { font-size: 11.5px; color: var(--warn); }
+  .sidebar.rail .sem-panel { padding: 10px 6px; justify-items: center; }
+  .sidebar.rail .sem-panel .hide-rail { display: none; }
+
+  .topline { display: flex; align-items: center; gap: 10px; padding: 0 20px; height: 52px;
+    border-bottom: 1px solid var(--line); background: var(--surface); flex-shrink: 0; }
+  .topline .title { font-weight: 600; flex: 1; }
+
+  /* phone */
+  .phonebar { display: flex; align-items: center; gap: 8px; padding: 0 12px; height: 50px;
+    border-bottom: 1px solid var(--line); background: var(--surface); flex-shrink: 0; }
+  .phonebar .title { font-weight: 600; font-size: 15px; flex: 1; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  .tabbar { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr;
+    border-top: 1px solid var(--line); background: var(--surface); flex-shrink: 0; padding-bottom: 6px; }
+  .tabbar a { text-decoration: none; color: var(--ink-3); display: grid; justify-items: center;
+    gap: 3px; padding: 7px 2px 3px; font-size: 10.5px; position: relative; }
+  .tabbar a[aria-current] { color: var(--ink); font-weight: 600; }
+  .tabbar .glyph { width: 20px; height: 20px; border: 1.5px solid currentColor; border-radius: 5px; }
+  .tabbar .dot { position: absolute; top: 5px; right: 50%; margin-right: -14px; width: 6px;
+    height: 6px; border-radius: 50%; background: var(--warn); }
+  .sem-strip { padding: 7px 12px; font-size: 12px; display: flex; align-items: center; gap: 8px;
+    border-bottom: 1px solid var(--line); background: var(--warn-bg); color: var(--warn); flex-shrink: 0; }
+
+  /* edit toolbar */
+  .edit-toolbar { background: var(--ink); color: var(--surface); padding: 8px 16px;
+    display: flex; align-items: center; gap: 8px; flex-shrink: 0; font-size: 13px; }
+  .edit-toolbar .grow { flex: 1; font-weight: 600; }
+  .edit-toolbar .btn { background: transparent; border-color: rgb(255 255 255 / 0.35); color: inherit; }
+  .edit-toolbar .btn.primary { background: var(--surface); color: var(--ink); border-color: var(--surface); }
+
+  /* the rehearsal-window timeline (review item 3) */
+  .timeline { display: grid; gap: 5px; }
+  .timeline .track { display: flex; height: 26px; border: 1px solid var(--line);
+    border-radius: 4px; overflow: hidden; background: var(--surface-2); }
+  .timeline .slot { border-right: 1px solid var(--line-soft); display: flex; align-items: center;
+    justify-content: center; font-size: 9.5px; overflow: hidden; padding: 0 2px;
+    font-family: var(--mono); color: var(--ink-3); }
+  .timeline .slot:last-child { border-right: 0; }
+  .timeline .slot.mine { background: var(--ok-bg); color: var(--ok); font-weight: 600; }
+  .timeline .slot.brk { background: repeating-linear-gradient(45deg,
+      transparent, transparent 3px, var(--box) 3px, var(--box) 6px); }
+  .timeline .ends { display: flex; justify-content: space-between; font-size: 11px; }
+
+  /* modal / sheet */
+  .backdrop { position: absolute; inset: 0; background: rgb(0 0 0 / 0.38); display: flex;
+    align-items: center; justify-content: center; padding: 20px; }
+  .backdrop.bottom { align-items: flex-end; padding: 0; }
+  .modal { background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+    width: 100%; max-width: 440px; max-height: 100%; overflow-y: auto; }
+  .backdrop.bottom .modal { border-radius: 14px 14px 0 0; max-width: none; border-bottom: 0; }
+  .modal .m-head { padding: 14px 16px; border-bottom: 1px solid var(--line-soft);
+    display: flex; align-items: center; gap: 10px; }
+  .modal .m-head h3 { font-size: 15px; flex: 1; }
+  .modal .m-body { padding: 14px 16px; display: grid; gap: 12px; }
+  .modal .m-foot { padding: 12px 16px; border-top: 1px solid var(--line-soft);
+    display: flex; gap: 8px; justify-content: flex-end; }
+  .radio { display: flex; gap: 9px; align-items: flex-start; padding: 8px 10px;
+    border: 1px solid var(--line); border-radius: var(--radius); cursor: pointer; }
+  .radio[aria-checked="true"] { border-color: var(--ink); background: var(--surface-2); }
+  .radio .dot { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--line);
+    flex-shrink: 0; margin-top: 2px; }
+  .radio[aria-checked="true"] .dot { border-color: var(--ink); box-shadow: inset 0 0 0 3px var(--surface),
+    inset 0 0 0 8px var(--ink); }
+  .radio .sub { font-size: 11.5px; color: var(--ink-3); }
+  .privacy { font-size: 11.5px; color: var(--ink-3); border-left: 2px solid var(--line);
+    padding-left: 8px; }
+
+  .songlist { display: grid; }
+  .songlist .item { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px;
+    align-items: center; padding: 9px 0; border-bottom: 1px solid var(--line-soft); }
+  .songlist .item .sub { grid-column: 1 / -1; }
+  .prog { display: flex; align-items: center; gap: 8px; }
+  .prog .track { flex: 1; height: 5px; background: var(--box); border-radius: 99px; min-width: 50px; }
+  .prog .fill { height: 100%; background: var(--ink-2); border-radius: 99px; }
+  .songcards { display: grid; gap: 8px; }
+  .songcards .kv { display: flex; justify-content: space-between; gap: 10px; font-size: 12.5px; padding: 3px 0; }
+  .matrix th:first-child, .matrix td:first-child { position: sticky; left: 0; background: var(--surface); z-index: 1; }
+  .matrix th:nth-child(2), .matrix td:nth-child(2) { position: sticky; left: 62px; background: var(--surface); z-index: 1; }
+
+  /* ---- bottom switcher ---- */
+  .switcher { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 50;
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: center;
+    background: var(--chrome); color: var(--chrome-ink); border-radius: 99px; padding: 7px 9px;
+    box-shadow: 0 6px 26px rgb(0 0 0 / 0.3); max-width: calc(100vw - 24px); }
+  .switcher button, .switcher select { font: inherit; font-size: 12.5px;
+    border: 1px solid rgb(255 255 255 / 0.22); background: rgb(255 255 255 / 0.06);
+    color: inherit; border-radius: 99px; padding: 4px 11px; cursor: pointer; }
+  .switcher select { padding: 4px 8px; }
+  .switcher .seg { display: inline-flex; border-radius: 99px; overflow: hidden;
+    border: 1px solid rgb(255 255 255 / 0.22); }
+  .switcher .seg button { border: 0; border-radius: 0; }
+  .switcher .seg button[aria-pressed="true"] { background: var(--mark); color: #fff; font-weight: 600; }
+  .switcher .divider { width: 1px; height: 20px; background: rgb(255 255 255 / 0.2); }
+
+  :focus-visible { outline: 2px solid var(--mark); outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<style>
+  /* ============================================================
+     #310 additions. Everything above is #303's shell CSS, verbatim,
+     with the pieces of #306's chrome this ticket inherits re-declared
+     here (edit toolbar extras, the stale notice, the Save popup).
+     ============================================================ */
+
+  /* --- inherited from #306: an edited row is marked on the grid --- */
+  .opflag { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--ink-2); border: 1px solid var(--line);
+    border-radius: 99px; padding: 0 6px; white-space: nowrap; }
+  .opflag.warn { color: var(--warn); border-color: var(--warn); }
+  .opflag.ok { color: var(--ok); border-color: var(--ok); }
+
+  /* --- inherited from #306: the stale-Semester notice sits with the semester control --- */
+  .blocknote { border-top: 1px solid var(--warn); background: var(--warn-bg); color: var(--warn);
+    padding: 10px 14px; display: grid; gap: 6px; font-size: 12px; }
+  .blocknote b { font-size: 12.5px; }
+  .sidebar.rail .blocknote { padding: 10px 6px; justify-items: center; }
+  .sidebar.rail .blocknote .hide-rail { display: none; }
+  .blocknote .bang { font-family: var(--mono); font-size: 15px; }
+  .block-strip { padding: 8px 12px; font-size: 12px; display: flex; align-items: center; gap: 8px;
+    border-bottom: 1px solid var(--warn); background: var(--warn-bg); color: var(--warn); flex-shrink: 0; }
+
+  /* --- inherited from #306: fallout lives in the Save popup and nowhere else --- */
+  .fo { display: grid; gap: 11px; }
+  .fo h4 { margin: 0 0 5px; font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--ink-3); font-weight: 600; }
+  .fo ul { margin: 0; padding-left: 16px; display: grid; gap: 5px; font-size: 12.5px; color: var(--ink-2); }
+  .fo .loud li { color: var(--warn); }
+  .fo-doom { border: 1px solid var(--warn); border-radius: var(--radius); padding: 9px 11px;
+    display: grid; gap: 5px; font-size: 12.5px; }
+  .fo-empty { font-size: 12.5px; color: var(--ink-3); }
+  .changelist { display: grid; }
+  .changelist li { list-style: none; display: flex; gap: 9px; align-items: baseline;
+    padding: 6px 0; border-bottom: 1px solid var(--line-soft); font-size: 12.5px; }
+  .changelist li:last-child { border-bottom: 0; }
+  .changelist .op { font-family: var(--mono); font-size: 10px; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--ink-3); width: 62px; flex-shrink: 0; }
+  .changelist .why { color: var(--ink-3); font-size: 11.5px; }
+  .modal .m-body.tall { max-height: 52vh; overflow-y: auto; }
+  .frame.phone .modal .m-body.tall { max-height: 400px; }
+
+  /* --- setlist: one dense editable row per Song on desktop --- */
+  .srow { display: grid; align-items: center; gap: 8px; padding: 7px 9px;
+    border: 1px solid var(--line-soft); border-radius: var(--radius); background: var(--surface);
+    grid-template-columns: 16px 22px 1fr 150px 74px auto auto; }
+  .srow + .srow { margin-top: 5px; }
+  .srow.struck { border-color: var(--warn); background: var(--warn-bg); }
+  .srow.struck .field { text-decoration: line-through; text-decoration-color: var(--warn); }
+  .srow.fresh { border-color: var(--line); box-shadow: inset 3px 0 0 var(--ink-2); }
+  .srow .grip { font-family: var(--mono); color: var(--ink-3); cursor: grab; }
+  .srow .idx { font-family: var(--mono); color: var(--ink-3); text-align: right; font-size: 12px; }
+  .srow .acts { display: flex; gap: 4px; align-items: center; }
+  .snotes { border: 1px solid var(--line-soft); border-top: 0; border-radius: 0 0 var(--radius) var(--radius);
+    padding: 7px 9px 8px 55px; background: var(--surface-2); font-size: 12.5px; color: var(--ink-2); }
+  .stepper { display: inline-flex; border: 1px solid var(--line); border-radius: 4px;
+    overflow: hidden; background: var(--surface); }
+  .stepper button { border: 0; background: transparent; padding: 1px 8px; cursor: pointer;
+    font-family: var(--mono); font-size: 12px; color: var(--ink-2); }
+
+  /* --- setlist + roster on phone: a two-line summary that opens, one at a time --- */
+  .pcard { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+  .pcard + .pcard { margin-top: 6px; }
+  .pcard.struck { border-color: var(--warn); background: var(--warn-bg); }
+  .pcard.struck .psum .ptitle { text-decoration: line-through; text-decoration-color: var(--warn); }
+  .pcard.fresh { box-shadow: inset 3px 0 0 var(--ink-2); }
+  .psum { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; align-items: center;
+    width: 100%; border: 0; background: none; padding: 9px 11px; text-align: left; cursor: pointer; }
+  .psum .ptitle { font-weight: 600; font-size: 13.5px; }
+  .psum .pmeta { grid-column: 1; font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); }
+  .psum .pright { grid-row: 1 / span 2; grid-column: 2; display: flex; align-items: center; gap: 7px; }
+  .psum .caret { font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+  .pbody { border-top: 1px solid var(--line-soft); padding: 10px 11px; display: grid; gap: 9px; }
+  .pfields { display: grid; gap: 7px; }
+  .pfields .two { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+  .movepair { display: flex; gap: 6px; }
+  .movepair button { flex: 1; }
+
+  /* --- roster --- */
+  .rolechips { display: flex; gap: 5px; flex-wrap: wrap; align-items: center; }
+  .rchip { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line);
+    background: var(--surface-2); border-radius: 99px; padding: 1px 8px; font-size: 12px; white-space: nowrap; }
+  .rchip .x { font-family: var(--mono); font-size: 11px; color: var(--ink-3); cursor: pointer;
+    border: 0; background: none; padding: 0 0 0 2px; }
+  .rchip.add { border-style: dashed; background: transparent; color: var(--ink-3); cursor: pointer; }
+  .mismatch-flag { color: var(--warn); font-size: 12px; }
+  .selfnote { font-size: 11.5px; color: var(--ink-3); }
+
+  /* --- the contested region: where new rows come from --- */
+  .pane { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2);
+    overflow: hidden; }
+  .pane > .ph { display: flex; align-items: center; gap: 8px; padding: 8px 11px;
+    border-bottom: 1px solid var(--line-soft); font-size: 12.5px; font-weight: 600; background: var(--surface); }
+  .pane > .ph .n { font-family: var(--mono); color: var(--ink-3); font-weight: 400; }
+  .pane .pbodyx { padding: 10px 11px; display: grid; gap: 9px; }
+  .cand { display: grid; }
+  .cand li { list-style: none; display: grid; grid-template-columns: 16px 1fr auto; gap: 3px 9px;
+    align-items: center; padding: 6px 0; border-bottom: 1px solid var(--line-soft); font-size: 12.5px; }
+  .cand li:last-child { border-bottom: 0; }
+  .cand li .sub { grid-column: 2 / -1; font-size: 11.5px; color: var(--ink-3); }
+  .cand li.off { opacity: 0.55; }
+  .box { width: 13px; height: 13px; border: 1.5px solid var(--line); border-radius: 3px; flex-shrink: 0; }
+  .box.on { background: var(--ink); border-color: var(--ink); position: relative; }
+  .box.on::after { content: ''; position: absolute; left: 3.5px; top: 0.5px; width: 3px; height: 7px;
+    border: solid var(--surface); border-width: 0 1.6px 1.6px 0; transform: rotate(42deg); }
+  .inline-add { border: 1px dashed var(--line); border-radius: var(--radius); background: transparent;
+    color: var(--ink-2); font-size: 13px; padding: 9px 11px; cursor: pointer; width: 100%; text-align: left; }
+  .srcline { display: flex; gap: 7px; align-items: center; flex-wrap: wrap; }
+  .srcline .field { flex: 1; min-width: 150px; }
+  .impnote { font-size: 11.5px; color: var(--ink-3); border-left: 2px solid var(--line); padding-left: 8px; }
+
+  /* --- the add sheet (variant C) --- */
+  .sheet-sec { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+  .sheet-sec > .sh { padding: 7px 11px; background: var(--surface-2); font-size: 12px;
+    border-bottom: 1px solid var(--line-soft); display: flex; align-items: center; gap: 8px; }
+  .sheet-sec > .sh b { font-weight: 600; }
+  .sheet-sec .body { padding: 9px 11px; display: grid; gap: 8px; }
+
+  /* --- prototype-only annotation, never part of the design being judged --- */
+  .note-pr { border: 1px solid var(--mark); border-left-width: 3px; border-radius: var(--radius);
+    padding: 8px 11px; font-size: 12px; color: var(--ink-2); background: transparent; }
+  .note-pr b { color: var(--ink); }
+  .toolstrip { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+</style>
+
+<div class="chrome-head">
+  <h1>Rolling Sloans &mdash; setlist editor &amp; roster greybox</h1>
+  <span class="tag">Prototype &middot; #310</span>
+  <p>Both surfaces wear <b>#306's edit chrome unchanged</b> &mdash; sticky toolbar, clean grid, one Save
+  popup, stale notice in the sidebar &mdash; so none of that is on the ballot. The one contested thing is
+  <b>where new rows come from</b>, which is the same question on both surfaces (a song arrives by hand or
+  from Spotify; a person arrives from last semester, from the existing members, or by invite). Three
+  variants answer it: <b>A inline</b>, <b>B staged pane</b>, <b>C add sheet</b>. &larr;/&rarr; cycles.
+  Structure only. All data synthesized.</p>
+</div>
+
+<div class="stage" id="stage"></div>
+<div class="verdict" id="verdict"></div>
+
+<div class="switcher" role="group" aria-label="Prototype controls">
+  <span class="seg" id="viewportseg">
+    <button data-vp="desktop">Desktop</button>
+    <button data-vp="phone">Phone</button>
+  </span>
+  <span class="divider"></span>
+  <select id="pagesel" aria-label="Surface"></select>
+  <select id="bufsel" aria-label="Buffer state"></select>
+  <span class="divider"></span>
+  <button onclick="cycleVariant(-1)" aria-label="Previous variant">&larr;</button>
+  <span id="vlabel" style="font-weight:600"></span>
+  <button onclick="cycleVariant(1)" aria-label="Next variant">&rarr;</button>
+  <span class="divider"></span>
+  <button id="savebtn">Open the Save popup</button>
+</div>
+
+<script>
+/* ============================================================
+   Synthesized data - nothing here is a real person, email or
+   setlist (CONTRIBUTING.md). Names carry over from the #305/#306
+   prototypes so the three read as one portal.
+   ============================================================ */
+const LIVE = 'Fall 2026';
+const YOU = 'Avery Cho';
+const PRIOR = 'Fall 2026';
+
+/* op: 'keep' | 'moved' | 'edited' | 'remove' | 'new' */
+const SONGS = [
+  { pos: 1, title: 'Paper Lanterns',      artist: 'The Hollow Coast', len: '3:42', recs: 3, cast: 5,
+    notes: 'Tighten the last chorus - come in a bar early.', op: 'keep' },
+  { pos: 2, title: 'Riverbend',           artist: 'Junia Wolfe',      len: '4:15', recs: 1, cast: 3,
+    notes: 'Key change still unsettled.', op: 'edited', was: 'length 4:02' },
+  { pos: 3, title: 'Marigold',            artist: 'The Hollow Coast', len: '3:20', recs: 2, cast: 5,
+    notes: '', op: 'moved', was: '5' },
+  { pos: 4, title: 'Two Weeks in June',   artist: 'Colma Park',       len: '5:07', recs: 0, cast: 0,
+    notes: 'Not started - cast this first.', op: 'keep' },
+  { pos: 5, title: 'Static Bloom',        artist: 'Ferris & Doe',     len: '2:58', recs: 4, cast: 5,
+    notes: '', op: 'moved', was: '3' },
+  { pos: 6, title: 'Cold Open',           artist: 'Nightjar',         len: '3:55', recs: 0, cast: 3,
+    notes: '', op: 'remove' },
+  { pos: 7, title: 'The Long Way Down',   artist: 'Junia Wolfe',      len: '6:12', recs: 5, cast: 5,
+    notes: 'Locked. The reference take lives here.', op: 'remove' },
+  { pos: 8, title: 'Ninety-Nine Summers', artist: 'Colma Park',       len: '4:01', recs: 0, cast: 1,
+    notes: '', op: 'keep' },
+  { pos: 9, title: 'Hollow Season',       artist: 'Nightjar',         len: '',     recs: 0, cast: 0,
+    notes: '', op: 'new', from: 'Spotify' },
+  { pos: 10, title: 'Dry Season',         artist: 'Junia Wolfe',      len: '3:11', recs: 0, cast: 0,
+    notes: '', op: 'new', from: 'Spotify' },
+];
+
+/* What a playlist fetch returns. scheduling/spotify.py WRITES NOTHING - it hands
+   rows back for the edit buffer to append, and a missing client secret degrades
+   to a message rather than an error. Both are modelled here. */
+const IMPORT = {
+  playlist: 'open.spotify.com/playlist/7xQ2...',
+  found: [
+    { title: 'Hollow Season',  artist: 'Nightjar',    len: '',     on: true,  dupe: false },
+    { title: 'Dry Season',     artist: 'Junia Wolfe', len: '3:11', on: true,  dupe: false },
+    { title: 'Paper Lanterns', artist: 'The Hollow Coast', len: '3:42', on: false, dupe: true },
+    { title: 'Ember Line',     artist: 'Colma Park',  len: '4:44', on: false, dupe: false },
+    { title: 'Salt and Iron',  artist: 'Ferris & Doe', len: '2:20', on: false, dupe: false },
+  ],
+  skipped: [['podcast episode', 1], ['local file', 1]],
+};
+
+/* rop: 'keep' | 'roles' | 'renamed' | 'remove' | 'add' | 'invite' */
+const PEOPLE = [
+  { name: 'Avery Cho',       email: 'avery@example.edu',   roles: ['Lead Vocals', 'Keys'], songs: 6,
+    self: true,  active: true, rop: 'keep' },
+  { name: 'Dani Okafor',     email: 'dani@example.edu',    roles: ['Drums', 'Backing Vocals'], songs: 5,
+    active: true, rop: 'roles', was: 'Drums' },
+  { name: 'Priya Raman',     email: 'priya@example.edu',   roles: ['Bass', 'Backing Vocals'], songs: 4,
+    active: true, rop: 'keep' },
+  { name: 'Marcus Vale',     email: 'marcus@example.edu',  roles: ['Guitar'], songs: 4,
+    active: true, rop: 'remove' },
+  { name: 'Nina Restrepo-Vidal', email: 'nina@example.edu', roles: ['Keys', 'Backing Vocals'], songs: 3,
+    active: true, rop: 'renamed', was: 'Nina Restrepo' },
+  { name: 'Theo Lindqvist',  email: 'theo@example.edu',    roles: ['Guitar', 'Bass'], songs: 2,
+    active: true, rop: 'keep', mismatch: 'Assigned Drums on Riverbend, a Role they have not declared' },
+  { name: 'Sam Aterlay',     email: 'sam@example.edu',     roles: [], songs: 2,
+    active: true, rop: 'keep' },
+  { name: 'Jules Marchetti', email: 'jules@example.edu',   roles: ['Guitar'], songs: 0,
+    active: false, rop: 'keep' },
+  { name: 'Rowan Adeyemi',   email: 'rowan@example.edu',   roles: ['Drums'], songs: 0,
+    active: true, rop: 'add', from: PRIOR },
+  { name: 'kestrel@example.edu', email: 'kestrel@example.edu', roles: [], songs: 0,
+    active: false, rop: 'invite' },
+];
+
+/* People not on the roster, as the two buckets a way-in offers. */
+const OFF_ROSTER = [
+  { name: 'Rowan Adeyemi', roles: ['Drums'], from: PRIOR, on: true },
+  { name: 'Iris Bellweather', roles: ['Keys'], from: PRIOR, on: false },
+  { name: 'Ola Dziedzic', roles: ['Lead Vocals'], from: PRIOR, on: false },
+  { name: 'Bo Trần', roles: ['Guitar'], from: null, on: false },
+  { name: 'Mira Halloway', roles: [], from: null, on: false },
+];
+const ALL_ROLES = ['Lead Vocals', 'Backing Vocals', 'Guitar', 'Bass', 'Drums', 'Keys'];
+
+/* Fallout, in ADR 0008's two tiers, per surface. Neither tier ever blocks a save;
+   only a stale Semester does, and that is not fallout at all. */
+const FALLOUT = {
+  setlist: {
+    changes: [
+      ['delete', 'The Long Way Down', 'position 7'],
+      ['delete', 'Cold Open', 'position 6'],
+      ['move', 'Marigold', '5 → 3'],
+      ['move', 'Static Bloom', '3 → 5'],
+      ['edit', 'Riverbend', 'length 4:02 → 4:15'],
+      ['add', 'Hollow Season, Dry Season', 'imported from Spotify'],
+    ],
+    loud: [
+      'Deleting The Long Way Down destroys 5 Recordings from 3 uploaders. There is no undo.',
+      'Deleting Cold Open drops 3 Role Assignments and removes it from 2 Running Orders.',
+    ],
+    quiet: [
+      'Hollow Season and Dry Season have no Role requirements and nobody cast.',
+      'Hollow Season imported with no length. Length is a display field and has no scheduling authority.',
+      'The Dress Rehearsal derives its songs from the Setlist at read time (ADR 0003), so it picks up both new songs immediately.',
+      'Reordering changes concert position only. It does not touch any rehearsal Running Order.',
+    ],
+    doomed: [{ what: 'The Long Way Down', recs: 5, uploaders: 3 }],
+  },
+  roster: {
+    changes: [
+      ['remove', 'Marcus Vale', 'marcus@example.edu'],
+      ['add', 'Rowan Adeyemi', 'from ' + PRIOR],
+      ['invite', 'kestrel@example.edu', 'sends a sign-in code'],
+      ['roles', "Dani Okafor", 'Drums → Drums, Backing Vocals'],
+      ['rename', 'Nina Restrepo', '→ Nina Restrepo-Vidal'],
+    ],
+    loud: [
+      "Marcus Vale's removal destroys 4 Role Assignments and deletes 1 Conflict.",
+      'Static Bloom has no one left to fill Guitar (target 1).',
+    ],
+    quiet: [
+      'Sam Aterlay has no declared Roles.',
+      "Dani Okafor's change newly flags their Keys assignment on Marigold as a mismatch.",
+      'Rowan Adeyemi joins with the Roles they held in ' + PRIOR + '. A Membership is created fresh per Semester (ADR 0001).',
+    ],
+    doomed: [],
+  },
+};
+
+/* ============================================================
+   State
+   ============================================================ */
+const state = {
+  page: 'setlist', viewport: 'desktop', buffer: 'edits', variant: 'A',
+  rail: false, semester: 'Spring 2027', openRow: -1, modal: null, sheetTab: null,
+};
+const PAGES = [
+  ['setlist', 'Setlist editor  /setlist/edit/'],
+  ['roster',  'Roster edit mode  /members/'],
+];
+const BUFFERS = [
+  ['edits',   'Buffer: unsaved edits'],
+  ['clean',   'Buffer: clean'],
+  ['blocked', 'Buffer: blocked (stale)'],
+];
+const VARIANTS = [
+  ['A', 'Inline append'],
+  ['B', 'Staged pane'],
+  ['C', 'Add sheet'],
+];
+
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const isPhone = () => state.viewport === 'phone';
+const isDraft = () => state.semester !== LIVE;
+const dirty = () => state.buffer !== 'clean';
+const blocked = () => state.buffer === 'blocked';
+const fallout = () => FALLOUT[state.page];
+const editCount = () => dirty() ? fallout().changes.length : 0;
+const doomedTakes = () => fallout().doomed.reduce((a, d) => a + d.recs, 0);
+
+/* A clean buffer is the saved state: no new rows, nothing struck, nothing badged. */
+const songRows = () => dirty() ? SONGS
+  : SONGS.filter(s => s.op !== 'new').map((s, i) => ({ ...s, pos: i + 1, op: 'keep' }));
+const peopleRows = () => dirty()
+  ? PEOPLE
+  : PEOPLE.filter(p => !['add', 'invite'].includes(p.rop)).map(p => ({ ...p, rop: 'keep' }));
+
+function go(p) { state.page = p; state.openRow = -1; state.modal = null; render(); }
+function setBuffer(b) { state.buffer = b; state.modal = null; render(); }
+function setVariant(v) { state.variant = v; state.modal = null; render(); }
+function cycleVariant(d) {
+  const i = VARIANTS.findIndex(([k]) => k === state.variant);
+  setVariant(VARIANTS[(i + d + VARIANTS.length) % VARIANTS.length][0]);
+}
+function toggleRail() { state.rail = !state.rail; render(); }
+function openRow(i) { state.openRow = state.openRow === i ? -1 : i; render(); }
+function openModal(m, tab) { state.modal = m; state.sheetTab = tab || null; render(); }
+function closeModal() { state.modal = null; render(); }
+/* Save never commits from the toolbar. It opens the popup, always (#306). */
+function trySave() { if (!blocked() && dirty()) openModal('save'); }
+
+/* ============================================================
+   The shell - #303's, with #306's placement of the stale notice.
+   Re-rendered here verbatim so the surfaces are judged in situ.
+   ============================================================ */
+function blockNote() {
+  return `<div class="blocknote" role="alert">
+    <div class="hstack" style="gap:7px"><span class="bang">&#9888;</span>
+      <b class="hide-rail">Can&rsquo;t save</b></div>
+    <span class="hide-rail">Someone else saved ${esc(state.semester)} while you were editing.
+      Your edits are still here and nothing has been written.</span>
+    <div class="hide-rail"><button class="btn sm">Reload and re-apply</button></div>
+  </div>`;
+}
+function semesterPanel() {
+  const draft = isDraft();
+  return `<div class="sem-panel ${draft ? 'draft' : ''}">
+    <div class="hide-rail stack" style="gap:6px">
+      <span class="gb-label">Viewing</span>
+      <span class="field">${esc(state.semester)} &#9662;</span>
+      ${draft ? `<span class="warnline">Not what members see &mdash; they see ${LIVE}.</span>` : ''}
+      <div class="hstack" style="gap:6px">
+        <button class="btn sm" ${dirty() && !blocked() ? '' : 'disabled'} onclick="trySave()">Save changes</button>
+        <button class="btn sm ${draft ? 'primary' : ''}" ${draft && !blocked() ? '' : 'disabled'}>Publish</button>
+      </div>
+    </div>
+  </div>`;
+}
+const NAV = [['overview', 'Home'], ['schedule', 'Schedule'], ['songs', 'Setlist'],
+             ['members', 'Band'], ['conflicts', 'Conflicts']];
+function sidebar() {
+  const cur = state.page === 'setlist' ? 'songs' : 'members';
+  return `<aside class="sidebar ${state.rail ? 'rail' : ''}">
+    <div class="head">
+      <span class="brand">Rolling Sloans</span>
+      <button class="btn sm icon" onclick="toggleRail()" title="Collapse sidebar">${state.rail ? '&raquo;' : '&laquo;'}</button>
+    </div>
+    <nav>
+      ${NAV.map(([k, l]) => `<a href="#" onclick="go('${k === 'songs' ? 'setlist' : k === 'members' ? 'roster' : state.page}');return false"
+        ${k === cur ? 'aria-current="page"' : ''} title="${l}">
+        <span class="glyph"></span><span class="label">${l}</span>
+        ${k === 'conflicts' ? '<span class="count">3</span>' : ''}</a>`).join('')}
+      <div class="group"><span class="gb-label">Admin</span></div>
+      <a href="#" onclick="return false" title="Semesters"><span class="glyph"></span><span class="label">Semesters</span></a>
+    </nav>
+    ${blocked() ? blockNote() : ''}
+    ${semesterPanel()}
+    <div class="sem-panel"><button class="btn sm hide-rail">Log out</button></div>
+  </aside>`;
+}
+function editToolbar() {
+  const n = editCount();
+  const what = state.page === 'setlist' ? 'the setlist' : 'the roster';
+  return `<div class="edit-toolbar">
+    <span class="grow">Editing ${what} &mdash; ${n ? `${n} unsaved change${n === 1 ? '' : 's'}` : 'no changes yet'}</span>
+    <button class="btn sm">Discard</button>
+    <button class="btn sm primary" ${n && !blocked() ? '' : 'disabled'} onclick="trySave()">Save changes</button>
+  </div>`;
+}
+function desktopShell(body) {
+  return `<div class="framewrap"><div class="shell">
+    ${sidebar()}
+    <div class="framewrap">${editToolbar()}
+      <div class="frame-scroll"><div class="page">${body}</div></div>
+    </div>
+  </div>${modalLayer()}</div>`;
+}
+function phoneShell(body) {
+  return `<div class="framewrap">
+    <div class="phonebar">
+      <span class="title">${state.page === 'setlist' ? 'Edit setlist' : 'Edit roster'}</span>
+      <button class="btn sm" ${dirty() && !blocked() ? '' : 'disabled'} onclick="trySave()">Save</button>
+    </div>
+    ${blocked() ? `<div class="block-strip"><span>&#9888;</span>
+      <span><b>Can&rsquo;t save</b> &mdash; someone else saved ${esc(state.semester)} while you were editing.</span>
+      <span style="flex:1"></span><button class="btn sm">Reload</button></div>` : ''}
+    ${isDraft() ? `<div class="sem-strip">
+      <span>Viewing <b>${esc(state.semester)}</b> &mdash; not what members see</span>
+      <span style="flex:1"></span><button class="btn sm">Switch</button></div>` : ''}
+    ${editToolbar()}
+    <div class="frame-scroll"><div class="page">${body}</div></div>
+    <nav class="tabbar">
+      ${[['Home', 0], ['Schedule', 0], ['Setlist', state.page === 'setlist'], ['Band', state.page === 'roster'], ['More', 0]]
+        .map(([l, cur]) => `<a href="#" onclick="return false" ${cur ? 'aria-current="page"' : ''}>
+          <span class="glyph"></span>${l}</a>`).join('')}
+    </nav>
+    ${modalLayer()}
+  </div>`;
+}
+
+function pageHead(title, sub, actions) {
+  return `<div class="page-head">
+    <div><h1>${esc(title)}</h1><div class="muted" style="font-size:12.5px">${sub}</div></div>
+    <div class="actions">${actions || ''}</div>
+  </div>`;
+}
+function note(html) { return `<div class="note-pr">${html}</div>`; }
+
+/* ============================================================
+   Surface 1 - the setlist editor, /setlist/edit/.
+
+   #306's rule applies unchanged: the GRID shows what you changed
+   (struck rows, Moved and New badges), the SAVE POPUP shows what
+   it costs. Nothing warns while you type.
+   ============================================================ */
+const SOP = {
+  keep: null, new: ['New', 'fresh'], moved: ['Moved', ''], edited: ['Edited', ''], remove: ['Deleting', 'warn'],
+};
+function sFlag(s) {
+  const f = SOP[s.op];
+  if (!f) return '';
+  const detail = s.op === 'moved' ? ` ${s.was}→${s.pos}` : s.op === 'new' && s.from ? ` · ${s.from}` : '';
+  return `<span class="opflag ${f[1] === 'warn' ? 'warn' : ''}">${f[0]}${detail}</span>`;
+}
+
+function setlistDesktop() {
+  return `<div>
+    <div class="hstack" style="gap:10px;padding:0 9px 6px">
+      <span class="gb-label" style="width:38px"></span>
+      <span class="gb-label" style="flex:1">Title</span>
+      <span class="gb-label" style="width:150px">Artist</span>
+      <span class="gb-label" style="width:74px">Length</span>
+    </div>
+    ${songRows().map((s, i) => `
+      <div class="srow ${s.op === 'remove' ? 'struck' : ''} ${s.op === 'new' ? 'fresh' : ''}">
+        <span class="grip" title="Drag to reorder">&#10247;</span>
+        <span class="idx">${s.pos}</span>
+        <span class="field">${esc(s.title) || '<span class="muted">Title</span>'}</span>
+        <span class="field">${esc(s.artist)}</span>
+        <span class="field mono">${s.len || '<span class="muted">M:SS</span>'}</span>
+        <span class="hstack" style="gap:5px">${sFlag(s)}
+          ${s.recs ? `<span class="opflag" title="Recordings on this Song">${s.recs} take${s.recs === 1 ? '' : 's'}</span>` : ''}</span>
+        <span class="acts">
+          <button class="btn sm icon" onclick="openRow(${i})" title="Notes">&#9662;</button>
+          <span class="stepper"><button title="Move up">&#8593;</button><button title="Move down">&#8595;</button></span>
+          <button class="btn sm" onclick="return false">${s.op === 'remove' ? 'Undo' : 'Delete'}</button>
+        </span>
+      </div>
+      ${state.openRow === i ? `<div class="snotes">
+        <span class="gb-label">Notes</span>
+        <div class="field" style="margin-top:4px;min-height:48px;align-items:flex-start">${esc(s.notes) || '<span class="muted">Free text, one field &mdash; shown on the Setlist and the Song page.</span>'}</div>
+      </div>` : ''}`).join('')}
+  </div>`;
+}
+
+function setlistPhone() {
+  return `<div>${songRows().map((s, i) => {
+    const open = state.openRow === i;
+    return `<div class="pcard ${s.op === 'remove' ? 'struck' : ''} ${s.op === 'new' ? 'fresh' : ''} ${open ? 'open' : ''}">
+      <button class="psum" onclick="openRow(${i})">
+        <span class="ptitle">${s.pos}. ${esc(s.title) || 'Untitled'}</span>
+        <span class="pmeta">${esc(s.artist) || '&mdash;'} &middot; ${s.len || 'no length'}${s.recs ? ' &middot; ' + s.recs + ' takes' : ''}</span>
+        <span class="pright">${sFlag(s)}<span class="caret">${open ? '&#9652;' : '&#9662;'}</span></span>
+      </button>
+      ${open ? `<div class="pbody">
+        <div class="pfields">
+          <label class="stack" style="gap:3px"><span class="gb-label">Title</span><span class="field">${esc(s.title)}</span></label>
+          <label class="stack" style="gap:3px"><span class="gb-label">Artist</span><span class="field">${esc(s.artist)}</span></label>
+          <div class="two">
+            <label class="stack" style="gap:3px"><span class="gb-label">Length</span><span class="field mono">${s.len || 'M:SS'}</span></label>
+            <label class="stack" style="gap:3px"><span class="gb-label">Position</span><span class="field mono">${s.pos} of ${songRows().length}</span></label>
+          </div>
+          <label class="stack" style="gap:3px"><span class="gb-label">Notes</span>
+            <span class="field" style="min-height:44px;align-items:flex-start">${esc(s.notes) || '<span class="muted">&mdash;</span>'}</span></label>
+        </div>
+        <div class="movepair">
+          <button class="btn sm">&#8593; Move up</button>
+          <button class="btn sm">&#8595; Move down</button>
+        </div>
+        <button class="btn sm" style="justify-self:start">${s.op === 'remove' ? 'Undo delete' : 'Delete song'}</button>
+      </div>` : ''}
+    </div>`;
+  }).join('')}
+  ${note('The drag grip is hidden here and <b>up/down is the primary affordance</b> &mdash; native HTML5 drag ' +
+    'does not fire on mobile at all, and SortableJS is the accelerator, not the mechanism (#306).')}</div>`;
+}
+
+function setlistPage() {
+  return `
+    ${pageHead('Setlist', `${esc(state.semester)} &middot; ${songRows().length} songs &middot; concert order`,
+      state.variant === 'C' ? '<button class="btn primary" onclick="openModal(\'sheet\')">+ Add songs</button>' : '')}
+    ${isPhone() ? setlistPhone() : setlistDesktop()}
+    ${waysIn()}`;
+}
+
+/* ============================================================
+   Surface 2 - the roster, /members/ in edit mode.
+
+   #303 settled that the Band list shows ACTIVE members only, with
+   invited-but-inactive rows appearing only while editing - so the
+   edit surface carries a row the read surface does not.
+   #305 settled that the Songs count is dropped in edit mode (it is
+   not editable) and that role mismatch surfaces here as a quiet
+   per-row flag, never a block (ADR 0002).
+   ============================================================ */
+const ROP = {
+  keep: null, roles: ['Roles changed', ''], renamed: ['Renamed', ''],
+  remove: ['Removing', 'warn'], add: ['Adding', 'fresh'], invite: ['Inviting', 'fresh'],
+};
+function rFlag(p) {
+  const f = ROP[p.rop];
+  if (!f) return '';
+  const detail = p.rop === 'add' && p.from ? ` · ${p.from}` : '';
+  return `<span class="opflag ${f[1] === 'warn' ? 'warn' : ''}">${f[0]}${detail}</span>`;
+}
+function roleChips(p) {
+  return `<span class="rolechips">
+    ${p.roles.map(r => `<span class="rchip">${esc(r)}<button class="x" title="Remove Role">&times;</button></span>`).join('')}
+    ${p.roles.length ? '' : '<span class="muted" style="font-size:12px">no declared Roles</span>'}
+    <button class="rchip add" title="Add a Role to this member">+ Role</button>
+  </span>`;
+}
+
+function rosterDesktop() {
+  return `<div class="scroll-x"><table class="gb">
+    <thead><tr><th style="width:220px">Name</th><th>Roles</th><th style="width:200px"></th><th style="width:96px"></th></tr></thead>
+    <tbody>${peopleRows().map(p => `
+      <tr>
+        <td>
+          <span class="field">${esc(p.name)}</span>
+          <div class="hstack" style="gap:6px;margin-top:4px">
+            <span class="muted" style="font-size:11.5px">${esc(p.email)}</span>
+            ${p.self ? '<span class="opflag ok">you</span>' : ''}
+            ${!p.active && p.rop !== 'invite' ? '<span class="opflag">invited &middot; not active yet</span>' : ''}
+          </div>
+        </td>
+        <td>${p.rop === 'invite' ? '<span class="muted" style="font-size:12px">Roles can be set once they sign in</span>' : roleChips(p)}</td>
+        <td>${rFlag(p)}
+          ${p.mismatch ? `<span class="mismatch-flag" title="${esc(p.mismatch)}">&#9888; role mismatch</span>` : ''}
+          ${p.rop === 'renamed' ? `<span class="muted" style="font-size:11.5px">was ${esc(p.was)}</span>` : ''}
+          ${p.rop === 'roles' ? `<span class="muted" style="font-size:11.5px">was ${esc(p.was)}</span>` : ''}</td>
+        <td>${p.self ? '<span class="selfnote">can&rsquo;t remove yourself</span>'
+          : `<button class="btn sm">${p.rop === 'remove' ? 'Undo' : 'Remove'}</button>`}</td>
+      </tr>`).join('')}
+    </tbody></table></div>`;
+}
+
+function rosterPhone() {
+  return `<div>${peopleRows().map((p, i) => {
+    const open = state.openRow === i;
+    return `<div class="pcard ${p.rop === 'remove' ? 'struck' : ''} ${['add', 'invite'].includes(p.rop) ? 'fresh' : ''}">
+      <button class="psum" onclick="openRow(${i})">
+        <span class="ptitle">${esc(p.name)}${p.self ? ' <span class="opflag ok">you</span>' : ''}</span>
+        <span class="pmeta">${p.roles.length ? esc(p.roles.join(', ')) : 'no declared Roles'}</span>
+        <span class="pright">${rFlag(p)}${p.mismatch ? '<span class="mismatch-flag">&#9888;</span>' : ''}
+          <span class="caret">${open ? '&#9652;' : '&#9662;'}</span></span>
+      </button>
+      ${open ? `<div class="pbody">
+        <label class="stack" style="gap:3px"><span class="gb-label">Name</span><span class="field">${esc(p.name)}</span></label>
+        <div class="stack" style="gap:4px"><span class="gb-label">Roles</span>${roleChips(p)}</div>
+        ${p.mismatch ? `<div class="impnote">&#9888; ${esc(p.mismatch)}. Saved anyway (ADR 0002).</div>` : ''}
+        ${!p.active ? '<div class="impnote">Invited, not active yet. Shown only while editing.</div>' : ''}
+        ${p.self ? '<div class="selfnote">You can&rsquo;t remove yourself from the Roster.</div>'
+          : `<button class="btn sm" style="justify-self:start">${p.rop === 'remove' ? 'Undo remove' : 'Remove from roster'}</button>`}
+      </div>` : ''}
+    </div>`;
+  }).join('')}</div>`;
+}
+
+function rosterPage() {
+  const active = peopleRows().filter(p => p.active).length;
+  return `
+    ${pageHead('Band', `${esc(state.semester)} &middot; ${active} active &middot; ${peopleRows().length - active} invited`,
+      state.variant === 'C' ? '<button class="btn primary" onclick="openModal(\'sheet\')">+ Add people</button>' : '')}
+    ${isPhone() ? rosterPhone() : rosterDesktop()}
+    ${waysIn()}
+    ${note('The <b>Songs</b> column from the read surface is gone here: it is not editable, so it is not a ' +
+      'field (#305). Role mismatch appears only in edit mode, as a per-row flag that never blocks a save (ADR 0002).')}`;
+}
+
+/* ============================================================
+   THE CONTESTED REGION - where new rows come from.
+
+   Both surfaces have exactly this question, so one answer settles
+   both: a Song arrives by hand or from a Spotify playlist; a Person
+   arrives from a prior Semester, from the members who exist but are
+   not on this roster, or by invitation.
+   ============================================================ */
+function waysIn() {
+  if (state.variant === 'A') return waysInInline();
+  if (state.variant === 'B') return waysInPane();
+  return waysInSheetHint();
+}
+
+/* --- A: the grid grows. New rows land in it directly, editable in place. --- */
+function waysInInline() {
+  const common = `<button class="inline-add">+ ${state.page === 'setlist' ? 'Add a song' : 'Add a member'}</button>`;
+  if (state.page === 'setlist') {
+    return `<div class="stack" style="gap:9px">
+      ${common}
+      <div class="srcline">
+        <span class="gb-label" style="width:100%">Import from a Spotify playlist</span>
+        <span class="field">${esc(IMPORT.playlist)}</span>
+        <button class="btn sm">Import</button>
+      </div>
+      ${dirty() ? `<div class="impnote">Imported 2 songs. Skipped 2 items
+        (1 podcast episode, 1 local file) and 1 duplicate title. They are rows 9 and 10 above, marked
+        <i>New</i> &mdash; edit or delete them like any other row.</div>` : ''}
+      ${note('Import <b>writes nothing</b>: <code>scheduling/spotify.py</code> returns rows for the edit ' +
+        'buffer to append, so imported songs only exist once you Save. A missing client secret degrades ' +
+        'to a message here, not an error.')}
+    </div>`;
+  }
+  return `<div class="stack" style="gap:9px">
+    ${common}
+    <div class="srcline">
+      <button class="btn sm">Import roster from ${PRIOR}</button>
+      <span class="muted" style="font-size:12px">appends 3 members as new rows</span>
+    </div>
+    <div class="srcline">
+      <span class="gb-label" style="width:100%">Invite someone who has no account</span>
+      <span class="field">name</span><span class="field">email</span>
+      <button class="btn sm">Invite</button>
+    </div>
+    ${note('In this variant an invite lands as a row in the grid like any other add, so it is part of the ' +
+      'same Save. That is only correct because #307 made sign-in a <b>6-digit emailed code</b>: there is ' +
+      'no set-password link to go stale, so inviting is just adding a person who happens to have an email.')}
+  </div>`;
+}
+
+/* --- B: a source pane below the grid. You tick candidates; ticking moves
+       them into the buffer. Echoes #306's staged generation diff.        --- */
+function waysInPane() {
+  if (state.page === 'setlist') {
+    return `<div class="stack" style="gap:10px">
+      <div class="pane">
+        <div class="ph">Add songs <span class="n">2 ticked</span></div>
+        <div class="pbodyx">
+          <div class="srcline"><span class="field">${esc(IMPORT.playlist)}</span><button class="btn sm">Fetch</button></div>
+          <ul class="cand">${IMPORT.found.map(t => `
+            <li class="${t.dupe ? 'off' : ''}">
+              <span class="box ${t.on ? 'on' : ''}"></span>
+              <span>${esc(t.title)} <span class="muted">&middot; ${esc(t.artist)}</span></span>
+              <span class="mono muted" style="font-size:11.5px">${t.len || '&mdash;'}</span>
+              ${t.dupe ? '<span class="sub">Already in this setlist &mdash; ticking it adds a second row.</span>' : ''}
+            </li>`).join('')}
+          </ul>
+          <div class="impnote">Skipped ${IMPORT.skipped.reduce((a, s) => a + s[1], 0)} items
+            (${IMPORT.skipped.map(s => s[1] + ' ' + s[0]).join(', ')}) &mdash; they carry no usable title.</div>
+          <div class="hstack"><button class="btn sm primary">Add 2 ticked songs</button>
+            <button class="btn sm">Add a blank row instead</button></div>
+        </div>
+      </div>
+      ${note('The pane is a <b>staging area, not a second grid</b>: ticking appends to the same Pending ' +
+        'Buffer a hand-edit fills, so the Save popup is still the only place a consequence appears.')}
+    </div>`;
+  }
+  const bucket = (title, list) => `<div class="pane">
+    <div class="ph">${title} <span class="n">${list.length}</span></div>
+    <ul class="cand" style="padding:4px 11px">${list.map(p => `
+      <li><span class="box ${p.on ? 'on' : ''}"></span>
+        <span>${esc(p.name)}</span>
+        <span class="muted" style="font-size:11.5px">${p.roles.join(', ') || 'no Roles'}</span></li>`).join('')}
+    </ul></div>`;
+  return `<div class="stack" style="gap:10px">
+    ${bucket(`On the roster in ${PRIOR}`, OFF_ROSTER.filter(p => p.from))}
+    ${bucket('Other members with an account', OFF_ROSTER.filter(p => !p.from))}
+    <div class="pane">
+      <div class="ph">Invite someone new</div>
+      <div class="pbodyx">
+        <div class="srcline"><span class="field">name</span><span class="field">email</span>
+          <button class="btn sm">Queue invite</button></div>
+      </div>
+    </div>
+    <button class="btn primary" style="justify-self:start">Add 1 ticked person</button>
+    ${note('Three panes, three sources &mdash; which is close to what the surface does today ' +
+      '(roster table, &ldquo;Add to Roster&rdquo; table, invite form). The question this variant asks is ' +
+      'whether that stack is still legible under the sticky toolbar, on a phone, with a grid above it.')}
+  </div>`;
+}
+
+function waysInSheetHint() {
+  return note('<b>Variant C:</b> the surface below the grid is empty on purpose. Every way in lives behind the ' +
+    'single <b>+ Add</b> button in the page head &mdash; a modal on desktop, a bottom sheet on phone. ' +
+    'Open it to judge it.');
+}
+
+/* --- C: one + Add, one sheet, sources as sections. Echoes the assignment
+       picker (ADR 0009), which is the other place this portal acquires rows. --- */
+function sheetModal() {
+  const setlist = state.page === 'setlist';
+  const tab = state.sheetTab || (setlist ? 'spotify' : 'prior');
+  const secs = setlist ? [
+    ['spotify', 'From a Spotify playlist'],
+    ['byhand', 'By hand'],
+  ] : [
+    ['prior', `From ${PRIOR}`],
+    ['members', 'From members with an account'],
+    ['invite', 'Invite someone new'],
+  ];
+  const body = {
+    spotify: `<div class="srcline"><span class="field">${esc(IMPORT.playlist)}</span><button class="btn sm">Fetch</button></div>
+      <ul class="cand">${IMPORT.found.map(t => `<li class="${t.dupe ? 'off' : ''}">
+        <span class="box ${t.on ? 'on' : ''}"></span>
+        <span>${esc(t.title)} <span class="muted">&middot; ${esc(t.artist)}</span></span>
+        <span class="mono muted" style="font-size:11.5px">${t.len || '&mdash;'}</span>
+        ${t.dupe ? '<span class="sub">Already in this setlist.</span>' : ''}</li>`).join('')}</ul>
+      <div class="impnote">Skipped 2 items (1 podcast episode, 1 local file).</div>`,
+    byhand: `<div class="pfields">
+        <label class="stack" style="gap:3px"><span class="gb-label">Title</span><span class="field">&nbsp;</span></label>
+        <label class="stack" style="gap:3px"><span class="gb-label">Artist</span><span class="field">&nbsp;</span></label>
+        <label class="stack" style="gap:3px"><span class="gb-label">Length</span><span class="field mono">M:SS</span></label>
+      </div>`,
+    prior: `<ul class="cand">${OFF_ROSTER.filter(p => p.from).map(p => `<li>
+        <span class="box ${p.on ? 'on' : ''}"></span><span>${esc(p.name)}</span>
+        <span class="muted" style="font-size:11.5px">${p.roles.join(', ') || 'no Roles'}</span></li>`).join('')}</ul>
+      <button class="btn sm">Tick all 3</button>`,
+    members: `<ul class="cand">${OFF_ROSTER.filter(p => !p.from).map(p => `<li>
+        <span class="box"></span><span>${esc(p.name)}</span>
+        <span class="muted" style="font-size:11.5px">${p.roles.join(', ') || 'no Roles'}</span></li>`).join('')}</ul>`,
+    invite: `<div class="pfields">
+        <label class="stack" style="gap:3px"><span class="gb-label">Name</span><span class="field">&nbsp;</span></label>
+        <label class="stack" style="gap:3px"><span class="gb-label">Email</span><span class="field">&nbsp;</span></label>
+      </div>
+      <div class="impnote">Sends a sign-in code on Save, not before &mdash; the mail is registered with
+        <code>on_commit()</code>, so opening this sheet during a Preview sends nothing (ADR 0008).</div>`,
+  }[tab];
+
+  return `<div class="backdrop ${isPhone() ? 'bottom' : ''}" onclick="closeModal()">
+    <div class="modal" onclick="event.stopPropagation()">
+      <div class="m-head"><h3>${setlist ? 'Add songs' : 'Add people'}</h3>
+        <button class="btn sm ghost" onclick="closeModal()">&times;</button></div>
+      <div class="m-body tall">
+        <div class="seg2" style="width:100%">${secs.map(([k, l]) =>
+          `<button aria-pressed="${k === tab}" style="flex:1" onclick="openModal('sheet','${k}')">${l}</button>`).join('')}</div>
+        ${body}
+      </div>
+      <div class="m-foot">
+        <button class="btn" onclick="closeModal()">Cancel</button>
+        <button class="btn primary" onclick="closeModal()">Add to the buffer</button>
+      </div>
+    </div></div>`;
+}
+
+/* ============================================================
+   The Save popup - #306's, and the ONLY home for fallout.
+   One dialog with escalating content: the doomed block appears
+   and the button becomes "Save anyway". There is no second
+   destructive dialog, and no separate removal-confirm dialog.
+   ============================================================ */
+const OPWORD = { delete: 'Delete', move: 'Move', edit: 'Edit', add: 'Add', remove: 'Remove', invite: 'Invite', roles: 'Roles', rename: 'Rename' };
+function saveModal() {
+  const f = fallout();
+  const takes = doomedTakes();
+  return `<div class="backdrop ${isPhone() ? 'bottom' : ''}" onclick="closeModal()">
+    <div class="modal" onclick="event.stopPropagation()">
+      <div class="m-head"><h3>Save ${f.changes.length} change${f.changes.length === 1 ? '' : 's'} to ${esc(state.semester)}</h3>
+        <button class="btn sm ghost" onclick="closeModal()">&times;</button></div>
+      <div class="m-body tall">
+        <div class="fo">
+          <div><h4>What changes</h4>
+            <ul class="changelist">${f.changes.map(([op, what, why]) => `<li>
+              <span class="op">${OPWORD[op] || op}</span>
+              <span style="flex:1">${esc(what)}<div class="why">${esc(why)}</div></span></li>`).join('')}</ul></div>
+
+          ${f.loud.length ? `<div class="loud"><h4>Then this happens</h4>
+            <ul>${f.loud.map(l => `<li>${esc(l)}</li>`).join('')}</ul></div>` : ''}
+
+          ${f.quiet.length ? `<div><h4>Worth noting</h4>
+            <ul>${f.quiet.map(l => `<li>${esc(l)}</li>`).join('')}</ul></div>` : ''}
+
+          ${takes ? `<div class="fo-doom"><b>${takes} Recording${takes === 1 ? '' : 's'} will be deleted permanently.</b>
+            ${f.doomed.map(d => `<div>${esc(d.what)} &mdash; ${d.recs} take${d.recs === 1 ? '' : 's'}
+              from ${d.uploaders} uploader${d.uploaders === 1 ? '' : 's'}.</div>`).join('')}
+            <div class="muted" style="font-size:11.5px">The files are removed from storage on save. There is no undo and no export.</div>
+          </div>` : ''}
+        </div>
+      </div>
+      <div class="m-foot">
+        <button class="btn" onclick="closeModal()">Keep editing</button>
+        <button class="btn primary" onclick="closeModal()">${takes ? 'Save anyway' : 'Save changes'}</button>
+      </div>
+    </div></div>`;
+}
+
+function modalLayer() {
+  if (state.modal === 'save') return saveModal();
+  if (state.modal === 'sheet') return sheetModal();
+  return '';
+}
+
+/* ============================================================
+   Render
+   ============================================================ */
+function render() {
+  const body = state.page === 'setlist' ? setlistPage() : rosterPage();
+  document.getElementById('stage').innerHTML =
+    `<div class="frame ${state.viewport}">${isPhone() ? phoneShell(body) : desktopShell(body)}</div>`;
+  renderVerdict();
+  syncChrome();
+}
+
+function renderVerdict() {
+  const v = VARIANTS.find(([k]) => k === state.variant)[1];
+  document.getElementById('verdict').innerHTML = `
+    <h2>The one question on the ballot: where new rows come from &mdash; now showing ${state.variant} (${v})</h2>
+    <div class="cols">
+      <div><h2>A &mdash; inline append</h2><ul>
+        <li>New rows land <b>in the grid</b>, empty and editable, and the import field sits under it. One list,
+        one mental model, and an imported song is edited exactly like a typed one.</li>
+        <li><b>Against:</b> the grid grows a second personality &mdash; half saved rows, half blank ones &mdash;
+        and on the roster it means three affordances stacked under the table (add, import, invite), which is
+        roughly today's layout and the thing that reads worst on a phone.</li>
+      </ul></div>
+      <div><h2>B &mdash; staged pane</h2><ul>
+        <li>A source region under the grid where you tick candidates before they join the buffer. It is the
+        shape #306 already uses for <b>generation</b>, so an admin has met it. It is also the only variant
+        where you can see what a playlist contains <i>before</i> committing to rows, duplicates included.</li>
+        <li><b>Against:</b> it is a second scrolling region under a grid that already scrolls, and on the
+        roster it needs three panes. Phone is where this either survives or does not.</li>
+      </ul></div>
+      <div><h2>C &mdash; add sheet</h2><ul>
+        <li>One <b>+ Add</b> in the page head; every source is a section inside one modal (bottom sheet on
+        phone). The grid stays exactly the buffer and nothing else. It is the shape of the assignment picker,
+        the portal's other row-acquiring surface (ADR 0009).</li>
+        <li><b>Against:</b> a modal over an edit surface hides the thing you are adding to, and &ldquo;type
+        one quick song&rdquo; costs a dialog.</li>
+      </ul></div>
+    </div>
+
+    <h2 style="margin-top:6px">Inherited from #306, not re-decided here</h2>
+    <ul>
+      <li>The sticky edit toolbar, the clean grid, and <b>the Save popup as the only home for fallout</b> &mdash;
+      the grid shows what you changed (struck rows, <i>Moved 5&rarr;3</i>, <i>New</i>), the popup shows what it costs.</li>
+      <li>One dialog with escalating content. <b>The setlist's delete-confirm dialog and the roster's
+      removal-confirm dialog both disappear into it</b>: deleting The Long Way Down turns the button into
+      <i>Save anyway</i> in the same popup rather than opening a second one.</li>
+      <li>The stale-Semester notice renders in the sidebar above the semester panel, and as a strip above the
+      semester strip on phone. Try <i>Buffer: blocked</i> on both surfaces.</li>
+    </ul>
+
+    <h2>Findings that need a call, whichever variant wins</h2>
+    <ul>
+      <li><b>The setlist editor is not a Buffer &rarr; preview &rarr; apply surface, and #306's chrome
+      requires that it become one.</b> <code>services.py</code> has <code>RosterEditBuffer</code> /
+      <code>preview_roster_edits()</code> / <code>RosterEditFallout</code>, but the setlist has only
+      <code>song_deletion_summaries()</code> feeding a confirm dialog &mdash; no buffer, no preview, no
+      fallout dataclass. A Save popup has nothing to render until <code>SetlistEditBuffer</code>,
+      <code>preview_setlist_edits()</code> and <code>SetlistEditFallout</code> exist. CLAUDE.md's list of
+      Buffers already omits a setlist one; this is the gap, not an oversight in the prototype.</li>
+      <li><b>Invite may not deserve to be its own thing any more.</b> #307 replaced the set-password link with
+      a 6-digit emailed code, so there is nothing to go stale and nothing to expire &mdash; inviting is adding
+      a person who happens to have an email. All three variants therefore file it with the other ways in
+      rather than as the separate form the surface has today. It also means the invite mail must be
+      registered with <code>on_commit()</code>, or a Preview mails a real person (ADR 0008).</li>
+      <li><b>Reordering the setlist is not reordering a rehearsal.</b> Position here is the concert's
+      Setlist order; a rehearsal's Running Order is a different sequence with different consequences (#306).
+      The popup says so explicitly, because the two are one drag gesture apart in the UI.</li>
+      <li><b>Both surfaces need row-level flags the read surface does not have</b> &mdash; role mismatch on the
+      roster (ADR 0002, never a block), and takes-on-this-song on the setlist, which is what makes a delete
+      destructive. Neither is fallout, so both stay on the grid.</li>
+    </ul>`;
+}
+
+function syncChrome() {
+  document.querySelectorAll('#viewportseg button').forEach(b =>
+    b.setAttribute('aria-pressed', String(b.dataset.vp === state.viewport)));
+  document.getElementById('pagesel').value = state.page;
+  document.getElementById('bufsel').value = state.buffer;
+  document.getElementById('savebtn').disabled = !dirty() || blocked();
+  const v = VARIANTS.find(([k]) => k === state.variant);
+  document.getElementById('vlabel').textContent = `${v[0]} (${v[1]})`;
+}
+
+document.getElementById('pagesel').innerHTML = PAGES.map(([k, l]) => `<option value="${k}">${l}</option>`).join('');
+document.getElementById('bufsel').innerHTML = BUFFERS.map(([k, l]) => `<option value="${k}">${l}</option>`).join('');
+document.getElementById('pagesel').onchange = e => go(e.target.value);
+document.getElementById('bufsel').onchange = e => setBuffer(e.target.value);
+document.getElementById('savebtn').onclick = () => trySave();
+document.querySelectorAll('#viewportseg button').forEach(b =>
+  b.onclick = () => { state.viewport = b.dataset.vp; state.openRow = -1; render(); });
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && state.modal) return closeModal();
+  if (['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
+  if (e.key === 'ArrowLeft') cycleVariant(-1);
+  if (e.key === 'ArrowRight') cycleVariant(1);
+});
+
+render();
+</script>
