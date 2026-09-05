@@ -1,6 +1,8 @@
 import type { RouteObject } from 'react-router-dom'
 
 import { Band } from './routes/Band'
+import { ConflictAdjudicationDetail } from './routes/ConflictAdjudicationDetail'
+import { ConflictAdjudicationIndex } from './routes/ConflictAdjudicationIndex'
 import { NotFound } from './routes/NotFound'
 import { Person } from './routes/Person'
 import { PlaceholderPage } from './routes/PlaceholderPage'
@@ -16,10 +18,12 @@ import { AppShell } from './shell/AppShell'
  * (`router.tsx`) and tests (which mount it in a `MemoryRouter` instead).
  * `AppShell` wraps every route via a layout route, so nav chrome is never a
  * per-page concern. Home is still a placeholder (#332); Setlist, Song detail
- * (#330), Schedule (#331), Band/Person (#333) and the rehearsal schedule
- * editor (#337) are built end to end.
+ * (#330), Schedule (#331), Band/Person (#333), the rehearsal schedule
+ * editor (#337) and Conflict adjudication (#340) are built end to end.
  * `/schedule` absorbed `/me/conflicts/` outright (issue #190) — there is no
- * `/conflicts` route at all, and no redirect from one.
+ * member-facing `/conflicts` route, and no redirect from one. `/conflicts`
+ * below is a different, admin-only surface (#340): the adjudication index
+ * and detail, unrelated to that member-facing absorption.
  */
 export const routes: RouteObject[] = [
   {
@@ -36,6 +40,11 @@ export const routes: RouteObject[] = [
       { path: '/members', element: <Band /> },
       { path: '/members/:personId', element: <Person /> },
       { path: '/profile', element: <ProfileRedirect /> },
+      { path: '/conflicts', element: <ConflictAdjudicationIndex /> },
+      {
+        path: '/conflicts/:rehearsalId',
+        element: <ConflictAdjudicationDetail />,
+      },
       { path: '*', element: <NotFound /> },
     ],
   },

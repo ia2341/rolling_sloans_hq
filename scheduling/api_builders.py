@@ -47,8 +47,10 @@ from django.utils.dateparse import parse_date, parse_datetime, parse_time
 
 from identity.models import Person
 from scheduling.fields import parse_song_length
-from scheduling.models import Role, Song
+from scheduling.models import Conflict, Role, Song
 from scheduling.services import (
+    AdjudicationBuffer,
+    AdjudicationEntry,
     RehearsalEditBuffer,
     RehearsalEditRow,
     RehearsalPatternInput,
@@ -76,6 +78,9 @@ _EMAIL_TAKEN_MESSAGE = (
     'This person already has an account — tick them in "From members with an account" instead.'
 )
 _EMAIL_STAGED_TWICE_MESSAGE = 'This email is already staged for another invite.'
+_UNKNOWN_STATUS_MESSAGE = 'status must be one of: pending, approved, rejected.'
+_NOTE_MAX_LENGTH = 255
+_NOTE_TOO_LONG_MESSAGE = f'Ensure this note has at most {_NOTE_MAX_LENGTH} characters.'
 
 
 class SetlistBufferValidationError(ValidationError):
@@ -937,4 +942,138 @@ def build_roster_buffer_from_request(request, *, viewing_semester) -> RosterEdit
         entries=entries,
         removed_person_ids=frozenset(removed_person_ids),
         pending_invites=invites,
+    )
+
+
+class AdjudicationBufferValidationError(ValidationError):
+    """Raised by `build_adjudication_buffer_from_request()` for a JSON body that can't become an `AdjudicationBuffer` (issue #340).
+
+    Mirrors `RosterBufferValidationError`'s shape: `row_errors`
+    (`{<row_key>: {<field>: [messages]}}`, keyed by `conflict-<conflict_id>`
+    when the row's `conflict_id` parsed cleanly, else `entry-<index>` the
+    same way `build_roster_buffer_from_request()` falls back for a
+    malformed `person_id`) and `non_field_errors` (`[messages]` for
+    anything not attributable to one row/field). Also carries `raw_body`
+    — the request's own parsed JSON body, untouched — so a Preview view
+    can still echo every submitted verdict/note on a validation failure
+    (issue #340 user story 42), even though normalization never finished
+    long enough to build an `AdjudicationBuffer`.
+    """
+
+    def __init__(self, *, row_errors, non_field_errors, raw_body):
+        """Store the structured failure shape and a human-readable summary message."""
+        super().__init__('The submitted adjudication edit could not be validated.')
+        self.row_errors = row_errors
+        self.non_field_errors = non_field_errors
+        self.raw_body = raw_body
+
+
+def build_adjudication_buffer_from_request(request, *, rehearsal_id) -> AdjudicationBuffer:
+    """Parse `request`'s JSON body into an `AdjudicationBuffer` for `rehearsal_id` (issue #340).
+
+    The ONE place a submitted Conflict-adjudication JSON body becomes an
+    `AdjudicationBuffer` — `/api/conflicts/<rehearsal_id>/preview/` and
+    `/api/conflicts/<rehearsal_id>/save/` both call it, never fork it,
+    mirroring `build_roster_buffer_from_request()`'s ADR-0008 "preview and
+    save cannot disagree" guarantee. `rehearsal_id` always comes from the
+    URL, never the body — there is no per-row Rehearsal to disagree about,
+    since this Buffer always describes one Rehearsal's whole table.
+
+    Wire shape::
+
+        {
+            "semester_id": 1,
+            "semester_updated_at": "2026-01-01T00:00:00.000000+00:00",
+            "entries": [
+                {"conflict_id": 12, "status": "approved", "note": "..."}
+            ]
+        }
+
+    Each entry's `status` must be one of `Conflict.STATUS_CHOICES`'
+    values, and `note` must be at most 255 characters — the same limit
+    `AdjudicationRowForm.note` enforced pre-SPA. A validation failure on
+    one entry is reported as a per-row field error keyed by
+    `conflict-<conflict_id>` (or `entry-<index>` when `conflict_id` itself
+    doesn't parse), preserving every other submitted entry rather than
+    failing the whole batch (issue #340 user story 42) — the caller
+    reconstructs `values` from `raw_body`, not from a partially-built
+    Buffer. Does not check `conflict_id` against `rehearsal_id`'s actual
+    Conflicts, nor `semester_id` against the viewing Semester: both stay
+    `UnknownConflictError`/`WrongAdjudicationSemesterError` territory,
+    raised by `apply_adjudications()`/`preview_adjudications()` themselves.
+    """
+    from config.views import ApiView
+
+    body = ApiView().parse_json_body(request)
+
+    non_field_errors = []
+    raw_body = body if isinstance(body, dict) else {}
+
+    if not isinstance(body, dict):
+        non_field_errors.append('Expected a JSON object.')
+        raise AdjudicationBufferValidationError(row_errors={}, non_field_errors=non_field_errors, raw_body=raw_body)
+
+    semester_id = _expect_int(body.get('semester_id'))
+    if semester_id is None:
+        non_field_errors.append('semester_id is required and must be an integer.')
+
+    semester_updated_at = None
+    raw_stamp = body.get('semester_updated_at')
+    if not isinstance(raw_stamp, str) or not raw_stamp:
+        non_field_errors.append('semester_updated_at is required and must be an ISO datetime string.')
+    else:
+        try:
+            semester_updated_at = parse_datetime(raw_stamp)
+        except ValueError:
+            semester_updated_at = None
+        if semester_updated_at is None:
+            non_field_errors.append('semester_updated_at could not be parsed as an ISO datetime.')
+
+    entries_raw = body.get('entries')
+    if not isinstance(entries_raw, list):
+        non_field_errors.append('entries must be a list.')
+        entries_raw = []
+
+    valid_statuses = {value for value, _label in Conflict.STATUS_CHOICES}
+    row_errors = {}
+    entries = []
+    for index, raw_entry in enumerate(entries_raw):
+        conflict_id = _expect_int(raw_entry.get('conflict_id')) if isinstance(raw_entry, dict) else None
+        row_key = f'conflict-{conflict_id}' if conflict_id is not None else f'entry-{index}'
+
+        if not isinstance(raw_entry, dict):
+            row_errors[row_key] = {'row': [_MUST_BE_OBJECT_MESSAGE]}
+            continue
+
+        field_errors: dict[str, list[str]] = {}
+
+        if conflict_id is None:
+            field_errors.setdefault('conflict_id', []).append(_MUST_BE_INTEGER_MESSAGE)
+
+        status = _expect_string(raw_entry.get('status'))
+        if status is None:
+            field_errors.setdefault('status', []).append(_MUST_BE_STRING_MESSAGE)
+        elif status not in valid_statuses:
+            field_errors.setdefault('status', []).append(_UNKNOWN_STATUS_MESSAGE)
+
+        note = _expect_string(raw_entry.get('note', ''))
+        if note is None:
+            field_errors.setdefault('note', []).append(_MUST_BE_STRING_MESSAGE)
+        elif len(note) > _NOTE_MAX_LENGTH:
+            field_errors.setdefault('note', []).append(_NOTE_TOO_LONG_MESSAGE)
+
+        if field_errors:
+            row_errors[row_key] = field_errors
+            continue
+
+        entries.append(AdjudicationEntry(conflict_id=conflict_id, status=status, note=note))
+
+    if row_errors or non_field_errors:
+        raise AdjudicationBufferValidationError(row_errors=row_errors, non_field_errors=non_field_errors, raw_body=raw_body)
+
+    return AdjudicationBuffer(
+        rehearsal_id=rehearsal_id,
+        semester_id=semester_id,
+        semester_updated_at=semester_updated_at,
+        entries=entries,
     )
