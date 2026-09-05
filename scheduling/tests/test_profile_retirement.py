@@ -1,9 +1,11 @@
 """`/me/profile/` is retired in favour of `/members/<pk>/` (issue #139, slice 3 of map #135).
 
 These are migration tests, not feature tests: they assert the old route is
-*gone* — unreversible, unroutable, and unlinked — because `MemberDetailView`
-now carries the behaviour it used to hold. Nothing shipped to users, so no
-redirect is kept.
+*gone* — unreversible and unlinked — because `MemberDetailView` now carries
+the behaviour it used to hold. Nothing shipped to users, so no redirect is
+kept. Since issue #325's catch-all, "gone" for a GET means the path reaches
+the SPA shell (a 200, not a Django 404) rather than any Django view of its
+own — the client, not this Django route, now owns deciding it's not found.
 """
 
 from django.template import TemplateDoesNotExist, loader
@@ -33,16 +35,17 @@ class ProfileRouteRetiredTests(TestCase):
             reverse('scheduling:profile')
 
     def test_profile_path_is_not_routed(self):
-        """A GET to the retired /me/profile/ path 404s rather than redirecting anywhere."""
+        """A GET to the retired /me/profile/ path reaches the SPA's catch-all shell, not a Django view."""
         response = self.client.get('/me/profile/')
 
-        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '<div id="root">')
 
     def test_profile_path_is_not_routed_for_post(self):
-        """A POST to the retired /me/profile/ path 404s too — no write surface survives there."""
+        """A POST to the retired /me/profile/ path 405s — no write surface survives there, and the SPA shell is GET-only."""
         response = self.client.post('/me/profile/', {'roles': []})
 
-        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.status_code, 405)
 
     def test_profile_template_is_gone(self):
         """The retired profile.html is no longer loadable, so nothing can render it by accident."""

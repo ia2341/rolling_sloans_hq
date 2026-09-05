@@ -2,9 +2,16 @@
 
 from typing import ClassVar
 
+from django.conf import settings
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.db import transaction
 from django.http import HttpResponseForbidden
+from django.shortcuts import render
+from django.utils.decorators import method_decorator
+from django.views import View
+from django.views.decorators.csrf import ensure_csrf_cookie
+
+from config import spa
 
 
 class BaseView(LoginRequiredMixin):
@@ -52,3 +59,48 @@ class PreviewMixin:
             response = self.run_preview(request, *args, **kwargs)
             transaction.set_rollback(True)
         return response
+
+
+class SpaIndexView(View):
+    """Serves the React SPA's shell document (issue #325).
+
+    Deliberately not login-gated, and not a `BaseView` — that is the
+    decision, not an oversight. The document itself carries no member data;
+    every byte the SPA displays arrives from `/api/`, which is gated by
+    `ApiView`. Gating this view would cost a redirect round trip on every
+    cold load and would break the fetch wrapper's contract that a 401
+    triggers a full-page navigation to the login page, which requires this
+    shell to still be servable to a browser whose session has just expired.
+    Allowlisted in `config/tests/test_url_conf_structure.py` for exactly
+    this reason.
+    """
+
+    http_method_names: ClassVar[list[str]] = ['get']
+
+    @method_decorator(ensure_csrf_cookie)
+    def get(self, request, *args, **kwargs):
+        """Render the shell: from a running Vite dev server in development, or the build manifest otherwise.
+
+        The fetch wrapper the SPA uses for its first write request (issue
+        #326) reads the `csrftoken` cookie `ensure_csrf_cookie` guarantees
+        here, since the SPA never renders a Django form that would set it
+        as a side effect.
+        """
+        if settings.VITE_DEV_SERVER_URL:
+            dev_server_url = settings.VITE_DEV_SERVER_URL.rstrip('/')
+            static_path = settings.STATIC_URL.strip('/')
+            context = {
+                'vite_client_url': f'{dev_server_url}/{static_path}/@vite/client',
+                'script_url': f'{dev_server_url}/{static_path}/{settings.FRONTEND_DEV_ENTRY}',
+                'modulepreload_urls': (),
+                'stylesheet_urls': (),
+            }
+        else:
+            assets = spa.get_spa_assets()
+            context = {
+                'vite_client_url': None,
+                'script_url': assets.script_url,
+                'modulepreload_urls': assets.modulepreload_urls,
+                'stylesheet_urls': assets.stylesheet_urls,
+            }
+        return render(request, 'config/spa_index.html', context)

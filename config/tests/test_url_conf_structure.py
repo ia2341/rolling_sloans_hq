@@ -28,6 +28,13 @@ ALLOWLISTED_VIEW_NAMES = {
     'PasswordResetCompleteView',
     'PasswordChangeView',
     'PasswordChangeDoneView',
+    # Serves the React SPA's shell document (issue #325). Deliberately not
+    # login-gated: the document carries no member data — everything the SPA
+    # renders comes from /api/, which is gated by ApiView — and gating it
+    # would break the fetch wrapper's contract that a 401 triggers a
+    # full-page navigation to login, which requires the shell to still be
+    # servable to a browser whose session has just expired.
+    'SpaIndexView',
 }
 
 # The Django admin mount is a resolver, not a view, so it's allowlisted by

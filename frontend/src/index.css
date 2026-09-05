@@ -1,0 +1,5 @@
+/* Deliberately empty beyond a minimal reset: the design system (Tailwind +
+   shadcn/ui, theme tokens) is issue #328's, not this ticket's. */
+body {
+  margin: 0;
+}

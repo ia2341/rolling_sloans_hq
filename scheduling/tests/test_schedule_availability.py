@@ -90,7 +90,13 @@ class AnonymousAccessTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class OldConflictsPageRemovalTests(TestCase):
-    """The old page goes outright, with no redirect — the treatment #172 gave /manage/setlist/*."""
+    """The old page goes outright, with no redirect — the treatment #172 gave /manage/setlist/*.
+
+    Since issue #325's catch-all, a GET to one of these paths reaches the
+    SPA shell (a 200) rather than a Django 404 — the client now owns
+    deciding a path is not found. A POST still gets no write surface: the
+    catch-all is GET-only, so it 405s instead.
+    """
 
     @classmethod
     def setUpTestData(cls):
@@ -101,27 +107,28 @@ class OldConflictsPageRemovalTests(TestCase):
         """Log in as the synthetic Person before each test."""
         self.client.login(username=self.person.email, password=PASSWORD)
 
-    def test_the_conflicts_page_is_gone(self):
-        """/me/conflicts/ 404s rather than redirecting anywhere."""
+    def test_the_conflicts_page_reaches_the_spa_shell(self):
+        """/me/conflicts/ reaches the SPA's catch-all shell rather than redirecting anywhere."""
         response = self.client.get('/me/conflicts/')
 
-        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '<div id="root">')
 
-    def test_the_conflict_edit_route_is_gone(self):
-        """/me/conflicts/<id>/edit/ 404s rather than redirecting anywhere."""
+    def test_the_conflict_edit_route_405s(self):
+        """/me/conflicts/<id>/edit/ 405s — the catch-all shell it reaches is GET-only."""
         rehearsal = RehearsalFactory()
 
         response = self.client.post(f'/me/conflicts/{rehearsal.pk}/edit/')
 
-        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.status_code, 405)
 
-    def test_the_conflict_delete_route_is_gone(self):
-        """/me/conflicts/<id>/delete/ 404s rather than redirecting anywhere."""
+    def test_the_conflict_delete_route_405s(self):
+        """/me/conflicts/<id>/delete/ 405s — the catch-all shell it reaches is GET-only."""
         rehearsal = RehearsalFactory()
 
         response = self.client.post(f'/me/conflicts/{rehearsal.pk}/delete/')
 
-        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.status_code, 405)
 
     def test_no_conflicts_route_is_registered_under_any_name(self):
         """The `conflicts` and `conflict-edit` route names no longer resolve."""
