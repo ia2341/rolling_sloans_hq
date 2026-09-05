@@ -4,13 +4,16 @@ Not a `factories.py` — this is test-only infrastructure, not a
 `factory_boy` model factory, so it lives here instead.
 """
 
+import json
 from unittest import mock
 
 from django.core import mail
 
 
-def assert_preview_writes_nothing(test_case, preview_url, post_data, *, models_to_check, semester=None):
-    """Snapshot row counts for `models_to_check` plus `Semester.updated_at`, POST `post_data` to `preview_url`, and assert nothing moved.
+def assert_preview_writes_nothing(
+    test_case, preview_url, post_data=None, *, models_to_check, semester=None, json_body=None
+):
+    """Snapshot row counts for `models_to_check` plus `Semester.updated_at`, POST to `preview_url`, and assert nothing moved.
 
     `models_to_check` is an iterable of `(Model, filter_kwargs)` pairs (or
     bare `Model` classes, treated as `(Model, {})`) — each is
@@ -32,6 +35,17 @@ def assert_preview_writes_nothing(test_case, preview_url, post_data, *, models_t
     issue #228's acceptance criteria: a helper exercised only against
     additions proves nothing about the rollback of a delete.
 
+    Two request-body modes (issue #334): the original form-encoded
+    `post_data` (a dict `test_case.client.post()` sends as
+    `multipart/form-data`, the pre-SPA Preview views' own wire format), or
+    `json_body` (a dict this helper itself `json.dumps()`s and posts with
+    `content_type='application/json'`, the `/api/.../preview/` wire format
+    a JSON-body `AdminPreviewApiView` subclass expects). Exactly one of
+    `post_data`/`json_body` should be given; existing form-encoded callers
+    (`test_setlist_preview_view.py`, `test_roster_preview_view.py`,
+    `test_adjudication_preview_view.py`) are untouched by this addition —
+    they keep passing `post_data` positionally, as before.
+
     Returns the `HttpResponse` from the POST, so a caller can additionally
     assert on rendered content without a second request.
     """
@@ -41,7 +55,12 @@ def assert_preview_writes_nothing(test_case, preview_url, post_data, *, models_t
     stamp_before = semester.updated_at if semester is not None else None
 
     with mock.patch('scheduling.services._recording_storage') as recording_storage:
-        response = test_case.client.post(preview_url, post_data)
+        if json_body is not None:
+            response = test_case.client.post(
+                preview_url, data=json.dumps(json_body), content_type='application/json'
+            )
+        else:
+            response = test_case.client.post(preview_url, post_data or {})
         recording_storage.return_value.connection.meta.client.delete_object.assert_not_called()
 
     test_case.assertLess(response.status_code, 300, 'Preview request did not succeed.')
