@@ -577,11 +577,18 @@
   .semdoor .car { grid-row: 1 / span 2; grid-column: 2; align-self: center;
     font-family: var(--mono); color: var(--ink-3); }
 
+  /* A's own admin-only controls, lifted out of the dropdown so the dropdown only picks. */
+  .sem-links { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding-top: 1px; }
+  .sem-links button { background: none; border: 0; padding: 0; font: inherit; font-size: 11.5px;
+    color: var(--ink-2); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+  .sem-links button:hover { color: var(--ink); }
+  .sem-links .dot { color: var(--ink-3); font-size: 11.5px; }
+
   /* A's semester picker. Review split A's one sheet in two: this menu PICKS (and offers
      creation), the manage sheet behind it does the destructive work. It opens upward from
      the Viewing control, which sits at the bottom of the sidebar. */
   .backdrop.anchor { align-items: flex-end; justify-content: flex-start; padding: 0; }
-  .semmenu { width: 288px; margin: 0 0 148px 14px; background: var(--surface);
+  .semmenu { width: 288px; margin: 0 0 176px 14px; background: var(--surface);
     border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
     box-shadow: 0 10px 30px rgb(0 0 0 / 0.3); }
   .frame.phone .semmenu { width: 100%; margin: 0; border-radius: 14px 14px 0 0; border-bottom: 0;
@@ -909,7 +916,6 @@ function openNewSemester() { state.sheetMode = 'new'; state.modal = 'semsheet'; 
 /* Review split the door's job in two. Both of these go BACK to the menu, not to each
    other: the menu is the door, and the manage sheet is a room off it. */
 function openManageSheet() { state.sheetMode = 'list'; state.modal = 'semsheet'; render(); }
-function backToMenu() { state.modal = 'semmenu'; render(); }
 /* set_viewing_semester() again - the same call creation makes, from the picker. */
 function pickSemester(name) { state.semester = name; state.modal = null; state.buffer = 'clean'; render(); }
 function createSemester() {
@@ -952,6 +958,16 @@ function semesterPanel() {
          <span class="sub">Switch semester</span>
          <span class="car">&#9662;</span></button>`
     : `<span class="field">${esc(state.semester)} &#9662;</span>`;
+  /* Approved shape. The dropdown does one thing - pick - so creating and managing are
+     lifted out of it into the shell beside it, as their own admin-only controls. They sit
+     below Save/Publish and read quieter than them, because Save and Publish act on the
+     Semester you are IN and these two act on the set of Semesters. Admin-only in the
+     literal sense: a member never renders this panel at all. */
+  const semActionsRow = V() === 'A'
+    ? `<div class="sem-links"><button onclick="openNewSemester()">&#43; New semester</button>
+         <span class="dot">&middot;</span>
+         <button onclick="openManageSheet()">Manage semesters</button></div>`
+    : '';
   return `<div class="sem-panel ${draft ? 'draft' : ''}">
     <div class="hide-rail stack" style="gap:6px">
       <span class="gb-label">Viewing</span>
@@ -962,6 +978,7 @@ function semesterPanel() {
         <button class="btn sm ${draft ? 'primary' : ''}" ${draft && !blocked() ? '' : 'disabled'}
           onclick="openModal('publish', ${JSON.stringify(state.semester)})">Publish</button>
       </div>
+      ${semActionsRow}
     </div>
   </div>`;
 }
@@ -1097,22 +1114,15 @@ function semActions(s, size) {
 function semesterSheet() {
   return state.sheetMode === 'new' ? newSemesterSheet() : listSemesterSheet();
 }
-/* The picker. Review: the Viewing control is a dropdown, so what falls out of it has to be
-   the list of semesters - nothing else. Creation is pinned above that list as its own item
-   rather than being what the control does, and the destructive actions are pinned below it
-   behind one more door. Everything here is a read or a set_viewing_semester(); nothing on
-   this menu writes a row. */
+/* The picker, in its approved shape: the list of semesters and NOTHING else. Creating and
+   managing were pinned to it in v3 and are now their own controls in the shell, so this
+   menu is a pure set_viewing_semester() - it writes no row and needs no confirmation, and
+   there is nothing on it an accidental click can do damage with. */
 function semesterMenu() {
   const rows = SEMESTERS.slice();
   if (state.created) rows.unshift({ name: SUGGESTED, published: null, members: 0, songs: 0, rehearsals: 0, recs: 0 });
   return `<div class="backdrop ${isPhone() ? 'bottom' : 'anchor'}" onclick="closeModal()">
     <div class="semmenu" onclick="event.stopPropagation()">
-      <button class="mitem" onclick="openNewSemester()">
-        <span class="tick">+</span>
-        <span class="nm">New semester</span>
-        <span class="sub">Names it, copies the timing defaults, switches you to it</span>
-      </button>
-      <div class="mrule"></div>
       <div class="mcap">Switch to</div>
       ${rows.map(r => {
         const cur = r.name === state.semester;
@@ -1122,19 +1132,12 @@ function semesterMenu() {
           <span class="sub">${r.members} members &middot; ${r.songs} songs &middot; ${r.rehearsals} rehearsals</span>
         </button>`;
       }).join('')}
-      <div class="mrule"></div>
-      <button class="mitem" onclick="openManageSheet()">
-        <span class="tick">&#9881;</span>
-        <span class="nm">Manage semesters&hellip;</span>
-        <span class="sub">Publish, reapply defaults, delete</span>
-      </button>
     </div></div>`;
 }
 function listSemesterSheet() {
   return `<div class="backdrop ${isPhone() ? 'bottom' : ''}" onclick="closeModal()">
     <div class="modal" style="max-width:540px" onclick="event.stopPropagation()">
       <div class="m-head">
-        <button class="btn sm ghost" onclick="backToMenu()" aria-label="Back to the semester list">&#9666;</button>
         <h3>Manage semesters</h3>
         <button class="btn sm ghost" onclick="closeModal()" aria-label="Close">&times;</button></div>
       <div class="m-body tall">
@@ -1176,7 +1179,6 @@ function newSemesterSheet() {
   return `<div class="backdrop ${isPhone() ? 'bottom' : ''}" onclick="closeModal()">
     <div class="modal" style="max-width:480px" onclick="event.stopPropagation()">
       <div class="m-head">
-        <button class="btn sm ghost" onclick="backToMenu()" aria-label="Back to the semester list">&#9666;</button>
         <h3>New semester</h3>
         <button class="btn sm ghost" onclick="closeModal()" aria-label="Close">&times;</button></div>
       <div class="m-body tall">
@@ -1203,7 +1205,7 @@ function newSemesterSheet() {
         </div>
       </div>
       <div class="m-foot">
-        <button class="btn" onclick="backToMenu()">Cancel</button>
+        <button class="btn" onclick="closeModal()">Cancel</button>
         <button class="btn primary" onclick="createSemester()">Create ${SUGGESTED}</button>
       </div>
     </div></div>`;
@@ -1213,7 +1215,11 @@ function newSemesterSheet() {
    the draft-semester strip, which does not render while you are on the Live Semester, so
    there was no door at all from there. */
 function moreSheet() {
-  const items = [['Semesters', `Switch, create or manage &mdash; editing ${esc(state.semester)}`, "openNewSemesterDoor()"],
+  /* The same three controls the desktop panel has, as three items - not one door that
+     opens onto a menu of doors. */
+  const items = [['Switch semester', `Editing ${esc(state.semester)}`, "openNewSemesterDoor()"],
+                 ['New semester', 'Names it and switches you to it', "openNewSemester()"],
+                 ['Manage semesters', 'Publish, reapply defaults, delete', "openManageSheet()"],
                  ['Profile', 'Your roles and recordings', ''], ['Log out', '', '']];
   return `<div class="backdrop bottom" onclick="closeModal()">
     <div class="modal" onclick="event.stopPropagation()">
@@ -1233,25 +1239,30 @@ function semestersA() {
     <div class="page-head"><h1>Home</h1></div>
     <div class="flaw"><b>Variant A&rsquo;s claim: <code>/manage/semesters/</code> does not survive.</b>
       There is no Semesters page and no Semesters nav item. Everything the page did hangs off the
-      sidebar&rsquo;s <b>Viewing</b> control; on phone it is the <b>More</b> tab. Review split that
-      control&rsquo;s job in two, because a dropdown that does not drop down a list of semesters is
-      not a dropdown:
+      sidebar; on phone it is the <b>More</b> tab. Review split the semester control into three,
+      because a dropdown that does not drop down a list of semesters is not a dropdown, and the
+      two things that are not picking should not be hiding inside the thing that is:
       <div style="margin-top:7px" class="hstack">
         <button class="btn sm primary" onclick="openModal('semmenu')">Open the dropdown</button>
         <button class="btn sm" onclick="openManageSheet()">Manage semesters</button>
         <button class="btn sm" onclick="openNewSemester()">New semester</button>
       </div></div>
     <div class="card stack">
-      <span class="section-head">The two doors</span>
+      <span class="section-head">The three controls</span>
       <ul style="margin:0;padding-left:18px;display:grid;gap:6px;color:var(--ink-2);font-size:13px">
-        <li><b>The dropdown picks.</b> Every semester, newest first, with the one you are editing
-        ticked. Choosing one is <code>set_viewing_semester()</code> and nothing else &mdash; no writes,
-        so it needs no confirmation and can be a one-click menu.</li>
-        <li><b>&ldquo;New semester&rdquo; is pinned above the list</b>, not fused into it. It is an item on
-        the menu, so the control itself still reads as &ldquo;which semester am I editing&rdquo;.</li>
-        <li><b>&ldquo;Manage semesters&hellip;&rdquo; is pinned below it</b>, and is the only thing that writes:
-        Publish, Reapply defaults, Delete. Switching is gone from that sheet entirely &mdash; the menu
-        owns it, so A now has exactly one control per act.</li>
+        <li><b>The dropdown picks, and only picks.</b> Every semester, newest first, with the one you
+        are editing ticked. Choosing one is <code>set_viewing_semester()</code> and nothing else &mdash;
+        no writes, so it needs no confirmation, and there is nothing on the menu a stray click can do
+        damage with.</li>
+        <li><b>&ldquo;New semester&rdquo; is its own control in the shell</b>, beside the dropdown rather than
+        inside it. Approved shape: creation is not a special case of switching, even though it ends in
+        a switch.</li>
+        <li><b>&ldquo;Manage semesters&rdquo; is its own control too</b>, and is the only thing that writes:
+        Publish, Reapply defaults, Delete. Switching is gone from that sheet entirely, so A has exactly
+        one control per act.</li>
+        <li><b>All three are admin-only in the literal sense.</b> They live in the semester panel, which
+        a member never renders &mdash; there is no visibility rule to write, because there is no member
+        request that reaches this markup.</li>
       </ul>
     </div>
     <div class="card stack">
@@ -1268,13 +1279,12 @@ function semestersA() {
     </div>
     <div class="card stack">
       <span class="section-head">What it costs</span>
-      <p class="note" style="border-color:var(--warn)">Splitting the door fixed the picker and made the
-      <b>hard delete</b> worse. It is now: Viewing control &rarr; dropdown &rarr; Manage semesters
-      &rarr; Delete &rarr; confirm. ADR 0011 makes that last confirmation the only safety net there is,
-      and it is now reached through <b>three dismissible layers</b>, each of which closes on a
-      backdrop click. That is the sharpest argument for <code>/manage/semesters/</code> surviving as a
-      real route: not because a list of four names needs a page, but because a cascading delete of every
-      rehearsal, song and uploaded recording wants a URL you arrived at deliberately.</p>
+      <p class="note" style="border-color:var(--warn)">Lifting the two actions out of the dropdown
+      also shortened the path to the <b>hard delete</b>: it is now Manage semesters &rarr; Delete
+      &rarr; confirm, one sheet and one dialog, rather than the three stacked layers v3 had. It is
+      still <b>two dismissible layers</b> over a cascade that reaches every rehearsal, song and
+      uploaded R2 object, with no export and no undo (ADR 0011), and the confirmation is the only
+      safety net there is.</p>
       <p class="note">The alternative inside A: leave Publish and Reapply defaults on the sheet and let
       <b>Delete</b> be the one thing that navigates &mdash; a <code>/manage/semesters/&lt;pk&gt;/delete/</code>
       page, which already exists today. A keeps its claim about the <i>index</i> and gives up its claim
