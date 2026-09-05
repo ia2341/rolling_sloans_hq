@@ -25,9 +25,12 @@ from django.views import View
 
 from config.views import AdminApiView, AdminPreviewApiView, ApiView
 from identity.models import Person
+from identity.services import AlreadyHasPasswordError, resend_invite
 from scheduling import serializers, services
 from scheduling.api_builders import (
+    RosterBufferValidationError,
     SetlistBufferValidationError,
+    build_roster_buffer_from_request,
     build_setlist_buffer_from_request,
 )
 from scheduling.forms import DeclareConflictForm, MembershipRolesForm
@@ -41,6 +44,8 @@ from scheduling.models import (
 )
 from scheduling.services import (
     RecordingUploadError,
+    SelfRemovalError,
+    StaleRosterSemesterError,
     StaleSetlistSemesterError,
     WrongViewingSemesterError,
 )
@@ -321,6 +326,175 @@ class BandApiView(ApiView, View):
             memberships = services.active_roster_for(Membership.objects.filter(semester=semester))
         data = serializers.serialize_band(memberships, semester)
         return self.read_response(request, data)
+
+
+class RosterEditApiView(AdminApiView, View):
+    """`GET /api/members/roster/`: the Roster editor's whole read model for the viewing Semester (issue #336).
+
+    Unlike `BandApiView` (active Roster only), this returns every
+    Membership — invited-but-not-yet-active people included — since the
+    editor is exactly the surface that needs to rename them, change their
+    Roles once they've signed in, or offer "Invite again".
+    """
+
+    def get(self, request):
+        """Return the Roster editor envelope, or its empty shape when no Semester is being viewed."""
+        semester = services.get_viewing_semester(request)
+        if semester is None:
+            data = {
+                'semester_id': None, 'semester_updated_at': None,
+                'active_count': 0, 'invited_count': 0, 'members': [], 'available_roles': [],
+            }
+            return self.read_response(request, data)
+        memberships = services.roster_for(Membership.objects.filter(semester=semester))
+        mismatched_person_ids = services.mismatched_person_ids_for(semester)
+        data = serializers.serialize_roster_edit(semester, memberships, mismatched_person_ids=mismatched_person_ids)
+        return self.read_response(request, data)
+
+
+class RosterCandidatesApiView(AdminApiView, View):
+    """`GET /api/members/roster/candidates/`: the `+ Add people` sheet's two ticket-source lists (issue #336).
+
+    Answers a question rather than taking a Buffer, so per the envelope
+    boundary rule this wears the read envelope, not the write one.
+    """
+
+    def get(self, request):
+        """Return the prior Semester's Roster proposal and the unrostered active People, or the empty shape."""
+        semester = services.get_viewing_semester(request)
+        if semester is None:
+            data = {'import_source_semester_name': None, 'import_candidates': [], 'unrostered_people': []}
+            return self.read_response(request, data)
+        proposal = services.import_roster_from_semester(semester)
+        unrostered_people = services.unrostered_people_for(semester)
+        data = serializers.serialize_roster_candidates(proposal, unrostered_people)
+        return self.read_response(request, data)
+
+
+class RoleDeclareApiView(AdminApiView, View):
+    """`POST /api/members/roster/roles/`: get-or-creates a Role by name for the `+ Role` chip's "declare a new one" path (issue #336).
+
+    Wraps `create_or_reactivate_role()` unchanged — it commits immediately,
+    outside any Pending Buffer, so a Role invented mid-edit survives
+    discarding the batch. Own shape, plus `context`, per the envelope
+    boundary rule: this answers "what Role resulted from this name", it
+    doesn't apply a Buffer.
+    """
+
+    def post(self, request):
+        """Validate the submitted name and return the resulting Role, or a 400 for a blank one."""
+        payload = self.parse_json_body(request)
+        name = payload.get('name')
+        if not isinstance(name, str) or not name.strip():
+            return JsonResponse({'context': self.build_context(request), 'error': 'invalid_name'}, status=400)
+        result = services.create_or_reactivate_role(name.strip())
+        return self.read_response(request, serializers.serialize_role_declaration(result))
+
+
+class RosterResendInviteApiView(AdminApiView, View):
+    """`POST /api/members/roster/<pk>/resend-invite/`: re-sends a pending invite from the Roster editor (issue #336, #327).
+
+    An immediate act, not a Buffer row: it changes no Roster state, so
+    there is nothing to stage and nothing for the Save popup to describe.
+    Calls the same `resend_invite()` `/manage/people/<id>/resend-invite/`
+    calls — never a second implementation.
+    """
+
+    def post(self, request, pk):
+        """Re-send `pk`'s invite, or report the refusal if they already have a password."""
+        person = get_object_or_404(Person, pk=pk)
+        try:
+            resend_invite(person)
+        except AlreadyHasPasswordError as error:
+            return self.write_response(request, ok=False, non_field_errors=[str(error)])
+        return self.write_response(request, ok=True, values=None)
+
+
+def _wrong_roster_semester_response(message: str) -> JsonResponse:
+    """Return the shared 409 for a Roster edit Buffer whose `semester_id` doesn't match the viewing Semester (issue #336, mirrors `_wrong_semester_response`)."""
+    return JsonResponse({'error': 'wrong_semester', 'message': message}, status=409)
+
+
+class RosterPreviewApiView(AdminPreviewApiView):
+    """`POST /api/members/roster/preview/`: the Roster edit surface's Preview, run for real and rolled back (issue #336, ADR 0008)."""
+
+    def run_preview(self, request):
+        """Build the Roster edit Buffer from the JSON body and return its rendered Fallout envelope.
+
+        Mirrors `SetlistPreviewApiView.run_preview()` exactly: a
+        `RosterBufferValidationError` renders as `ok: false` with per-row
+        `errors`/`non_field_errors` and the raw submitted body echoed back
+        as `values`; a `semester_id` that doesn't match the viewing
+        Semester is answered as the shared 409 before
+        `preview_roster_edits()` is ever called, so that endpoint's
+        `is_blocked` Fallout shape never has to double as this endpoint's
+        4xx contract. `preview_roster_edits()` runs `apply_roster_edits()`
+        for real, including creating and mailing any staged invite via
+        `transaction.on_commit()` — the rollback `PreviewMixin.post()`
+        performs discards both for free (ADR 0008).
+        """
+        viewing_semester = services.get_viewing_semester(request)
+        try:
+            buffer = build_roster_buffer_from_request(request, viewing_semester=viewing_semester)
+        except RosterBufferValidationError as error:
+            return self.write_response(
+                request, ok=False, errors=error.row_errors, non_field_errors=error.non_field_errors,
+                fallout=None, values=error.raw_body,
+            )
+
+        if viewing_semester is None or buffer.semester_id != viewing_semester.pk:
+            return _wrong_roster_semester_response(
+                "This Roster edit Buffer's Semester doesn't match the Semester you're currently viewing."
+            )
+
+        fallout = services.preview_roster_edits(
+            buffer, viewing_semester=viewing_semester, requesting_admin=request.user,
+        )
+        return self.write_response(
+            request, ok=True,
+            fallout=serializers.serialize_roster_edit_fallout(fallout),
+            values=serializers.serialize_roster_edit_buffer(buffer),
+        )
+
+
+class RosterSaveApiView(AdminApiView, View):
+    """`POST /api/members/roster/save/`: the Roster edit surface's Save — the real, committing write (issue #336)."""
+
+    def post(self, request):
+        """Build the Roster edit Buffer from the JSON body and apply it, or report why it couldn't be applied.
+
+        Calls the same `build_roster_buffer_from_request()` the Preview
+        endpoint calls, then the unchanged `apply_roster_edits()`. A wrong
+        `semester_id` answers the shared 409 before `apply_roster_edits()`
+        is even called; `SelfRemovalError` and `StaleRosterSemesterError`
+        are reported as `ok: false` with a `non_field_errors` message — a
+        blocking Validation Error, never a hard 4xx, since a hand-crafted
+        self-removal must be *refused*, not merely 403'd (issue #336 user
+        story 15). `values` is omitted on every response here, per #326's
+        rule that a write response doesn't echo the Buffer back.
+        """
+        viewing_semester = services.get_viewing_semester(request)
+        try:
+            buffer = build_roster_buffer_from_request(request, viewing_semester=viewing_semester)
+        except RosterBufferValidationError as error:
+            return self.write_response(
+                request, ok=False, errors=error.row_errors, non_field_errors=error.non_field_errors,
+                fallout=None, values=None,
+            )
+
+        if viewing_semester is None or buffer.semester_id != viewing_semester.pk:
+            return _wrong_roster_semester_response(
+                "This Roster edit Buffer's Semester doesn't match the Semester you're currently viewing."
+            )
+
+        try:
+            services.apply_roster_edits(buffer, viewing_semester=viewing_semester, requesting_admin=request.user)
+        except WrongViewingSemesterError as error:
+            return _wrong_roster_semester_response(str(error))
+        except (SelfRemovalError, StaleRosterSemesterError) as error:
+            return self.write_response(request, ok=False, non_field_errors=[str(error)], fallout=None, values=None)
+
+        return self.write_response(request, ok=True, values=None)
 
 
 class PersonApiView(ApiView, View):

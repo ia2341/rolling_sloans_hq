@@ -6,8 +6,10 @@ the Band and Person surfaces, plus their upload-confirm/delete/presign
 endpoints. Issue #334 adds the Setlist edit surface's Preview and Save —
 the shared Pending-Buffer-over-HTTP mechanism's one proven concrete
 surface; the other five admin edit surfaces (#335-#340) each add their
-own `preview/`/`save/` pair later, following this one's shape. `#332`
-(Home) is a separate, unrelated ticket.
+own `preview/`/`save/` pair later, following this one's shape. Issue #336
+adds the Roster edit surface's own read/preview/save/candidates/roles/
+resend-invite endpoints, the second full surface to follow that shape.
+`#332` (Home) is a separate, unrelated ticket.
 
 The Recordings routes deliberately nest under `members/` rather than
 mirroring the old `/me/recordings/` prefix: Recordings is no longer its own
@@ -36,6 +38,15 @@ urlpatterns = [
         name='api-conflict-withdraw',
     ),
     path('members/', api_views.BandApiView.as_view(), name='api-members'),
+    path('members/roster/', api_views.RosterEditApiView.as_view(), name='api-roster-edit'),
+    path('members/roster/preview/', api_views.RosterPreviewApiView.as_view(), name='api-roster-preview'),
+    path('members/roster/save/', api_views.RosterSaveApiView.as_view(), name='api-roster-save'),
+    path('members/roster/candidates/', api_views.RosterCandidatesApiView.as_view(), name='api-roster-candidates'),
+    path('members/roster/roles/', api_views.RoleDeclareApiView.as_view(), name='api-roster-declare-role'),
+    path(
+        'members/roster/<int:pk>/resend-invite/',
+        api_views.RosterResendInviteApiView.as_view(), name='api-roster-resend-invite',
+    ),
     path('members/recordings/presign/', api_views.RecordingPresignApiView.as_view(), name='api-recordings-presign'),
     path('members/recordings/confirm/', api_views.RecordingConfirmApiView.as_view(), name='api-recordings-confirm'),
     path(

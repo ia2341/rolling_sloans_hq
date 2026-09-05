@@ -2,10 +2,12 @@
 
 from datetime import date
 
+from django.core import mail
 from django.db import transaction
 from django.test import TestCase
 
 from identity.factories import PersonFactory
+from identity.models import Person
 from scheduling.factories import (
     ConflictFactory,
     MembershipFactory,
@@ -26,6 +28,7 @@ from scheduling.models import (
 from scheduling.services import (
     RosterEditBuffer,
     RosterEditEntry,
+    RosterInvite,
     preview_roster_edits,
 )
 
@@ -37,7 +40,7 @@ class PreviewRosterEditsTests(TestCase):
         self.role = RoleFactory()
         self.admin = PersonFactory(is_admin=True)
 
-    def _buffer(self, entries=(), removed_person_ids=(), semester=None, updated_at=None):
+    def _buffer(self, entries=(), removed_person_ids=(), semester=None, updated_at=None, pending_invites=()):
         """Build a RosterEditBuffer against self.semester unless overridden."""
         semester = semester or self.semester
         return RosterEditBuffer(
@@ -45,6 +48,7 @@ class PreviewRosterEditsTests(TestCase):
             semester_updated_at=updated_at if updated_at is not None else semester.updated_at,
             entries=list(entries),
             removed_person_ids=frozenset(removed_person_ids),
+            pending_invites=list(pending_invites),
         )
 
     def _preview(self, buffer, requesting_admin=None):
@@ -233,3 +237,23 @@ class PreviewRosterEditsTests(TestCase):
 
         self.semester.refresh_from_db()
         self.assertEqual(self.semester.updated_at, original_stamp)
+
+    def test_pending_invites_lists_the_staged_names(self):
+        """A Buffer carrying a staged invite reports its name in pending_invites."""
+        buffer = self._buffer(pending_invites=[RosterInvite(name='Future Member', email='future@example.com')])
+
+        fallout = self._preview(buffer)
+
+        self.assertIn('Future Member', fallout.pending_invites)
+        self.assertFalse(fallout.is_blocked)
+
+    def test_preview_of_a_buffer_with_an_invite_creates_no_person_and_sends_no_mail(self):
+        """Previewing a Buffer containing an invite writes nothing: no Person row, and mail.outbox stays empty (ADR 0008)."""
+        person_count_before = Person.objects.count()
+        buffer = self._buffer(pending_invites=[RosterInvite(name='Never Created', email='never-created@example.com')])
+
+        self._preview(buffer)
+
+        self.assertEqual(Person.objects.count(), person_count_before)
+        self.assertFalse(Person.objects.filter(email='never-created@example.com').exists())
+        self.assertEqual(len(mail.outbox), 0)

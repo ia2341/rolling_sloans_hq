@@ -18,6 +18,10 @@ from scheduling import services
 from scheduling.fields import format_song_length
 from scheduling.models import Conflict, Rehearsal, Song
 from scheduling.services import (
+    RoleCreationResult,
+    RosterEditBuffer,
+    RosterEditFallout,
+    RosterImportProposal,
     SetlistEditBuffer,
     SetlistEditFallout,
     SetlistSongDeletion,
@@ -551,6 +555,161 @@ def serialize_band(memberships, semester) -> dict:
 def _serialize_role(role) -> dict:
     """Return one Role as `id`/`name`, for a Person page's declared-Roles chips and its editable Role catalog (issue #333)."""
     return {'id': role.pk, 'name': role.name}
+
+
+def _serialize_roster_edit_member(membership, *, mismatched_person_ids: frozenset[int]) -> dict:
+    """Return one Roster editor row: name, declared Roles, Song count, mismatch flag and invite status (issue #336).
+
+    No `email` (ADR 0005 — it stays off every Roster surface but the
+    removal lines in the Save popup). `is_role_mismatch` is the ADR 0002
+    soft flag, never a block; `is_pending_invite` is `not
+    has_usable_password()`, letting the editor show "invited · not active
+    yet" without a second query per row.
+    """
+    return {
+        'id': membership.person_id,
+        'name': membership.person.name,
+        'roles': [_serialize_role(entry.role) for entry in membership.membershiprole_set.all()],
+        'song_count': membership.songs_count,
+        'is_role_mismatch': membership.person_id in mismatched_person_ids,
+        'is_pending_invite': not membership.person.has_usable_password(),
+    }
+
+
+def serialize_roster_edit(semester, memberships, *, mismatched_person_ids: frozenset[int]) -> dict:
+    """Return the `/api/members/roster/` `data` shape (issue #336): every Membership in the viewing Semester, invited-but-inactive included.
+
+    Unlike `serialize_band()` (active only), this is the editor's read
+    model, so it uses `roster_for()` rather than `active_roster_for()` — an
+    admin needs to see, rename and offer "Invite again" on a Person who
+    hasn't set a password yet, which is exactly the row `serialize_band()`
+    deliberately excludes. `available_roles` is the catalog the `+ Role`
+    chip's picker offers before falling back to declaring a new one.
+    """
+    entries = list(memberships)
+    active_count = sum(1 for membership in entries if membership.person.has_usable_password())
+    return {
+        'semester_id': semester.pk,
+        'semester_updated_at': semester.updated_at.isoformat(),
+        'active_count': active_count,
+        'invited_count': len(entries) - active_count,
+        'members': [
+            _serialize_roster_edit_member(membership, mismatched_person_ids=mismatched_person_ids)
+            for membership in entries
+        ],
+        'available_roles': [_serialize_role(role) for role in services.active_roles_for(semester)],
+    }
+
+
+def _serialize_roster_removal(removal) -> dict:
+    """Return one `RosterRemoval`: the Person's name and email — the one place a Roster surface shows an email (ADR 0005, issue #228)."""
+    return {'person_id': removal.person_id, 'name': removal.name, 'email': removal.email}
+
+
+def serialize_roster_edit_fallout(fallout: RosterEditFallout) -> dict:
+    """Return a `RosterEditFallout` as the `/api/members/roster/preview/` response's `fallout` value (issue #336).
+
+    Named field-by-field like every other serializer here — `dataclasses.asdict()`
+    is rejected on this surface specifically (issue #336's Implementation
+    Decisions): `preview_roster_edits()` snapshots `Conflict` counts, and a
+    blanket "emit every field" rule would ship a future Conflict-derived
+    field to this member-facing payload with no test failing. The removal
+    Conflict figure stays a count (`RosterEditFallout.loud`'s own wording),
+    never a reason or a date (ADR 0005).
+    """
+    return {
+        'is_blocked': fallout.is_blocked,
+        'block_message': fallout.block_message,
+        'is_stale': fallout.is_stale,
+        'pending_adds': list(fallout.pending_adds),
+        'pending_invites': list(fallout.pending_invites),
+        'pending_removals': [_serialize_roster_removal(removal) for removal in fallout.pending_removals],
+        'pending_role_changes': list(fallout.pending_role_changes),
+        'pending_name_edits': list(fallout.pending_name_edits),
+        'loud': list(fallout.loud),
+        'quiet': list(fallout.quiet),
+    }
+
+
+def _serialize_roster_edit_entry_echo(entry, index: int) -> dict:
+    """Return one `RosterEditEntry` echoed back in `build_roster_buffer_from_request()`'s wire shape (issue #336).
+
+    `row_key` isn't reconstructable from a `RosterEditEntry` (never stored
+    on the Buffer, only used transiently to key a validation failure), so a
+    successfully built Buffer's echo indexes positionally.
+    """
+    return {
+        'row_key': f'entry-{index}',
+        'person_id': entry.person.pk,
+        'name': entry.name,
+        'role_ids': sorted(entry.role_ids),
+    }
+
+
+def _serialize_roster_invite_echo(invite, index: int) -> dict:
+    """Return one `RosterInvite` echoed back in `build_roster_buffer_from_request()`'s wire shape (issue #336)."""
+    return {'row_key': f'invite-{index}', 'name': invite.name, 'email': invite.email}
+
+
+def serialize_roster_edit_buffer(buffer: RosterEditBuffer) -> dict:
+    """Return a `RosterEditBuffer` echoed back in `build_roster_buffer_from_request()`'s wire shape (issue #336).
+
+    Used only by `/api/members/roster/preview/`'s `values` field on a
+    successful build — every submitted value, normalized — never by
+    `/api/members/roster/save/`, which drops `values` per #326's rule that
+    a write response echoes nothing back.
+    """
+    return {
+        'semester_id': buffer.semester_id,
+        'semester_updated_at': buffer.semester_updated_at.isoformat() if buffer.semester_updated_at else None,
+        'entries': [_serialize_roster_edit_entry_echo(entry, index) for index, entry in enumerate(buffer.entries)],
+        'removed_person_ids': sorted(buffer.removed_person_ids),
+        'invites': [_serialize_roster_invite_echo(invite, index) for index, invite in enumerate(buffer.pending_invites)],
+    }
+
+
+def _serialize_roster_import_candidate(candidate) -> dict:
+    """Return one `RosterImportPerson`: the Person's name and the Roles they held last term, copied as fresh values (ADR 0001, issue #336)."""
+    return {
+        'id': candidate.person.pk,
+        'name': candidate.person.name,
+        'roles': [_serialize_role(role) for role in candidate.roles],
+    }
+
+
+def _serialize_unrostered_person(person) -> dict:
+    """Return one active, unrostered Person as a `+ Add people` sheet candidate: `id`/`name` only (issue #336)."""
+    return {'id': person.pk, 'name': person.name}
+
+
+def serialize_roster_candidates(proposal: RosterImportProposal, unrostered_people) -> dict:
+    """Return the `/api/members/roster/candidates/` `data` shape (issue #336): the `+ Add people` sheet's two ticket-source lists.
+
+    Answers a question rather than taking a Buffer, so per the envelope
+    boundary rule (#307) this is its own shape, not the write envelope.
+    `import_source_semester_name` is `None` when there is no prior
+    Semester, backing the sheet's explanatory empty state (issue #336 user
+    story 28) rather than a broken one.
+    """
+    return {
+        'import_source_semester_name': proposal.source_semester.name if proposal.source_semester else None,
+        'import_candidates': [_serialize_roster_import_candidate(candidate) for candidate in proposal.people],
+        'unrostered_people': [_serialize_unrostered_person(person) for person in unrostered_people],
+    }
+
+
+def serialize_role_declaration(result: RoleCreationResult) -> dict:
+    """Return the `/api/members/roster/roles/` `data` shape (issue #336): the Role plus whether it was created, matched or reactivated.
+
+    Wraps `create_or_reactivate_role()` unchanged. Its own shape, not the
+    write envelope, per the envelope boundary rule (#307) — this answers
+    "what Role resulted from this name", it doesn't apply a Buffer.
+    """
+    return {
+        'role': _serialize_role(result.role),
+        'created': result.created,
+        'reactivated': result.reactivated,
+    }
 
 
 def _serialize_person_song(assignment) -> dict:
