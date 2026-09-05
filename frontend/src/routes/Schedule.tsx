@@ -100,7 +100,14 @@ export function Schedule() {
         <PageHead
           title="Schedule"
           subline={data.semester_name ?? undefined}
-          action={appContext?.viewer.is_admin ? <EditRehearsalsButton /> : undefined}
+          action={
+            appContext?.viewer.is_admin ? (
+              <div className="flex gap-2">
+                <EditRehearsalsButton />
+                <AdjudicateConflictsButton />
+              </div>
+            ) : undefined
+          }
         />
         <p className="text-sm text-rs-muted">
           {data.semester_name === null
@@ -129,6 +136,7 @@ export function Schedule() {
           appContext?.viewer.is_admin ? (
             <div className="flex gap-2">
               <EditRehearsalsButton />
+              <AdjudicateConflictsButton />
               {selected !== null && (
                 <button
                   type="button"
@@ -938,6 +946,18 @@ function EditRehearsalsButton() {
       className="rounded bg-rs-accent px-3 py-1.5 text-sm font-medium text-rs-accent-fg"
     >
       Edit rehearsals
+    </Link>
+  )
+}
+
+/** The Schedule surface's admin entry point into `/conflicts/`, the Conflict-adjudication index (issue #340). */
+function AdjudicateConflictsButton() {
+  return (
+    <Link
+      to="/conflicts"
+      className="rounded border border-rs-border px-3 py-1.5 text-sm font-medium"
+    >
+      Adjudicate conflicts
     </Link>
   )
 }

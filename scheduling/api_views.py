@@ -28,11 +28,13 @@ from identity.models import Person
 from identity.services import AlreadyHasPasswordError, resend_invite
 from scheduling import serializers, services, spotify
 from scheduling.api_builders import (
+    AdjudicationBufferValidationError,
     AssignmentBufferValidationError,
     RehearsalBufferValidationError,
     RehearsalPatternInputError,
     RosterBufferValidationError,
     SetlistBufferValidationError,
+    build_adjudication_buffer_from_request,
     build_assignment_buffer_from_request,
     build_generation_date_range_from_body,
     build_rehearsal_buffer_from_request,
@@ -59,10 +61,13 @@ from scheduling.services import (
     RehearsalPatternCollisionError,
     RunningOrderValidationError,
     SelfRemovalError,
+    StaleAdjudicationSemesterError,
     StaleAssignmentSemesterError,
     StaleRehearsalSemesterError,
     StaleRosterSemesterError,
     StaleSetlistSemesterError,
+    UnknownConflictError,
+    WrongAdjudicationSemesterError,
     WrongViewingSemesterError,
 )
 
@@ -1038,6 +1043,167 @@ class AssignmentSaveApiView(AdminApiView, View):
         except WrongViewingSemesterError as error:
             return _wrong_semester_response(str(error))
         except StaleAssignmentSemesterError as error:
+            return self.write_response(request, ok=False, non_field_errors=[str(error)], fallout=None, values=None)
+
+        return self.write_response(request, ok=True, values=None)
+
+
+def _adjudicatable_rehearsal_or_404(semester, rehearsal_id):
+    """Return `semester`'s Rehearsal `rehearsal_id` names, or raise 404 — never the Dress Rehearsal (issue #340, ADR 0006).
+
+    Scoped to `semester` the same way every other per-Rehearsal `/api/`
+    route is; additionally excludes the Dress Rehearsal outright, since it
+    can hold no Conflict at all (ADR 0006) and so has nothing to
+    adjudicate — a stricter 404 than the pre-SPA
+    `ConflictAdjudicationDetailView`, which only scoped by Semester.
+    """
+    return get_object_or_404(Rehearsal, pk=rehearsal_id, semester=semester, is_full_setlist=False)
+
+
+def _feasibility_name_lookups(feasibility_by_conflict_id: dict) -> tuple[dict, dict]:
+    """Return `(song_titles_by_id, role_names_by_id)`, batched across every feasibility row's overlap target (issue #340).
+
+    One `Song` query and one `Role` query total, regardless of how many
+    Conflicts are on the Rehearsal — avoids an N+1 across
+    `ConflictFeasibilityRow.overlap_song_id`/`overlap_role_id`.
+    """
+    song_ids = {row.overlap_song_id for row in feasibility_by_conflict_id.values() if row.overlap_song_id}
+    role_ids = {row.overlap_role_id for row in feasibility_by_conflict_id.values() if row.overlap_role_id}
+    song_titles_by_id = dict(Song.objects.filter(pk__in=song_ids).values_list('pk', 'title'))
+    role_names_by_id = dict(Role.objects.filter(pk__in=role_ids).values_list('pk', 'name'))
+    return song_titles_by_id, role_names_by_id
+
+
+class ConflictAdjudicationIndexApiView(AdminApiView, View):
+    """`GET /api/conflicts/`: the admin adjudication index's whole read model, in one round trip (issue #191, #340).
+
+    Lists the viewing Semester's future, non-Dress Rehearsals, each
+    carrying its pending/approved/rejected Conflict counts — the
+    `/api/` successor to `ConflictAdjudicationIndexView`, which stays in
+    place per issue #341 until that ticket removes it.
+    """
+
+    def get(self, request):
+        """Return the adjudication index envelope, or its empty shape when no Semester is being viewed."""
+        semester = services.get_viewing_semester(request)
+        if semester is None:
+            return self.read_response(request, {'rows': []})
+        rows = services.conflict_adjudication_index_for(semester)
+        return self.read_response(request, {'rows': serializers.serialize_conflict_adjudication_index(rows)})
+
+
+class ConflictAdjudicationDetailApiView(AdminApiView, View):
+    """`GET /api/conflicts/<rehearsal_id>/`: one Rehearsal's whole adjudication table, in one round trip (issue #192, #194, #340).
+
+    Feasibility is computed against the *currently saved* Conflict
+    statuses — mirroring what `_current_adjudication_fallout()` served
+    pre-SPA on a plain GET, with no pending edits in play.
+    """
+
+    def get(self, request, rehearsal_id):
+        """Return the adjudication-table envelope for `rehearsal_id`, 404ing outside the viewing Semester or on the Dress Rehearsal."""
+        semester = services.get_viewing_semester(request)
+        rehearsal = _adjudicatable_rehearsal_or_404(semester, rehearsal_id)
+        detail_rows = services.conflict_adjudication_rows_for(rehearsal)
+        approved_ids = {row.conflict.pk for row in detail_rows if row.status == Conflict.APPROVED}
+        feasibility_rows = services.conflict_feasibility_for(rehearsal, approved_ids)
+        feasibility_by_conflict_id = {row.conflict_id: row for row in feasibility_rows}
+        song_titles_by_id, role_names_by_id = _feasibility_name_lookups(feasibility_by_conflict_id)
+        data = serializers.serialize_conflict_adjudication_detail(
+            rehearsal, detail_rows, feasibility_rows,
+            semester=semester, song_titles_by_id=song_titles_by_id, role_names_by_id=role_names_by_id,
+        )
+        return self.read_response(request, data)
+
+
+def _wrong_adjudication_semester_response(message: str) -> JsonResponse:
+    """Return the shared 409 for an Adjudication Buffer whose `semester_id` doesn't match the viewing Semester (issue #340, mirrors `_wrong_roster_semester_response`)."""
+    return JsonResponse({'error': 'wrong_semester', 'message': message}, status=409)
+
+
+class ConflictAdjudicationPreviewApiView(AdminPreviewApiView):
+    """`POST /api/conflicts/<rehearsal_id>/preview/`: feasibility verdicts and Fallout for a candidate Buffer, run for real and rolled back (issue #194, #340, ADR 0008)."""
+
+    def run_preview(self, request, rehearsal_id):
+        """Build the Adjudication Buffer from the JSON body and return its rendered Fallout envelope.
+
+        Mirrors `RosterPreviewApiView.run_preview()`: an
+        `AdjudicationBufferValidationError` renders as `ok: false` with
+        per-row `errors`/`non_field_errors` and the raw submitted body
+        echoed back as `values`; a `semester_id` that doesn't match the
+        viewing Semester is answered as the shared 409 before
+        `preview_adjudications()` is ever called. `preview_adjudications()`
+        is itself a pure read (issue #194), so `PreviewMixin`'s rollback
+        has nothing to undo here beyond the Rehearsal 404 lookup.
+        """
+        viewing_semester = services.get_viewing_semester(request)
+        rehearsal = _adjudicatable_rehearsal_or_404(viewing_semester, rehearsal_id)
+        try:
+            buffer = build_adjudication_buffer_from_request(request, rehearsal_id=rehearsal_id)
+        except AdjudicationBufferValidationError as error:
+            return self.write_response(
+                request, ok=False, errors=error.row_errors, non_field_errors=error.non_field_errors,
+                fallout=None, values=error.raw_body,
+            )
+
+        if viewing_semester is None or buffer.semester_id != viewing_semester.pk:
+            return _wrong_adjudication_semester_response(
+                "This adjudication Buffer's Semester doesn't match the Semester you're currently viewing."
+            )
+
+        fallout = services.preview_adjudications(buffer, rehearsal=rehearsal, viewing_semester=viewing_semester)
+        song_titles_by_id, role_names_by_id = _feasibility_name_lookups(fallout.feasibility_by_conflict_id)
+        return self.write_response(
+            request, ok=True,
+            fallout=serializers.serialize_adjudication_fallout(
+                fallout, song_titles_by_id=song_titles_by_id, role_names_by_id=role_names_by_id,
+            ),
+            values=None,
+        )
+
+
+class ConflictAdjudicationSaveApiView(AdminApiView, View):
+    """`POST /api/conflicts/<rehearsal_id>/save/`: the adjudication table's Save — the real, committing write (issue #192, #340)."""
+
+    def post(self, request, rehearsal_id):
+        """Build the Adjudication Buffer from the JSON body and apply it, or report why it couldn't be applied.
+
+        Calls the same `build_adjudication_buffer_from_request()` the
+        Preview endpoint calls, then the unchanged `apply_adjudications()`.
+        A wrong `semester_id` answers the shared 409 before
+        `apply_adjudications()` is even called. Refuses outright (`ok:
+        false`, before any write) when the submitted Buffer carries no
+        entries at all — issue #340 user story 38, "Save refused while
+        nothing is pending" — since an empty Buffer has nothing for
+        `apply_adjudications()` to usefully commit.
+        """
+        viewing_semester = services.get_viewing_semester(request)
+        _adjudicatable_rehearsal_or_404(viewing_semester, rehearsal_id)
+        try:
+            buffer = build_adjudication_buffer_from_request(request, rehearsal_id=rehearsal_id)
+        except AdjudicationBufferValidationError as error:
+            return self.write_response(
+                request, ok=False, errors=error.row_errors, non_field_errors=error.non_field_errors,
+                fallout=None, values=None,
+            )
+
+        if viewing_semester is None or buffer.semester_id != viewing_semester.pk:
+            return _wrong_adjudication_semester_response(
+                "This adjudication Buffer's Semester doesn't match the Semester you're currently viewing."
+            )
+
+        if not buffer.entries:
+            return self.write_response(
+                request, ok=False,
+                non_field_errors=['There is nothing to save — no adjudication decision was submitted.'],
+                fallout=None, values=None,
+            )
+
+        try:
+            services.apply_adjudications(buffer, viewing_semester=viewing_semester)
+        except WrongAdjudicationSemesterError as error:
+            return _wrong_adjudication_semester_response(str(error))
+        except (StaleAdjudicationSemesterError, UnknownConflictError) as error:
             return self.write_response(request, ok=False, non_field_errors=[str(error)], fallout=None, values=None)
 
         return self.write_response(request, ok=True, values=None)

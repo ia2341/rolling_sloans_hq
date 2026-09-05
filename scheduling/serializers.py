@@ -1290,3 +1290,142 @@ def serialize_assignment_picker(picker: AssignmentPickerResult, rehearsal) -> di
             _serialize_picker_option(option, conflict_notes=conflict_notes) for option in picker.backup_others
         ],
     }
+
+
+def _serialize_adjudication_rehearsal_window(rehearsal) -> dict:
+    """Return `rehearsal`'s `date`/`start_time`/`end_time` for the Conflict-adjudication surface (issue #340).
+
+    A narrower cousin of `_serialize_rehearsal_summary()`: this surface's
+    own key-set test asserts nothing beyond what each endpoint documents,
+    so this deliberately omits `is_dress`/`is_past` rather than reusing
+    that helper and pruning after the fact.
+    """
+    return {
+        'date': rehearsal.date.isoformat(),
+        'start_time': rehearsal.start_time.isoformat(),
+        'end_time': rehearsal.end_time.isoformat() if rehearsal.end_time else None,
+    }
+
+
+def serialize_conflict_adjudication_index(rows: list) -> list:
+    """Return `conflict_adjudication_index_for()`'s rows as `/api/conflicts/`'s `data.rows` value (issue #191, #340).
+
+    One dict per Rehearsal: its window and its pending/approved/rejected
+    Conflict counts — never a Person, a declaration, a reason or a note
+    (ADR 0005). Admin-only surface, so nothing here needs an `is_admin`
+    branch the way a member-facing serializer would.
+    """
+    return [
+        {
+            'rehearsal_id': row.rehearsal.pk,
+            **_serialize_adjudication_rehearsal_window(row.rehearsal),
+            'pending_count': row.pending_count,
+            'approved_count': row.approved_count,
+            'rejected_count': row.rejected_count,
+        }
+        for row in rows
+    ]
+
+
+def _serialize_conflict_feasibility_row(row, *, song_titles_by_id, role_names_by_id) -> dict:
+    """Return one `ConflictFeasibilityRow` as a `feasibility` map entry, resolving the overlap Song/Role to display names (issue #194, #340).
+
+    `overlap_song_title`/`overlap_role_name` are `None` whenever there is
+    no standing overlap (`overlap_song_id`/`overlap_role_id` are also
+    `None` then) — looked up from the caller's batched `song_titles_by_id`/
+    `role_names_by_id` dicts rather than querying per row, avoiding an
+    N+1 across a Rehearsal's whole Conflict table.
+    """
+    return {
+        'checked': row.checked,
+        'verdict': row.verdict,
+        'has_standing_overlap': row.has_standing_overlap,
+        'overlap_song_id': row.overlap_song_id,
+        'overlap_role_id': row.overlap_role_id,
+        'overlap_song_title': song_titles_by_id.get(row.overlap_song_id) if row.overlap_song_id else None,
+        'overlap_role_name': role_names_by_id.get(row.overlap_role_id) if row.overlap_role_id else None,
+    }
+
+
+def _serialize_feasibility_map(feasibility_by_conflict_id: dict, *, song_titles_by_id, role_names_by_id) -> dict:
+    """Return a `dict[int, ConflictFeasibilityRow]` as a JSON-safe `feasibility` map, keyed by the string Conflict id.
+
+    JSON object keys are always strings, so `conflict_id` (an int on the
+    Python side) is stringified here rather than asking every consumer of
+    this map to remember to do it themselves.
+    """
+    return {
+        str(conflict_id): _serialize_conflict_feasibility_row(
+            row, song_titles_by_id=song_titles_by_id, role_names_by_id=role_names_by_id,
+        )
+        for conflict_id, row in feasibility_by_conflict_id.items()
+    }
+
+
+def _serialize_adjudication_detail_row(row) -> dict:
+    """Return one `ConflictAdjudicationDetailRow` for `/api/conflicts/<rehearsal_id>/`'s `data.rows` value (issue #192, #340).
+
+    Admin-only surface (ADR 0005): `person_name` and `reason` are
+    legitimately present here, unlike the member-facing Schedule read.
+    `note` reads `row.conflict.adjudication_note` directly — the dataclass
+    itself carries no `note` field of its own, since `conflict_adjudication_rows_for()`
+    is unchanged by this issue and its underlying `Conflict` instance
+    already holds the value.
+    """
+    return {
+        'conflict_id': row.conflict.pk,
+        'person_id': row.person.pk,
+        'person_name': row.person.name,
+        'type_label': row.type_label,
+        'declared_time': row.declared_time.isoformat() if row.declared_time else None,
+        'reason': row.reason,
+        'status': row.status,
+        'note': row.conflict.adjudication_note,
+    }
+
+
+def serialize_conflict_adjudication_detail(
+    rehearsal, detail_rows: list, feasibility_rows: list, *, semester, song_titles_by_id, role_names_by_id,
+) -> dict:
+    """Return `/api/conflicts/<rehearsal_id>/`'s whole page-shaped `data` value in one round trip (issue #192, #340).
+
+    Per #307's one-round-trip rule: the Rehearsal's identity/window, the
+    live `pending_count` (derived from `detail_rows`' own statuses, so it
+    can never disagree with what `rows` shows), `semester_updated_at` (the
+    stamp a submitted `AdjudicationBuffer` is checked against), every
+    Conflict row, and the feasibility map computed against the *currently
+    saved* statuses — the ambient read `_current_adjudication_fallout()`
+    used to serve pre-SPA.
+    """
+    feasibility_by_conflict_id = {row.conflict_id: row for row in feasibility_rows}
+    return {
+        'rehearsal_id': rehearsal.pk,
+        **_serialize_adjudication_rehearsal_window(rehearsal),
+        'pending_count': sum(1 for row in detail_rows if row.status == Conflict.PENDING),
+        'semester_updated_at': semester.updated_at.isoformat(),
+        'rows': [_serialize_adjudication_detail_row(row) for row in detail_rows],
+        'feasibility': _serialize_feasibility_map(
+            feasibility_by_conflict_id, song_titles_by_id=song_titles_by_id, role_names_by_id=role_names_by_id,
+        ),
+    }
+
+
+def serialize_adjudication_fallout(fallout, *, song_titles_by_id, role_names_by_id) -> dict:
+    """Return an `AdjudicationFallout` as `/api/conflicts/<rehearsal_id>/preview/`'s `fallout` value (issue #194, #340).
+
+    Mirrors `serialize_roster_edit_fallout()`'s shape: named field-by-field,
+    never `dataclasses.asdict()`. `feasibility` uses the same string-keyed
+    shape `serialize_conflict_adjudication_detail()`'s `feasibility` does,
+    so a client can treat the ambient GET and the live Preview response
+    identically.
+    """
+    return {
+        'is_blocked': fallout.is_blocked,
+        'block_message': fallout.block_message,
+        'is_stale': fallout.is_stale,
+        'loud': list(fallout.loud),
+        'quiet': list(fallout.quiet),
+        'feasibility': _serialize_feasibility_map(
+            fallout.feasibility_by_conflict_id, song_titles_by_id=song_titles_by_id, role_names_by_id=role_names_by_id,
+        ),
+    }
