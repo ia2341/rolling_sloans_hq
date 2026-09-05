@@ -28,10 +28,12 @@ from identity.models import Person
 from identity.services import AlreadyHasPasswordError, resend_invite
 from scheduling import serializers, services, spotify
 from scheduling.api_builders import (
+    AssignmentBufferValidationError,
     RehearsalBufferValidationError,
     RehearsalPatternInputError,
     RosterBufferValidationError,
     SetlistBufferValidationError,
+    build_assignment_buffer_from_request,
     build_generation_date_range_from_body,
     build_rehearsal_buffer_from_request,
     build_rehearsal_pattern_input_from_body,
@@ -45,6 +47,7 @@ from scheduling.models import (
     Recording,
     Rehearsal,
     RehearsalSong,
+    Role,
     Song,
 )
 from scheduling.services import (
@@ -56,6 +59,7 @@ from scheduling.services import (
     RehearsalPatternCollisionError,
     RunningOrderValidationError,
     SelfRemovalError,
+    StaleAssignmentSemesterError,
     StaleRehearsalSemesterError,
     StaleRosterSemesterError,
     StaleSetlistSemesterError,
@@ -911,3 +915,129 @@ class ScheduleEditorShuffleApiView(AdminApiView, View):
         rehearsal = get_object_or_404(Rehearsal, pk=rehearsal_id, semester=semester)
         rows = services.shuffle_rehearsal_running_order(rehearsal)
         return self.read_response(request, serializers.serialize_shuffle_rows(rows))
+
+
+def _editable_assignment_rehearsal_or_404(request, rehearsal_id):
+    """Return the viewing Semester's Rehearsal `rehearsal_id` names that also offers edit mode on its assignment grid, or 404 (issue #338, ADR-0009).
+
+    Mirrors `scheduling/views.py`'s `_editable_assignment_rehearsal_or_404()`:
+    `services.assignment_grid_is_editable()` stays the single definition
+    of "editable" — a hand-crafted request naming a past-dated,
+    non-Dress Rehearsal 404s rather than silently applying a removal or
+    add the grid never offered a control for.
+    """
+    semester = services.get_viewing_semester(request)
+    rehearsal = get_object_or_404(Rehearsal, pk=rehearsal_id, semester=semester)
+    if not services.assignment_grid_is_editable(rehearsal):
+        raise Http404('This Rehearsal is not editable.')
+    return rehearsal
+
+
+class AssignmentPickerApiView(AdminApiView, View):
+    """`GET /api/schedule/<rehearsal_id>/assignments/picker/<song_id>/<role_id>/`: the "+" picker's fetched-on-open contents (issue #338).
+
+    Fetched only when a cell's "+" is opened, over the existing roster
+    read — an unopened cell issues no request, so a twelve-song six-role
+    grid never renders seventy-two live widgets (issue #338's Implementation
+    Decisions). Answers a question rather than taking a Pending Buffer, so
+    per #307's envelope boundary rule this wears the read envelope
+    (`self.read_response()`), never the write one — there is no `values`
+    or `errors` field that could ever be populated here.
+    """
+
+    def get(self, request, rehearsal_id, song_id, role_id):
+        """Return the picker's contents for one (Song, Role) cell on an editable grid, or 404."""
+        rehearsal = _editable_assignment_rehearsal_or_404(request, rehearsal_id)
+        semester = services.get_viewing_semester(request)
+        song = get_object_or_404(Song, pk=song_id, semester=semester)
+        role = get_object_or_404(Role, pk=role_id)
+        rehearsal_song = None
+        if not rehearsal.is_full_setlist:
+            rehearsal_song = get_object_or_404(RehearsalSong, rehearsal=rehearsal, song=song)
+        picker = services.assignment_picker_for(song, role, semester, rehearsal_song=rehearsal_song)
+        return self.read_response(request, serializers.serialize_assignment_picker(picker, rehearsal))
+
+
+class AssignmentPreviewApiView(AdminPreviewApiView):
+    """`POST /api/schedule/<rehearsal_id>/assignments/preview/`: the assignment editor's Preview, run for real and rolled back (issue #338, ADR 0008, ADR 0009).
+
+    Fires exactly once, when the Save popup opens — issue #338's
+    "Implementation Decisions" explicitly retires the old debounced
+    per-popover-close preview fetch, since there is no ambient Fallout
+    region on this surface left to keep fed once the grid moved to the
+    SPA.
+    """
+
+    def run_preview(self, request, rehearsal_id):
+        """Build the assignment edit Buffer from the JSON body and return its rendered Fallout envelope for `rehearsal_id`.
+
+        Mirrors `ScheduleEditorPreviewApiView.run_preview()` exactly:
+        `build_assignment_buffer_from_request()` is the same function
+        `AssignmentSaveApiView.post()` calls, so Preview and Save of an
+        identical body can never disagree about what Buffer they
+        describe. A wrong `semester_id`, or a Rehearsal that isn't
+        editable, is answered before `preview_song_role_assignments()` is
+        ever called, rather than being swallowed into an `is_blocked`
+        Fallout.
+        """
+        rehearsal = _editable_assignment_rehearsal_or_404(request, rehearsal_id)
+        viewing_semester = services.get_viewing_semester(request)
+        try:
+            buffer = build_assignment_buffer_from_request(request, viewing_semester=viewing_semester)
+        except AssignmentBufferValidationError as error:
+            return self.write_response(
+                request, ok=False, errors=None, non_field_errors=error.non_field_errors, fallout=None, values=None,
+            )
+
+        if viewing_semester is None or buffer.semester_id != viewing_semester.pk:
+            return _wrong_semester_response(
+                "This assignment edit Buffer's Semester doesn't match the Semester you're currently viewing."
+            )
+
+        fallout = services.preview_song_role_assignments(buffer, rehearsal=rehearsal, viewing_semester=viewing_semester)
+        return self.write_response(
+            request,
+            ok=True,
+            fallout=serializers.serialize_assignment_edit_fallout(fallout),
+            values=serializers.serialize_assignment_edit_buffer(buffer),
+        )
+
+
+class AssignmentSaveApiView(AdminApiView, View):
+    """`POST /api/schedule/<rehearsal_id>/assignments/save/`: the assignment editor's Save — the real, committing write (issue #338)."""
+
+    def post(self, request, rehearsal_id):
+        """Build the assignment edit Buffer from the JSON body and apply it, or report why it couldn't be applied.
+
+        Mirrors `ScheduleEditorSaveApiView.post()`: the same
+        `build_assignment_buffer_from_request()` the Preview endpoint
+        calls, then the unchanged `apply_song_role_assignments()`. A
+        `StaleAssignmentSemesterError` is reported as `ok: false` with
+        `non_field_errors` rather than a hard 4xx, since `apply_*()`'s own
+        transaction has already rolled back whatever it had applied by
+        the time this `except` runs. `values` is omitted on every response
+        here, per #326's rule that a write response doesn't echo the
+        Buffer back.
+        """
+        rehearsal = _editable_assignment_rehearsal_or_404(request, rehearsal_id)
+        viewing_semester = services.get_viewing_semester(request)
+        try:
+            buffer = build_assignment_buffer_from_request(request, viewing_semester=viewing_semester)
+        except AssignmentBufferValidationError as error:
+            return self.write_response(
+                request, ok=False, errors=None, non_field_errors=error.non_field_errors, fallout=None, values=None,
+            )
+
+        if viewing_semester is None or buffer.semester_id != viewing_semester.pk:
+            return _wrong_semester_response(
+                "This assignment edit Buffer's Semester doesn't match the Semester you're currently viewing."
+            )
+
+        try:
+            services.apply_song_role_assignments(buffer, viewing_semester=viewing_semester, rehearsal=rehearsal)
+        except WrongViewingSemesterError as error:
+            return _wrong_semester_response(str(error))
+        except StaleAssignmentSemesterError as error:
+            return self.write_response(request, ok=False, non_field_errors=[str(error)], fallout=None, values=None)
+
+        return self.write_response(request, ok=True, values=None)
