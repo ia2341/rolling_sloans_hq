@@ -87,6 +87,18 @@ describe('the route table', () => {
   })
 
   it("redirects /profile to the viewer's own person page once context has loaded", () => {
+    mockFetchOnce(200, {
+      context: memberContext(),
+      data: {
+        id: 1,
+        name: 'Sam Rivera',
+        is_self: true,
+        can_edit_roles: true,
+        has_membership: false,
+        semester_name: null,
+        email: 'sam@example.com',
+      },
+    })
     setContext(memberContext())
     const router = createMemoryRouter(routes, { initialEntries: ['/profile'] })
     render(<RouterProvider router={router} />)
