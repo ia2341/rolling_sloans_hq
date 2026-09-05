@@ -116,6 +116,16 @@ AUTH_USER_MODEL = 'identity.Person'
 LOGIN_URL = reverse_lazy('identity:login')
 LOGIN_REDIRECT_URL = reverse_lazy('scheduling:overview')
 
+# Declared explicitly (issue #327) rather than inherited from Django's own
+# default (which happens to also be three days): this value governs BOTH
+# the invite link and the forgot-password link, since they share one token
+# route (`identity:set-password-confirm`). Don't raise it to suit the
+# invite — the same value would leave a multi-week account-takeover token
+# sitting in inboxes for the reset case. Short is correct for reset, and
+# `resend_invite()` (not a longer timeout) is what makes the invite's
+# expiry survivable.
+PASSWORD_RESET_TIMEOUT = 60 * 60 * 24 * 3  # 3 days
+
 
 # Password validation
 # https://docs.djangoproject.com/en/6.1/ref/settings/#auth-password-validators

@@ -7,12 +7,19 @@ from unittest.mock import patch
 from urllib.parse import urlsplit
 
 from django.core import mail
+from django.db import transaction
 from django.test import TestCase, override_settings
 from django.urls import NoReverseMatch, reverse
 from faker import Faker
 
+from identity.factories import PersonFactory
 from identity.models import Person
-from identity.services import EmailDeliveryError, invite_person
+from identity.services import (
+    AlreadyHasPasswordError,
+    EmailDeliveryError,
+    invite_person,
+    resend_invite,
+)
 
 fake = Faker()
 
@@ -97,7 +104,14 @@ class ConsoleBackendInviteTests(TestCase):
 class SetPasswordFlowTests(TestCase):
     @classmethod
     def setUpTestData(cls):
-        """Invite a Person once and extract the set-password link every test in this class reuses."""
+        """Invite a Person once and extract the set-password link every test in this class reuses.
+
+        `setUpTestData` runs in `setUpClass`, before Django's per-test
+        `mail.outbox` reset, so it can start behind whatever the previous
+        class's last test method left in the outbox: clear it first rather
+        than trusting `mail.outbox[0]` to be this invite.
+        """
+        mail.outbox = []
         cls.person = invite_person(**invite_args())
         cls.set_password_path = extract_set_password_path(mail.outbox[0].body)
 
@@ -118,7 +132,8 @@ class SetPasswordFlowTests(TestCase):
             {'new_password1': 'a-strong-new-password-1', 'new_password2': 'a-strong-new-password-1'},
         )
 
-        self.assertRedirects(post_response, reverse('identity:set-password-complete'))
+        self.assertEqual(post_response.status_code, 200)
+        self.assertTrue(post_response.context['done'])
         reloaded = Person.objects.get(pk=self.person.pk)
         self.assertTrue(reloaded.has_usable_password())
         self.assertTrue(reloaded.check_password('a-strong-new-password-1'))
@@ -193,4 +208,68 @@ class NoSelfRegistrationTests(TestCase):
 
         self.assertEqual(response.status_code, 302)
         self.assertIn('/admin/login', response.url)
+        self.assertFalse(Person.objects.filter(email=args['email']).exists())
+
+
+class ResendInviteTests(TestCase):
+    def test_resends_to_a_never_set_password_person_without_creating_a_second_row(self):
+        """resend_invite() on a pending Person sends and creates no second Person row."""
+        person = PersonFactory()
+        self.assertFalse(person.has_usable_password())
+
+        resend_invite(person)
+
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn(person.email, mail.outbox[0].to)
+        self.assertIn('set-password', mail.outbox[0].body)
+        self.assertEqual(Person.objects.filter(email=person.email).count(), 1)
+
+    def test_refused_for_a_person_with_a_usable_password(self):
+        """resend_invite() on a Person who already set a password is refused and sends nothing."""
+        person = PersonFactory(password='a-strong-password-123')
+
+        with self.assertRaises(AlreadyHasPasswordError):
+            resend_invite(person)
+
+        self.assertEqual(len(mail.outbox), 0)
+
+
+class InvitePersonSendModeTests(TestCase):
+    """The `send_via_on_commit` seam #336's roster Pending Buffer apply needs (#327)."""
+
+    def test_inline_mode_rolls_back_the_person_on_send_failure(self):
+        """The default (inline) mode still rolls the Person row back if the send fails."""
+        args = invite_args()
+
+        with patch('identity.services.send_mail', side_effect=RuntimeError('boom')), \
+                self.assertRaises(RuntimeError):
+            invite_person(**args, send_via_on_commit=False)
+
+        self.assertFalse(Person.objects.filter(email=args['email']).exists())
+
+    def test_on_commit_mode_sends_nothing_until_commit(self):
+        """`send_via_on_commit=True` defers the send past the end of the calling transaction.
+
+        `TestCase` itself wraps every test in an outer atomic block that's
+        rolled back rather than committed, so `on_commit` callbacks never
+        fire on their own here; `captureOnCommitCallbacks(execute=True)`
+        is Django's documented way to still exercise them under `TestCase`.
+        """
+        args = invite_args()
+
+        with self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+            invite_person(**args, send_via_on_commit=True)
+            self.assertEqual(len(mail.outbox), 0)
+
+        self.assertEqual(len(mail.outbox), 1)
+
+    def test_on_commit_mode_sends_nothing_under_rollback(self):
+        """`send_via_on_commit=True` sends nothing at all if the outer transaction rolls back (an admin Preview, ADR 0008)."""
+        args = invite_args()
+
+        with self.assertRaises(RuntimeError), transaction.atomic():
+            invite_person(**args, send_via_on_commit=True)
+            raise RuntimeError('simulate a Preview rollback')
+
+        self.assertEqual(len(mail.outbox), 0)
         self.assertFalse(Person.objects.filter(email=args['email']).exists())

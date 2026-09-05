@@ -10,7 +10,7 @@ from datetime import time
 from unittest.mock import patch
 
 from django.test import TestCase, override_settings
-from django.urls import reverse
+from django.urls import NoReverseMatch, reverse
 
 from identity.factories import PersonFactory
 from scheduling.factories import (
@@ -119,11 +119,10 @@ class TeammateViewTests(TestCase):
 
         self.assertNotContains(response, self.teammate.email)
 
-    def test_no_change_password_link_on_a_teammates_page(self):
-        """The change-password link is a self-only affordance."""
-        response = self.client.get(member_detail_url(self.teammate))
-
-        self.assertNotContains(response, reverse('identity:password-change'))
+    def test_no_password_change_route_exists(self):
+        """identity:password-change no longer exists: change password moved into the SPA (#327, built by #333)."""
+        with self.assertRaises(NoReverseMatch):
+            reverse('identity:password-change')
 
     def test_teammates_page_exposes_no_roles_form(self):
         """A teammate's page carries no MembershipRolesForm and no roles input at all."""
@@ -326,8 +325,13 @@ class SelfViewGetTests(TestCase):
         """Log in as the synthetic Person before each test."""
         self.client.login(username=self.person.email, password=PASSWORD)
 
-    def test_renders_own_name_email_and_change_password_link(self):
-        """Your own page shows your name, your email, and the change-password link — the self-only fields."""
+    def test_renders_own_name_and_email(self):
+        """Your own page shows your name and your email — self-only fields.
+
+        The change-password link used to live here too (issue #90); #327
+        removes it from this server-rendered page in favor of an SPA
+        affordance #333 builds.
+        """
         MembershipFactory(person=self.person, semester=self.semester)
 
         response = self.client.get(member_detail_url(self.person))
@@ -336,7 +340,6 @@ class SelfViewGetTests(TestCase):
         self.assertTrue(response.context['is_self'])
         self.assertContains(response, 'Owner Placeholder')
         self.assertContains(response, self.person.email)
-        self.assertContains(response, reverse('identity:password-change'))
 
     def test_renders_the_roles_form_always_inline(self):
         """The MembershipRolesForm renders inline with a Save button — no edit toggle."""

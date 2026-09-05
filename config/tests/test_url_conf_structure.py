@@ -19,20 +19,18 @@ from django.urls import URLResolver, get_resolver
 from config.views import ApiView, BaseView
 
 # Explicit and short by design (per the issue): auth views that run before a
-# Person can be assumed to exist, or (password-change/-done) that gate
-# themselves via Django's own `login_required` decorator instead of
-# `BaseView`. Adding to this list is a visible act in a diff.
+# Person can be assumed to exist. Adding to this list is a visible act in a
+# diff. Change password (issue #90) used to be here too, gating itself via
+# Django's own `login_required` decorator instead of `BaseView`; #327 removes
+# it from this URLConf entirely in favor of an SPA affordance #333 builds.
 ALLOWLISTED_VIEW_NAMES = {
     'LoginView',
     'LogoutView',
+    # The single token route serving both the invite and forgot-password
+    # flows (issue #327) — collapsed from the previous SetPasswordConfirmView
+    # + PasswordResetConfirmView pair.
     'SetPasswordConfirmView',
-    'SetPasswordCompleteView',
     'PasswordResetRequestView',
-    'PasswordResetDoneView',
-    'PasswordResetConfirmView',
-    'PasswordResetCompleteView',
-    'PasswordChangeView',
-    'PasswordChangeDoneView',
     # Serves the React SPA's shell document (issue #325). Deliberately not
     # login-gated: the document carries no member data — everything the SPA
     # renders comes from /api/, which is gated by ApiView — and gating it
