@@ -61,6 +61,7 @@ export function EditSessionProvider({ children }: { children: ReactNode }) {
   )
 }
 
+/** Returns the raw context value, throwing if called outside an `EditSessionProvider`. */
 function useEditSessionContext(): EditSessionContextValue {
   const context = useContext(EditSessionReactContext)
   if (context === null) {

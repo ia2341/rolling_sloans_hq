@@ -12,6 +12,7 @@ afterEach(() => {
   resetContextForTests()
 })
 
+/** A minimal route stand-in that registers `title` via `usePageTitle()`, for asserting what `TopBar` renders. */
 function TitledPage({ title }: { title: string }) {
   usePageTitle(title)
   return null

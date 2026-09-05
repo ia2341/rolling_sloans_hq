@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react'
 
 const STORAGE_KEY = 'rs-sidebar-rail-collapsed'
 
+/** Reads the persisted rail-collapsed flag, defaulting to expanded if storage is unavailable or unset. */
 function readStored(): boolean {
   try {
     return window.localStorage.getItem(STORAGE_KEY) === 'true'
@@ -10,6 +11,7 @@ function readStored(): boolean {
   }
 }
 
+/** Persists the rail-collapsed flag, silently no-op-ing if storage is unavailable. */
 function writeStored(collapsed: boolean): void {
   try {
     window.localStorage.setItem(STORAGE_KEY, String(collapsed))

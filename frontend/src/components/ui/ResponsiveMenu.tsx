@@ -8,7 +8,6 @@ import {
 } from 'react'
 
 import { useIsPhone } from '../../hooks/useIsPhone'
-import { cn } from '../../lib/utils'
 import { ResponsiveDialog } from './ResponsiveDialog'
 
 export interface ResponsiveMenuItem {
@@ -48,7 +47,22 @@ export function ResponsiveMenu({
       <>
         {triggerWithHandler}
         <ResponsiveDialog open={open} onOpenChange={setOpen} title={caption}>
-          <MenuItemList items={items} onSelected={() => setOpen(false)} />
+          <ul className="flex flex-col">
+            {items.map((item) => (
+              <li key={item.key}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    item.onSelect()
+                    setOpen(false)
+                  }}
+                  className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-sm hover:bg-rs-border/40"
+                >
+                  <MenuItemContent item={item} />
+                </button>
+              </li>
+            ))}
+          </ul>
         </ResponsiveDialog>
       </>
     )
@@ -72,17 +86,7 @@ export function ResponsiveMenu({
               onSelect={item.onSelect}
               className="flex cursor-pointer items-center gap-2 px-3 py-2 text-sm outline-none data-[highlighted]:bg-rs-border/40"
             >
-              <span className="w-4 shrink-0">
-                {item.selected && <Check size={14} aria-hidden="true" />}
-              </span>
-              <span className="flex flex-col">
-                <span>{item.label}</span>
-                {item.secondaryText !== undefined && (
-                  <span className="text-xs text-rs-muted">
-                    {item.secondaryText}
-                  </span>
-                )}
-              </span>
+              <MenuItemContent item={item} />
             </DropdownMenu.Item>
           ))}
         </DropdownMenu.Content>
@@ -91,41 +95,19 @@ export function ResponsiveMenu({
   )
 }
 
-function MenuItemList({
-  items,
-  onSelected,
-}: {
-  items: ResponsiveMenuItem[]
-  onSelected: () => void
-}) {
+/** The tick, label and secondary text shared by a menu item's desktop-dropdown and phone-sheet rendering. */
+function MenuItemContent({ item }: { item: ResponsiveMenuItem }) {
   return (
-    <ul className="flex flex-col">
-      {items.map((item) => (
-        <li key={item.key}>
-          <button
-            type="button"
-            onClick={() => {
-              item.onSelect()
-              onSelected()
-            }}
-            className={cn(
-              'flex w-full items-center gap-2 rounded px-2 py-2 text-left text-sm hover:bg-rs-border/40',
-            )}
-          >
-            <span className="w-4 shrink-0">
-              {item.selected && <Check size={14} aria-hidden="true" />}
-            </span>
-            <span className="flex flex-col">
-              <span>{item.label}</span>
-              {item.secondaryText !== undefined && (
-                <span className="text-xs text-rs-muted">
-                  {item.secondaryText}
-                </span>
-              )}
-            </span>
-          </button>
-        </li>
-      ))}
-    </ul>
+    <>
+      <span className="w-4 shrink-0">
+        {item.selected && <Check size={14} aria-hidden="true" />}
+      </span>
+      <span className="flex flex-col">
+        <span>{item.label}</span>
+        {item.secondaryText !== undefined && (
+          <span className="text-xs text-rs-muted">{item.secondaryText}</span>
+        )}
+      </span>
+    </>
   )
 }

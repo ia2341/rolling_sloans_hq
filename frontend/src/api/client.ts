@@ -18,6 +18,7 @@ export class ApiError extends Error {
   }
 }
 
+/** Returns the value of cookie `name`, or `null` if it isn't set. */
 function readCookie(name: string): string | null {
   const match = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`))
   return match ? decodeURIComponent(match[1] ?? '') : null

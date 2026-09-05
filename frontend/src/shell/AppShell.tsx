@@ -29,6 +29,7 @@ export function AppShell() {
   )
 }
 
+/** Picks the phone (`TopBar`/`TabBar`) or desktop (`Sidebar`) chrome around `children` based on `useIsPhone()`. */
 function ShellLayout({ children }: { children: ReactNode }) {
   const isPhone = useIsPhone()
 

@@ -2,12 +2,14 @@ import { useSyncExternalStore } from 'react'
 
 const PHONE_QUERY = '(max-width: 640px)'
 
+/** `useSyncExternalStore` subscribe: re-runs `callback` whenever the phone breakpoint's match state changes. */
 function subscribe(callback: () => void) {
   const mediaQueryList = window.matchMedia(PHONE_QUERY)
   mediaQueryList.addEventListener('change', callback)
   return () => mediaQueryList.removeEventListener('change', callback)
 }
 
+/** `useSyncExternalStore` snapshot: whether the viewport currently matches the phone breakpoint. */
 function getSnapshot() {
   return window.matchMedia(PHONE_QUERY).matches
 }

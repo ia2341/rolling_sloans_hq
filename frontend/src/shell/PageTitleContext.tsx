@@ -25,6 +25,7 @@ export function PageTitleProvider({ children }: { children: ReactNode }) {
   )
 }
 
+/** Returns the raw context value, throwing if called outside a `PageTitleProvider`. */
 function usePageTitleContext(): PageTitleContextValue {
   const context = useContext(PageTitleReactContext)
   if (context === null) {

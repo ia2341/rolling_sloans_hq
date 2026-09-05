@@ -73,6 +73,7 @@ export function MoreSheet({ open, onOpenChange }: MoreSheetProps) {
   )
 }
 
+/** One row in the More sheet: an icon, a label, and optional secondary text. */
 function MoreSheetItem({
   icon: Icon,
   label,
@@ -103,6 +104,7 @@ function MoreSheetItem({
   )
 }
 
+/** The More sheet's Log out row: the same CSRF-carrying POST form as the sidebar's. */
 function MoreSheetLogoutItem() {
   const match = document.cookie.match(/(?:^|; )csrftoken=([^;]*)/)
   const token = match ? decodeURIComponent(match[1] ?? '') : ''
