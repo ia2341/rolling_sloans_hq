@@ -3,11 +3,12 @@
 `test_members_view.py` and `test_member_detail_view.py` already assert most
 of the doc's field-by-field verdicts inline with the tests that cover a
 surface's happy path. This module fills the verdicts neither file exercises
-for a **non-admin** viewer — `is_role_mismatch`, `Conflict`/`ConflictWindow`,
-the Roster's remove control, and `Backup.covering_for` — on both member-facing
-roster routes, so the doc's table has no row left unbacked by a test. As
-`/api/` payloads land (per the doc's own note), the same forbidden-value
-assertions apply to their bodies too.
+for a **non-admin** viewer, split by route: on `/members/`,
+`is_role_mismatch`, `Conflict`/`ConflictWindow`, the Roster's remove control,
+and `Person.email` on your own row; on `/members/<pk>/`, `Backup.covering_for`
+— so the doc's table has no row left unbacked by a test. As `/api/` payloads
+land (per the doc's own note), the same forbidden-value assertions apply to
+their bodies too.
 """
 
 from datetime import time
