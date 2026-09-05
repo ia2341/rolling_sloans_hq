@@ -2757,6 +2757,288 @@ def preview_roster_edits(buffer: RosterEditBuffer, *, viewing_semester: Semester
     )
 
 
+class StaleSetlistSemesterError(ValueError):
+    """Raised when a Setlist edit Buffer's Semester changed since the Buffer was loaded (issue #321)."""
+
+
+@dataclass(frozen=True)
+class SetlistEditRow:
+    """One setlist edit grid row's target state, in final concert-position order: an existing Song's edit, or a brand-new one (issue #321).
+
+    `song_id` is None for a new row. Unlike `RehearsalEditBuffer`'s rows
+    (ordered by `date`, an independent field), a Song's position has no
+    field of its own to derive an order from, so a row's position *is*
+    its index in the Buffer's own `rows` list — the same "list order is
+    the buffer's own row order" convention `SetlistEditView._save_buffer()`
+    used to read off `song_order` by hand. Filled identically by a
+    hand-edit (from a bound `SetlistEditFormSet`) and a Spotify import
+    (`SetlistImportView`'s unsaved rows, appended client-side before Save).
+    """
+
+    song_id: int | None
+    title: str
+    artist: str
+    length: timedelta
+    notes: str
+
+
+@dataclass(frozen=True)
+class SetlistEditBuffer:
+    """The whole diff `apply_setlist_edits()` commits in one transaction (issue #321).
+
+    `semester_id`/`semester_updated_at` back the same two staleness checks
+    every other Pending Buffer uses (issue #226's shape): `semester_id` is
+    cross-checked against the caller's session-scoped viewing Semester, and
+    `semester_updated_at` against the Semester row's current stamp. `rows`
+    carries every surviving Song in final concert-position order —
+    existing or newly added; a Song not named in `rows` and not in
+    `deleted_song_ids` doesn't exist yet and never will.
+    `deleted_song_ids` names every existing Song the grid's struck-row
+    control marked for a hard delete.
+    """
+
+    semester_id: int
+    semester_updated_at: datetime
+    rows: list[SetlistEditRow]
+    deleted_song_ids: frozenset[int] = field(default_factory=frozenset)
+
+
+def apply_setlist_edits(buffer: SetlistEditBuffer, *, viewing_semester: Semester) -> None:
+    """Apply a whole Setlist edit Buffer — adds, edits, deletes and reorder — in one transaction (issue #321).
+
+    The single write the setlist edit grid and its future Preview both
+    run (ADR-0008): a failure anywhere leaves nothing applied. Holds the
+    Semester row lock for the duration, like every other Song-position
+    mutation must — a whole-setlist reorder ends in `reorder_songs()`,
+    exactly the write CLAUDE.md's locking rule exists for.
+
+    Deletions (`delete_songs_with_recordings()`) run first, before any
+    surviving row is saved — mirroring the prior inline `_save_buffer()`'s
+    ordering — so a row moved out from under a doomed Song's old position
+    can never collide with it; the deferred
+    `unique_song_position_per_semester` constraint makes the sequence
+    collision-free either way. Every surviving row is then saved with a
+    throwaway `position=0` (a new instance has none yet, and an existing
+    one's current position may already collide with another surviving
+    row's target slot); `reorder_songs()` renumbers `buffer.rows`' exact
+    order to a contiguous `1..N` afterward, on the surviving Song ids
+    alone.
+
+    Raises `WrongViewingSemesterError` if `buffer.semester_id` doesn't
+    match `viewing_semester`, checked before any transaction opens. Raises
+    `StaleSetlistSemesterError` inside the transaction if the Semester's
+    `updated_at` no longer matches `buffer.semester_updated_at`, rolling
+    back whatever this call had already applied. Makes no external call
+    of its own — `delete_songs_with_recordings()` registers its Recording
+    object-storage cleanup with `transaction.on_commit()` itself — so
+    nothing here needs its own `on_commit()`.
+    """
+    if viewing_semester is None or buffer.semester_id != viewing_semester.pk:
+        raise WrongViewingSemesterError(
+            "This Setlist edit Buffer's Semester doesn't match the Semester you're currently viewing."
+        )
+
+    with transaction.atomic():
+        semester = Semester.objects.select_for_update().get(pk=buffer.semester_id)
+        if semester.updated_at != buffer.semester_updated_at:
+            raise StaleSetlistSemesterError('The setlist changed while you were editing — reload and reapply.')
+
+        if buffer.deleted_song_ids:
+            delete_songs_with_recordings(
+                list(Song.objects.filter(semester=semester, pk__in=buffer.deleted_song_ids))
+            )
+
+        ordered_ids = [_apply_setlist_edit_row(row, semester).pk for row in buffer.rows]
+        reorder_songs(semester, ordered_ids)
+
+        semester.updated_at = timezone.now()
+        semester.save(update_fields=['updated_at'])
+
+
+def _apply_setlist_edit_row(row: SetlistEditRow, semester: Semester) -> Song:
+    """Save one Buffer row onto its Song (existing or new) with a throwaway position; return the saved Song."""
+    if row.song_id is not None:
+        song = Song.objects.get(pk=row.song_id, semester=semester)
+    else:
+        song = Song(semester=semester)
+    song.title = row.title
+    song.artist = row.artist
+    song.length = row.length
+    song.notes = row.notes
+    song.position = 0
+    song.save()
+    return song
+
+
+@dataclass(frozen=True)
+class SetlistSongDeletion:
+    """One doomed Song's recording/uploader/Running-Order counts, for the Save popup's escalation block (issue #321).
+
+    Mirrors `SongDeletionSummary`, extended with `running_order_count` —
+    the number of Rehearsals whose Running Order this Song currently sits
+    in, every one of which loses that row when the Song is deleted (per
+    ADR-0003 the Dress Rehearsal never holds a `RehearsalSong`, so it is
+    never counted here). This is `song_deletion_summaries()`'s old
+    doomed-Recordings content, folded into the Setlist Fallout as the one
+    escalation block a destructive Save opens, per #306/#310's "the Save
+    popup is the only home for Fallout" rule.
+    """
+
+    title: str
+    recording_count: int
+    uploader_count: int
+    running_order_count: int
+
+
+@dataclass(frozen=True)
+class SetlistEditFallout:
+    """Every observable consequence of a Setlist edit Buffer, computed without committing it (issue #321, ADR 0008).
+
+    `is_blocked` mirrors `apply_setlist_edits()`'s Validation Errors (wrong
+    Semester, stale stamp) with no Fallout computed at all — a Validation
+    Error in ADR 0008's terms. `loud`/`quiet` are the two ADR-0002 tiers;
+    neither ever blocks a save. `is_stale` flags a `Semester.updated_at`
+    mismatch, reported never refused, per ADR 0008. `pending_deletions`
+    is non-empty exactly when the Buffer would destroy at least one Song —
+    the one condition that should fire a destructive-save escalation on
+    Save. `reordered` is true iff the Buffer's final concert-position
+    order differs from the surviving Songs' current order — reported as a
+    quiet line, since a reorder changes concert position only and never
+    touches any Rehearsal's Running Order.
+    """
+
+    is_blocked: bool
+    block_message: str
+    is_stale: bool
+    pending_adds: list[str]
+    pending_edits: list[str]
+    reordered: bool
+    pending_deletions: list[SetlistSongDeletion]
+    loud: list[str]
+    quiet: list[str]
+
+
+def _blocked_setlist_fallout(block_message: str, *, is_stale: bool = False) -> SetlistEditFallout:
+    """Return a SetlistEditFallout reporting a hard block, with every Fallout/pending list empty."""
+    return SetlistEditFallout(
+        is_blocked=True,
+        block_message=block_message,
+        is_stale=is_stale,
+        pending_adds=[],
+        pending_edits=[],
+        reordered=False,
+        pending_deletions=[],
+        loud=[],
+        quiet=[],
+    )
+
+
+def preview_setlist_edits(buffer: SetlistEditBuffer, *, viewing_semester: Semester) -> SetlistEditFallout:
+    """Run the real `apply_setlist_edits()` for `buffer` and report every observable consequence, without committing it (issue #321, ADR-0008).
+
+    This function's write is real — it must be called inside a
+    transaction the *caller* rolls back (a Preview view's `PreviewMixin`
+    does this; a test calling this directly must wrap it the same way, per
+    `assert_preview_writes_nothing`). Called outside such a transaction,
+    this function corrupts the database.
+
+    Snapshots each existing Song named in the Buffer (title/artist/length/
+    notes) and the Semester's current position order, plus — for every
+    Song `buffer.deleted_song_ids` would destroy — its Recording and
+    distinct-uploader counts (via `song_deletion_summaries()`) and how many
+    Rehearsals' Running Orders it currently sits in, all *before* calling
+    `apply_setlist_edits()` (with a copy of `buffer` whose
+    `semester_updated_at` is swapped for the Semester's current value, so
+    the real function's own staleness check always passes and the write
+    actually runs). A `WrongViewingSemesterError` or
+    `StaleSetlistSemesterError` from `apply_setlist_edits()` is reported as
+    `is_blocked` with no Fallout computed at all, rather than
+    re-implementing either check here.
+    """
+    if viewing_semester is None or buffer.semester_id != viewing_semester.pk:
+        return _blocked_setlist_fallout(
+            "This Setlist edit Buffer's Semester doesn't match the Semester you're currently viewing."
+        )
+
+    current_semester = Semester.objects.get(pk=viewing_semester.pk)
+    is_stale = buffer.semester_updated_at != current_semester.updated_at
+
+    existing_ids = [row.song_id for row in buffer.rows if row.song_id is not None]
+    songs_before = {
+        song.pk: song for song in Song.objects.filter(semester=current_semester, pk__in=existing_ids)
+    }
+    surviving_current_order = [
+        song_id for song_id in
+        Song.objects.filter(semester=current_semester).order_by('position').values_list('pk', flat=True)
+        if song_id not in buffer.deleted_song_ids
+    ]
+
+    songs_to_delete = list(Song.objects.filter(semester=current_semester, pk__in=buffer.deleted_song_ids))
+    deletion_summaries = song_deletion_summaries(songs_to_delete)
+    running_order_count_by_song_id = {
+        song.pk: RehearsalSong.objects.filter(song=song).count() for song in songs_to_delete
+    }
+    pending_deletions = [
+        SetlistSongDeletion(
+            title=summary.song.title,
+            recording_count=summary.recording_count,
+            uploader_count=summary.uploader_count,
+            running_order_count=running_order_count_by_song_id[summary.song.pk],
+        )
+        for summary in deletion_summaries
+    ]
+
+    apply_buffer = replace(buffer, semester_updated_at=current_semester.updated_at)
+    try:
+        apply_setlist_edits(apply_buffer, viewing_semester=viewing_semester)
+    except (WrongViewingSemesterError, StaleSetlistSemesterError) as error:
+        return _blocked_setlist_fallout(str(error), is_stale=is_stale)
+
+    pending_adds = []
+    pending_edits = []
+    for row in buffer.rows:
+        before = songs_before.get(row.song_id)
+        if before is None:
+            pending_adds.append(row.title)
+            continue
+        if (before.title, before.artist, before.length, before.notes) != (row.title, row.artist, row.length, row.notes):
+            pending_edits.append(f'{before.title} → {row.title}' if before.title != row.title else row.title)
+
+    final_order = [row.song_id for row in buffer.rows if row.song_id is not None]
+    reordered = final_order != surviving_current_order
+
+    loud = []
+    for deletion in pending_deletions:
+        parts = []
+        if deletion.recording_count:
+            parts.append(f"{deletion.recording_count} recording{'' if deletion.recording_count == 1 else 's'}")
+        if deletion.running_order_count:
+            parts.append(
+                f"{deletion.running_order_count} rehearsal Running Order"
+                f"{'' if deletion.running_order_count == 1 else 's'}"
+            )
+        if parts:
+            loud.append(f"Deleting {deletion.title} destroys {' and '.join(parts)}.")
+
+    quiet = []
+    if reordered:
+        quiet.append(
+            'Reordering the setlist changes concert position only — it does not change any rehearsal’s Running Order.'
+        )
+
+    return SetlistEditFallout(
+        is_blocked=False,
+        block_message='',
+        is_stale=is_stale,
+        pending_adds=pending_adds,
+        pending_edits=pending_edits,
+        reordered=reordered,
+        pending_deletions=pending_deletions,
+        loud=loud,
+        quiet=quiet,
+    )
+
+
 class StaleSongRoleRequirementsError(ValueError):
     """Raised when a Song's Role Requirements changed since the edit Buffer was loaded (issue #209)."""
 
