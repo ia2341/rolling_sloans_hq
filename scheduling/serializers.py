@@ -21,6 +21,7 @@ from scheduling.services import (
     SetlistEditBuffer,
     SetlistEditFallout,
     SetlistSongDeletion,
+    SpotifyImportCandidate,
 )
 
 # The Semester status set crosses the wire as lowercase snake-case,
@@ -301,6 +302,39 @@ def serialize_setlist_edit_buffer(buffer: SetlistEditBuffer) -> dict:
         'semester_updated_at': buffer.semester_updated_at.isoformat() if buffer.semester_updated_at else None,
         'rows': [_serialize_setlist_edit_row_echo(row, index) for index, row in enumerate(buffer.rows)],
         'deleted_song_ids': sorted(buffer.deleted_song_ids),
+    }
+
+
+def _serialize_spotify_import_candidate(candidate: SpotifyImportCandidate) -> dict:
+    """Return one `SpotifyImportCandidate`: its display fields plus the server-computed duplicate flag (issue #335).
+
+    `length` crosses as its display string like every other Song length on
+    the wire; a candidate whose track carried no usable duration (never
+    seen from `scheduling.spotify` today, which always derives one from
+    `duration_ms`, but not guaranteed by its contract) crosses as `''`
+    rather than a fabricated `0:00`, per issue #335 user story 33.
+    """
+    return {
+        'title': candidate.title,
+        'artist': candidate.artist,
+        'length': format_song_length(candidate.length) if candidate.length else '',
+        'already_in_setlist': candidate.already_in_setlist,
+    }
+
+
+def serialize_spotify_import(candidates: list[SpotifyImportCandidate], *, skipped_count: int, skipped_reasons: dict, message: str) -> dict:
+    """Return the `/api/setlist/spotify/` `data` shape (issue #335): answers its own question, not the write envelope.
+
+    `message` is `''` on a successful fetch and a readable explanation
+    otherwise (an invalid link, an unconfigured credential, a Spotify-side
+    failure) — the sheet renders it as a plain message rather than an
+    error state, and `candidates`/`skipped_*` are empty whenever it's set.
+    """
+    return {
+        'songs': [_serialize_spotify_import_candidate(candidate) for candidate in candidates],
+        'skipped_count': skipped_count,
+        'skipped_reasons': dict(skipped_reasons),
+        'message': message,
     }
 
 

@@ -3403,6 +3403,53 @@ def preview_setlist_edits(buffer: SetlistEditBuffer, *, viewing_semester: Semest
     )
 
 
+@dataclass(frozen=True)
+class SpotifyImportCandidate:
+    """One playlist track offered in the + Add sheet's Spotify section, with server-computed duplicate detection (issue #335).
+
+    `scheduling.spotify` performs no de-duplication of any kind — it only
+    turns a playlist into rows. Whether a candidate is "already in this
+    setlist" is a question about saved data, so it's answered here rather
+    than in the client: the wire carries what the admin reads and types,
+    and anything derived from saved state stays server-side (issue #335's
+    wire-primitives rule). A duplicate still ticks and adds normally — a
+    Setlist may legitimately repeat a title (issue #335 user story 25) —
+    this only supplies the sheet's grey/"Already in this setlist" label.
+    """
+
+    title: str
+    artist: str
+    length: timedelta
+    already_in_setlist: bool
+
+
+def spotify_import_candidates_for(semester: Semester | None, songs) -> list[SpotifyImportCandidate]:
+    """Return Spotify-imported rows as + Add sheet candidates, flagging each whose title already exists in `semester`'s Setlist.
+
+    `songs` is `PlaylistImportResult.songs` (a list of `scheduling.spotify.ImportedSong`,
+    accessed here only by `title`/`artist`/`length` duck typing, so this
+    function stays free of a dependency on `scheduling.spotify`'s types).
+    The duplicate check is case-insensitive and title-only, matching the
+    sheet's greyed "Already in this setlist" label (issue #335) — an
+    artist or length difference never suppresses the flag. `semester=None`
+    (nothing published/selected) flags nothing as a duplicate.
+    """
+    existing_titles = (
+        {title.casefold() for title in Song.objects.filter(semester=semester).values_list('title', flat=True)}
+        if semester is not None
+        else set()
+    )
+    return [
+        SpotifyImportCandidate(
+            title=song.title,
+            artist=song.artist,
+            length=song.length,
+            already_in_setlist=song.title.casefold() in existing_titles,
+        )
+        for song in songs
+    ]
+
+
 class StaleSongRoleRequirementsError(ValueError):
     """Raised when a Song's Role Requirements changed since the edit Buffer was loaded (issue #209)."""
 

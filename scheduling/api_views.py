@@ -25,7 +25,7 @@ from django.views import View
 
 from config.views import AdminApiView, AdminPreviewApiView, ApiView
 from identity.models import Person
-from scheduling import serializers, services
+from scheduling import serializers, services, spotify
 from scheduling.api_builders import (
     SetlistBufferValidationError,
     build_setlist_buffer_from_request,
@@ -196,6 +196,51 @@ class SetlistSaveApiView(AdminApiView, View):
             )
 
         return self.write_response(request, ok=True, values=None)
+
+
+class SetlistSpotifyImportApiView(AdminApiView, View):
+    """`POST /api/setlist/spotify/`: fetches a public Spotify playlist as + Add sheet candidates (issue #335).
+
+    Writes nothing anywhere: `scheduling.spotify.import_playlist()` only
+    reads from Spotify, and this view persists no `Song` — an imported row
+    exists only once the admin ticks it into the edit Buffer and Saves.
+    Answers its own shape (`songs`/`skipped_count`/`skipped_reasons`/`message`),
+    not the write envelope: the envelope boundary rule (issue #307)
+    reserves that shape for an endpoint that takes a Pending Buffer, and
+    this endpoint answers a question instead. Still carries `context`, via
+    `read_response()`. A missing/blank `url`, an unconfigured Spotify
+    credential (`SpotifyImportUnavailable`) and every other
+    `SpotifyImportError` (a malformed link, a private/missing playlist, an
+    auth failure, a rate limit, a transport error) all degrade to a
+    readable `message` in a 200 response rather than a non-2xx status, so
+    the sheet renders the failure inline instead of treating it as a
+    fetch failure (issue #335 user stories 27-28).
+    """
+
+    def post(self, request):
+        """Fetch `request`'s JSON `url` as a playlist and return its candidates, or a readable `message` on failure."""
+        body = self.parse_json_body(request)
+        url = body.get('url') if isinstance(body, dict) else None
+        if not isinstance(url, str) or not url.strip():
+            return self.read_response(
+                request, serializers.serialize_spotify_import([], skipped_count=0, skipped_reasons={}, message=spotify.INVALID_LINK_MESSAGE)
+            )
+
+        try:
+            result = spotify.import_playlist(url)
+        except spotify.SpotifyImportError as error:
+            return self.read_response(
+                request, serializers.serialize_spotify_import([], skipped_count=0, skipped_reasons={}, message=str(error))
+            )
+
+        viewing_semester = services.get_viewing_semester(request)
+        candidates = services.spotify_import_candidates_for(viewing_semester, result.songs)
+        return self.read_response(
+            request,
+            serializers.serialize_spotify_import(
+                candidates, skipped_count=result.skipped_count, skipped_reasons=result.skipped_reasons, message=''
+            ),
+        )
 
 
 class ScheduleApiView(ApiView, View):

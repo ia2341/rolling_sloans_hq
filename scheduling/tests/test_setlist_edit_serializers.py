@@ -1,16 +1,20 @@
-"""Exact-key-set tests for the new Setlist edit Fallout/Buffer serializers (issue #334)."""
+"""Exact-key-set tests for the new Setlist edit Fallout/Buffer serializers (issue #334, #335)."""
+
+from datetime import timedelta
 
 from django.test import SimpleTestCase
 
 from scheduling.serializers import (
     serialize_setlist_edit_buffer,
     serialize_setlist_edit_fallout,
+    serialize_spotify_import,
 )
 from scheduling.services import (
     SetlistEditBuffer,
     SetlistEditFallout,
     SetlistEditRow,
     SetlistSongDeletion,
+    SpotifyImportCandidate,
 )
 
 
@@ -77,3 +81,38 @@ class SerializeSetlistEditBufferTests(SimpleTestCase):
         self.assertEqual(payload['deleted_song_ids'], [9, 10])
         self.assertEqual(payload['rows'][0]['length'], '3:30')
         self.assertEqual(payload['rows'][1]['song_id'], None)
+
+
+class SerializeSpotifyImportTests(SimpleTestCase):
+    """`serialize_spotify_import()` (issue #335) emits exactly its documented key set."""
+
+    def test_returns_exactly_the_documented_keys(self):
+        """One candidate plus skip metadata serializes to exactly the documented shape."""
+        candidates = [
+            SpotifyImportCandidate(
+                title='Borrowed Chorus', artist='Nomad Echo', length=timedelta(minutes=4, seconds=5), already_in_setlist=True,
+            ),
+        ]
+
+        payload = serialize_spotify_import(
+            candidates, skipped_count=1, skipped_reasons={'local file': 1}, message='',
+        )
+
+        self.assertEqual(set(payload.keys()), {'songs', 'skipped_count', 'skipped_reasons', 'message'})
+        self.assertEqual(
+            set(payload['songs'][0].keys()),
+            {'title', 'artist', 'length', 'already_in_setlist'},
+        )
+        self.assertEqual(payload['songs'][0]['length'], '4:05')
+        self.assertTrue(payload['songs'][0]['already_in_setlist'])
+        self.assertEqual(payload['skipped_reasons'], {'local file': 1})
+
+    def test_a_zero_length_candidate_serializes_to_a_blank_length(self):
+        """A candidate with no usable duration serializes to `''`, never a fabricated `0:00` (issue #335 user story 33)."""
+        candidates = [
+            SpotifyImportCandidate(title='No Duration', artist='Unknown', length=timedelta(0), already_in_setlist=False),
+        ]
+
+        payload = serialize_spotify_import(candidates, skipped_count=0, skipped_reasons={}, message='')
+
+        self.assertEqual(payload['songs'][0]['length'], '')
