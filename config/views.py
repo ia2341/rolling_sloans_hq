@@ -1,11 +1,12 @@
 """Project-level view base classes shared across apps."""
 
+import json
 from typing import ClassVar
 
 from django.conf import settings
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.db import transaction
-from django.http import HttpResponseForbidden
+from django.http import HttpResponseForbidden, JsonResponse
 from django.shortcuts import render
 from django.utils.decorators import method_decorator
 from django.views import View
@@ -32,10 +33,108 @@ class AdminRequiredMixin(BaseView):
     """
 
     def dispatch(self, request, *args, **kwargs):
-        """Return 403 for a logged-in non-admin Person; otherwise defer to the login-gated dispatch chain."""
+        """Return this view's admin-required refusal for a logged-in non-admin; otherwise defer to the login-gated dispatch chain."""
         if request.user.is_authenticated and not request.user.is_admin:
-            return HttpResponseForbidden()
+            return self.handle_admin_required()
         return super().dispatch(request, *args, **kwargs)
+
+    def handle_admin_required(self):
+        """Return the refusal for a logged-in non-admin Person (issue #326: overridable so `AdminApiView` can answer JSON instead of HTML)."""
+        return HttpResponseForbidden()
+
+
+class MalformedPayloadError(ValueError):
+    """Raised by `ApiView.parse_json_body()` for a request body that isn't parseable JSON (issue #326)."""
+
+
+class ApiView(BaseView):
+    """Base class for every `/api/` endpoint (issue #326): the login gate answers a 401, never a redirect.
+
+    `fetch()` follows a 302 transparently, which would turn an expired
+    session into a 200 carrying an HTML login page. Overriding
+    `handle_no_permission()` here means every `/api/` route inherits the
+    JSON 401 for free, the same way `BaseView` gives every route the login
+    gate for free — there is no supported way to serve a `/api/` response
+    without it.
+
+    Also owns the envelope every `/api/` response wears: `read_response()`
+    and `write_response()` attach the `context` block themselves, so an
+    endpoint cannot forget it either.
+    """
+
+    def handle_no_permission(self):
+        """Answer an unauthenticated request with the documented JSON 401, never a redirect."""
+        return JsonResponse({'error': 'authentication_required'}, status=401)
+
+    def dispatch(self, request, *args, **kwargs):
+        """Run the normal dispatch chain, turning a `MalformedPayloadError` into the documented JSON 400."""
+        try:
+            return super().dispatch(request, *args, **kwargs)
+        except MalformedPayloadError:
+            return JsonResponse({'error': 'malformed_payload'}, status=400)
+
+    def parse_json_body(self, request):
+        """Return `request.body` parsed as JSON, or raise `MalformedPayloadError` for an unparseable body."""
+        try:
+            return json.loads(request.body)
+        except (json.JSONDecodeError, UnicodeDecodeError) as error:
+            raise MalformedPayloadError('Malformed JSON body.') from error
+
+    def build_context(self, request):
+        """Return the six-key `context` block every `/api/` response carries (issue #326).
+
+        Imported locally, not at module scope: `config/views.py` is
+        project-level infrastructure every app depends on, and importing an
+        app's serializer module at the top of it would invert that
+        direction for no benefit — the context block is genuinely a
+        `scheduling` concern (Semester lives there), delegating to
+        `identity` for the viewer.
+        """
+        from scheduling.serializers import serialize_context
+
+        return serialize_context(request)
+
+    def read_response(self, request, data):
+        """Return the read envelope: `{"context": ..., "data": data}`, for an endpoint answering a question."""
+        return JsonResponse({'context': self.build_context(request), 'data': data})
+
+    def write_response(
+        self,
+        request,
+        *,
+        ok,
+        errors=None,
+        non_field_errors=None,
+        fallout=None,
+        values=None,
+        data=None,
+    ):
+        """Return the write envelope for an endpoint that takes a Pending Buffer (issue #326)."""
+        return JsonResponse({
+            'context': self.build_context(request),
+            'ok': ok,
+            'errors': errors or {},
+            'non_field_errors': non_field_errors or [],
+            'fallout': fallout,
+            'values': values,
+            'data': data,
+        })
+
+
+class AdminApiView(AdminRequiredMixin, ApiView):
+    """Base class for every admin-only `/api/` endpoint (issue #326).
+
+    MRO is `AdminApiView -> AdminRequiredMixin -> ApiView -> BaseView ->
+    LoginRequiredMixin`, deliberately: the admin check runs first, but an
+    anonymous caller still gets `ApiView`'s JSON 401 rather than
+    `AdminRequiredMixin`'s refusal, because `AdminRequiredMixin` only
+    rejects an *authenticated* non-admin and otherwise defers to the
+    login-gated dispatch chain below it.
+    """
+
+    def handle_admin_required(self):
+        """Answer a logged-in non-admin's request with the documented JSON 403."""
+        return JsonResponse({'error': 'admin_required'}, status=403)
 
 
 class PreviewMixin:

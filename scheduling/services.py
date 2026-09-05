@@ -69,11 +69,21 @@ class RecordingUploadError(ValueError):
 
 @dataclass(frozen=True)
 class SemesterOption:
-    """One entry in the admin's Semester dropdown: a Semester, its Live/Draft/Previously-published label, and whether it's the one on screen."""
+    """One entry in the admin's Semester dropdown: a Semester, its Live/Draft/Previously-published label, whether it's the one on screen, and its counts.
+
+    `member_count`, `song_count` and `rehearsal_count` are the three counts
+    the `/api/` sidebar's dropdown wants on every entry without a per-option
+    query (issue #326) — `semester_options_for()` annotates them onto the
+    single queryset it already builds, rather than issuing one query per
+    Semester per count.
+    """
 
     semester: Semester
     status: str
     is_viewing: bool
+    member_count: int
+    song_count: int
+    rehearsal_count: int
 
 
 @dataclass(frozen=True)
@@ -564,13 +574,21 @@ def semester_options_for(request) -> list['SemesterOption']:
         return []
     live = get_live_semester()
     viewing = get_viewing_semester(request)
+    semesters = Semester.objects.order_by('-created_at', '-id').annotate(
+        member_count=Count('membership', distinct=True),
+        song_count=Count('song', distinct=True),
+        rehearsal_count=Count('rehearsal', distinct=True),
+    )
     return [
         SemesterOption(
             semester=semester,
             status=_semester_status(semester, live),
             is_viewing=viewing is not None and semester.pk == viewing.pk,
+            member_count=semester.member_count,
+            song_count=semester.song_count,
+            rehearsal_count=semester.rehearsal_count,
         )
-        for semester in Semester.objects.order_by('-created_at', '-id')
+        for semester in semesters
     ]
 
 
@@ -1707,6 +1725,20 @@ def conflict_adjudication_index_for(semester) -> list[ConflictAdjudicationRow]:
         ConflictAdjudicationRow(rehearsal=rehearsal, pending_count=pending_counts.get(rehearsal.pk, 0))
         for rehearsal in rehearsals
     ]
+
+
+def pending_conflict_count_for(semester) -> int:
+    """Return `semester`'s total pending-Conflict count across every adjudicatable Rehearsal (issue #326).
+
+    The ambient count the `/api/` envelope's `context.pending_conflict_count`
+    carries for an admin — its one consumer is the admin Conflicts index
+    (issue #340); #328 must not render it on the Conflicts nav item, which
+    #311 removed deliberately. Shares `conflict_adjudication_index_for()`'s
+    future/non-Dress Rehearsal scope (ADR 0006), summed rather than broken
+    out per Rehearsal.
+    """
+    rehearsals = future_rehearsals_for(semester)
+    return Conflict.objects.filter(rehearsal__in=rehearsals, status=Conflict.PENDING).count()
 
 
 @dataclass(frozen=True)

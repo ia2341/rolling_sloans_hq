@@ -150,6 +150,18 @@ if 'test' in sys.argv:
 SESSION_COOKIE_AGE = 60 * 60 * 24 * 30  # 30 days
 SESSION_SAVE_EVERY_REQUEST = True
 
+# Stated explicitly rather than inherited (issue #326 user story 24): both
+# already equal Django's own default, but a same-origin Django + React SPA
+# with session cookies (#307) makes a silent Django default change a
+# decision we'd rather make ourselves than have happen to us.
+SESSION_COOKIE_SAMESITE = 'Lax'
+CSRF_COOKIE_SAMESITE = 'Lax'
+
+# CSRF_COOKIE_HTTPONLY is left at its default (False) and that default is
+# load-bearing, not incidental: the SPA's fetch wrapper (issue #326) reads
+# the csrftoken cookie from script and sends it back as X-CSRFToken on
+# every unsafe request. Setting this True would make every write 403.
+
 
 # Internationalization
 # https://docs.djangoproject.com/en/6.1/topics/i18n/

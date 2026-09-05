@@ -10,12 +10,12 @@ from config.views import SpaIndexView
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('accounts/', include('identity.urls')),
-    # path('api/', include('api.urls')) lands here, ahead of the catch-all
-    # and the existing app routes below — issue #326 owns that include and
-    # its own terminal JSON-404 route, which is what stops a mistyped API
-    # path from falling through to the SPA shell and getting an HTML 200
-    # where the client expected JSON.
-    #
+    # Ahead of the catch-all and the existing app routes below (issue #326):
+    # includes each app's own /api/ URLConf and ends in its own terminal
+    # JSON-404 route, which is what stops a mistyped API path from falling
+    # through to the SPA shell and getting an HTML 200 where the client
+    # expected JSON.
+    path('api/', include('config.api_urls')),
     # No explicit /static/ entry is needed: `runserver` serves STATICFILES_DIRS
     # itself when DEBUG is True, and WhiteNoise's middleware serves STATIC_ROOT
     # in production — neither goes through this URLconf.
