@@ -16,7 +16,7 @@ from django.contrib import admin
 from django.test import Client, SimpleTestCase
 from django.urls import URLResolver, get_resolver, reverse
 
-from config.views import AdminApiView, ApiView, BaseView
+from config.views import AdminApiView, AdminPreviewApiView, ApiView, BaseView
 
 # Explicit and short by design (per the issue): auth views that run before a
 # Person can be assumed to exist. Adding to this list is a visible act in a
@@ -110,6 +110,24 @@ def _iter_api_leaf_paths(url_patterns, prefix=''):
             yield prefix + str(entry.pattern)
 
 
+def _iter_api_leaf_path_view_pairs(url_patterns, prefix=''):
+    """Recursively walk an `/api/`-rooted URLconf, yielding `(full_path, view_class)` for every zero-argument leaf route.
+
+    Mirrors `_iter_api_leaf_paths()`, but keeps the resolved view class
+    alongside its path — `_iter_view_classes()` alone loses the path, and
+    `_iter_api_leaf_paths()` alone loses the view, and issue #334's
+    "every `.../preview/` route is an `AdminPreviewApiView` subclass"
+    check needs both at once.
+    """
+    for entry in url_patterns:
+        if isinstance(entry, URLResolver):
+            yield from _iter_api_leaf_path_view_pairs(entry.url_patterns, prefix + str(entry.pattern))
+        elif entry.pattern.regex.groups == 0:
+            view_class = getattr(entry.callback, 'view_class', None)
+            if view_class is not None:
+                yield prefix + str(entry.pattern), view_class
+
+
 class ApiViewCoverageTests(SimpleTestCase):
     """Every `/api/` view must inherit `ApiView`, and every zero-argument `/api/` route must 401, never 302 (issue #326)."""
 
@@ -145,6 +163,30 @@ class ApiViewCoverageTests(SimpleTestCase):
             offenders,
             [],
             f'The following /api/ routes did not answer an anonymous request with a bare 401: {offenders}',
+        )
+
+    def test_every_preview_route_resolves_to_an_admin_preview_api_view_subclass(self):
+        """Every `/api/` route ending in `preview/` must resolve to an `AdminPreviewApiView` subclass (issue #334).
+
+        The generic `test_every_api_view_inherits_api_view` above already
+        proves every `/api/` view is an `ApiView`; this sharpens that for
+        the Preview shape specifically, since `AdminPreviewApiView` is what
+        actually guarantees the ADR-0008 run-and-roll-back transaction —
+        a plain `AdminApiView` subclass at a `preview/` path would 401/403
+        identically but silently skip the rollback.
+        """
+        api_resolver = _find_api_resolver(get_resolver().url_patterns)
+        self.assertIsNotNone(api_resolver, 'No api/ route found in the project URLConf.')
+        offenders = []
+
+        for path, view_class in _iter_api_leaf_path_view_pairs(api_resolver.url_patterns, prefix='/api/'):
+            if path.endswith('preview/') and not issubclass(view_class, AdminPreviewApiView):
+                offenders.append(f'{path} -> {view_class.__module__}.{view_class.__qualname__}')
+
+        self.assertEqual(
+            offenders,
+            [],
+            f'The following /api/ .../preview/ routes do not inherit AdminPreviewApiView: {offenders}',
         )
 
 

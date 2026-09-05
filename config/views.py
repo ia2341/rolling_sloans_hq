@@ -160,6 +160,29 @@ class PreviewMixin:
         return response
 
 
+class AdminPreviewApiView(PreviewMixin, AdminApiView, View):
+    """Base class for an admin-only `/api/` Preview endpoint (issue #334, ADR 0008).
+
+    MRO is `AdminPreviewApiView -> PreviewMixin -> AdminApiView ->
+    AdminRequiredMixin -> ApiView -> BaseView -> LoginRequiredMixin ->
+    View`, mirroring the pre-SPA `PreviewMixin, AdminRequiredMixin, View`
+    ordering: `PreviewMixin` owns `post()` (and the `http_method_names =
+    ['post']` that comes with it), so it must sit ahead of the mixin chain
+    that owns `dispatch()` — the admin/auth gate still runs first, since
+    `PreviewMixin.post()` is only ever reached once `dispatch()` (resolved
+    through `AdminRequiredMixin`/`BaseView`/`LoginRequiredMixin`) has let
+    the request through. `View` is listed explicitly (unlike the pre-SPA
+    version, where the concrete view class supplied it) because none of
+    `AdminApiView`/`AdminRequiredMixin`/`ApiView`/`BaseView` are
+    `django.views.View` subclasses themselves — each is a plain mixin, by
+    the same convention `SetlistApiView(ApiView, View)` already follows —
+    so a base class meant to be used directly (as this one is, by every
+    admin Preview endpoint) has to supply `View` itself rather than assume
+    a subclass will. A subclass supplies only `run_preview()`; the
+    transaction-then-rollback shape is entirely `PreviewMixin`'s.
+    """
+
+
 class SpaIndexView(View):
     """Serves the React SPA's shell document (issue #325).
 

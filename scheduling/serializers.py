@@ -17,6 +17,11 @@ from identity.serializers import serialize_viewer
 from scheduling import services
 from scheduling.fields import format_song_length
 from scheduling.models import Conflict, Rehearsal, Song
+from scheduling.services import (
+    SetlistEditBuffer,
+    SetlistEditFallout,
+    SetlistSongDeletion,
+)
 
 # The Semester status set crosses the wire as lowercase snake-case,
 # mirroring `services._semester_status()`'s three internal labels.
@@ -226,6 +231,77 @@ def serialize_song(song, *, is_admin: bool, next_rehearsal) -> dict:
     if is_admin:
         data['next_rehearsal'] = _serialize_next_rehearsal(next_rehearsal) if next_rehearsal is not None else None
     return data
+
+
+def _serialize_setlist_song_deletion(deletion: SetlistSongDeletion) -> dict:
+    """Return one `SetlistSongDeletion`: the doomed Song's title and its Recording/uploader/Running-Order counts."""
+    return {
+        'title': deletion.title,
+        'recording_count': deletion.recording_count,
+        'uploader_count': deletion.uploader_count,
+        'running_order_count': deletion.running_order_count,
+    }
+
+
+def serialize_setlist_edit_fallout(fallout: SetlistEditFallout) -> dict:
+    """Return a `SetlistEditFallout` as the `/api/setlist/preview/` response's `fallout` value (issue #334).
+
+    Named field-by-field, matching every other serializer in this module
+    — `is_blocked`/`block_message` are included so a caller can tell a
+    genuinely-computed (if empty) Fallout apart from one that never ran,
+    even though the `/api/setlist/preview/` view itself only ever calls
+    this function on a *non*-blocked Fallout (a `WrongViewingSemesterError`
+    is checked for and answered as its own 4xx before `preview_setlist_edits()`
+    is even called, per the issue's "wrong semester_id hard-fails" rule).
+    """
+    return {
+        'is_blocked': fallout.is_blocked,
+        'block_message': fallout.block_message,
+        'is_stale': fallout.is_stale,
+        'pending_adds': list(fallout.pending_adds),
+        'pending_edits': list(fallout.pending_edits),
+        'reordered': fallout.reordered,
+        'pending_deletions': [_serialize_setlist_song_deletion(deletion) for deletion in fallout.pending_deletions],
+        'loud': list(fallout.loud),
+        'quiet': list(fallout.quiet),
+    }
+
+
+def _serialize_setlist_edit_row_echo(row, index: int) -> dict:
+    """Return one `SetlistEditRow` echoed back in `build_setlist_buffer_from_request()`'s wire shape.
+
+    `row_key` isn't reconstructable from a `SetlistEditRow` — it was never
+    stored on the Buffer, only used transiently to key a validation
+    failure — so a *successfully built* Buffer's echo indexes positionally
+    (`row-0`, `row-1`, ...). A validation failure's echo takes a different
+    path entirely (the view echoes `SetlistBufferValidationError.raw_rows`
+    directly, which does carry the client's own `row_key`s), since
+    normalization never finished long enough to reach this function.
+    """
+    return {
+        'row_key': f'row-{index}',
+        'song_id': row.song_id,
+        'title': row.title,
+        'artist': row.artist,
+        'length': format_song_length(row.length),
+        'notes': row.notes,
+    }
+
+
+def serialize_setlist_edit_buffer(buffer: SetlistEditBuffer) -> dict:
+    """Return a `SetlistEditBuffer` echoed back in `build_setlist_buffer_from_request()`'s wire shape (issue #334).
+
+    Used only by `/api/setlist/preview/`'s `values` field on a *successful*
+    build — every submitted value, normalized — never by `/api/setlist/save/`,
+    which drops `values` per #326's rule that a write response echoes
+    nothing back.
+    """
+    return {
+        'semester_id': buffer.semester_id,
+        'semester_updated_at': buffer.semester_updated_at.isoformat() if buffer.semester_updated_at else None,
+        'rows': [_serialize_setlist_edit_row_echo(row, index) for index, row in enumerate(buffer.rows)],
+        'deleted_song_ids': sorted(buffer.deleted_song_ids),
+    }
 
 
 def serialize_availability(rehearsal, conflict_row) -> dict:
