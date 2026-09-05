@@ -43,6 +43,7 @@ from scheduling.services import (
     setlist_total_running_time,
     song_rehearsal_progress,
     songs_with_progress_for,
+    timeline_for,
 )
 
 
@@ -382,6 +383,71 @@ class BreaksForTests(TestCase):
         SongRoleAssignmentFactory(song=song, role=self.role, person=self.person)
 
         self.assertEqual(breaks_for(dress_rehearsal, self.person), [])
+
+
+class TimelineForTests(TestCase):
+    """`timeline_for()`: the "You at this rehearsal" picture (issue #331)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        """Build a Person and a Role to attach RehearsalSong rows to."""
+        cls.person = PersonFactory()
+        cls.role = RoleFactory()
+
+    def _slot(self, rehearsal, order, *, assign=False):
+        """Build a RehearsalSong at `order` in `rehearsal`, optionally assigning self.person to its Song."""
+        song = SongFactory(semester=rehearsal.semester)
+        if assign:
+            SongRoleAssignmentFactory(song=song, role=self.role, person=self.person)
+        return RehearsalSongFactory(rehearsal=rehearsal, song=song, order=order)
+
+    def test_viewer_on_no_slots(self):
+        """A viewer on none of the Rehearsal's slots gets every slot flagged False and no viewer start/end."""
+        rehearsal = RehearsalFactory(is_full_setlist=False)
+        self._slot(rehearsal, 1)
+        self._slot(rehearsal, 2)
+
+        timeline = timeline_for(rehearsal, self.person)
+
+        self.assertEqual(len(timeline.slots), 2)
+        self.assertTrue(all(not slot.is_viewer for slot in timeline.slots))
+        self.assertEqual(timeline.viewer_song_count, 0)
+        self.assertEqual(timeline.total_song_count, 2)
+        self.assertIsNone(timeline.viewer_start_time)
+        self.assertIsNone(timeline.viewer_end_time)
+        self.assertEqual(timeline.window_start, rehearsal.start_time)
+        self.assertEqual(timeline.window_end, rehearsal.end_time)
+        self.assertFalse(timeline.is_dress_rehearsal)
+
+    def test_viewer_on_first_and_last_slot_only(self):
+        """The viewer's start/end span the first and last slot they're on, skipping the unassigned middle one."""
+        rehearsal = RehearsalFactory(is_full_setlist=False)
+        first = self._slot(rehearsal, 1, assign=True)
+        self._slot(rehearsal, 2)
+        last = self._slot(rehearsal, 3, assign=True)
+
+        timeline = timeline_for(rehearsal, self.person)
+
+        self.assertEqual([slot.is_viewer for slot in timeline.slots], [True, False, True])
+        self.assertEqual(timeline.viewer_song_count, 2)
+        self.assertEqual(timeline.total_song_count, 3)
+        self.assertEqual(timeline.viewer_start_time, first.start_time)
+        self.assertEqual(timeline.viewer_end_time, last.end_time)
+
+    def test_dress_rehearsal_degenerates_to_the_whole_window_and_setlist(self):
+        """The Dress Rehearsal has no RehearsalSong rows: the picture is the whole window, for every viewer (ADR-0006)."""
+        dress_rehearsal = RehearsalFactory(is_full_setlist=True)
+        SongFactory(semester=dress_rehearsal.semester)
+        SongFactory(semester=dress_rehearsal.semester)
+
+        timeline = timeline_for(dress_rehearsal, self.person)
+
+        self.assertEqual(timeline.slots, [])
+        self.assertEqual(timeline.viewer_song_count, 2)
+        self.assertEqual(timeline.total_song_count, 2)
+        self.assertEqual(timeline.viewer_start_time, dress_rehearsal.start_time)
+        self.assertEqual(timeline.viewer_end_time, dress_rehearsal.end_time)
+        self.assertTrue(timeline.is_dress_rehearsal)
 
 
 class AssignmentMatrixForTests(TestCase):

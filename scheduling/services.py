@@ -1800,6 +1800,86 @@ def breaks_for(rehearsal, person) -> list[Break]:
     return breaks
 
 
+@dataclass(frozen=True)
+class TimelineSlot:
+    """One slot of `timeline_for()`'s rehearsal-window picture: a Song's timed span and whether the viewer is on it (issue #331)."""
+
+    song: Song
+    start_time: time
+    end_time: time
+    is_viewer: bool
+
+
+@dataclass(frozen=True)
+class Timeline:
+    """The viewer's "You at this rehearsal" picture: the Rehearsal's ordered slots, plus the viewer's own span and counts (issue #331).
+
+    `slots` is empty for the Dress Rehearsal (ADR-0003, no persisted
+    RehearsalSong rows) — its picture degenerates to the whole window, so
+    `viewer_start_time`/`viewer_end_time` are the Rehearsal's own
+    start_time/end_time and both counts are the live setlist's song count,
+    for every viewer alike (attendance there is mandatory, ADR-0006).
+    `viewer_start_time`/`viewer_end_time` are None for a regular Rehearsal
+    the viewer is on no slot of — an empty timeline is itself the answer,
+    not a missing one.
+    """
+
+    slots: list[TimelineSlot]
+    window_start: time
+    window_end: time
+    viewer_song_count: int
+    total_song_count: int
+    viewer_start_time: time | None
+    viewer_end_time: time | None
+    is_dress_rehearsal: bool
+
+
+def timeline_for(rehearsal, person) -> Timeline:
+    """Build `person`'s "You at this rehearsal" timeline for `rehearsal` (issue #331).
+
+    Derives slot membership from `slots_for_person()` — the union of
+    standing assignments and Backups (ADR-0007) — never from `Song.length`,
+    which carries no scheduling authority (a slot is an equal share of the
+    Rehearsal's window, not the song's running time).
+    """
+    if rehearsal.is_full_setlist:
+        song_count = Song.objects.filter(semester=rehearsal.semester).count()
+        return Timeline(
+            slots=[],
+            window_start=rehearsal.start_time,
+            window_end=rehearsal.end_time,
+            viewer_song_count=song_count,
+            total_song_count=song_count,
+            viewer_start_time=rehearsal.start_time,
+            viewer_end_time=rehearsal.end_time,
+            is_dress_rehearsal=True,
+        )
+    rehearsal_songs = list(
+        RehearsalSong.objects.filter(rehearsal=rehearsal).select_related('song').order_by('order'),
+    )
+    viewer_slot_ids = set(slots_for_person(rehearsal, person).values_list('pk', flat=True))
+    slots = [
+        TimelineSlot(
+            song=rehearsal_song.song,
+            start_time=rehearsal_song.start_time,
+            end_time=rehearsal_song.end_time,
+            is_viewer=rehearsal_song.pk in viewer_slot_ids,
+        )
+        for rehearsal_song in rehearsal_songs
+    ]
+    viewer_slots = [slot for slot in slots if slot.is_viewer]
+    return Timeline(
+        slots=slots,
+        window_start=rehearsal.start_time,
+        window_end=rehearsal.end_time,
+        viewer_song_count=len(viewer_slots),
+        total_song_count=len(slots),
+        viewer_start_time=viewer_slots[0].start_time if viewer_slots else None,
+        viewer_end_time=viewer_slots[-1].end_time if viewer_slots else None,
+        is_dress_rehearsal=False,
+    )
+
+
 CONFLICT_FULL_ABSENCE = 'full_absence'
 CONFLICT_LATE_ARRIVAL = 'late_arrival'
 CONFLICT_EARLY_DEPARTURE = 'early_departure'
