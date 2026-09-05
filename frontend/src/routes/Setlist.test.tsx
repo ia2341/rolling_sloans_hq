@@ -1,7 +1,9 @@
 import { screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { memberContext } from '../test/fixtures'
+import { useEditSession } from '../shell/EditSessionContext'
+import { adminContext, memberContext } from '../test/fixtures'
 import { mockFetchOnce } from '../test/mockFetch'
 import { mockMatchMedia } from '../test/mockMatchMedia'
 import { renderShell } from '../test/renderShell'
@@ -193,5 +195,252 @@ describe('Setlist', () => {
       configurable: true,
       value: originalLocation,
     })
+  })
+})
+
+/** Exposes the registered `EditSession`'s Discard/Save-changes as clickable buttons, standing in for the shell's own `EditToolbar` (issue #335). */
+function EditSessionSpy() {
+  const session = useEditSession()
+  if (session === null) return <p>no edit session</p>
+  return (
+    <div>
+      <button type="button" onClick={session.discard}>
+        toolbar discard
+      </button>
+      <button type="button" onClick={session.requestSave} disabled={session.changeCount === 0}>
+        toolbar save
+      </button>
+      <p>{session.changeCount} unsaved</p>
+    </div>
+  )
+}
+
+describe('Setlist edit mode', () => {
+  it('shows "Edit setlist" for an admin and nothing for a member', async () => {
+    mockFetchOnce(200, { context: memberContext(), data: setlistPayload() })
+    renderShell(<Setlist />, ['/setlist'])
+    await screen.findByText('Test Song')
+    expect(screen.queryByRole('button', { name: 'Edit setlist' })).not.toBeInTheDocument()
+  })
+
+  it('entering edit mode swaps the read views for the grid and shows "+ Add songs"', async () => {
+    mockFetchOnce(200, { context: adminContext(), data: setlistPayload() })
+    const user = userEvent.setup()
+    renderShell(<Setlist />, ['/setlist'])
+
+    await user.click(await screen.findByRole('button', { name: 'Edit setlist' }))
+
+    expect(screen.getByRole('button', { name: '+ Add songs' })).toBeInTheDocument()
+    expect(screen.queryByRole('table', { name: '' })).toBeInTheDocument() // the edit grid is still a table on desktop
+    expect(screen.getByLabelText('Title for row 1')).toHaveValue('Test Song')
+  })
+
+  it('registers an EditSession only while editing, and clears it on Discard', async () => {
+    mockFetchOnce(200, { context: adminContext(), data: setlistPayload() })
+    const user = userEvent.setup()
+    renderShell(
+      <>
+        <Setlist />
+        <EditSessionSpy />
+      </>,
+      ['/setlist'],
+    )
+    await screen.findByText('Test Song')
+    expect(screen.getByText('no edit session')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Edit setlist' }))
+    expect(screen.getByText('0 unsaved')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'toolbar discard' }))
+    expect(screen.getByText('no edit session')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Edit setlist' })).toBeInTheDocument()
+  })
+
+  it('editing a title field updates the buffer and reports one unsaved change', async () => {
+    mockFetchOnce(200, { context: adminContext(), data: setlistPayload() })
+    const user = userEvent.setup()
+    renderShell(
+      <>
+        <Setlist />
+        <EditSessionSpy />
+      </>,
+      ['/setlist'],
+    )
+    await user.click(await screen.findByRole('button', { name: 'Edit setlist' }))
+
+    const titleInput = screen.getByLabelText('Title for row 1')
+    await user.clear(titleInput)
+    await user.type(titleInput, 'Renamed Song')
+
+    expect(titleInput).toHaveValue('Renamed Song')
+    expect(screen.getByText('1 unsaved')).toBeInTheDocument()
+  })
+
+  it('deleting a row strikes it through, and Undo restores it with no changes left', async () => {
+    mockFetchOnce(200, { context: adminContext(), data: setlistPayload() })
+    const user = userEvent.setup()
+    renderShell(
+      <>
+        <Setlist />
+        <EditSessionSpy />
+      </>,
+      ['/setlist'],
+    )
+    await user.click(await screen.findByRole('button', { name: 'Edit setlist' }))
+
+    await user.click(screen.getByRole('button', { name: 'Delete' }))
+    expect(screen.getByText('Test Song · Test Artist')).toBeInTheDocument()
+    expect(screen.getByText('1 unsaved')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Undo' }))
+    expect(screen.queryByText('Test Song · Test Artist')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Title for row 1')).toBeInTheDocument()
+    expect(screen.getByText('0 unsaved')).toBeInTheDocument()
+  })
+
+  it('adding a by-hand song through the + Add songs sheet appends a New row to the buffer', async () => {
+    mockFetchOnce(200, { context: adminContext(), data: setlistPayload() })
+    const user = userEvent.setup()
+    renderShell(<Setlist />, ['/setlist'])
+    await user.click(await screen.findByRole('button', { name: 'Edit setlist' }))
+
+    await user.click(screen.getByRole('button', { name: '+ Add songs' }))
+    await user.click(screen.getByRole('radio', { name: 'By hand' }))
+    await user.type(screen.getByLabelText('Title'), 'Hand-Added Song')
+    await user.click(screen.getByRole('button', { name: 'Add to the buffer' }))
+
+    expect(screen.getByLabelText('Title for row 2')).toHaveValue('Hand-Added Song')
+  })
+
+  it('opening the Save popup calls preview exactly once and renders its changes', async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        json: () => Promise.resolve({ context: adminContext(), data: setlistPayload() }),
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            context: adminContext(),
+            ok: true,
+            errors: {},
+            non_field_errors: [],
+            fallout: {
+              is_blocked: false,
+              block_message: '',
+              is_stale: false,
+              pending_adds: [],
+              pending_edits: ['Test Song: title changed'],
+              reordered: false,
+              pending_deletions: [],
+              loud: [],
+              quiet: [],
+            },
+            values: null,
+            data: null,
+          }),
+      })
+    vi.stubGlobal('fetch', fetchSpy)
+    const user = userEvent.setup()
+
+    renderShell(
+      <>
+        <Setlist />
+        <EditSessionSpy />
+      </>,
+      ['/setlist'],
+    )
+    await user.click(await screen.findByRole('button', { name: 'Edit setlist' }))
+    const titleInput = screen.getByLabelText('Title for row 1')
+    await user.clear(titleInput)
+    await user.type(titleInput, 'Test Song 2')
+
+    await user.click(screen.getByRole('button', { name: 'toolbar save' }))
+
+    await waitFor(() => expect(screen.getByText('What changes')).toBeInTheDocument())
+    expect(screen.getByText('Test Song: title changed')).toBeInTheDocument()
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
+    expect(fetchSpy.mock.calls[1]?.[0]).toBe('/api/setlist/preview/')
+  })
+
+  it('confirming a save posts to /api/setlist/save/ and returns to read mode on success', async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        json: () => Promise.resolve({ context: adminContext(), data: setlistPayload() }),
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            context: adminContext(),
+            ok: true,
+            errors: {},
+            non_field_errors: [],
+            fallout: {
+              is_blocked: false,
+              block_message: '',
+              is_stale: false,
+              pending_adds: [],
+              pending_edits: ['Test Song: title changed'],
+              reordered: false,
+              pending_deletions: [],
+              loud: [],
+              quiet: [],
+            },
+            values: null,
+            data: null,
+          }),
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            context: adminContext(),
+            ok: true,
+            errors: {},
+            non_field_errors: [],
+            fallout: null,
+            values: null,
+            data: null,
+          }),
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        json: () => Promise.resolve({ context: adminContext(), data: setlistPayload() }),
+      })
+    vi.stubGlobal('fetch', fetchSpy)
+    const user = userEvent.setup()
+
+    renderShell(
+      <>
+        <Setlist />
+        <EditSessionSpy />
+      </>,
+      ['/setlist'],
+    )
+    await user.click(await screen.findByRole('button', { name: 'Edit setlist' }))
+    const titleInput = screen.getByLabelText('Title for row 1')
+    await user.clear(titleInput)
+    await user.type(titleInput, 'Test Song 2')
+
+    await user.click(screen.getByRole('button', { name: 'toolbar save' }))
+    await waitFor(() => expect(screen.getByText('What changes')).toBeInTheDocument())
+
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Edit setlist' })).toBeInTheDocument())
+    expect(fetchSpy).toHaveBeenCalledTimes(4)
+    expect(fetchSpy.mock.calls[2]?.[0]).toBe('/api/setlist/save/')
+    expect(fetchSpy.mock.calls[3]?.[0]).toBe('/api/setlist/')
   })
 })
