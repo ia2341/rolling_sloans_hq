@@ -79,6 +79,7 @@ export function Setlist() {
   )
 }
 
+/** The phone layout: one card per Song, no horizontal scroll (issue #330). */
 function SetlistCards({
   songs,
   viewerId,
@@ -110,6 +111,7 @@ function SetlistCards({
   )
 }
 
+/** The desktop layout: one table row per Song, plus a second full-width row for its notes when it has any (issue #330). */
 function SetlistTable({
   songs,
   viewerId,

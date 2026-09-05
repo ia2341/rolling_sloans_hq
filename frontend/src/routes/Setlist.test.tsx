@@ -2,10 +2,12 @@ import { screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { memberContext } from '../test/fixtures'
+import { mockFetchOnce } from '../test/mockFetch'
 import { mockMatchMedia } from '../test/mockMatchMedia'
 import { renderShell } from '../test/renderShell'
 import { Setlist } from './Setlist'
 
+/** A minimal `/api/setlist/` `data` payload, one Song with a partial cast (Singer filled, Drummer unfilled). */
 function setlistPayload(overrides: Record<string, unknown> = {}) {
   return {
     semester_name: 'Spring 2026',
@@ -39,17 +41,6 @@ function setlistPayload(overrides: Record<string, unknown> = {}) {
     ],
     ...overrides,
   }
-}
-
-function mockFetchOnce(status: number, body: unknown) {
-  vi.stubGlobal(
-    'fetch',
-    vi.fn().mockResolvedValue({
-      status,
-      ok: status >= 200 && status < 300,
-      json: () => Promise.resolve(body),
-    }),
-  )
 }
 
 beforeEach(() => {

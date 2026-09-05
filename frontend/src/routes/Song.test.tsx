@@ -1,11 +1,13 @@
-import { screen } from '@testing-library/react'
+import { screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { adminContext, memberContext } from '../test/fixtures'
+import { mockFetchOnce } from '../test/mockFetch'
 import { mockMatchMedia } from '../test/mockMatchMedia'
 import { renderShell } from '../test/renderShell'
 import { Song } from './Song'
 
+/** A minimal `/api/songs/<pk>/` `data` payload: one Song with an unfilled cast, no recordings, no rehearsals. */
 function songPayload(overrides: Record<string, unknown> = {}) {
   return {
     id: 1,
@@ -19,17 +21,6 @@ function songPayload(overrides: Record<string, unknown> = {}) {
     rehearsed_at: [],
     ...overrides,
   }
-}
-
-function mockFetchOnce(status: number, body: unknown) {
-  vi.stubGlobal(
-    'fetch',
-    vi.fn().mockResolvedValue({
-      status,
-      ok: status >= 200 && status < 300,
-      json: () => Promise.resolve(body),
-    }),
-  )
 }
 
 beforeEach(() => {
@@ -142,7 +133,7 @@ describe('Song', () => {
     renderShell(<Song />, ['/songs/1'])
 
     expect(
-      await screen.findByText(/2026-02-10.*18:00:00–18:15:00.*2 takes/),
+      await screen.findByText(/2026-02-10.*18:00–18:15.*2 takes/),
     ).toBeInTheDocument()
     expect(screen.getByText('Sam Rivera')).toBeInTheDocument()
     expect(screen.getByText(/Alex Kim — Good take/)).toBeInTheDocument()
@@ -180,17 +171,32 @@ describe('Song', () => {
   })
 
   it('renders a 404 not-found state for a Song outside the viewing Semester', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        status: 404,
-        ok: false,
-        json: () => Promise.resolve({ error: 'not_found' }),
-      }),
-    )
+    mockFetchOnce(404, { error: 'not_found' })
 
     renderShell(<Song />, ['/songs/999'])
 
     expect(await screen.findByText('Song not found')).toBeInTheDocument()
+  })
+
+  it('a 401 from the mocked fetch layer triggers a full-page navigation, not an error banner', async () => {
+    mockFetchOnce(401, { error: 'authentication_required' })
+    const assignSpy = vi.fn()
+    const originalLocation = window.location
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: { ...originalLocation, assign: assignSpy },
+    })
+
+    renderShell(<Song />, ['/songs/1'])
+
+    await waitFor(() =>
+      expect(assignSpy).toHaveBeenCalledWith('/accounts/login/'),
+    )
+    expect(screen.queryByText(/error/i)).not.toBeInTheDocument()
+
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: originalLocation,
+    })
   })
 })

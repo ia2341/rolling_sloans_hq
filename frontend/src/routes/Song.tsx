@@ -14,6 +14,11 @@ type LoadState =
   | { status: 'not_found' }
   | { status: 'loaded'; data: SongPayload }
 
+/** Trims a wire `HH:MM:SS` time string down to `HH:MM` for display (issue #330's "date + HH:MM–HH:MM" group header). */
+function formatClockTime(isoTime: string): string {
+  return isoTime.slice(0, 5)
+}
+
 /**
  * `/songs/<pk>/` (issue #330): one Song's read model, fed by one
  * `GET /api/songs/<pk>/` round trip. A Song outside the viewing Semester
@@ -134,7 +139,7 @@ export function Song() {
                 <p className="text-sm font-medium">
                   {group.date}
                   {group.start_time !== null && group.end_time !== null
-                    ? ` · ${group.start_time}–${group.end_time}`
+                    ? ` · ${formatClockTime(group.start_time)}–${formatClockTime(group.end_time)}`
                     : ''}{' '}
                   · {group.take_count} take{group.take_count === 1 ? '' : 's'}
                 </p>
@@ -175,7 +180,9 @@ export function Song() {
                 {' — '}
                 {row.is_dress_rehearsal
                   ? 'whole setlist'
-                  : `${row.start_time ?? ''}–${row.end_time ?? ''}`}
+                  : `${row.start_time !== null ? formatClockTime(row.start_time) : ''}–${
+                      row.end_time !== null ? formatClockTime(row.end_time) : ''
+                    }`}
               </li>
             ))}
           </ul>
