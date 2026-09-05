@@ -1,0 +1,242 @@
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { MemoryRouter } from 'react-router-dom'
+import { describe, expect, it, vi } from 'vitest'
+
+import type { ScheduleEditorPayload } from '../api/scheduleEditorTypes'
+import { EditToolbar } from '../components/ui/EditToolbar'
+import { ContextProvider } from '../api/ContextProvider'
+import { EditSessionProvider, useEditSession } from '../shell/EditSessionContext'
+import { PageTitleProvider } from '../shell/PageTitleContext'
+import { adminContext } from '../test/fixtures'
+import { mockFetchOnce } from '../test/mockFetch'
+import { mockMatchMedia } from '../test/mockMatchMedia'
+import { ScheduleEdit } from './ScheduleEdit'
+
+/** Renders the sticky `EditToolbar` from whatever `EditSession` `ScheduleEdit` registers, mirroring `AppShell`'s own wiring — `renderShell()` doesn't include it, and this route's tests need to click Save. */
+function ActiveEditToolbar() {
+  const session = useEditSession()
+  if (session === null) return null
+  return (
+    <EditToolbar
+      what={session.what}
+      changeCount={session.changeCount}
+      blockedReason={session.blockedReason}
+      onDiscard={session.discard}
+      onRequestSave={session.requestSave}
+    />
+  )
+}
+
+function renderScheduleEdit() {
+  return render(
+    <MemoryRouter initialEntries={['/schedule/edit']}>
+      <ContextProvider>
+        <EditSessionProvider>
+          <PageTitleProvider>
+            <ActiveEditToolbar />
+            <ScheduleEdit />
+          </PageTitleProvider>
+        </EditSessionProvider>
+      </ContextProvider>
+    </MemoryRouter>,
+  )
+}
+
+function editorPayload(overrides: Partial<ScheduleEditorPayload> = {}): ScheduleEditorPayload {
+  return {
+    semester_name: 'Fall 2026',
+    rehearsals: [
+      {
+        id: 1,
+        date: '2026-03-10',
+        start_time: '19:00:00',
+        end_time: '21:00:00',
+        is_full_setlist: false,
+        setup_grace_minutes: null,
+        teardown_grace_minutes: null,
+        arrival_buffer_minutes: null,
+        departure_buffer_minutes: null,
+        running_order: [
+          {
+            rehearsal_song_id: 10,
+            song_id: 1,
+            song_title: 'First Song',
+            slot_count: 1,
+            start_time: '19:00:00',
+            end_time: '19:30:00',
+            is_pinned: false,
+            pinned_reasons: [],
+          },
+          {
+            rehearsal_song_id: 11,
+            song_id: 2,
+            song_title: 'Second Song',
+            slot_count: 1,
+            start_time: '19:30:00',
+            end_time: '20:00:00',
+            is_pinned: false,
+            pinned_reasons: [],
+          },
+        ],
+      },
+      {
+        id: 2,
+        date: '2026-03-17',
+        start_time: '19:00:00',
+        end_time: '21:00:00',
+        is_full_setlist: false,
+        setup_grace_minutes: null,
+        teardown_grace_minutes: null,
+        arrival_buffer_minutes: null,
+        departure_buffer_minutes: null,
+        running_order: [],
+      },
+    ],
+    past_rehearsals: [],
+    setlist_songs: [
+      { id: 1, title: 'First Song', artist: 'Placeholder Artist', position: 1 },
+      { id: 2, title: 'Second Song', artist: 'Placeholder Artist', position: 2 },
+      { id: 3, title: 'Third Song', artist: 'Placeholder Artist', position: 3 },
+    ],
+    semester_defaults: {
+      default_rehearsal_duration_minutes: 120,
+      default_setup_grace_minutes: 15,
+      default_teardown_grace_minutes: 15,
+      default_song_slot_count: 8,
+      default_arrival_buffer_minutes: 10,
+      default_departure_buffer_minutes: 10,
+      default_dress_rehearsal_count: 1,
+    },
+    pattern: null,
+    ...overrides,
+  }
+}
+
+describe('ScheduleEdit', () => {
+  it('shows only one open Rehearsal at a time on a phone viewport', async () => {
+    mockMatchMedia(true)
+    mockFetchOnce(200, { context: adminContext(), data: editorPayload() })
+
+    renderScheduleEdit()
+
+    const user = userEvent.setup()
+    await screen.findByText('2026-03-10', { exact: false })
+
+    await user.click(screen.getByText('2026-03-10', { exact: false }))
+    expect(await screen.findByLabelText('First Song slot count')).toBeVisible()
+
+    await user.click(screen.getByText('2026-03-17', { exact: false }))
+    expect(screen.queryByLabelText('First Song slot count')).not.toBeInTheDocument()
+  })
+
+  it('reorders a Running Order with up/down buttons alone, with no drag library involved', async () => {
+    mockMatchMedia(false)
+    mockFetchOnce(200, { context: adminContext(), data: editorPayload() })
+
+    renderScheduleEdit()
+    const user = userEvent.setup()
+
+    await screen.findByRole('button', { name: 'Expand 2026-03-10' })
+    fireEvent.click(screen.getByRole('button', { name: 'Expand 2026-03-10' }))
+    await screen.findByLabelText('First Song slot count')
+
+    const listBefore = screen.getAllByRole('listitem').map((item) => item.textContent ?? '')
+    expect(listBefore.some((text) => text.startsWith('First Song'))).toBe(true)
+
+    await user.click(screen.getByRole('button', { name: 'Move First Song down' }))
+
+    const listAfter = screen
+      .getAllByRole('listitem')
+      .map((item) => item.textContent ?? '')
+      .filter((text) => text.startsWith('First Song') || text.startsWith('Second Song'))
+    expect(listAfter[0]).toMatch(/^Second Song/)
+    expect(listAfter[1]).toMatch(/^First Song/)
+  })
+
+  it('keeps the same Rehearsal open when switching to Assignments mode and back', async () => {
+    mockMatchMedia(false)
+    mockFetchOnce(200, { context: adminContext(), data: editorPayload() })
+
+    renderScheduleEdit()
+    const user = userEvent.setup()
+
+    await screen.findByRole('button', { name: 'Expand 2026-03-10' })
+    fireEvent.click(screen.getByRole('button', { name: 'Expand 2026-03-10' }))
+    await screen.findByLabelText('First Song slot count')
+
+    await user.click(screen.getByRole('radio', { name: 'Assignments' }))
+    expect(await screen.findByText('Assignment editing ships in issue #338.')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('radio', { name: 'Running order' }))
+    expect(await screen.findByLabelText('First Song slot count')).toBeInTheDocument()
+  })
+
+  it('opens the Save popup on Save and fires the preview endpoint exactly once', async () => {
+    mockMatchMedia(false)
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        json: () => Promise.resolve({ context: adminContext(), data: editorPayload() }),
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            context: adminContext(),
+            ok: true,
+            errors: {},
+            non_field_errors: [],
+            fallout: { is_blocked: false, block_message: '', is_stale: false, loud: [], quiet: [], doomed_recording_groups: [] },
+            values: null,
+            data: null,
+          }),
+      })
+    vi.stubGlobal('fetch', fetchSpy)
+
+    renderScheduleEdit()
+    const user = userEvent.setup()
+
+    await screen.findByRole('button', { name: 'Expand 2026-03-10' })
+    fireEvent.click(screen.getByRole('button', { name: 'Expand 2026-03-10' }))
+    await screen.findByRole('button', { name: 'Move First Song down' })
+    await user.click(screen.getByRole('button', { name: 'Move First Song down' }))
+
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(screen.getByText(/Save \d+ change/)).toBeInTheDocument())
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2))
+    expect(fetchSpy.mock.calls[1]?.[0]).toBe('/api/schedule/editor/preview/')
+  })
+
+  it('disables Save when the Buffer has no unsaved changes', async () => {
+    mockMatchMedia(false)
+    mockFetchOnce(200, { context: adminContext(), data: editorPayload() })
+
+    renderScheduleEdit()
+
+    await screen.findByRole('button', { name: 'Expand 2026-03-10' })
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled()
+  })
+
+  it('renders past rehearsals in a collapsed, non-editable disclosure', async () => {
+    mockMatchMedia(false)
+    mockFetchOnce(200, {
+      context: adminContext(),
+      data: editorPayload({
+        past_rehearsals: [
+          { id: 99, date: '2026-01-01', start_time: '19:00:00', end_time: '21:00:00', is_full_setlist: false, song_count: 3 },
+        ],
+      }),
+    })
+
+    renderScheduleEdit()
+
+    await screen.findByRole('button', { name: 'Expand 2026-03-10' })
+    expect(screen.getByText('Past rehearsals — not editable')).toBeInTheDocument()
+    within(screen.getByText('Past rehearsals — not editable').closest('details')!).getByText(/2026-01-01/)
+  })
+})

@@ -59,4 +59,23 @@ urlpatterns = [
     ),
     path('members/<int:pk>/', api_views.PersonApiView.as_view(), name='api-member-detail'),
     path('members/<int:pk>/roles/', api_views.PersonRolesApiView.as_view(), name='api-member-roles'),
+    path('schedule/editor/', api_views.ScheduleEditorApiView.as_view(), name='api-schedule-editor'),
+    path(
+        'schedule/editor/preview/',
+        api_views.ScheduleEditorPreviewApiView.as_view(), name='api-schedule-editor-preview',
+    ),
+    path('schedule/editor/save/', api_views.ScheduleEditorSaveApiView.as_view(), name='api-schedule-editor-save'),
+    path(
+        'schedule/editor/pattern/save/',
+        api_views.RehearsalPatternSaveApiView.as_view(), name='api-schedule-editor-pattern-save',
+    ),
+    path(
+        'schedule/editor/generate/diff/',
+        api_views.RehearsalGenerationDiffApiView.as_view(), name='api-schedule-editor-generate-diff',
+    ),
+    path('schedule/editor/deal/', api_views.ScheduleEditorDealApiView.as_view(), name='api-schedule-editor-deal'),
+    path(
+        'schedule/editor/rehearsal/<int:rehearsal_id>/shuffle/',
+        api_views.ScheduleEditorShuffleApiView.as_view(), name='api-schedule-editor-shuffle',
+    ),
 ]
