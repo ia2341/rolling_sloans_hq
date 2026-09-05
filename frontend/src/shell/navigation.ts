@@ -20,13 +20,18 @@ export interface NavItem {
  * Songs/Setlist, Band, Profile. Conflicts is deliberately top-level,
  * directly under Home, and carries no count (ADR 0005 — see
  * `Sidebar.tsx`). There is no Semesters item and no Recordings item.
+ *
+ * Conflicts' `path` deep-links into `/schedule`'s All-rehearsals sub-view
+ * (issue #331) rather than a route of its own — `/schedule/` absorbed
+ * `/me/conflicts/` outright (issue #190), with no separate route and no
+ * redirect.
  */
 export const SIDEBAR_NAV_ITEMS: NavItem[] = [
   { key: 'home', label: 'Home', path: '/', icon: Home },
   {
     key: 'conflicts',
     label: 'Conflicts',
-    path: '/conflicts',
+    path: '/schedule?view=all',
     icon: TriangleAlert,
   },
   { key: 'schedule', label: 'Schedule', path: '/schedule', icon: CalendarDays },
@@ -47,7 +52,7 @@ export const TAB_BAR_NAV_ITEMS: NavItem[] = [
   {
     key: 'conflicts',
     label: 'Conflicts',
-    path: '/conflicts',
+    path: '/schedule?view=all',
     icon: TriangleAlert,
   },
 ]
