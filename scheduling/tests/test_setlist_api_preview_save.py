@@ -103,18 +103,29 @@ class PreviewValidBufferTests(TestCase):
     """A valid Buffer's Preview renders Fallout, echoes `values`, and writes nothing."""
 
     def setUp(self):
-        """Log in a synthetic admin against a Semester with one Song."""
+        """Log in a synthetic admin against a Semester with two Songs (one to edit, one to delete)."""
         admin_client(self)
         self.semester = SemesterFactory()
         select(self, self.semester)
         self.song = SongFactory(semester=self.semester, position=1, title='Original', artist='Artist A')
+        self.doomed_song = SongFactory(semester=self.semester, position=2, title='Doomed', artist='Artist B')
 
     def test_valid_buffer_previews_ok_with_fallout_and_echoed_values_and_writes_nothing(self):
-        """A mixed add+edit+delete Buffer previews `ok: true`, a populated Fallout, echoed `values`, and no DB writes."""
-        body = _valid_body(self.semester, rows=[
-            {'row_key': 'r1', 'song_id': self.song.pk, 'title': 'Edited', 'artist': 'Artist A', 'length': '3:30', 'notes': ''},
-            {'row_key': 'r2', 'song_id': None, 'title': 'New Song', 'artist': 'New Artist', 'length': '2:15', 'notes': 'fresh'},
-        ])
+        """A mixed add+edit+delete Buffer (issue #228's acceptance criteria) previews `ok: true` and writes nothing.
+
+        Exercises `assert_preview_writes_nothing()`'s new `json_body=` mode
+        with a Buffer containing a creation, a mutation *and* a deletion
+        together — per issue #228, a helper exercised only against
+        additions proves nothing about the rollback of a delete.
+        """
+        body = _valid_body(
+            self.semester,
+            rows=[
+                {'row_key': 'r1', 'song_id': self.song.pk, 'title': 'Edited', 'artist': 'Artist A', 'length': '3:30', 'notes': ''},
+                {'row_key': 'r2', 'song_id': None, 'title': 'New Song', 'artist': 'New Artist', 'length': '2:15', 'notes': 'fresh'},
+            ],
+            deleted_song_ids=[self.doomed_song.pk],
+        )
         response = assert_preview_writes_nothing(
             self, _preview_url(), models_to_check=[Song], semester=self.semester, json_body=body,
         )
@@ -125,9 +136,12 @@ class PreviewValidBufferTests(TestCase):
         self.assertIn('context', envelope)
         self.assertIsNotNone(envelope['fallout'])
         self.assertEqual(envelope['fallout']['pending_adds'], ['New Song'])
+        self.assertEqual(len(envelope['fallout']['pending_deletions']), 1)
+        self.assertEqual(envelope['fallout']['pending_deletions'][0]['title'], 'Doomed')
         self.assertIsNotNone(envelope['values'])
         self.assertEqual(envelope['values']['rows'][0]['title'], 'Edited')
         self.assertEqual(envelope['values']['rows'][1]['title'], 'New Song')
+        self.assertEqual(envelope['values']['deleted_song_ids'], [self.doomed_song.pk])
         self.assertEqual(envelope['errors'], {})
         self.assertEqual(envelope['non_field_errors'], [])
 
