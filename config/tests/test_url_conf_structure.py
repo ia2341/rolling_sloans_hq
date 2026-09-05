@@ -14,9 +14,9 @@ that must never regress.
 
 from django.contrib import admin
 from django.test import Client, SimpleTestCase
-from django.urls import URLResolver, get_resolver
+from django.urls import URLResolver, get_resolver, reverse
 
-from config.views import AdminPreviewApiView, ApiView, BaseView
+from config.views import AdminApiView, AdminPreviewApiView, ApiView, BaseView
 
 # Explicit and short by design (per the issue): auth views that run before a
 # Person can be assumed to exist. Adding to this list is a visible act in a
@@ -188,3 +188,65 @@ class ApiViewCoverageTests(SimpleTestCase):
             [],
             f'The following /api/ .../preview/ routes do not inherit AdminPreviewApiView: {offenders}',
         )
+
+
+# The Band/Person surfaces (issue #333). `_iter_api_leaf_paths` above skips
+# every parameterised route (member/roles/recording-delete), so those need
+# their own explicit 401 coverage; the zero-argument ones are already swept
+# by `test_every_zero_argument_api_route_401s_anonymously_and_never_302s`,
+# but are named here too so this module documents every new #333 route in
+# one place, per the issue's ask.
+NEW_API_VIEW_IMPORT_PATHS = {
+    'BandApiView': 'scheduling.api_views.BandApiView',
+    'PersonApiView': 'scheduling.api_views.PersonApiView',
+    'PersonRolesApiView': 'scheduling.api_views.PersonRolesApiView',
+    'RecordingPresignApiView': 'scheduling.api_views.RecordingPresignApiView',
+    'RecordingConfirmApiView': 'scheduling.api_views.RecordingConfirmApiView',
+    'RecordingDeleteApiView': 'scheduling.api_views.RecordingDeleteApiView',
+    'PasswordChangeApiView': 'identity.api_views.PasswordChangeApiView',
+}
+
+
+def _import_view_class(dotted_path):
+    """Return the view class named by `dotted_path` (e.g. `'scheduling.api_views.BandApiView'`)."""
+    module_path, class_name = dotted_path.rsplit('.', 1)
+    module = __import__(module_path, fromlist=[class_name])
+    return getattr(module, class_name)
+
+
+class BandPersonApiRouteCoverageTests(SimpleTestCase):
+    """Issue #333's Band/Person/Recordings/password-change routes: `ApiView`, never `AdminApiView`, and a bare 401 anonymously.
+
+    Every route here is member-facing (a non-admin needs it for their own
+    pk), so none of them may be an `AdminApiView` — the only admin-
+    conditional content on these surfaces is per-field, decided inside the
+    view or serializer, not by gating the whole endpoint.
+    """
+
+    def test_every_new_view_inherits_api_view_and_not_admin_api_view(self):
+        """Each of issue #333's new views is an `ApiView` subclass and not an `AdminApiView` subclass."""
+        for name, dotted_path in NEW_API_VIEW_IMPORT_PATHS.items():
+            view_class = _import_view_class(dotted_path)
+            with self.subTest(view=name):
+                self.assertTrue(issubclass(view_class, ApiView), f'{name} must inherit ApiView')
+                self.assertFalse(issubclass(view_class, AdminApiView), f'{name} must not inherit AdminApiView')
+
+    def test_anonymous_get_401s_on_every_new_route_never_302s(self):
+        """An anonymous GET to every new #333 route (zero-argument or parameterised) answers 401, never a redirect."""
+        client = Client()
+        routes = [
+            reverse('api-members'),
+            reverse('api-member-detail', args=[1]),
+            reverse('api-member-roles', args=[1]),
+            reverse('api-recordings-presign'),
+            reverse('api-recordings-confirm'),
+            reverse('api-recordings-delete', args=[1]),
+            reverse('api-password-change'),
+        ]
+        offenders = []
+        for path in routes:
+            response = client.get(path)
+            if response.status_code != 401 or 'Location' in response:
+                offenders.append((path, response.status_code))
+
+        self.assertEqual(offenders, [], f'The following routes did not answer anonymously with a bare 401: {offenders}')

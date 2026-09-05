@@ -1,15 +1,18 @@
 import { render, screen } from '@testing-library/react'
 import { createMemoryRouter, RouterProvider } from 'react-router-dom'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { resetContextForTests, setContext } from './api/contextStore'
 import { routes } from './routes'
 import { memberContext } from './test/fixtures'
+import { mockFetchOnce } from './test/mockFetch'
 import { mockMatchMedia } from './test/mockMatchMedia'
 
 afterEach(() => {
   resetContextForTests()
   mockMatchMedia(false)
+  vi.unstubAllGlobals()
+  vi.restoreAllMocks()
 })
 
 describe('the route table', () => {
@@ -76,6 +79,18 @@ describe('the route table', () => {
   })
 
   it("redirects /profile to the viewer's own person page once context has loaded", () => {
+    mockFetchOnce(200, {
+      context: memberContext(),
+      data: {
+        id: 1,
+        name: 'Sam Rivera',
+        is_self: true,
+        can_edit_roles: true,
+        has_membership: false,
+        semester_name: null,
+        email: 'sam@example.com',
+      },
+    })
     setContext(memberContext())
     const router = createMemoryRouter(routes, { initialEntries: ['/profile'] })
     render(<RouterProvider router={router} />)
