@@ -105,6 +105,27 @@ class SpaShellManifestTests(TestCase):
             self.client.get(UNCLAIMED_PATH)
 
 
+@override_settings(SECURE_SSL_REDIRECT=False, VITE_DEV_SERVER_URL='http://localhost:5173')
+class SpaShellDevServerTests(TestCase):
+    """With `VITE_DEV_SERVER_URL` set, the shell points at the dev server instead of reading any manifest."""
+
+    def test_renders_the_dev_servers_client_and_entry_module(self):
+        """The shell references the dev server's `@vite/client` and the entry module, not a manifest-resolved file."""
+        response = self.client.get(UNCLAIMED_PATH)
+
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode()
+        self.assertIn('http://localhost:5173/static/@vite/client', content)
+        self.assertIn('http://localhost:5173/static/src/main.tsx', content)
+
+    def test_ignores_the_manifest_even_when_one_is_missing(self):
+        """Dev-server mode never touches the manifest, so a missing one doesn't raise."""
+        with override_settings(FRONTEND_MANIFEST_PATH=Path(tempfile.mkdtemp()) / 'manifest.json'):
+            response = self.client.get(UNCLAIMED_PATH)
+
+        self.assertEqual(response.status_code, 200)
+
+
 @override_settings(SECURE_SSL_REDIRECT=False)
 class RouteOrderingTests(TestCase):
     """The catch-all must not swallow a path the earlier patterns already claim (issue #325)."""
