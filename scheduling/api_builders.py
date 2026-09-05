@@ -153,7 +153,10 @@ def build_setlist_buffer_from_request(request, *, viewing_semester) -> SetlistEd
     if not isinstance(raw_stamp, str) or not raw_stamp:
         non_field_errors.append('semester_updated_at is required and must be an ISO datetime string.')
     else:
-        semester_updated_at = parse_datetime(raw_stamp)
+        try:
+            semester_updated_at = parse_datetime(raw_stamp)
+        except ValueError:
+            semester_updated_at = None
         if semester_updated_at is None:
             non_field_errors.append('semester_updated_at could not be parsed as an ISO datetime.')
 
