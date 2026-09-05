@@ -42,11 +42,19 @@ per-row — it is not persisted anywhere and has no relationship to
 """
 
 from django.core.exceptions import ValidationError
+from django.core.validators import validate_email
 from django.utils.dateparse import parse_datetime
 
+from identity.models import Person
 from scheduling.fields import parse_song_length
-from scheduling.models import Song
-from scheduling.services import SetlistEditBuffer, SetlistEditRow
+from scheduling.models import Role, Song
+from scheduling.services import (
+    RosterEditBuffer,
+    RosterEditEntry,
+    RosterInvite,
+    SetlistEditBuffer,
+    SetlistEditRow,
+)
 
 #: Field-level messages shared by every row/field validation failure below.
 _REQUIRED_MESSAGE = 'This field is required.'
@@ -55,6 +63,13 @@ _MUST_BE_STRING_MESSAGE = 'Enter a string.'
 _MUST_BE_LIST_MESSAGE = 'Expected a list.'
 _MUST_BE_OBJECT_MESSAGE = 'Expected an object.'
 _SONG_NOT_FOUND_MESSAGE = 'This song no longer exists in the current semester.'
+_PERSON_NOT_FOUND_MESSAGE = 'This person could not be found.'
+_UNKNOWN_ROLE_MESSAGE = 'This Role no longer exists.'
+_INVALID_EMAIL_MESSAGE = 'Enter a valid email address.'
+_EMAIL_TAKEN_MESSAGE = (
+    'This person already has an account — tick them in "From members with an account" instead.'
+)
+_EMAIL_STAGED_TWICE_MESSAGE = 'This email is already staged for another invite.'
 
 
 class SetlistBufferValidationError(ValidationError):
@@ -263,4 +278,255 @@ def build_setlist_buffer_from_request(request, *, viewing_semester) -> SetlistEd
         semester_updated_at=semester_updated_at,
         rows=rows,
         deleted_song_ids=frozenset(deleted_song_ids),
+    )
+
+
+class RosterBufferValidationError(ValidationError):
+    """Raised by `build_roster_buffer_from_request()` for a JSON body that can't become a `RosterEditBuffer` (issue #336).
+
+    Mirrors `SetlistBufferValidationError`'s shape: `row_errors`
+    (`{<row_key>: {<field>: [messages]}}`, shared across `entries` and
+    `invites` rows since every row — hand-edited or staged from the `+ Add`
+    sheet — carries one client-generated `row_key`) and `non_field_errors`
+    (`[messages]` for anything not attributable to one row/field). Also
+    carries `raw_body` — the request's own parsed JSON body, untouched —
+    so a Preview view can still echo every submitted value on a validation
+    failure even though normalization never finished long enough to build
+    a `RosterEditBuffer`.
+    """
+
+    def __init__(self, *, row_errors, non_field_errors, raw_body):
+        """Store the structured failure shape and a human-readable summary message."""
+        super().__init__('The submitted roster edit could not be validated.')
+        self.row_errors = row_errors
+        self.non_field_errors = non_field_errors
+        self.raw_body = raw_body
+
+
+def build_roster_buffer_from_request(request, *, viewing_semester) -> RosterEditBuffer:
+    """Parse `request`'s JSON body into a `RosterEditBuffer` (issue #336).
+
+    The ONE place a submitted Roster edit JSON body becomes a
+    `RosterEditBuffer` — `/api/members/roster/preview/` and
+    `/api/members/roster/save/` both call it, never fork it, mirroring
+    `build_setlist_buffer_from_request()`'s ADR-0008 "preview and save
+    cannot disagree" guarantee. Collapses what was, pre-SPA, two divergent
+    buffer-building helpers (the edit formset alone for Preview, the edit
+    formset plus a separate add-list formset for Save) into one path that
+    always sees the whole submission.
+
+    Wire shape::
+
+        {
+            "semester_id": 1,
+            "semester_updated_at": "2026-01-01T00:00:00.000000+00:00",
+            "entries": [
+                {"row_key": "row-1", "person_id": 5, "name": "...", "role_ids": [1, 2]}
+            ],
+            "removed_person_ids": [7, 8],
+            "invites": [
+                {"row_key": "invite-1", "name": "...", "email": "..."}
+            ]
+        }
+
+    `row_key` is a client-generated, per-row-render key (never reused
+    across `entries` or `invites` in one submission) that exists only so a
+    validation failure can be reported and echoed per-row; it is not
+    persisted anywhere. `entries`' `person_id` is checked for existence but
+    not for Roster membership — an entry may name a Person newly added
+    from the `+ Add` sheet's other two sections, who holds no Membership
+    in `viewing_semester` yet. An `invites` row's email is rejected here
+    (a per-row Validation Error, never `apply_roster_edits()`'s problem) if
+    it already belongs to an existing Person or is staged twice in the same
+    submission — the one duplicate-email check this surface needs, since
+    `Person.email`'s own uniqueness constraint would otherwise surface as
+    an unhandled `IntegrityError` deep inside the apply.
+
+    Does not check `semester_id` against `viewing_semester`, nor
+    `removed_person_ids` against the requesting admin's own pk — both stay
+    `WrongViewingSemesterError`/`SelfRemovalError` territory, raised by
+    `apply_roster_edits()`/`preview_roster_edits()` themselves.
+    """
+    from config.views import ApiView
+
+    body = ApiView().parse_json_body(request)
+
+    non_field_errors = []
+    raw_body = body if isinstance(body, dict) else {}
+
+    if not isinstance(body, dict):
+        non_field_errors.append('Expected a JSON object.')
+        raise RosterBufferValidationError(row_errors={}, non_field_errors=non_field_errors, raw_body=raw_body)
+
+    semester_id = _expect_int(body.get('semester_id'))
+    if semester_id is None:
+        non_field_errors.append('semester_id is required and must be an integer.')
+
+    semester_updated_at = None
+    raw_stamp = body.get('semester_updated_at')
+    if not isinstance(raw_stamp, str) or not raw_stamp:
+        non_field_errors.append('semester_updated_at is required and must be an ISO datetime string.')
+    else:
+        try:
+            semester_updated_at = parse_datetime(raw_stamp)
+        except ValueError:
+            semester_updated_at = None
+        if semester_updated_at is None:
+            non_field_errors.append('semester_updated_at could not be parsed as an ISO datetime.')
+
+    entries_raw = body.get('entries')
+    if not isinstance(entries_raw, list):
+        non_field_errors.append('entries must be a list.')
+        entries_raw = []
+
+    removed_raw = body.get('removed_person_ids', [])
+    removed_person_ids = set()
+    if not isinstance(removed_raw, list):
+        non_field_errors.append('removed_person_ids must be a list.')
+    else:
+        for value in removed_raw:
+            person_id = _expect_int(value)
+            if person_id is None:
+                non_field_errors.append(f'removed_person_ids contains a non-integer value: {value!r}.')
+            else:
+                removed_person_ids.add(person_id)
+
+    invites_raw = body.get('invites', [])
+    if not isinstance(invites_raw, list):
+        non_field_errors.append('invites must be a list.')
+        invites_raw = []
+
+    row_errors = {}
+    seen_row_keys = set()
+
+    candidate_person_ids = set()
+    candidate_role_ids = set()
+    for raw_entry in entries_raw:
+        if not isinstance(raw_entry, dict):
+            continue
+        candidate_person_id = _expect_int(raw_entry.get('person_id'))
+        if candidate_person_id is not None:
+            candidate_person_ids.add(candidate_person_id)
+        role_ids_raw = raw_entry.get('role_ids')
+        if isinstance(role_ids_raw, list):
+            for value in role_ids_raw:
+                candidate_role_id = _expect_int(value)
+                if candidate_role_id is not None:
+                    candidate_role_ids.add(candidate_role_id)
+
+    people_by_id = Person.objects.in_bulk(candidate_person_ids)
+    existing_role_ids = set(
+        Role.objects.filter(pk__in=candidate_role_ids).values_list('pk', flat=True)
+    ) if candidate_role_ids else set()
+
+    entries = []
+    for index, raw_entry in enumerate(entries_raw):
+        row_key = raw_entry.get('row_key') if isinstance(raw_entry, dict) else None
+        if not isinstance(row_key, str) or not row_key:
+            row_key = f'entry-{index}'
+        if row_key in seen_row_keys:
+            non_field_errors.append(f'Duplicate row_key: {row_key}.')
+        seen_row_keys.add(row_key)
+
+        if not isinstance(raw_entry, dict):
+            row_errors[row_key] = {'row': [_MUST_BE_OBJECT_MESSAGE]}
+            continue
+
+        field_errors: dict[str, list[str]] = {}
+
+        person_id = _expect_int(raw_entry.get('person_id'))
+        if person_id is None:
+            field_errors.setdefault('person_id', []).append(_MUST_BE_INTEGER_MESSAGE)
+        elif person_id not in people_by_id:
+            field_errors.setdefault('person_id', []).append(_PERSON_NOT_FOUND_MESSAGE)
+
+        name = _expect_string(raw_entry.get('name'))
+        if name is None:
+            field_errors.setdefault('name', []).append(_MUST_BE_STRING_MESSAGE)
+        elif not name.strip():
+            field_errors.setdefault('name', []).append(_REQUIRED_MESSAGE)
+
+        role_ids_raw = raw_entry.get('role_ids', [])
+        role_ids = set()
+        if not isinstance(role_ids_raw, list):
+            field_errors.setdefault('role_ids', []).append(_MUST_BE_LIST_MESSAGE)
+        else:
+            for value in role_ids_raw:
+                role_id = _expect_int(value)
+                if role_id is None or role_id not in existing_role_ids:
+                    field_errors.setdefault('role_ids', []).append(_UNKNOWN_ROLE_MESSAGE)
+                else:
+                    role_ids.add(role_id)
+
+        if field_errors:
+            row_errors[row_key] = field_errors
+            continue
+
+        entries.append(RosterEditEntry(
+            person=people_by_id[person_id], name=name.strip(), role_ids=frozenset(role_ids),
+        ))
+
+    existing_emails = {
+        email.lower() for email in Person.objects.values_list('email', flat=True)
+    }
+    seen_invite_emails = set()
+
+    invites = []
+    for index, raw_invite in enumerate(invites_raw):
+        row_key = raw_invite.get('row_key') if isinstance(raw_invite, dict) else None
+        if not isinstance(row_key, str) or not row_key:
+            row_key = f'invite-{index}'
+        if row_key in seen_row_keys:
+            non_field_errors.append(f'Duplicate row_key: {row_key}.')
+        seen_row_keys.add(row_key)
+
+        if not isinstance(raw_invite, dict):
+            row_errors[row_key] = {'row': [_MUST_BE_OBJECT_MESSAGE]}
+            continue
+
+        field_errors = {}
+
+        name = _expect_string(raw_invite.get('name'))
+        if name is None:
+            field_errors.setdefault('name', []).append(_MUST_BE_STRING_MESSAGE)
+        elif not name.strip():
+            field_errors.setdefault('name', []).append(_REQUIRED_MESSAGE)
+
+        email = None
+        raw_email = _expect_string(raw_invite.get('email'))
+        if raw_email is None:
+            field_errors.setdefault('email', []).append(_MUST_BE_STRING_MESSAGE)
+        elif not raw_email.strip():
+            field_errors.setdefault('email', []).append(_REQUIRED_MESSAGE)
+        else:
+            candidate_email = raw_email.strip()
+            try:
+                validate_email(candidate_email)
+            except ValidationError:
+                field_errors.setdefault('email', []).append(_INVALID_EMAIL_MESSAGE)
+            else:
+                normalized = candidate_email.lower()
+                if normalized in existing_emails:
+                    field_errors.setdefault('email', []).append(_EMAIL_TAKEN_MESSAGE)
+                elif normalized in seen_invite_emails:
+                    field_errors.setdefault('email', []).append(_EMAIL_STAGED_TWICE_MESSAGE)
+                else:
+                    seen_invite_emails.add(normalized)
+                    email = candidate_email
+
+        if field_errors:
+            row_errors[row_key] = field_errors
+            continue
+
+        invites.append(RosterInvite(name=name.strip(), email=email))
+
+    if row_errors or non_field_errors:
+        raise RosterBufferValidationError(row_errors=row_errors, non_field_errors=non_field_errors, raw_body=raw_body)
+
+    return RosterEditBuffer(
+        semester_id=semester_id,
+        semester_updated_at=semester_updated_at,
+        entries=entries,
+        removed_person_ids=frozenset(removed_person_ids),
+        pending_invites=invites,
     )
