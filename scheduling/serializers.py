@@ -11,10 +11,12 @@ filtering all stay in `services.py`; a serializer names fields and
 nothing more.
 """
 
+from django.utils import timezone
+
 from identity.serializers import serialize_viewer
 from scheduling import services
 from scheduling.fields import format_song_length
-from scheduling.models import Song
+from scheduling.models import Conflict, Rehearsal, Song
 
 # The Semester status set crosses the wire as lowercase snake-case,
 # mirroring `services._semester_status()`'s three internal labels.
@@ -224,3 +226,219 @@ def serialize_song(song, *, is_admin: bool, next_rehearsal) -> dict:
     if is_admin:
         data['next_rehearsal'] = _serialize_next_rehearsal(next_rehearsal) if next_rehearsal is not None else None
     return data
+
+
+def serialize_availability(rehearsal, conflict_row) -> dict:
+    """Return `/api/schedule/`'s "Your availability" block for one Rehearsal (issue #331).
+
+    Carries only the viewer's own Conflict, never a teammate's (ADR 0005):
+    `conflict_row` is that Rehearsal's `ConflictHistoryRow` for the viewer,
+    from `services.conflict_rows_by_rehearsal()`, or None when nothing is
+    declared. `admin_note` is the one piece of Conflict data that travels
+    to someone other than an admin — its owner reads it here. Shared by
+    the read view and the declare/withdraw write endpoints, so a
+    successful write's response carries the same shape a follow-up read
+    would.
+    """
+    conflict = conflict_row.conflict if conflict_row is not None else None
+    return {
+        'declaration_type': conflict_row.declaration_type if conflict_row is not None else None,
+        'type_label': conflict_row.type_label if conflict_row is not None else None,
+        'declared_time': conflict_row.declared_time.isoformat() if conflict_row and conflict_row.declared_time else None,
+        'reason': conflict.reason if conflict is not None else None,
+        'status': conflict.status if conflict is not None else None,
+        'admin_note': conflict.adjudication_note if conflict is not None else None,
+        'is_dress': rehearsal.is_full_setlist,
+        'is_editable': not rehearsal.is_full_setlist and rehearsal.date >= timezone.localdate(),
+    }
+
+
+def _serialize_timeline_slot(slot) -> dict:
+    """Return one `TimelineSlot`: the Song's title and span, and whether the viewer is on it."""
+    return {
+        'song_id': slot.song.pk,
+        'song_title': slot.song.title,
+        'start_time': slot.start_time.isoformat(),
+        'end_time': slot.end_time.isoformat(),
+        'is_viewer': slot.is_viewer,
+    }
+
+
+def _serialize_timeline(timeline) -> dict:
+    """Return `services.Timeline` as the "You at this rehearsal" wire shape."""
+    return {
+        'slots': [_serialize_timeline_slot(slot) for slot in timeline.slots],
+        'window_start': timeline.window_start.isoformat(),
+        'window_end': timeline.window_end.isoformat(),
+        'viewer_song_count': timeline.viewer_song_count,
+        'total_song_count': timeline.total_song_count,
+        'viewer_start_time': timeline.viewer_start_time.isoformat() if timeline.viewer_start_time else None,
+        'viewer_end_time': timeline.viewer_end_time.isoformat() if timeline.viewer_end_time else None,
+        'is_dress_rehearsal': timeline.is_dress_rehearsal,
+    }
+
+
+def _serialize_matrix_entry(entry, *, is_admin, conflicted_person_ids) -> dict:
+    """Return one `AssignmentMatrixEntry`: the Person by name (never email), never `covering_for` for a member (ADR 0007).
+
+    `has_conflict` is a marker only — never a reason, a declaration type
+    or a time (ADR 0005) — true when the entry's Person has declared any
+    Conflict against this Rehearsal.
+    """
+    data = {
+        'id': entry.id,
+        'kind': entry.kind,
+        'person_id': entry.person.pk,
+        'person_name': entry.person.name,
+        'is_role_mismatch': entry.is_role_mismatch,
+        'has_conflict': entry.person.pk in conflicted_person_ids,
+    }
+    if is_admin:
+        data['covering_for_name'] = entry.covering_for.name if entry.covering_for is not None else None
+    return data
+
+
+def _serialize_matrix_cell(cell, *, is_admin, conflicted_person_ids) -> dict:
+    """Return one `AssignmentMatrixCell`: its Role id and ordered entries."""
+    return {
+        'role_id': cell.role.pk,
+        'entries': [
+            _serialize_matrix_entry(entry, is_admin=is_admin, conflicted_person_ids=conflicted_person_ids)
+            for entry in cell.entries
+        ],
+    }
+
+
+def _serialize_matrix_row(row, *, is_admin, conflicted_person_ids) -> dict:
+    """Return one `AssignmentMatrixRow`: the Song, its slot start_time (null for the Dress Rehearsal), and its cells."""
+    return {
+        'song_id': row.song.pk,
+        'song_title': row.song.title,
+        'start_time': row.start_time.isoformat() if row.start_time else None,
+        'cells': [
+            _serialize_matrix_cell(cell, is_admin=is_admin, conflicted_person_ids=conflicted_person_ids)
+            for cell in row.cells
+        ],
+    }
+
+
+def _serialize_rehearsal_summary(rehearsal, *, today) -> dict:
+    """Return one Rehearsal's quick-jump/list identity: id, date, window and whether it's the Dress Rehearsal or past."""
+    return {
+        'id': rehearsal.pk,
+        'date': rehearsal.date.isoformat(),
+        'start_time': rehearsal.start_time.isoformat(),
+        'end_time': rehearsal.end_time.isoformat(),
+        'is_dress': rehearsal.is_full_setlist,
+        'is_past': rehearsal.date < today,
+    }
+
+
+def _serialize_your_state(rehearsal, conflict_row, attendance_suggestion) -> dict:
+    """Return the All-rehearsals row's one-chip summary of the viewer's own state for `rehearsal` (issue #331).
+
+    `mandatory` for the Dress Rehearsal outranks everything else — it
+    takes no Conflict (ADR 0006) — else a declared Conflict, else a
+    suggested arrival/departure window, else "not needed".
+    """
+    if rehearsal.is_full_setlist:
+        return {'kind': 'mandatory'}
+    if conflict_row is not None:
+        return {
+            'kind': 'conflict',
+            'type_label': conflict_row.type_label,
+            'declared_time': conflict_row.declared_time.isoformat() if conflict_row.declared_time else None,
+        }
+    if attendance_suggestion is not None:
+        return {
+            'kind': 'window',
+            'arrival_time': attendance_suggestion.arrival_time.isoformat(),
+            'departure_time': attendance_suggestion.departure_time.isoformat(),
+        }
+    return {'kind': 'not_needed'}
+
+
+def _serialize_schedule_list_row(row, *, conflict_rows, is_admin, pending_counts, today) -> dict:
+    """Return one `RehearsalListRow` for the All-rehearsals sub-view: identity, song count, the viewer's state, and (admin) a pending count."""
+    rehearsal = row.rehearsal
+    data = {
+        **_serialize_rehearsal_summary(rehearsal, today=today),
+        'song_count': len(services.assignment_matrix_for(rehearsal).rows),
+        'your_state': _serialize_your_state(rehearsal, conflict_rows.get(rehearsal.pk), row.attendance_suggestion),
+    }
+    if is_admin and rehearsal.pk in pending_counts:
+        data['pending_count'] = pending_counts[rehearsal.pk]
+    return data
+
+
+def _serialize_rehearsal_detail(rehearsal, *, viewer, is_admin, today) -> dict:
+    """Return `/api/schedule/`'s "This rehearsal" sub-view detail for `rehearsal` (issue #331).
+
+    `can_edit_assignments` is the ADR-0009 gate: true only for an admin on
+    an editable grid (`services.assignment_grid_is_editable()`), never
+    re-derived by the client.
+    """
+    matrix = services.assignment_matrix_for(rehearsal)
+    roles = matrix.roles
+    codes = services.role_codes_for(roles)
+    conflicted_person_ids = set(
+        Conflict.objects.filter(rehearsal=rehearsal).values_list('person_id', flat=True),
+    )
+    conflict_row = services.conflict_rows_by_rehearsal(rehearsal.semester, viewer).get(rehearsal.pk)
+    return {
+        **_serialize_rehearsal_summary(rehearsal, today=today),
+        'can_edit_assignments': is_admin and services.assignment_grid_is_editable(rehearsal),
+        'timeline': _serialize_timeline(services.timeline_for(rehearsal, viewer)),
+        'availability': serialize_availability(rehearsal, conflict_row),
+        'roles': [_serialize_role_legend_entry(role, codes) for role in roles],
+        'rows': [
+            _serialize_matrix_row(row, is_admin=is_admin, conflicted_person_ids=conflicted_person_ids)
+            for row in matrix.rows
+        ],
+    }
+
+
+def serialize_schedule(request, semester, *, rehearsal_id=None) -> dict:
+    """Return the `/api/schedule/` `data` shape for `semester` (issue #331): one round trip for both sub-views.
+
+    Carries the whole `RehearsalSchedule` (for the All-rehearsals sub-view
+    and the quick-jump row) plus one selected Rehearsal's full detail (for
+    the This-rehearsal sub-view) — the sub-view toggle is client-side
+    state, never a second fetch. `rehearsal_id` selects which Rehearsal to
+    detail; omitted, it falls back to `services.landing_rehearsal_for()`.
+    Raises `Rehearsal.DoesNotExist` for a `rehearsal_id` outside `semester`,
+    left for the view to turn into a 404 (ADR 0001).
+    """
+    viewer = request.user
+    is_admin = bool(getattr(viewer, 'is_admin', False))
+    if semester is None:
+        return {'semester_name': None, 'schedule': {'past': [], 'future': []}, 'selected': None}
+    today = timezone.localdate()
+    if rehearsal_id is not None:
+        selected_rehearsal = Rehearsal.objects.get(pk=rehearsal_id, semester=semester)
+    else:
+        selected_rehearsal = services.landing_rehearsal_for(viewer, semester)
+    conflict_rows = services.conflict_rows_by_rehearsal(semester, viewer)
+    pending_counts = (
+        {row.rehearsal.pk: row.pending_count for row in services.conflict_adjudication_index_for(semester)}
+        if is_admin
+        else {}
+    )
+    schedule = services.rehearsal_schedule_for(semester, viewer)
+    return {
+        'semester_name': semester.name,
+        'schedule': {
+            section: [
+                _serialize_schedule_list_row(
+                    row, conflict_rows=conflict_rows, is_admin=is_admin, pending_counts=pending_counts, today=today,
+                )
+                for row in rows
+            ]
+            for section, rows in (('past', schedule.past), ('future', schedule.future))
+        },
+        'selected': (
+            _serialize_rehearsal_detail(selected_rehearsal, viewer=viewer, is_admin=is_admin, today=today)
+            if selected_rehearsal is not None
+            else None
+        ),
+    }
