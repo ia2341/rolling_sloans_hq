@@ -1391,7 +1391,15 @@ def assignment_matrix_for(rehearsal) -> AssignmentMatrix:
 
 
 def _matrix_songs(rehearsal):
-    """Return (Songs in Song.position order, {song_id: start_time}, {song_id: RehearsalSong.pk}) for `rehearsal`.
+    """Return (Songs in this Rehearsal's Running Order, {song_id: start_time}, {song_id: RehearsalSong.pk}) for `rehearsal`.
+
+    Ordered by `RehearsalSong.order`, not `Song.position` — the Running
+    Order is a Rehearsal's own sequence and can be dealt/shuffled/reordered
+    independently of the Setlist's concert position (CLAUDE.md). Sorting by
+    `Song.position` here would desync this grid from `timeline_for()`'s
+    slot picture (Home's Next-rehearsal card and the Schedule page both
+    render `RehearsalSong.order`), showing the same Song at two different
+    positions across the two surfaces.
 
     The Dress Rehearsal (is_full_setlist=True) has no RehearsalSong rows by
     design (ADR-0003), so its Songs come from the live setlist instead and
@@ -1400,10 +1408,12 @@ def _matrix_songs(rehearsal):
     """
     if rehearsal.is_full_setlist:
         return list(rehearsal.dress_rehearsal_songs), {}, {}
-    rehearsal_songs = list(RehearsalSong.objects.filter(rehearsal=rehearsal))
+    rehearsal_songs = list(
+        RehearsalSong.objects.filter(rehearsal=rehearsal).select_related('song').order_by('order')
+    )
     start_times = {rehearsal_song.song_id: rehearsal_song.start_time for rehearsal_song in rehearsal_songs}
     rehearsal_song_ids = {rehearsal_song.song_id: rehearsal_song.pk for rehearsal_song in rehearsal_songs}
-    songs = list(Song.objects.filter(pk__in=start_times.keys()).order_by('position'))
+    songs = [rehearsal_song.song for rehearsal_song in rehearsal_songs]
     return songs, start_times, rehearsal_song_ids
 
 

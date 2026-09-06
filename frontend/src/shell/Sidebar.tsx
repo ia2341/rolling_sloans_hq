@@ -1,12 +1,12 @@
 import { ChevronLeft, ChevronRight, LogOut } from 'lucide-react'
-import { NavLink } from 'react-router-dom'
+import { NavLink, useLocation } from 'react-router-dom'
 
 import { useAppContext } from '../api/ContextProvider'
 import { BlockNote } from '../components/ui/BlockNote'
 import { useRailCollapsed } from '../hooks/useRailCollapsed'
 import { cn } from '../lib/utils'
 import { useEditSession } from './EditSessionContext'
-import { SIDEBAR_NAV_ITEMS } from './navigation'
+import { isNavItemActive, SIDEBAR_NAV_ITEMS } from './navigation'
 import { SemesterPanel } from './SemesterPanel'
 
 /**
@@ -21,6 +21,7 @@ export function Sidebar() {
   const appContext = useAppContext()
   const editSession = useEditSession()
   const isAdmin = appContext?.viewer.is_admin ?? false
+  const location = useLocation()
 
   return (
     <nav
@@ -49,26 +50,26 @@ export function Sidebar() {
       </div>
 
       <ul className="flex flex-1 flex-col gap-0.5 overflow-y-auto px-2 py-3">
-        {SIDEBAR_NAV_ITEMS.map((item) => (
-          <li key={item.key}>
-            <NavLink
-              to={item.path}
-              end={item.path === '/'}
-              title={collapsed ? item.label : undefined}
-              className={({ isActive }) =>
-                cn(
+        {SIDEBAR_NAV_ITEMS.map((item) => {
+          const isActive = isNavItemActive(item, location)
+          return (
+            <li key={item.key}>
+              <NavLink
+                to={item.path}
+                title={collapsed ? item.label : undefined}
+                className={cn(
                   'flex items-center gap-3 rounded px-2.5 py-2 text-sm font-medium',
                   isActive
                     ? 'bg-rs-accent text-rs-accent-fg'
                     : 'text-rs-fg hover:bg-rs-border/40',
-                )
-              }
-            >
-              <item.icon size={18} aria-hidden="true" className="shrink-0" />
-              {!collapsed && <span className="truncate">{item.label}</span>}
-            </NavLink>
-          </li>
-        ))}
+                )}
+              >
+                <item.icon size={18} aria-hidden="true" className="shrink-0" />
+                {!collapsed && <span className="truncate">{item.label}</span>}
+              </NavLink>
+            </li>
+          )
+        })}
       </ul>
 
       {editSession?.blockedReason != null && (

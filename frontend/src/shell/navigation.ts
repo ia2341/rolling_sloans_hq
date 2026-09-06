@@ -56,3 +56,30 @@ export const TAB_BAR_NAV_ITEMS: NavItem[] = [
     icon: TriangleAlert,
   },
 ]
+
+/**
+ * Whether a nav item should render as active for the current location.
+ *
+ * `NavLink`'s own `isActive` compares only `location.pathname`, so
+ * Conflicts (`/schedule?view=all`) and Schedule (`/schedule`) — which
+ * share a pathname and differ only by the `view` query param — would
+ * both light up together on every `/schedule` sub-view. This compares
+ * the `view` param too, so exactly one of the two is active at a time.
+ */
+export function isNavItemActive(
+  item: NavItem,
+  location: { pathname: string; search: string },
+): boolean {
+  const [itemPath, itemQuery] = item.path.split('?')
+  const pathMatches =
+    itemPath === '/'
+      ? location.pathname === '/'
+      : location.pathname === itemPath ||
+        location.pathname.startsWith(`${itemPath}/`)
+  if (!pathMatches) {
+    return false
+  }
+  const itemView = new URLSearchParams(itemQuery ?? '').get('view')
+  const currentView = new URLSearchParams(location.search).get('view')
+  return itemView === currentView
+}

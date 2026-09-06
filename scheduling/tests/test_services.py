@@ -451,14 +451,21 @@ class TimelineForTests(TestCase):
 
 
 class AssignmentMatrixForTests(TestCase):
-    def test_rows_ordered_by_song_position_with_start_times(self):
-        """Rows are the Rehearsal's Songs in Song.position order, each carrying its RehearsalSong start_time."""
+    def test_rows_ordered_by_rehearsal_song_order_with_start_times(self):
+        """Rows are the Rehearsal's Songs in RehearsalSong.order (Running Order), each carrying its start_time.
+
+        Deliberately not Song.position (the Setlist's concert position):
+        the Running Order can be dealt/shuffled independently of it
+        (CLAUDE.md), and this grid must agree with `timeline_for()`'s slot
+        picture — rendered on Home and Schedule from the same
+        RehearsalSong.order — about which position a Song is in.
+        """
         rehearsal = RehearsalFactory(is_full_setlist=False)
         semester = rehearsal.semester
-        second_song = SongFactory(semester=semester, position=2)
-        first_song = SongFactory(semester=semester, position=1)
-        second_rs = RehearsalSongFactory(song=second_song, rehearsal=rehearsal, order=1)
-        first_rs = RehearsalSongFactory(song=first_song, rehearsal=rehearsal, order=2)
+        second_song = SongFactory(semester=semester, position=1)
+        first_song = SongFactory(semester=semester, position=2)
+        second_rs = RehearsalSongFactory(song=second_song, rehearsal=rehearsal, order=2)
+        first_rs = RehearsalSongFactory(song=first_song, rehearsal=rehearsal, order=1)
 
         matrix = assignment_matrix_for(rehearsal)
 
