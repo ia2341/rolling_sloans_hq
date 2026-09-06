@@ -47,7 +47,7 @@ from scheduling.api_builders import (
     build_setlist_buffer_from_request,
     build_song_role_requirement_buffer_from_request,
 )
-from scheduling.forms import DeclareConflictForm, MembershipRolesForm
+from scheduling.forms import DeclareConflictForm
 from scheduling.models import (
     Conflict,
     Membership,
@@ -726,30 +726,38 @@ class PersonApiView(ApiView, View):
 
 
 class PersonRolesApiView(ApiView, View):
-    """`POST /api/members/<pk>/roles/`: saves declared Roles for your own pk, or (issue #232) an admin's on anyone's (issue #333).
+    """`POST /api/members/<pk>/roles/`: saves standing declared Roles for your own pk, or (issue #232, #378) an admin's on anyone's.
 
     Not `AdminApiView`: a non-admin may hit this for their own pk. A
     teammate's page has no mutation surface for a non-admin viewer, so the
     guard 404s exactly as `MemberDetailView`'s POST does, rather than
     rendering a rejected form.
+
+    Writes `PersonRole` (ADR-0014), not `MembershipRole` — a standing,
+    person-level fact that needs no Semester in scope, so this endpoint no
+    longer requires (or creates) a Membership. Not run through this repo's
+    Buffer-preview-apply ceremony: it renumbers nothing, and its only side
+    effect (the `is_role_mismatch` resweep, issue #377) already fires via
+    `PersonRole`'s own signals regardless of how the write is framed — see
+    the PR description for the fuller Buffer/no-Buffer reasoning.
     """
 
     def post(self, request, pk):
-        """Validate and persist the submitted `role_ids` onto `pk`'s Membership, creating it on a first submission."""
+        """Validate and persist the submitted `role_ids` as `pk`'s complete standing `PersonRole` set."""
         is_admin = bool(getattr(request.user, 'is_admin', False))
         if pk != request.user.pk and not is_admin:
             raise Http404("A member can only edit their own declared Roles unless they're an admin.")
         person = request.user if pk == request.user.pk else get_object_or_404(Person, pk=pk)
-        semester = services.get_viewing_semester(request)
-        if semester is None:
-            return self.write_response(request, ok=False, non_field_errors=['No Semester is being edited.'])
         payload = self.parse_json_body(request)
         role_ids = payload.get('role_ids', [])
-        membership, _ = Membership.objects.get_or_create(person=person, semester=semester)
-        form = MembershipRolesForm(data={'roles': role_ids}, instance=membership)
-        if not form.is_valid():
-            return self.write_response(request, ok=False, errors=form.errors)
-        form.save()
+        try:
+            services.sync_person_roles(person, role_ids)
+        except (services.PersonRoleValidationError, ValueError, TypeError):
+            return self.write_response(
+                request, ok=False, non_field_errors=['One or more selected roles are not valid.'],
+            )
+        semester = services.get_viewing_semester(request)
+        membership = Membership.objects.filter(person=person, semester=semester).first() if semester is not None else None
         data = serializers.serialize_person(
             person, semester=semester, is_self=(person.pk == request.user.pk), can_edit_roles=True,
             membership=membership,

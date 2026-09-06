@@ -84,10 +84,12 @@ export interface PersonRecordingsBlock {
 /**
  * `data` shape of `GET /api/members/<pk>/`, computed for exactly one of
  * the three viewer states. `email` and `recordings` are present only in
- * the self payload; `available_roles` only when `can_edit_roles`;
- * `roles`/`songs` only when `has_membership` is true (the not-yet-rostered
- * self case omits both sections entirely rather than rendering them
- * empty).
+ * the self payload; `available_roles` only when `can_edit_roles`; `songs`
+ * only when `has_membership` is true (the not-yet-rostered self case omits
+ * that section rather than rendering it empty). `roles` (issue #378,
+ * ADR-0014) is unconditional — a standing `PersonRole` declaration needs no
+ * Membership to exist, so it's never gated by `has_membership` the way
+ * `songs` is.
  */
 export interface PersonPayload {
   id: number
@@ -96,9 +98,9 @@ export interface PersonPayload {
   can_edit_roles: boolean
   has_membership: boolean
   semester_name: string | null
+  roles: MemberRole[]
   email?: string
   available_roles?: MemberRole[]
-  roles?: MemberRole[]
   songs?: PersonSong[]
   recordings?: PersonRecordingsBlock
 }
