@@ -15,7 +15,11 @@ import type {
 import type { ReadEnvelope, WriteEnvelope } from '../api/types'
 import { AssignmentEditor } from '../components/assignments/AssignmentEditor'
 import { RecordingUploadDialog } from '../components/recordings/RecordingUploadDialog'
-import { CastGridTable, type CastGridRow } from '../components/ui/CastLine'
+import {
+  CastGridTable,
+  RoleMismatchLegend,
+  type CastGridRow,
+} from '../components/ui/CastLine'
 import { PageHead } from '../components/ui/PageHead'
 import { RehearsalOverview } from '../components/ui/RehearsalOverview'
 import { ResponsiveDialog } from '../components/ui/ResponsiveDialog'
@@ -639,6 +643,8 @@ function AssignmentGrid({
   onAddRecording: (songId: number) => void
 }) {
   const isPhone = useIsPhone()
+  const appContext = useAppContext()
+  const isAdmin = appContext?.viewer.is_admin ?? false
   const gridRows = matrixRowsToCastGridRows(rows, roles)
 
   return (
@@ -650,9 +656,10 @@ function AssignmentGrid({
       </div>
       <div className="flex flex-wrap gap-3 pb-2 text-xs text-rs-muted">
         <span>away — a declared conflict</span>
-        <span>◦ role not on membership</span>
+        {isPhone && <span>◦ role not on membership</span>}
         <span>(backup) covering a slot</span>
       </div>
+      {!isPhone && isAdmin && <RoleMismatchLegend />}
       {isDress && (
         <p className="pb-2 text-sm text-rs-muted">
           The dress rehearsal has no running order of its own — it runs the
@@ -666,6 +673,7 @@ function AssignmentGrid({
           roles={roles}
           rows={gridRows}
           viewerId={viewerId}
+          isAdmin={isAdmin}
           onOpenRow={onOpenSong}
           renderRecordingCell={(row) => (
             <button

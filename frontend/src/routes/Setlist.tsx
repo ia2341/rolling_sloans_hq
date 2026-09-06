@@ -10,6 +10,7 @@ import { RecordingUploadDialog } from '../components/recordings/RecordingUploadD
 import {
   CastCell,
   CastGridTable,
+  RoleMismatchLegend,
   type CastGridRow,
 } from '../components/ui/CastLine'
 import { PageHead } from '../components/ui/PageHead'
@@ -37,7 +38,10 @@ type EditField = 'title' | 'artist' | 'length' | 'notes'
  * edit mode -- the same page flips into a Pending-Buffer grid rather than
  * navigating anywhere else (issue #335 user story 2), so nothing shifts
  * underfoot when editing starts. Renders nothing until the initial read
- * arrives.
+ * arrives. An admin viewer also gets a `RoleMismatchLegend` above the cast
+ * table/cards, explaining the per-cell `RoleMismatchBadge` (issue #365,
+ * ADR 0002) -- a non-admin sees neither, since the underlying fact is
+ * never rendered to a non-admin.
  */
 export function Setlist() {
   usePageTitle('Setlist')
@@ -168,6 +172,7 @@ export function Setlist() {
   }, [rows, viewingSemester, load])
 
   const changeCount = useMemo(() => computeChangeCount(rows), [rows])
+  const isAdmin = appContext?.viewer.is_admin ?? false
 
   if (data === null) return null
 
@@ -221,19 +226,26 @@ export function Setlist() {
         />
       ) : data.songs.length === 0 ? (
         <p className="text-sm text-rs-muted">No songs yet this Semester.</p>
-      ) : isPhone ? (
-        <SetlistCards
-          songs={data.songs}
-          viewerId={appContext?.viewer.id}
-          onAddRecording={setUploadSongId}
-        />
       ) : (
-        <SetlistTable
-          roles={data.roles}
-          songs={data.songs}
-          viewerId={appContext?.viewer.id}
-          onAddRecording={setUploadSongId}
-        />
+        <>
+          {isAdmin && <RoleMismatchLegend />}
+          {isPhone ? (
+            <SetlistCards
+              songs={data.songs}
+              viewerId={appContext?.viewer.id}
+              isAdmin={isAdmin}
+              onAddRecording={setUploadSongId}
+            />
+          ) : (
+            <SetlistTable
+              roles={data.roles}
+              songs={data.songs}
+              viewerId={appContext?.viewer.id}
+              isAdmin={isAdmin}
+              onAddRecording={setUploadSongId}
+            />
+          )}
+        </>
       )}
 
       <AddSongsSheet
@@ -299,15 +311,18 @@ function SetlistEditSessionRegistrar({
  * so the only entry point this card keeps is the "+" upload trigger, which
  * stops the click from bubbling into the card's own navigation and opens
  * the shared Recording-upload popup (issue: UI overhaul round 2) rather
- * than navigating to `/profile?song={id}`.
+ * than navigating to `/profile?song={id}`. `isAdmin` gates each `CastCell`'s
+ * role-mismatch badge (issue #365, ADR 0002).
  */
 function SetlistCards({
   songs,
   viewerId,
+  isAdmin,
   onAddRecording,
 }: {
   songs: SetlistPayload['songs']
   viewerId?: number
+  isAdmin: boolean
   onAddRecording: (songId: number) => void
 }) {
   const navigate = useNavigate()
@@ -357,7 +372,7 @@ function SetlistCards({
                 <p className="text-xs font-semibold uppercase text-rs-muted">
                   {entry.role_name}
                 </p>
-                <CastCell entry={entry} viewerId={viewerId} />
+                <CastCell entry={entry} viewerId={viewerId} isAdmin={isAdmin} />
               </li>
             ))}
           </ul>
@@ -376,17 +391,20 @@ function SetlistCards({
  * Add Recording. Each Song row is itself the "Open" control -- clicking
  * anywhere on it but a link or button navigates to `/songs/{id}`; the
  * trailing column's "+" opens the shared Recording-upload popup instead of
- * navigating to `/profile?song={id}`.
+ * navigating to `/profile?song={id}`. `isAdmin` gates each cell's
+ * role-mismatch badge (issue #365, ADR 0002).
  */
 function SetlistTable({
   roles,
   songs,
   viewerId,
+  isAdmin,
   onAddRecording,
 }: {
   roles: SetlistPayload['roles']
   songs: SetlistPayload['songs']
   viewerId?: number
+  isAdmin: boolean
   onAddRecording: (songId: number) => void
 }) {
   const navigate = useNavigate()
@@ -404,6 +422,7 @@ function SetlistTable({
       roles={roles}
       rows={rows}
       viewerId={viewerId}
+      isAdmin={isAdmin}
       onOpenRow={(songId) => navigate(`/songs/${songId}`)}
       renderRecordingCell={(row) => (
         <button

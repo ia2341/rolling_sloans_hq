@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import { apiFetch } from '../api/client'
@@ -6,19 +6,25 @@ import { useAppContext } from '../api/ContextProvider'
 import type { BandPayload, RosterEntry } from '../api/memberTypes'
 import type { ReadEnvelope } from '../api/types'
 import { PageHead } from '../components/ui/PageHead'
-import { useIsPhone } from '../hooks/useIsPhone'
+import {
+  buildRosterFilterBuckets,
+  memberMatchesRosterFilter,
+  type RosterFilterKey,
+} from '../lib/roleColumns'
 import { usePageTitle } from '../shell/PageTitleContext'
 
 /**
- * `/members/` (issue #333): the viewing Semester's active Roster, fed by
- * one `GET /api/members/` round trip. Renders nothing until that response
- * arrives, mirroring `Setlist`/`Song`.
+ * `/members/` (issue #366): the viewing Semester's active Roster as a
+ * single filterable card grid, fed by one `GET /api/members/` round trip.
+ * Renders nothing until that response arrives, mirroring `Setlist`/`Song`.
  */
 export function Band() {
   usePageTitle('Band')
   const appContext = useAppContext()
-  const isPhone = useIsPhone()
   const [data, setData] = useState<BandPayload | null>(null)
+  const [checked, setChecked] = useState<ReadonlySet<RosterFilterKey>>(
+    new Set(),
+  )
 
   useEffect(() => {
     let cancelled = false
@@ -32,7 +38,32 @@ export function Band() {
     }
   }, [])
 
+  const buckets = useMemo(
+    () => (data === null ? [] : buildRosterFilterBuckets(data.members)),
+    [data],
+  )
+
+  const visibleMembers = useMemo(
+    () =>
+      data === null
+        ? []
+        : data.members.filter((member) =>
+            memberMatchesRosterFilter(member.roles, checked),
+          ),
+    [data, checked],
+  )
+
   if (data === null) return null
+
+  /** Toggles one filter bucket on or off, keeping every other bucket's state. */
+  function toggleBucket(key: RosterFilterKey) {
+    setChecked((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
 
   const subline =
     data.semester_name === null
@@ -74,41 +105,89 @@ export function Band() {
         <p className="text-sm text-rs-muted">No Semester published yet.</p>
       ) : data.members.length === 0 ? (
         <p className="text-sm text-rs-muted">No one is on the Roster yet.</p>
-      ) : isPhone ? (
-        <BandCards members={data.members} viewerId={appContext?.viewer.id} />
       ) : (
-        <BandTable members={data.members} viewerId={appContext?.viewer.id} />
+        <>
+          {buckets.length > 0 && (
+            <RosterFilterBar
+              buckets={buckets}
+              checked={checked}
+              onToggle={toggleBucket}
+            />
+          )}
+          <BandGrid members={visibleMembers} viewerId={appContext?.viewer.id} />
+        </>
       )}
     </div>
   )
 }
 
-/** The phone layout: one card per member, no horizontal scroll (issue #333). */
-function BandCards({
+/** Role-filter checkboxes (issue #366), OR'd together — checking none shows everyone. */
+function RosterFilterBar({
+  buckets,
+  checked,
+  onToggle,
+}: {
+  buckets: { key: RosterFilterKey; label: string }[]
+  checked: ReadonlySet<RosterFilterKey>
+  onToggle: (key: RosterFilterKey) => void
+}) {
+  return (
+    <fieldset className="mb-4 flex flex-wrap gap-x-4 gap-y-2 border-0 p-0">
+      <legend className="sr-only">Filter by role</legend>
+      {buckets.map((bucket) => (
+        <label
+          key={bucket.key}
+          className="flex items-center gap-1.5 text-sm text-rs-muted"
+        >
+          <input
+            type="checkbox"
+            checked={checked.has(bucket.key)}
+            onChange={() => onToggle(bucket.key)}
+          />
+          {bucket.label}
+        </label>
+      ))}
+    </fieldset>
+  )
+}
+
+/**
+ * The Roster's card grid (issue #366): one card per member, every
+ * viewport, in a CSS grid that reflows continuously rather than snapping
+ * at a Tailwind breakpoint. `minmax(260px, 1fr)` fits exactly three cards
+ * across a typical desktop content width (roughly 900–1100px once the
+ * shell's own padding is subtracted — three columns plus two 12px gaps is
+ * just under 900px at the 260px floor) while still collapsing to a single
+ * column under about 560px, so a phone and a desktop share one layout
+ * with no `isPhone` branch.
+ */
+function BandGrid({
   members,
   viewerId,
 }: {
   members: RosterEntry[]
   viewerId?: number
 }) {
+  if (members.length === 0) {
+    return (
+      <p className="text-sm text-rs-muted">
+        No members match the selected roles.
+      </p>
+    )
+  }
   return (
-    <ul className="flex flex-col gap-3">
+    <ul className="grid grid-cols-[repeat(auto-fit,minmax(260px,1fr))] gap-3">
       {members.map((member) => (
-        <li key={member.id} className="rounded border border-rs-border p-3">
-          <Link to={`/members/${member.id}`} className="block">
-            <div className="flex items-center justify-between gap-2">
-              <p className="font-medium">
-                {member.name}
-                {member.id === viewerId && (
-                  <span className="ml-2 rounded-full bg-rs-accent px-2 py-0.5 text-xs font-medium text-rs-accent-fg">
-                    you
-                  </span>
-                )}
-              </p>
-              <span className="text-sm text-rs-muted">
-                {member.song_count} song{member.song_count === 1 ? '' : 's'}
-              </span>
-            </div>
+        <li key={member.id} className="rounded border border-rs-border">
+          <Link to={`/members/${member.id}`} className="block p-3">
+            <p className="font-medium">
+              {member.name}
+              {member.id === viewerId && (
+                <span className="ml-2 rounded-full bg-rs-accent px-2 py-0.5 text-xs font-medium text-rs-accent-fg">
+                  you
+                </span>
+              )}
+            </p>
             <p className="pt-1 text-sm text-rs-muted">
               {member.roles.length > 0 ? member.roles.join(', ') : '—'}
             </p>
@@ -116,48 +195,5 @@ function BandCards({
         </li>
       ))}
     </ul>
-  )
-}
-
-/** The desktop layout: `Name | Roles | Songs` plus an action cell (issue #333). */
-function BandTable({
-  members,
-  viewerId,
-}: {
-  members: RosterEntry[]
-  viewerId?: number
-}) {
-  return (
-    <table className="w-full text-left text-sm">
-      <thead>
-        <tr>
-          <th className="pb-2">Name</th>
-          <th className="pb-2">Roles</th>
-          <th className="pb-2">Songs</th>
-          <th className="pb-2" />
-        </tr>
-      </thead>
-      <tbody>
-        {members.map((member) => (
-          <tr key={member.id}>
-            <td className="py-2 align-top">
-              {member.name}
-              {member.id === viewerId && (
-                <span className="ml-2 rounded-full bg-rs-accent px-2 py-0.5 text-xs font-medium text-rs-accent-fg">
-                  you
-                </span>
-              )}
-            </td>
-            <td className="py-2 align-top text-rs-muted">
-              {member.roles.length > 0 ? member.roles.join(', ') : '—'}
-            </td>
-            <td className="py-2 align-top">{member.song_count}</td>
-            <td className="py-2 align-top">
-              <Link to={`/members/${member.id}`}>Open</Link>
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
   )
 }

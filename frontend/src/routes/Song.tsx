@@ -7,7 +7,7 @@ import type { PreviewResult } from '../api/previewTypes'
 import type { SongPayload } from '../api/setlistTypes'
 import type { ReadEnvelope } from '../api/types'
 import { RecordingUploadDialog } from '../components/recordings/RecordingUploadDialog'
-import { CastTable } from '../components/ui/CastLine'
+import { CastTable, RoleMismatchLegend } from '../components/ui/CastLine'
 import { PageHead } from '../components/ui/PageHead'
 import { SaveChangesDialog } from '../components/ui/SaveChangesDialog'
 import { formatClockTime, formatRehearsalDate } from '../lib/formatDate'
@@ -41,7 +41,10 @@ type LoadState =
  * card rather than navigating anywhere else, matching the Setlist's
  * same-route toggle convention. A Song outside the viewing Semester 404s
  * server-side (ADR 0001); this renders that as an explicit not-found
- * state rather than an error banner.
+ * state rather than an error banner. The Cast section shares `CastLine.tsx`
+ * with the Setlist, so it gets the same admin-only `RoleMismatchLegend`/
+ * `RoleMismatchBadge` treatment for a mismatched Role Assignment (issue
+ * #365, ADR 0002) -- a non-admin sees neither.
  */
 export function Song() {
   usePageTitle('Song')
@@ -213,8 +216,13 @@ export function Song() {
           </h2>
           <span className="text-xs text-rs-muted">Read-only here</span>
         </div>
+        {appContext?.viewer.is_admin === true && <RoleMismatchLegend />}
         <div className="pt-2">
-          <CastTable cast={song.cast} viewerId={appContext?.viewer.id} />
+          <CastTable
+            cast={song.cast}
+            viewerId={appContext?.viewer.id}
+            isAdmin={appContext?.viewer.is_admin ?? false}
+          />
         </div>
         {isEditing ? (
           <RequirementsEditor

@@ -10,7 +10,12 @@ import { mockMatchMedia } from '../test/mockMatchMedia'
 import { renderShell } from '../test/renderShell'
 import { Setlist } from './Setlist'
 
-/** A minimal `/api/setlist/` `data` payload, one Song with a partial cast (Singer filled, Drummer unfilled). */
+/**
+ * A minimal `/api/setlist/` `data` payload, one Song with a partial cast
+ * (Singer filled with a role-mismatched performer, Drummer unfilled) -- the
+ * mismatch lets a test assert issue #365's admin-only badge/legend and its
+ * absence for a non-admin.
+ */
 function setlistPayload(overrides: Record<string, unknown> = {}) {
   return {
     semester_name: 'Spring 2026',
@@ -33,9 +38,7 @@ function setlistPayload(overrides: Record<string, unknown> = {}) {
             role_id: 1,
             role_name: 'Singer',
             code: 'SIN',
-            performers: [
-              { id: 1, name: 'Sam Rivera', is_role_mismatch: false },
-            ],
+            performers: [{ id: 1, name: 'Sam Rivera', is_role_mismatch: true }],
           },
           { role_id: 2, role_name: 'Drummer', code: 'DRU', performers: [] },
         ],
@@ -83,7 +86,7 @@ describe('Setlist', () => {
       screen.getByRole('columnheader', { name: 'Drums' }),
     ).toBeInTheDocument()
     expect(screen.getByText('Sam')).toBeInTheDocument() // shortened -- only one "Sam" in this table
-    expect(screen.getByText('unfilled')).toBeInTheDocument() // Drums has no performer
+    expect(screen.getByText('-')).toBeInTheDocument() // Drums has no performer (issue #365 -- not the word "unfilled")
   })
 
   it('renders a Song with no notes with no notes row at all', async () => {
@@ -270,6 +273,51 @@ describe('Setlist', () => {
       configurable: true,
       value: originalLocation,
     })
+  })
+})
+
+describe('Setlist role-mismatch display (issue #365)', () => {
+  it('never shows the role-mismatch marker or its legend to a non-admin', async () => {
+    mockFetchOnce(200, { context: memberContext(), data: setlistPayload() })
+
+    renderShell(<Setlist />, ['/setlist'])
+
+    await screen.findByText('Test Song')
+    expect(
+      screen.queryByText(/role not on membership/i),
+    ).not.toBeInTheDocument()
+    expect(screen.queryByText(/usual roles/i)).not.toBeInTheDocument()
+    expect(
+      screen.queryByTitle("Assigned outside this member's usual roles"),
+    ).not.toBeInTheDocument()
+  })
+
+  it('shows a compact badge and a legend for an admin viewing a mismatched cell', async () => {
+    mockFetchOnce(200, { context: adminContext(), data: setlistPayload() })
+
+    renderShell(<Setlist />, ['/setlist'])
+
+    await screen.findByText('Test Song')
+    expect(
+      screen.getByText(/Highlighted cells are assigned outside/),
+    ).toBeInTheDocument()
+    expect(
+      screen.getAllByTitle("Assigned outside this member's usual roles").length,
+    ).toBeGreaterThan(0)
+    // The old inline text message is gone entirely, replaced by the badge.
+    expect(
+      screen.queryByText(/role not on membership/i),
+    ).not.toBeInTheDocument()
+  })
+
+  it('renders an unfilled position as a plain "-" for every viewer', async () => {
+    mockFetchOnce(200, { context: memberContext(), data: setlistPayload() })
+
+    renderShell(<Setlist />, ['/setlist'])
+
+    await screen.findByText('Test Song')
+    expect(screen.queryByText(/unfilled/i)).not.toBeInTheDocument()
+    expect(screen.getByText('-')).toBeInTheDocument()
   })
 })
 
