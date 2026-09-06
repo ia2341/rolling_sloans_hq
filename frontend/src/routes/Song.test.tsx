@@ -1,6 +1,8 @@
 import { screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { useEditSession } from '../shell/EditSessionContext'
 import { adminContext, memberContext } from '../test/fixtures'
 import { mockFetchOnce } from '../test/mockFetch'
 import { mockMatchMedia } from '../test/mockMatchMedia'
@@ -17,6 +19,7 @@ function songPayload(overrides: Record<string, unknown> = {}) {
     position: 1,
     notes: '',
     cast: [{ role_id: 1, role_name: 'Singer', code: 'SIN', performers: [] }],
+    role_requirements: [],
     recording_groups: [],
     rehearsed_at: [],
     ...overrides,
@@ -198,5 +201,282 @@ describe('Song', () => {
       configurable: true,
       value: originalLocation,
     })
+  })
+})
+
+/** Exposes the registered `EditSession`'s Discard/Save-changes as clickable buttons, standing in for the shell's own `EditToolbar` (issue #339). */
+function EditSessionSpy() {
+  const session = useEditSession()
+  if (session === null) return <p>no edit session</p>
+  return (
+    <div>
+      <button type="button" onClick={session.discard}>
+        toolbar discard
+      </button>
+      <button type="button" onClick={session.requestSave} disabled={session.changeCount === 0}>
+        toolbar save
+      </button>
+      <p>{session.changeCount} unsaved</p>
+    </div>
+  )
+}
+
+describe('Song requirements editor', () => {
+  it('shows no Edit song button and no add control for a member', async () => {
+    mockFetchOnce(200, { context: memberContext(), data: songPayload() })
+
+    renderShell(<Song />, ['/songs/1'])
+
+    await screen.findByRole('heading', { name: 'Test Song' })
+    expect(screen.queryByRole('button', { name: 'Edit song' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '+ Add role requirement' })).not.toBeInTheDocument()
+  })
+
+  it('renders the read-only fill status for every viewer, including a member', async () => {
+    mockFetchOnce(200, {
+      context: memberContext(),
+      data: songPayload({
+        role_requirements: [
+          { role_id: 1, role_name: 'Singer', target: 2, actual: 1, is_understaffed: true, is_retired_role: false },
+        ],
+      }),
+    })
+
+    renderShell(<Song />, ['/songs/1'])
+
+    expect(await screen.findByText('Singer 1/2')).toBeInTheDocument()
+  })
+
+  it('Edit song flips the page into edit mode, showing 0 unsaved changes and Save disabled', async () => {
+    mockFetchOnce(200, {
+      context: adminContext(),
+      data: songPayload({
+        role_requirements: [
+          { role_id: 1, role_name: 'Singer', target: 2, actual: 1, is_understaffed: true, is_retired_role: false },
+        ],
+      }),
+    })
+    const user = userEvent.setup()
+    renderShell(
+      <>
+        <Song />
+        <EditSessionSpy />
+      </>,
+      ['/songs/1'],
+    )
+    await screen.findByText('no edit session')
+
+    await user.click(await screen.findByRole('button', { name: 'Edit song' }))
+
+    expect(screen.getByText('0 unsaved')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'toolbar save' })).toBeDisabled()
+    expect(screen.getByLabelText('Singer target count')).toHaveValue(2)
+  })
+
+  it('changing a count enables Save and updates the pending count', async () => {
+    mockFetchOnce(200, {
+      context: adminContext(),
+      data: songPayload({
+        role_requirements: [
+          { role_id: 1, role_name: 'Singer', target: 2, actual: 1, is_understaffed: true, is_retired_role: false },
+        ],
+      }),
+    })
+    const user = userEvent.setup()
+    renderShell(
+      <>
+        <Song />
+        <EditSessionSpy />
+      </>,
+      ['/songs/1'],
+    )
+    await user.click(await screen.findByRole('button', { name: 'Edit song' }))
+
+    const countInput = screen.getByLabelText('Singer target count')
+    await user.clear(countInput)
+    await user.type(countInput, '3')
+
+    expect(countInput).toHaveValue(3)
+    expect(screen.getByText('1 unsaved')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'toolbar save' })).not.toBeDisabled()
+  })
+
+  it('removing a row strikes it through, and Undo restores it with no changes left', async () => {
+    mockFetchOnce(200, {
+      context: adminContext(),
+      data: songPayload({
+        role_requirements: [
+          { role_id: 1, role_name: 'Singer', target: 2, actual: 1, is_understaffed: true, is_retired_role: false },
+        ],
+      }),
+    })
+    const user = userEvent.setup()
+    renderShell(
+      <>
+        <Song />
+        <EditSessionSpy />
+      </>,
+      ['/songs/1'],
+    )
+    await user.click(await screen.findByRole('button', { name: 'Edit song' }))
+
+    await user.click(screen.getByRole('button', { name: 'Remove Singer requirement' }))
+    expect(screen.getByText('1 unsaved')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Undo' }))
+    expect(screen.getByText('0 unsaved')).toBeInTheDocument()
+    expect(screen.getByLabelText('Singer target count')).toBeInTheDocument()
+  })
+
+  it('opening the Save popup calls preview exactly once and renders its changes', async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            context: adminContext(),
+            data: songPayload({
+              role_requirements: [
+                { role_id: 1, role_name: 'Singer', target: 2, actual: 1, is_understaffed: true, is_retired_role: false },
+              ],
+            }),
+          }),
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            context: adminContext(),
+            ok: true,
+            errors: {},
+            non_field_errors: [],
+            fallout: {
+              is_blocked: false,
+              block_message: '',
+              is_stale: false,
+              pending_adds: [],
+              pending_edits: [{ role_name: 'Singer', before: 2, after: 3 }],
+              pending_removals: [],
+              loud: [],
+              quiet: [],
+            },
+            values: null,
+            data: null,
+          }),
+      })
+    vi.stubGlobal('fetch', fetchSpy)
+    const user = userEvent.setup()
+
+    renderShell(
+      <>
+        <Song />
+        <EditSessionSpy />
+      </>,
+      ['/songs/1'],
+    )
+    await user.click(await screen.findByRole('button', { name: 'Edit song' }))
+    const countInput = screen.getByLabelText('Singer target count')
+    await user.clear(countInput)
+    await user.type(countInput, '3')
+
+    await user.click(screen.getByRole('button', { name: 'toolbar save' }))
+
+    await waitFor(() => expect(screen.getByText('What changes')).toBeInTheDocument())
+    expect(screen.getByText('Singer, 2 → 3')).toBeInTheDocument()
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
+    expect(fetchSpy.mock.calls[1]?.[0]).toBe('/api/songs/1/requirements/preview/')
+  })
+
+  it('confirming a save posts to the save endpoint and returns to read mode on success', async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            context: adminContext(),
+            data: songPayload({
+              role_requirements: [
+                { role_id: 1, role_name: 'Singer', target: 2, actual: 1, is_understaffed: true, is_retired_role: false },
+              ],
+            }),
+          }),
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            context: adminContext(),
+            ok: true,
+            errors: {},
+            non_field_errors: [],
+            fallout: {
+              is_blocked: false,
+              block_message: '',
+              is_stale: false,
+              pending_adds: [],
+              pending_edits: [{ role_name: 'Singer', before: 2, after: 3 }],
+              pending_removals: [],
+              loud: [],
+              quiet: [],
+            },
+            values: null,
+            data: null,
+          }),
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            context: adminContext(),
+            ok: true,
+            errors: {},
+            non_field_errors: [],
+            fallout: null,
+            values: null,
+            data: null,
+          }),
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            context: adminContext(),
+            data: songPayload({
+              role_requirements: [
+                { role_id: 1, role_name: 'Singer', target: 3, actual: 1, is_understaffed: true, is_retired_role: false },
+              ],
+            }),
+          }),
+      })
+    vi.stubGlobal('fetch', fetchSpy)
+    const user = userEvent.setup()
+
+    renderShell(
+      <>
+        <Song />
+        <EditSessionSpy />
+      </>,
+      ['/songs/1'],
+    )
+    await user.click(await screen.findByRole('button', { name: 'Edit song' }))
+    const countInput = screen.getByLabelText('Singer target count')
+    await user.clear(countInput)
+    await user.type(countInput, '3')
+    await user.click(screen.getByRole('button', { name: 'toolbar save' }))
+    await waitFor(() => expect(screen.getByText('What changes')).toBeInTheDocument())
+
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(screen.getByText('no edit session')).toBeInTheDocument())
+    expect(fetchSpy.mock.calls[2]?.[0]).toBe('/api/songs/1/requirements/save/')
+    expect(screen.getByText('Singer 1/3')).toBeInTheDocument()
   })
 })

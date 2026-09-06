@@ -22,6 +22,7 @@ from scheduling.factories import (
     SemesterFactory,
     SongFactory,
     SongRoleAssignmentFactory,
+    SongRoleRequirementFactory,
 )
 from scheduling.serializers import serialize_setlist, serialize_song
 
@@ -92,18 +93,21 @@ class SerializeSongExactKeySetTests(TestCase):
     """`serialize_song()` names every key it emits, and no more."""
 
     def test_member_viewer_keys(self):
-        """A member viewer's payload carries exactly the documented keys, with no `next_rehearsal` key at all."""
+        """A member viewer's payload carries exactly the documented keys, with no `next_rehearsal`/`available_roles` key at all."""
         song = SongFactory()
 
         data = serialize_song(song, is_admin=False, next_rehearsal=None)
 
         self.assertEqual(
             set(data.keys()),
-            {'id', 'title', 'artist', 'length', 'position', 'notes', 'cast', 'recording_groups', 'rehearsed_at'},
+            {
+                'id', 'title', 'artist', 'length', 'position', 'notes',
+                'cast', 'role_requirements', 'recording_groups', 'rehearsed_at',
+            },
         )
 
-    def test_admin_viewer_keys_add_next_rehearsal(self):
-        """An admin viewer's payload adds exactly one key, `next_rehearsal`, over the member shape."""
+    def test_admin_viewer_keys_add_next_rehearsal_and_available_roles(self):
+        """An admin viewer's payload adds exactly `next_rehearsal` and `available_roles` over the member shape."""
         song = SongFactory()
         rehearsal = RehearsalFactory(semester=song.semester)
 
@@ -113,10 +117,33 @@ class SerializeSongExactKeySetTests(TestCase):
             set(data.keys()),
             {
                 'id', 'title', 'artist', 'length', 'position', 'notes',
-                'cast', 'recording_groups', 'rehearsed_at', 'next_rehearsal',
+                'cast', 'role_requirements', 'recording_groups', 'rehearsed_at',
+                'next_rehearsal', 'available_roles',
             },
         )
         self.assertEqual(set(data['next_rehearsal'].keys()), {'id', 'date'})
+
+    def test_role_requirement_entry_keys(self):
+        """A `role_requirements` entry carries exactly its documented keys."""
+        song = SongFactory()
+        role = RoleFactory()
+        SongRoleRequirementFactory(song=song, role=role, count=2)
+
+        data = serialize_song(song, is_admin=False, next_rehearsal=None)
+
+        self.assertEqual(
+            set(data['role_requirements'][0].keys()),
+            {'role_id', 'role_name', 'target', 'actual', 'is_understaffed', 'is_retired_role'},
+        )
+
+    def test_available_role_keys(self):
+        """An `available_roles` entry carries exactly `id`/`name`."""
+        song = SongFactory()
+        RoleFactory()
+
+        data = serialize_song(song, is_admin=True, next_rehearsal=None)
+
+        self.assertEqual(set(data['available_roles'][0].keys()), {'id', 'name'})
 
     def test_recording_group_and_recording_keys(self):
         """A recording group, and its recordings, carry exactly their documented keys."""

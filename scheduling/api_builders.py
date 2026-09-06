@@ -62,6 +62,8 @@ from scheduling.services import (
     SetlistEditBuffer,
     SetlistEditRow,
     SkipDateInput,
+    SongRoleRequirementBuffer,
+    SongRoleRequirementEntry,
 )
 
 #: Field-level messages shared by every row/field validation failure below.
@@ -81,6 +83,8 @@ _EMAIL_STAGED_TWICE_MESSAGE = 'This email is already staged for another invite.'
 _UNKNOWN_STATUS_MESSAGE = 'status must be one of: pending, approved, rejected.'
 _NOTE_MAX_LENGTH = 255
 _NOTE_TOO_LONG_MESSAGE = f'Ensure this note has at most {_NOTE_MAX_LENGTH} characters.'
+_COUNT_TOO_LOW_MESSAGE = 'A Requirement must target at least 1 person.'
+_DUPLICATE_ROLE_MESSAGE = 'This Role already has a Requirement on this row — remove the duplicate.'
 
 
 class SetlistBufferValidationError(ValidationError):
@@ -1073,6 +1077,153 @@ def build_adjudication_buffer_from_request(request, *, rehearsal_id) -> Adjudica
 
     return AdjudicationBuffer(
         rehearsal_id=rehearsal_id,
+        semester_id=semester_id,
+        semester_updated_at=semester_updated_at,
+        entries=entries,
+    )
+
+
+class SongRoleRequirementBufferValidationError(ValidationError):
+    """Raised by `build_song_role_requirement_buffer_from_request()` for a JSON body that can't become a `SongRoleRequirementBuffer` (issue #339).
+
+    Mirrors `AdjudicationBufferValidationError`'s shape: `row_errors`
+    (`{<row_key>: {<field>: [messages]}}`, keyed by `role-<role_id>` when
+    the row's `role_id` parsed cleanly, else `entry-<index>` — this
+    Buffer's `entries` have no client-generated `row_key` of their own,
+    unlike a Setlist/Roster row, since a Requirement's own identity
+    already is its Role). Also carries `raw_body` — the request's own
+    parsed JSON body, untouched — so the Preview view can still echo every
+    submitted value on a validation failure (issue #339 user story 16)
+    even though normalization never finished long enough to build a
+    `SongRoleRequirementBuffer`.
+    """
+
+    def __init__(self, *, row_errors, non_field_errors, raw_body):
+        """Store the structured failure shape and a human-readable summary message."""
+        super().__init__('The submitted Role Requirements edit could not be validated.')
+        self.row_errors = row_errors
+        self.non_field_errors = non_field_errors
+        self.raw_body = raw_body
+
+
+def build_song_role_requirement_buffer_from_request(request, *, song_id, viewing_semester) -> SongRoleRequirementBuffer:
+    """Parse `request`'s JSON body into a `SongRoleRequirementBuffer` for `song_id` (issue #339).
+
+    The ONE place a submitted Requirements-editor JSON body becomes a
+    `SongRoleRequirementBuffer` — its Preview and Save endpoints both call
+    it, never fork it, mirroring `build_adjudication_buffer_from_request()`'s
+    ADR-0008 "preview and save cannot disagree" guarantee. `song_id` always
+    comes from the URL, never the body, the same way `rehearsal_id` does
+    for the adjudication Buffer — there is no per-row Song to disagree
+    about, since this Buffer always describes one Song's whole Requirements
+    set.
+
+    Wire shape::
+
+        {
+            "semester_id": 1,
+            "semester_updated_at": "2026-01-01T00:00:00.000000+00:00",
+            "entries": [{"role_id": 3, "count": 2}, ...]
+        }
+
+    `entries` names every Requirement the Song should have afterward — the
+    client sends the target state, not a diff, matching
+    `SongRoleRequirementBuffer.entries`' own documented semantics. A
+    `count` below 1 and a `role_id` naming no Role are per-row Validation
+    Errors; a `role_id` repeated across two entries is rejected here too
+    (the `unique_role_requirement_per_song` constraint's backstop, an
+    error a hand-crafted POST could otherwise turn into an unhandled
+    `IntegrityError` deep inside `apply_song_role_requirements()`). Does
+    not check `semester_id` against `viewing_semester`, nor a `role_id`
+    against anything Roster-related: both stay
+    `WrongViewingSemesterError`/Fallout territory, decided by
+    `apply_song_role_requirements()`/`preview_song_role_requirements()`
+    themselves.
+    """
+    from config.views import ApiView
+
+    body = ApiView().parse_json_body(request)
+
+    non_field_errors = []
+    raw_body = body if isinstance(body, dict) else {}
+
+    if not isinstance(body, dict):
+        non_field_errors.append('Expected a JSON object.')
+        raise SongRoleRequirementBufferValidationError(
+            row_errors={}, non_field_errors=non_field_errors, raw_body=raw_body,
+        )
+
+    semester_id = _expect_int(body.get('semester_id'))
+    if semester_id is None:
+        non_field_errors.append('semester_id is required and must be an integer.')
+
+    semester_updated_at = None
+    raw_stamp = body.get('semester_updated_at')
+    if not isinstance(raw_stamp, str) or not raw_stamp:
+        non_field_errors.append('semester_updated_at is required and must be an ISO datetime string.')
+    else:
+        try:
+            semester_updated_at = parse_datetime(raw_stamp)
+        except ValueError:
+            semester_updated_at = None
+        if semester_updated_at is None:
+            non_field_errors.append('semester_updated_at could not be parsed as an ISO datetime.')
+
+    entries_raw = body.get('entries')
+    if not isinstance(entries_raw, list):
+        non_field_errors.append('entries must be a list.')
+        entries_raw = []
+
+    candidate_role_ids = set()
+    for raw_entry in entries_raw:
+        if isinstance(raw_entry, dict):
+            candidate_role_id = _expect_int(raw_entry.get('role_id'))
+            if candidate_role_id is not None:
+                candidate_role_ids.add(candidate_role_id)
+    existing_role_ids = set(
+        Role.objects.filter(pk__in=candidate_role_ids).values_list('pk', flat=True)
+    ) if candidate_role_ids else set()
+
+    row_errors = {}
+    seen_role_ids = set()
+    entries = []
+    for index, raw_entry in enumerate(entries_raw):
+        role_id = _expect_int(raw_entry.get('role_id')) if isinstance(raw_entry, dict) else None
+        row_key = f'role-{role_id}' if role_id is not None else f'entry-{index}'
+
+        if not isinstance(raw_entry, dict):
+            row_errors[row_key] = {'row': [_MUST_BE_OBJECT_MESSAGE]}
+            continue
+
+        field_errors: dict[str, list[str]] = {}
+
+        if role_id is None:
+            field_errors.setdefault('role_id', []).append(_MUST_BE_INTEGER_MESSAGE)
+        elif role_id not in existing_role_ids:
+            field_errors.setdefault('role_id', []).append(_UNKNOWN_ROLE_MESSAGE)
+        elif role_id in seen_role_ids:
+            field_errors.setdefault('role_id', []).append(_DUPLICATE_ROLE_MESSAGE)
+
+        count = _expect_int(raw_entry.get('count'))
+        if count is None:
+            field_errors.setdefault('count', []).append(_MUST_BE_INTEGER_MESSAGE)
+        elif count < 1:
+            field_errors.setdefault('count', []).append(_COUNT_TOO_LOW_MESSAGE)
+
+        if field_errors:
+            row_errors[row_key] = field_errors
+            continue
+
+        seen_role_ids.add(role_id)
+        entries.append(SongRoleRequirementEntry(role_id=role_id, count=count))
+
+    if row_errors or non_field_errors:
+        raise SongRoleRequirementBufferValidationError(
+            row_errors=row_errors, non_field_errors=non_field_errors, raw_body=raw_body,
+        )
+
+    return SongRoleRequirementBuffer(
+        song_id=song_id,
         semester_id=semester_id,
         semester_updated_at=semester_updated_at,
         entries=entries,

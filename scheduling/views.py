@@ -1946,15 +1946,14 @@ class SongRequirementsEditView(AdminRequiredMixin, View):
     A sibling of `SongDetailView`, mirroring `SetlistEditView`'s shape
     (issue #178) — a dedicated `AdminRequiredMixin` view, a hidden
     `Semester.updated_at` stamp, one "Save Changes" boundary — rather than
-    the Roster's Preview/Fallout apparatus (issue #185). Applying ADR
-    0008's own test to this surface — is there fallout only the server can
-    compute? — comes back negative on both counts: deleting a Requirement
-    destroys nothing and cascades nowhere, and unfilled count is target
-    minus actual, which the Song page already renders in read mode. So
-    this surface ships no `preview_` sibling, deliberately (see
-    `apply_song_role_requirements()`'s docstring, and
-    `scheduling/tests/test_song_requirements_edit_view.py`'s negative
-    route-table test for the enforced absence).
+    the Roster's Preview/Fallout apparatus (issue #185). This pre-SPA
+    surface never grew its own Preview/Fallout apparatus, and it never
+    will now: the SPA cutover's `/api/songs/<pk>/requirements/{preview,save}/`
+    (issue #339) is this surface's replacement, not an addition to it, and
+    this whole view is deleted outright by issue #341 rather than
+    retrofitted. See `apply_song_role_requirements()`'s docstring for why
+    the "no preview needed" judgement this view was originally built under
+    no longer holds under the SPA's shared Save popup.
 
     GET renders the table — a bare fragment for the "Edit requirements"
     button's htmx swap, or a full page for a direct/no-JS request. POST
