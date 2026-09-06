@@ -1,0 +1,96 @@
+name: Seed example semester (production)
+
+# One-shot, manually-triggered job: seeds a demo "Example Semester",
+# published live, on the PRODUCTION database — Roles/People/Songs/
+# Rehearsals only. It creates no admin account and touches no existing
+# Person row; see scheduling/management/commands/seed_example_semester.py
+# for exactly what it does and why it's safe to run once against a live
+# database. Not part of the normal CI/deploy path.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type exactly "seed production" to proceed. Anything else aborts before touching the database.'
+        required: true
+
+jobs:
+  seed:
+    name: Seed example semester
+    runs-on: ubuntu-latest
+    # Job Summary (rendered at the top of the run page) is the fast way to
+    # see pass/fail without reading the raw step logs; raw logs are the
+    # step-by-step detail if something needs digging into.
+    steps:
+      - name: Guard on the typed confirmation
+        run: |
+          if [ "${{ github.event.inputs.confirm }}" != "seed production" ]; then
+            echo "::error::Confirmation phrase did not match. Nothing was touched. Re-run and type exactly: seed production"
+            echo "### ❌ Aborted before touching the database" >> "$GITHUB_STEP_SUMMARY"
+            echo "Confirmation input did not match \`seed production\` — no code ran." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "Confirmation matched — proceeding."
+
+      - name: Check required secret is present
+        run: |
+          if [ -z "${{ secrets.PRODUCTION_DATABASE_URL }}" ]; then
+            echo "::error::Missing repo secret PRODUCTION_DATABASE_URL. Add it under Settings > Secrets and variables > Actions, then re-run."
+            echo "### ❌ Missing required secret" >> "$GITHUB_STEP_SUMMARY"
+            echo '- `PRODUCTION_DATABASE_URL`' >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "Required secret is present."
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Seed example semester
+        id: seed
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          # Only DATABASE_URL needs to be the real production value. The
+          # rest are required by config/settings.py's env() calls at import
+          # time but never read by this command's actual work (no email
+          # sent, no R2 access), so harmless placeholders satisfy them
+          # without duplicating unrelated production secrets into GitHub.
+          DJANGO_SECRET_KEY: bootstrap-job-unused-secret-key
+          DJANGO_DEBUG: "True"
+          DJANGO_ALLOWED_HOSTS: example.com
+          AWS_ACCESS_KEY_ID: unused
+          AWS_SECRET_ACCESS_KEY: unused
+          AWS_STORAGE_BUCKET_NAME: unused
+          AWS_S3_ENDPOINT_URL: https://unused.example.com
+          CLUB_EMAIL_FROM: unused@example.com
+        run: |
+          set -o pipefail
+          python manage.py seed_example_semester --confirm 2>&1 | tee seed_output.log
+
+      - name: Report success
+        if: success()
+        run: |
+          echo "### ✅ Seed succeeded" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat seed_output.log >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "No admin account was created or modified — this run only added the Example Semester and its own demo roster." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report failure
+        if: failure()
+        run: |
+          echo "### ❌ Seed failed" >> "$GITHUB_STEP_SUMMARY"
+          echo "The command exited non-zero — nothing after the failure point ran (the seed command wraps everything in one transaction, so a mid-run failure leaves nothing behind)." >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Check the \"Seed example semester\" step's log above for the actual error." >> "$GITHUB_STEP_SUMMARY"
+          if [ -f seed_output.log ]; then
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            cat seed_output.log >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
