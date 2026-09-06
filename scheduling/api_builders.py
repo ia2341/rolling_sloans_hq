@@ -846,13 +846,15 @@ def build_roster_buffer_from_request(request, *, viewing_semester) -> RosterEdit
     formset plus a separate add-list formset for Save) into one path that
     always sees the whole submission.
 
-    Wire shape::
+    Wire shape (no Role data — issue #379 narrowed this Buffer to
+    add/remove-only; a Person's declared Roles are set only on their
+    Person page, #378)::
 
         {
             "semester_id": 1,
             "semester_updated_at": "2026-01-01T00:00:00.000000+00:00",
             "entries": [
-                {"row_key": "row-1", "person_id": 5, "name": "...", "role_ids": [1, 2]}
+                {"row_key": "row-1", "person_id": 5, "name": "..."}
             ],
             "removed_person_ids": [7, 8],
             "invites": [
@@ -931,24 +933,14 @@ def build_roster_buffer_from_request(request, *, viewing_semester) -> RosterEdit
     seen_row_keys = set()
 
     candidate_person_ids = set()
-    candidate_role_ids = set()
     for raw_entry in entries_raw:
         if not isinstance(raw_entry, dict):
             continue
         candidate_person_id = _expect_int(raw_entry.get('person_id'))
         if candidate_person_id is not None:
             candidate_person_ids.add(candidate_person_id)
-        role_ids_raw = raw_entry.get('role_ids')
-        if isinstance(role_ids_raw, list):
-            for value in role_ids_raw:
-                candidate_role_id = _expect_int(value)
-                if candidate_role_id is not None:
-                    candidate_role_ids.add(candidate_role_id)
 
     people_by_id = Person.objects.in_bulk(candidate_person_ids)
-    existing_role_ids = set(
-        Role.objects.filter(pk__in=candidate_role_ids).values_list('pk', flat=True)
-    ) if candidate_role_ids else set()
 
     entries = []
     for index, raw_entry in enumerate(entries_raw):
@@ -977,25 +969,11 @@ def build_roster_buffer_from_request(request, *, viewing_semester) -> RosterEdit
         elif not name.strip():
             field_errors.setdefault('name', []).append(_REQUIRED_MESSAGE)
 
-        role_ids_raw = raw_entry.get('role_ids', [])
-        role_ids = set()
-        if not isinstance(role_ids_raw, list):
-            field_errors.setdefault('role_ids', []).append(_MUST_BE_LIST_MESSAGE)
-        else:
-            for value in role_ids_raw:
-                role_id = _expect_int(value)
-                if role_id is None or role_id not in existing_role_ids:
-                    field_errors.setdefault('role_ids', []).append(_UNKNOWN_ROLE_MESSAGE)
-                else:
-                    role_ids.add(role_id)
-
         if field_errors:
             row_errors[row_key] = field_errors
             continue
 
-        entries.append(RosterEditEntry(
-            person=people_by_id[person_id], name=name.strip(), role_ids=frozenset(role_ids),
-        ))
+        entries.append(RosterEditEntry(person=people_by_id[person_id], name=name.strip()))
 
     existing_emails = {
         email.lower() for email in Person.objects.values_list('email', flat=True)

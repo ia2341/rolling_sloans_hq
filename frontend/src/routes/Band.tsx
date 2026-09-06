@@ -5,7 +5,6 @@ import { apiFetch } from '../api/client'
 import { useAppContext } from '../api/ContextProvider'
 import type {
   BandPayload,
-  MemberRole,
   RosterEditPayload,
   RosterEntry,
 } from '../api/memberTypes'
@@ -28,7 +27,6 @@ import {
   deleteRosterRow,
   mapRosterPreviewToResult,
   rowsFromPayload,
-  withDeclaredRole,
   type RosterEditRow,
   type RosterWriteEnvelope,
 } from './band/rosterEditModel'
@@ -60,7 +58,6 @@ export function Band() {
   const [rowErrors, setRowErrors] = useState<
     Record<string, Record<string, string[]>>
   >({})
-  const [availableRoles, setAvailableRoles] = useState<MemberRole[]>([])
   const [addSheetOpen, setAddSheetOpen] = useState(false)
   const [saveDialogOpen, setSaveDialogOpen] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
@@ -93,7 +90,6 @@ export function Band() {
     void apiFetch<ReadEnvelope<RosterEditPayload>>('/api/members/roster/').then(
       (envelope) => {
         setRows(rowsFromPayload(envelope.data.members))
-        setAvailableRoles(envelope.data.available_roles)
         setRowErrors({})
         setResentPersonIds(new Set())
         setIsEditing(true)
@@ -139,12 +135,6 @@ export function Band() {
     )
   }, [])
 
-  const updateRoles = useCallback((rowKey: string, roleIds: Set<number>) => {
-    setRows((current) =>
-      current.map((row) => (row.rowKey === rowKey ? { ...row, roleIds } : row)),
-    )
-  }, [])
-
   const deleteRow = useCallback((rowKey: string) => {
     setRows((current) => deleteRosterRow(current, rowKey))
   }, [])
@@ -173,10 +163,6 @@ export function Band() {
       )
       return [...current, ...deduped]
     })
-  }, [])
-
-  const onRoleDeclared = useCallback((role: MemberRole) => {
-    setAvailableRoles((current) => withDeclaredRole(current, role))
   }, [])
 
   const resendInvite = useCallback((personId: number) => {
@@ -341,14 +327,11 @@ export function Band() {
         <RosterEditGrid
           rows={rows}
           rowErrors={rowErrors}
-          availableRoles={availableRoles}
           onUpdateName={updateName}
-          onUpdateRoles={updateRoles}
           onDelete={deleteRow}
           onUndoDelete={undoDelete}
           onResendInvite={resendInvite}
           resentPersonIds={resentPersonIds}
-          onRoleDeclared={onRoleDeclared}
         />
       ) : data.semester_name === null ? (
         <p className="text-sm text-rs-muted">No Semester published yet.</p>

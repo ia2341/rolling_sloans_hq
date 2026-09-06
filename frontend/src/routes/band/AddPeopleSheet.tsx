@@ -285,8 +285,8 @@ export function AddPeopleSheet({
             />
           </div>
           <p className="text-xs text-rs-muted">
-            Roles are assigned in the grid after this row lands, via the same
-            Role picker every other row uses.
+            They can declare their Roles on their own Person page once they've
+            signed in.
           </p>
         </div>
       )}

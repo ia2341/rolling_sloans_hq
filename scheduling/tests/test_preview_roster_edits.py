@@ -82,8 +82,8 @@ class PreviewRosterEditsTests(TestCase):
         stamp_before = self.semester.updated_at
         buffer = self._buffer(
             entries=[
-                RosterEditEntry(person=added, name=added.name, role_ids=frozenset()),
-                RosterEditEntry(person=kept, name='Changed Name', role_ids=frozenset({self.role.pk})),
+                RosterEditEntry(person=added, name=added.name),
+                RosterEditEntry(person=kept, name='Changed Name'),
             ],
             removed_person_ids=[removed.pk],
         )
@@ -95,27 +95,24 @@ class PreviewRosterEditsTests(TestCase):
     def test_pending_adds_lists_a_new_person(self):
         """A Buffer entry with no existing Membership shows up in pending_adds."""
         added = PersonFactory(name='Brand New')
-        buffer = self._buffer(entries=[RosterEditEntry(person=added, name=added.name, role_ids=frozenset())])
+        buffer = self._buffer(entries=[RosterEditEntry(person=added, name=added.name)])
 
         fallout = self._preview(buffer)
 
         self.assertIn('Brand New', fallout.pending_adds)
         self.assertFalse(fallout.is_blocked)
 
-    def test_pending_name_edit_and_role_change_are_reported(self):
-        """A mutation to an existing Membership shows up in pending_name_edits and pending_role_changes."""
+    def test_pending_name_edit_is_reported(self):
+        """A name mutation to an existing Membership shows up in pending_name_edits."""
         person = PersonFactory(name='Old Name')
-        membership = MembershipFactory(person=person, semester=self.semester)
-        other_role = RoleFactory()
-        MembershipRole.objects.create(membership=membership, role=other_role)
+        MembershipFactory(person=person, semester=self.semester)
         buffer = self._buffer(entries=[
-            RosterEditEntry(person=person, name='New Name', role_ids=frozenset({self.role.pk})),
+            RosterEditEntry(person=person, name='New Name'),
         ])
 
         fallout = self._preview(buffer)
 
         self.assertTrue(any('New Name' in line for line in fallout.pending_name_edits))
-        self.assertTrue(any('New Name' in line for line in fallout.pending_role_changes))
 
     def test_pending_removals_carries_name_and_email(self):
         """A Buffer removal shows up in pending_removals with the removed Person's name and email."""
@@ -161,36 +158,20 @@ class PreviewRosterEditsTests(TestCase):
 
         self.assertTrue(any('Only Song' in line and self.role.name in line for line in fallout.loud))
 
-    def test_quiet_fallout_flags_a_person_with_no_declared_roles(self):
-        """A Role change leaving a Person's Membership with zero declared Roles reports quiet Fallout."""
-        person = PersonFactory(name='No Roles Left')
-        membership = MembershipFactory(person=person, semester=self.semester)
-        MembershipRole.objects.create(membership=membership, role=self.role)
-        buffer = self._buffer(entries=[RosterEditEntry(person=person, name=person.name, role_ids=frozenset())])
-
-        fallout = self._preview(buffer)
-
-        self.assertTrue(any('No Roles Left' in line for line in fallout.quiet))
-
-    def test_dropping_a_membership_role_no_longer_produces_a_mismatch_quiet_line(self):
-        """Dropping a roster-declared MembershipRole raises no quiet Fallout on its own (issue #377, ADR-0014).
-
-        is_role_mismatch now reads the person-level PersonRole, which this
-        Buffer's Role-set reconciliation doesn't touch -- Role declarations
-        are edited via PersonRole on the person page instead, issue #378.
-        """
-        person = PersonFactory(name='Mismatch Person')
+    def test_name_only_edit_leaves_existing_declared_roles_untouched(self):
+        """A name-only entry for a Person with declared Roles leaves those Roles, and any Role Assignment mismatch flag, exactly as they were — this Buffer carries no Role data at all."""
+        person = PersonFactory(name='Has Roles')
         membership = MembershipFactory(person=person, semester=self.semester)
         MembershipRole.objects.create(membership=membership, role=self.role)
         PersonRoleFactory(person=person, role=self.role)
-        song = SongFactory(semester=self.semester, title='Mismatch Song')
+        song = SongFactory(semester=self.semester, title='Some Song')
         assignment = SongRoleAssignmentFactory(song=song, role=self.role, person=person)
         self.assertFalse(assignment.is_role_mismatch)
-        buffer = self._buffer(entries=[RosterEditEntry(person=person, name=person.name, role_ids=frozenset())])
+        buffer = self._buffer(entries=[RosterEditEntry(person=person, name=person.name)])
 
-        fallout = self._preview(buffer)
+        self._preview(buffer)
 
-        self.assertFalse(any('Mismatch Person' in line and 'Mismatch Song' in line for line in fallout.quiet))
+        self.assertTrue(MembershipRole.objects.filter(membership=membership, role=self.role).exists())
         assignment.refresh_from_db()
         self.assertFalse(assignment.is_role_mismatch)
 

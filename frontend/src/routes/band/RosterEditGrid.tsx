@@ -1,38 +1,32 @@
-import type { MemberRole } from '../../api/memberTypes'
 import { RoleMismatchBadge } from '../../components/ui/CastLine'
 import { isEdited, rowBadges, type RosterEditRow } from './rosterEditModel'
-import { RolePicker } from './RolePicker'
 
 interface RosterEditGridProps {
   rows: RosterEditRow[]
   rowErrors: Record<string, Record<string, string[]>>
-  availableRoles: MemberRole[]
   onUpdateName: (rowKey: string, name: string) => void
-  onUpdateRoles: (rowKey: string, roleIds: Set<number>) => void
   onDelete: (rowKey: string) => void
   onUndoDelete: (rowKey: string) => void
   onResendInvite: (personId: number) => void
   resentPersonIds: ReadonlySet<number>
-  onRoleDeclared: (role: MemberRole) => void
 }
 
 /**
- * The Roster editor's grid (issue #374): the Pending Buffer and nothing
- * else -- a struck-through row and a `Remove`/`Add`/`Invite`/`Rename`/
- * `Roles` badge are the edits themselves, mirroring `SetlistEditGrid`'s
- * shape but with no ordering (the Roster has no position to reorder).
+ * The Roster editor's grid (issue #374, narrowed to add/remove-only by
+ * #379): the Pending Buffer and nothing else -- a struck-through row and a
+ * `Remove`/`Add`/`Invite`/`Rename` badge are the edits themselves,
+ * mirroring `SetlistEditGrid`'s shape but with no ordering (the Roster has
+ * no position to reorder). No Role-editing control of any kind -- a
+ * Person's declared Roles are set only on their Person page (#378).
  */
 export function RosterEditGrid({
   rows,
   rowErrors,
-  availableRoles,
   onUpdateName,
-  onUpdateRoles,
   onDelete,
   onUndoDelete,
   onResendInvite,
   resentPersonIds,
-  onRoleDeclared,
 }: RosterEditGridProps) {
   if (rows.length === 0) {
     return (
@@ -88,23 +82,9 @@ export function RosterEditGrid({
                   ))}
                 </div>
 
-                {!row.deleted && (
-                  <RolePicker
-                    roleIds={row.roleIds}
-                    availableRoles={availableRoles}
-                    onChange={(next) => onUpdateRoles(row.rowKey, next)}
-                    onRoleDeclared={onRoleDeclared}
-                  />
-                )}
-
                 {errors.name && (
                   <p role="alert" className="text-xs text-rs-danger">
                     {errors.name.join(', ')}
-                  </p>
-                )}
-                {errors.role_ids && (
-                  <p role="alert" className="text-xs text-rs-danger">
-                    {errors.role_ids.join(', ')}
                   </p>
                 )}
               </div>

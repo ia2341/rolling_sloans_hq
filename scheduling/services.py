@@ -3205,11 +3205,14 @@ class SelfRemovalError(ValueError):
 
 @dataclass(frozen=True)
 class RosterEditEntry:
-    """One Person's target Roster state in a Buffer: the name to save and the Role set to declare (issue #226)."""
+    """One Person's target Roster state in a Buffer: the name to save (issue #226, narrowed to add/remove-only by issue #379).
+
+    Carries no Role data — Roles are set only on the Person page (#378),
+    never through the Roster editor (ADR 0014, issue #379).
+    """
 
     person: Person
     name: str
-    role_ids: frozenset[int]
 
 
 @dataclass(frozen=True)
@@ -3235,9 +3238,11 @@ class RosterEditBuffer:
     viewing Semester (two open tabs editing different terms), and
     `semester_updated_at` against the Semester row's current stamp (another
     admin's save landed first). `entries` carries every Person the Buffer
-    wants rostered afterward — existing or newly added — with the name and
-    Role set to save; `removed_person_ids` names every Person to purge from
-    the Roster. A Person id appearing in neither is left untouched.
+    wants rostered afterward — existing or newly added — with the name to
+    save; `removed_person_ids` names every Person to purge from the
+    Roster. A Person id appearing in neither is left untouched. Carries no
+    Role data at all (issue #379): this Buffer is semester-membership-only,
+    and a Person's declared Roles are set only on their Person page (#378).
 
     `pending_invites` (issue #336) carries every not-yet-existing Person to
     create and roster in the same transaction — folded in here rather than
@@ -3255,24 +3260,22 @@ class RosterEditBuffer:
 
 
 def apply_roster_edits(buffer: RosterEditBuffer, *, viewing_semester: Semester, requesting_admin: Person) -> None:
-    """Apply a whole Roster Pending Buffer — adds, removals, Role sets, name edits and invites — in one transaction (issue #226, #336).
+    """Apply a whole Roster Pending Buffer — adds, removals, name edits and invites — in one transaction (issue #226, #336, narrowed by #379).
 
     The single write the Roster edit surface and its Preview both run
     (ADR-0008, issue #185): a failure anywhere leaves nothing applied.
     Takes no Semester row lock — nothing here renumbers positions, and the
-    Membership/MembershipRole uniqueness constraints plus get-or-create
-    absorb the concurrent-admin case, the same reasoning the existing
+    Membership uniqueness constraint plus get-or-create absorbs the
+    concurrent-admin case, the same reasoning the existing
     `_membership_for_writing()` write helper documents.
 
     Removing a Person is a Semester-scoped purge, not a bare Membership
     delete: it also deletes that Semester's `SongRoleAssignment` rows and
     `Conflict` rows for them, since both point at `Person` rather than at
     `Membership` and would otherwise survive un-rostered. A prior Semester's
-    rows for the same Person are untouched. Role-set changes go through
-    ordinary `MembershipRole` creates/deletes; this function never
-    recomputes `is_role_mismatch` by hand, but note that `MembershipRole`
-    no longer drives that flag at all (ADR-0014, issue #377) — only
-    `PersonRole` does, edited separately via `sync_person_roles()`.
+    rows for the same Person are untouched. This Buffer carries no Role
+    data (issue #379) — a Person's declared Roles are set only on their
+    Person page (#378), never here.
 
     Each of `buffer.pending_invites` (issue #336) is created via
     `identity.services.invite_person(..., send_via_on_commit=True)` and
@@ -3330,20 +3333,11 @@ def _purge_person_from_semester(person_id: int, semester: Semester) -> None:
 
 
 def _apply_roster_edit_entry(entry: RosterEditEntry, semester: Semester) -> None:
-    """Save `entry.name` onto its Person, then get-or-create their Membership and reconcile its declared Roles."""
+    """Save `entry.name` onto its Person, then get-or-create their Membership on `semester` (issue #379: no Role data here)."""
     if entry.person.name != entry.name:
         entry.person.name = entry.name
         entry.person.save(update_fields=['name'])
-    membership, _ = Membership.objects.get_or_create(person=entry.person, semester=semester)
-    current_role_ids = frozenset(
-        MembershipRole.objects.filter(membership=membership).values_list('role_id', flat=True)
-    )
-    for role_id in entry.role_ids - current_role_ids:
-        MembershipRole.objects.create(membership=membership, role_id=role_id)
-    if current_role_ids - entry.role_ids:
-        MembershipRole.objects.filter(
-            membership=membership, role_id__in=current_role_ids - entry.role_ids,
-        ).delete()
+    Membership.objects.get_or_create(person=entry.person, semester=semester)
 
 
 def _apply_roster_invite(invite: RosterInvite, semester: Semester) -> None:
@@ -3377,7 +3371,7 @@ class RosterRemoval:
 
 @dataclass(frozen=True)
 class RosterEditFallout:
-    """Every observable consequence of a Roster edit Buffer, computed without committing it (issue #228).
+    """Every observable consequence of a Roster edit Buffer, computed without committing it (issue #228, narrowed by #379).
 
     `is_blocked` is true iff the Buffer cannot be saved at all (a
     WrongViewingSemesterError or SelfRemovalError) — a Validation Error in
@@ -3390,6 +3384,8 @@ class RosterEditFallout:
     `loud`/`quiet` are human-readable Fallout messages in the two ADR
     0002/issue #228 tiers; neither ever blocks a save. `is_stale` flags a
     `Semester.updated_at` mismatch — reported, never refused, per ADR 0008.
+    Carries no Role-change field (issue #379): this Buffer never touches
+    Role data, so there is nothing to report there.
     """
 
     is_blocked: bool
@@ -3398,7 +3394,6 @@ class RosterEditFallout:
     pending_adds: list[str]
     pending_invites: list[str]
     pending_removals: list[RosterRemoval]
-    pending_role_changes: list[str]
     pending_name_edits: list[str]
     loud: list[str]
     quiet: list[str]
@@ -3413,7 +3408,6 @@ def _blocked_roster_fallout(block_message: str, *, is_stale: bool = False) -> Ro
         pending_adds=[],
         pending_invites=[],
         pending_removals=[],
-        pending_role_changes=[],
         pending_name_edits=[],
         loud=[],
         quiet=[],
@@ -3429,9 +3423,8 @@ def preview_roster_edits(buffer: RosterEditBuffer, *, viewing_semester: Semester
     Called outside such a transaction, this function corrupts the
     database.
 
-    Snapshots Membership/Role state, Role Assignment mismatch flags and
-    per-Song Role Requirement fill status *before* calling
-    `apply_roster_edits()` (with a copy of `buffer` whose
+    Snapshots Membership state and per-Song Role Requirement fill status
+    *before* calling `apply_roster_edits()` (with a copy of `buffer` whose
     `semester_updated_at` is swapped for the Semester's current value, so
     the real function's own staleness check always passes and the write
     actually runs), then re-reads the same state *after* and diffs the
@@ -3463,14 +3456,6 @@ def preview_roster_edits(buffer: RosterEditBuffer, *, viewing_semester: Semester
         Membership.objects.filter(semester=viewing_semester, person_id__in=person_ids_in_batch)
         .values_list('person_id', flat=True)
     )
-    role_ids_before_by_person = {
-        person_id: frozenset(
-            MembershipRole.objects.filter(
-                membership__person_id=person_id, membership__semester=viewing_semester,
-            ).values_list('role_id', flat=True)
-        )
-        for person_id in person_ids_in_batch
-    }
     names_before_by_person = {entry.person.pk: entry.person.name for entry in buffer.entries}
 
     removed_people_by_id = Person.objects.in_bulk(buffer.removed_person_ids)
@@ -3484,9 +3469,6 @@ def preview_roster_edits(buffer: RosterEditBuffer, *, viewing_semester: Semester
 
     songs = list(Song.objects.filter(semester=viewing_semester))
     fill_before = {song.pk: {status.role.pk: status for status in fill_status_for(song)} for song in songs}
-    mismatch_before = dict(
-        SongRoleAssignment.objects.filter(song__semester=viewing_semester).values_list('pk', 'is_role_mismatch')
-    )
 
     apply_buffer = replace(buffer, semester_updated_at=current_semester.updated_at)
     try:
@@ -3500,7 +3482,6 @@ def preview_roster_edits(buffer: RosterEditBuffer, *, viewing_semester: Semester
         RosterRemoval(person_id=person_id, name=person.name, email=person.email)
         for person_id, person in removed_people_by_id.items()
     ]
-    pending_role_changes = []
     pending_name_edits = []
     for entry in buffer.entries:
         person_id = entry.person.pk
@@ -3509,8 +3490,6 @@ def preview_roster_edits(buffer: RosterEditBuffer, *, viewing_semester: Semester
             continue
         if entry.name != names_before_by_person[person_id]:
             pending_name_edits.append(f'{names_before_by_person[person_id]} → {entry.name}')
-        if entry.role_ids != role_ids_before_by_person[person_id]:
-            pending_role_changes.append(entry.name)
 
     loud = []
     for person_id, (assignment_count, conflict_count) in removal_counts_before.items():
@@ -3533,29 +3512,6 @@ def preview_roster_edits(buffer: RosterEditBuffer, *, viewing_semester: Semester
                 )
 
     quiet = []
-    for entry in buffer.entries:
-        person_id = entry.person.pk
-        after_role_count = MembershipRole.objects.filter(
-            membership__person_id=person_id, membership__semester=viewing_semester,
-        ).count()
-        if after_role_count == 0:
-            quiet.append(f'{entry.name} has no declared Roles.')
-
-    after_assignments = {
-        assignment.pk: assignment
-        for assignment in SongRoleAssignment.objects.filter(
-            song__semester=viewing_semester,
-        ).select_related('person', 'role', 'song')
-    }
-    for assignment_id, was_mismatch in mismatch_before.items():
-        after_assignment = after_assignments.get(assignment_id)
-        if after_assignment is None or was_mismatch:
-            continue
-        if after_assignment.is_role_mismatch:
-            quiet.append(
-                f"{after_assignment.person.name}'s change newly flags their {after_assignment.role.name} "
-                f'assignment on {after_assignment.song.title} as a mismatch.'
-            )
 
     return RosterEditFallout(
         is_blocked=False,
@@ -3564,7 +3520,6 @@ def preview_roster_edits(buffer: RosterEditBuffer, *, viewing_semester: Semester
         pending_adds=pending_adds,
         pending_invites=pending_invites,
         pending_removals=pending_removals,
-        pending_role_changes=pending_role_changes,
         pending_name_edits=pending_name_edits,
         loud=loud,
         quiet=quiet,

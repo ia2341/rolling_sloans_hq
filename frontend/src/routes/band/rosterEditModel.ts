@@ -1,6 +1,5 @@
 import type { PreviewChange, PreviewResult } from '../../api/previewTypes'
 import type {
-  MemberRole,
   RosterEditBufferWire,
   RosterEditFalloutWire,
   RosterEditMember,
@@ -30,9 +29,11 @@ export interface RosterWriteEnvelope {
  * One row of the Roster editor's Pending Buffer, held entirely in client
  * state (issue #374, mirroring `setlistEditModel.ts`'s `EditRow`). The
  * grid *is* this Buffer and nothing else -- a struck-through row and a
- * `Rename`/`Roles`/`Add`/`Invite` badge are all derived from the fields
- * here, never from a second, server-computed shape (ADR 0008: only the
- * server's Preview computes Fallout; this is display-only bookkeeping).
+ * `Rename`/`Add`/`Invite` badge are all derived from the fields here,
+ * never from a second, server-computed shape (ADR 0008: only the server's
+ * Preview computes Fallout; this is display-only bookkeeping). Carries no
+ * Role data (issue #379): the Roster editor is add/remove-only, and a
+ * Person's declared Roles are set only on their Person page (#378).
  */
 export interface RosterEditRow {
   rowKey: string
@@ -41,7 +42,6 @@ export interface RosterEditRow {
   name: string
   /** Invite rows only; `null` for every existing/imported/added row (ADR 0005 keeps email off every other Roster surface). */
   email: string | null
-  roleIds: Set<number>
   /** Struck through and kept in place with Undo, rather than removed from the array -- but only for a row that has something to undo to (`original !== null`); see `deleteRosterRow()`. */
   deleted: boolean
   origin: 'existing' | 'imported' | 'added' | 'invited'
@@ -49,8 +49,8 @@ export interface RosterEditRow {
   isPendingInvite: boolean
   isRoleMismatch: boolean
   songCount: number
-  /** The saved values at load time, for an existing row -- `null` for a brand-new one (imported, added or invited this session), which has nothing to diff against. */
-  original: { name: string; roleIds: Set<number> } | null
+  /** The saved name at load time, for an existing row -- `null` for a brand-new one (imported, added or invited this session), which has nothing to diff against. */
+  original: { name: string } | null
 }
 
 let rowKeySequence = 0
@@ -63,22 +63,18 @@ export function nextRowKey(prefix: string): string {
 
 /** Builds the editor's initial Buffer rows from a freshly-loaded `/api/members/roster/` payload. */
 export function rowsFromPayload(members: RosterEditMember[]): RosterEditRow[] {
-  return members.map((member) => {
-    const roleIds = new Set(member.roles.map((role) => role.id))
-    return {
-      rowKey: `member-${member.id}`,
-      personId: member.id,
-      name: member.name,
-      email: null,
-      roleIds,
-      deleted: false,
-      origin: 'existing',
-      isPendingInvite: member.is_pending_invite,
-      isRoleMismatch: member.is_role_mismatch,
-      songCount: member.song_count,
-      original: { name: member.name, roleIds: new Set(roleIds) },
-    }
-  })
+  return members.map((member) => ({
+    rowKey: `member-${member.id}`,
+    personId: member.id,
+    name: member.name,
+    email: null,
+    deleted: false,
+    origin: 'existing',
+    isPendingInvite: member.is_pending_invite,
+    isRoleMismatch: member.is_role_mismatch,
+    songCount: member.song_count,
+    original: { name: member.name },
+  }))
 }
 
 /** Builds one Buffer row for an import-candidate ticked in the Add-people sheet's "Import" section. */
@@ -90,7 +86,6 @@ export function newImportedRow(
     personId: candidate.id,
     name: candidate.name,
     email: null,
-    roleIds: new Set(candidate.roles.map((role) => role.id)),
     deleted: false,
     origin: 'imported',
     isPendingInvite: false,
@@ -107,7 +102,6 @@ export function newAddedRow(person: UnrosteredPerson): RosterEditRow {
     personId: person.id,
     name: person.name,
     email: null,
-    roleIds: new Set<number>(),
     deleted: false,
     origin: 'added',
     isPendingInvite: false,
@@ -124,7 +118,6 @@ export function newInviteRow(name: string, email: string): RosterEditRow {
     personId: null,
     name,
     email,
-    roleIds: new Set<number>(),
     deleted: false,
     origin: 'invited',
     isPendingInvite: false,
@@ -134,20 +127,10 @@ export function newInviteRow(name: string, email: string): RosterEditRow {
   }
 }
 
-/** True if two Role-id sets hold exactly the same ids, regardless of insertion order. */
-function roleSetsEqual(a: Set<number>, b: Set<number>): boolean {
-  if (a.size !== b.size) return false
-  for (const id of a) if (!b.has(id)) return false
-  return true
-}
-
 /** True if `row` differs from its saved snapshot; always `false` for a brand-new row (nothing to diff against). */
 export function isEdited(row: RosterEditRow): boolean {
   if (row.original === null) return false
-  return (
-    row.name !== row.original.name ||
-    !roleSetsEqual(row.roleIds, row.original.roleIds)
-  )
+  return row.name !== row.original.name
 }
 
 /**
@@ -179,7 +162,6 @@ export function rowBadges(row: RosterEditRow): PreviewChange['op'][] {
     return [row.origin === 'invited' ? 'Invite' : 'Add']
   const badges: PreviewChange['op'][] = []
   if (row.name !== row.original.name) badges.push('Rename')
-  if (!roleSetsEqual(row.roleIds, row.original.roleIds)) badges.push('Roles')
   return badges
 }
 
@@ -219,7 +201,6 @@ export function buildBufferWire(
         row_key: row.rowKey,
         person_id: row.personId as number,
         name: row.name,
-        role_ids: [...row.roleIds].sort((a, b) => a - b),
       })),
     removed_person_ids: rows
       .filter((row) => row.original !== null && row.deleted)
@@ -232,16 +213,6 @@ export function buildBufferWire(
         email: row.email ?? '',
       })),
   }
-}
-
-/** Adds `role` to `available_roles` if it isn't already present, for the picker's own list after a "declare a new Role" round trip. */
-export function withDeclaredRole(
-  availableRoles: MemberRole[],
-  role: MemberRole,
-): MemberRole[] {
-  if (availableRoles.some((candidate) => candidate.id === role.id))
-    return availableRoles
-  return [...availableRoles, role]
 }
 
 const STALE_MESSAGE =
@@ -295,10 +266,6 @@ export function mapRosterPreviewToResult(
     ...fallout.pending_invites.map((name): PreviewChange => ({
       op: 'Invite',
       object: name,
-    })),
-    ...fallout.pending_role_changes.map((description): PreviewChange => ({
-      op: 'Roles',
-      object: description,
     })),
     ...fallout.pending_name_edits.map((description): PreviewChange => ({
       op: 'Rename',

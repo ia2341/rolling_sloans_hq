@@ -518,8 +518,9 @@ class RosterEditApiView(AdminApiView, View):
 
     Unlike `BandApiView` (active Roster only), this returns every
     Membership — invited-but-not-yet-active people included — since the
-    editor is exactly the surface that needs to rename them, change their
-    Roles once they've signed in, or offer "Invite again".
+    editor is exactly the surface that needs to rename them or offer
+    "Invite again". Carries no Role data (issue #379): a Person's declared
+    Roles are set only on their Person page (#378), never here.
     """
 
     def get(self, request):
@@ -528,7 +529,7 @@ class RosterEditApiView(AdminApiView, View):
         if semester is None:
             data = {
                 'semester_id': None, 'semester_updated_at': None,
-                'active_count': 0, 'invited_count': 0, 'members': [], 'available_roles': [],
+                'active_count': 0, 'invited_count': 0, 'members': [],
             }
             return self.read_response(request, data)
         memberships = services.roster_for(Membership.objects.filter(semester=semester))
