@@ -186,9 +186,9 @@ class SongRoleAssignment(models.Model):
     """A Person filling a Role on a Song (issue #35).
 
     is_role_mismatch is never a hard block on save (per ADR-0002): it just
-    flags that the assigned Role isn't among the Roles the Person declared
-    on their Membership for the Song's Semester, so an admin can notice and
-    resolve it either way.
+    flags that the assigned Role isn't among the Person's declared
+    `PersonRole`s (person-level, not Semester-scoped — ADR-0014), so an
+    admin can notice and resolve it either way.
     """
 
     song = models.ForeignKey(Song, on_delete=models.CASCADE)

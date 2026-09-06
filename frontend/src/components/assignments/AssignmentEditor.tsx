@@ -83,8 +83,8 @@ function fromServerEntry(entry: MatrixEntry): DisplayEntry {
  *
  * `isRoleMismatch` carries the pick's own predicted flag (ADR 0002) — a
  * pending pill for someone who hasn't declared the Role shows the same
- * "◦ role not on membership" marker a saved mismatch does, rather than
- * only appearing after a round trip.
+ * "◦ role not declared" marker a saved mismatch does, rather than only
+ * appearing after a round trip.
  */
 function fromPendingEntry(
   kind: 'assignment' | 'backup',
@@ -659,7 +659,7 @@ export function AssignmentEditor({
       <div className="flex flex-wrap gap-3 text-xs text-rs-muted">
         <span>backup — covers one evening only</span>
         <span>away — a declared Conflict</span>
-        <span>◦ role not on membership</span>
+        <span>◦ role not declared</span>
       </div>
 
       {addableRoles.length > 0 && (
@@ -810,7 +810,7 @@ function AssignmentEditorPill({
         <span className="rounded bg-rs-border px-1">away</span>
       )}
       {entry.isRoleMismatch && (
-        <span title="Role not on their membership (ADR 0002)">◦</span>
+        <span title="Role not declared for them (ADR 0002)">◦</span>
       )}
       <button
         type="button"
