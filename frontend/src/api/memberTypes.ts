@@ -105,6 +105,105 @@ export interface PersonPayload {
   recordings?: PersonRecordingsBlock
 }
 
+/**
+ * Wire types for the Roster editor (issue #336's backend, #374's
+ * frontend), mirroring `scheduling/serializers.py`'s
+ * `serialize_roster_edit()`/`serialize_roster_edit_fallout()`/
+ * `serialize_roster_candidates()`/`serialize_role_declaration()` exactly.
+ */
+
+/** One row of `GET /api/members/roster/`'s `members` list — every Membership in the viewing Semester, invited-but-inactive included. */
+export interface RosterEditMember {
+  id: number
+  name: string
+  roles: MemberRole[]
+  song_count: number
+  is_role_mismatch: boolean
+  is_pending_invite: boolean
+}
+
+/** `data` shape of `GET /api/members/roster/`. */
+export interface RosterEditPayload {
+  semester_id: number | null
+  semester_updated_at: string | null
+  active_count: number
+  invited_count: number
+  members: RosterEditMember[]
+  available_roles: MemberRole[]
+}
+
+/** One row of `GET /api/members/roster/candidates/`'s `import_candidates` list — a prior Semester's Roster, proposed fresh (ADR 0001). */
+export interface RosterImportCandidate {
+  id: number
+  name: string
+  roles: MemberRole[]
+}
+
+/** One row of `GET /api/members/roster/candidates/`'s `unrostered_people` list — an active Person with no Membership this Semester. */
+export interface UnrosteredPerson {
+  id: number
+  name: string
+}
+
+/** `data` shape of `GET /api/members/roster/candidates/`. */
+export interface RosterCandidatesPayload {
+  import_source_semester_name: string | null
+  import_candidates: RosterImportCandidate[]
+  unrostered_people: UnrosteredPerson[]
+}
+
+/** One `/api/members/roster/{preview,save}/` request body `entries` row (mirrors `scheduling/services.py`'s `RosterEditEntry`). */
+export interface RosterEditEntryWire {
+  row_key: string
+  person_id: number
+  name: string
+  role_ids: number[]
+}
+
+/** One `/api/members/roster/{preview,save}/` request body `invites` row (mirrors `scheduling/services.py`'s `RosterInvite`). */
+export interface RosterInviteWire {
+  row_key: string
+  name: string
+  email: string
+}
+
+/** `/api/members/roster/{preview,save}/` request body (mirrors `scheduling/services.py`'s `RosterEditBuffer`). */
+export interface RosterEditBufferWire {
+  semester_id: number
+  semester_updated_at: string
+  entries: RosterEditEntryWire[]
+  removed_person_ids: number[]
+  invites: RosterInviteWire[]
+}
+
+/** One `RosterRemoval`, as `serialize_roster_edit_fallout()` emits it — the one place a Roster surface shows an email (ADR 0005, issue #228). */
+export interface RosterRemovalWire {
+  person_id: number
+  name: string
+  email: string
+}
+
+/** `RosterEditFallout`, as `serialize_roster_edit_fallout()` emits it -- the `/api/members/roster/preview/` response's `fallout` value. */
+export interface RosterEditFalloutWire {
+  is_blocked: boolean
+  block_message: string
+  is_stale: boolean
+  pending_adds: string[]
+  pending_invites: string[]
+  pending_removals: RosterRemovalWire[]
+  pending_role_changes: string[]
+  pending_name_edits: string[]
+  loud: string[]
+  quiet: string[]
+}
+
+/** `data` shape of `POST /api/members/roster/roles/` — the Role that resulted, plus whether it was created, matched or reactivated. */
+export interface RoleDeclaration {
+  role: MemberRole
+  created: boolean
+  reactivated: boolean
+}
+
 /** Success body of `POST /api/members/recordings/presign/` (`data` of the read envelope it wears — see #307's envelope boundary rule). */
 export interface RecordingPresignReservation {
   upload_url: string
