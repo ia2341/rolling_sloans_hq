@@ -2140,14 +2140,16 @@ def future_rehearsals_for(semester) -> list[Rehearsal]:
 
 @dataclass(frozen=True)
 class ConflictAdjudicationRow:
-    """One row of the admin adjudication index: a Rehearsal plus its pending Conflict count (issue #191)."""
+    """One row of the admin adjudication index: a Rehearsal plus its pending/approved/rejected Conflict counts (issue #191, #340)."""
 
     rehearsal: Rehearsal
     pending_count: int
+    approved_count: int
+    rejected_count: int
 
 
 def conflict_adjudication_index_for(semester) -> list[ConflictAdjudicationRow]:
-    """Return `semester`'s adjudicatable Rehearsals with each one's pending Conflict count, in date order (issue #191).
+    """Return `semester`'s adjudicatable Rehearsals with each one's pending/approved/rejected Conflict counts, in date order (issue #191, #340).
 
     Shares future_rehearsals_for()'s future/non-Dress filter — the Dress
     Rehearsal can hold no Conflict (ADR-0006), and a past Rehearsal's
@@ -2157,17 +2159,29 @@ def conflict_adjudication_index_for(semester) -> list[ConflictAdjudicationRow]:
     member-facing declaration paths that have no business carrying a
     Conflict-derived count. A Rehearsal with zero Conflicts still gets a
     row, so an admin can confirm there is nothing to do rather than infer
-    it from an absence.
+    it from an absence. `approved_count`/`rejected_count` (issue #340) are
+    computed in the same conditional-aggregation query as `pending_count`,
+    one row per Rehearsal, rather than three separate `.filter().count()`
+    round trips per Rehearsal.
     """
     rehearsals = future_rehearsals_for(semester)
-    pending_counts = dict(
-        Conflict.objects.filter(rehearsal__in=rehearsals, status=Conflict.PENDING)
+    counts_by_rehearsal_id = {
+        row['rehearsal_id']: row
+        for row in Conflict.objects.filter(rehearsal__in=rehearsals)
         .values('rehearsal_id')
-        .annotate(count=Count('id'))
-        .values_list('rehearsal_id', 'count'),
-    )
+        .annotate(
+            pending_count=Count('id', filter=Q(status=Conflict.PENDING)),
+            approved_count=Count('id', filter=Q(status=Conflict.APPROVED)),
+            rejected_count=Count('id', filter=Q(status=Conflict.REJECTED)),
+        )
+    }
     return [
-        ConflictAdjudicationRow(rehearsal=rehearsal, pending_count=pending_counts.get(rehearsal.pk, 0))
+        ConflictAdjudicationRow(
+            rehearsal=rehearsal,
+            pending_count=counts_by_rehearsal_id.get(rehearsal.pk, {}).get('pending_count', 0),
+            approved_count=counts_by_rehearsal_id.get(rehearsal.pk, {}).get('approved_count', 0),
+            rejected_count=counts_by_rehearsal_id.get(rehearsal.pk, {}).get('rejected_count', 0),
+        )
         for rehearsal in rehearsals
     ]
 
