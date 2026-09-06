@@ -247,10 +247,10 @@ function UpcomingRehearsalsSection({ rows }: { rows: UpcomingRehearsalRow[] }) {
                 {formatClockTime(row.end_time)}
               </span>
               <span>
-                {row.your_window !== null
-                  ? `${formatClockTime(row.your_window.arrival_time)}–${formatClockTime(row.your_window.departure_time)}`
-                  : row.is_dress
-                    ? 'Whole window'
+                {row.is_dress
+                  ? 'Whole window'
+                  : row.your_window !== null
+                    ? `${formatClockTime(row.your_window.arrival_time)}–${formatClockTime(row.your_window.departure_time)}`
                     : 'Not needed'}
               </span>
             </li>
