@@ -90,7 +90,10 @@ export function Home() {
             />
           )}
           {data.setup_checklist !== null && (
-            <SetupChecklistPanel checklist={data.setup_checklist} />
+            <SetupChecklistPanel
+              checklist={data.setup_checklist}
+              onPublished={load}
+            />
           )}
           <NextRehearsalSection card={data.next_rehearsal} />
           <UpcomingRehearsalsSection rows={data.upcoming_rehearsals} />
@@ -390,7 +393,13 @@ function SongProgressTable({ songs }: { songs: SongProgressRow[] }) {
  * non-destructive Dismiss stored only in `localStorage` -- never on the
  * Semester itself.
  */
-function SetupChecklistPanel({ checklist }: { checklist: SetupChecklist }) {
+function SetupChecklistPanel({
+  checklist,
+  onPublished,
+}: {
+  checklist: SetupChecklist
+  onPublished: () => void
+}) {
   const appContext = useAppContext()
   const viewingSemester = appContext?.viewing_semester ?? null
   const [publishOpen, setPublishOpen] = useState(false)
@@ -451,6 +460,7 @@ function SetupChecklistPanel({ checklist }: { checklist: SetupChecklist }) {
         onOpenChange={setPublishOpen}
         semesterId={viewingSemester.id}
         semesterName={viewingSemester.name}
+        onSuccess={onPublished}
       />
     </section>
   )
