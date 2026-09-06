@@ -384,14 +384,14 @@ function ProgressBar({
 }) {
   const percent = total === 0 ? 0 : Math.round((completed / total) * 100)
   return (
-    <div className="flex items-center gap-2">
-      <div className="h-1.5 w-40 overflow-hidden rounded-full bg-rs-border/50">
+    <div className="flex w-full items-center gap-2">
+      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-rs-border/50">
         <div
           className="h-full rounded-full bg-rs-accent"
           style={{ width: `${percent}%` }}
         />
       </div>
-      <span className="text-xs text-rs-muted">
+      <span className="shrink-0 text-xs text-rs-muted">
         {completed} of {total}
       </span>
     </div>
@@ -447,13 +447,13 @@ function SongProgressTable({ songs }: { songs: SongProgressRow[] }) {
     <table className="w-full table-fixed text-left text-sm">
       <thead>
         <tr>
-          <th className="w-8 pb-2">#</th>
-          <th className="pb-2">Song</th>
-          <th className="w-20 pb-2">Artist</th>
-          <th className="w-16 pb-2">Length</th>
-          <th className="w-24 pb-2">Next rehearsal</th>
-          <th className="w-44 pb-2">Progress</th>
-          <th className="w-1/3 pb-2">Notes</th>
+          <th className="w-[3%] pb-2">#</th>
+          <th className="w-[24%] pb-2">Song</th>
+          <th className="w-[13%] pb-2">Artist</th>
+          <th className="w-[6%] pb-2">Length</th>
+          <th className="w-[9%] pb-2">Next rehearsal</th>
+          <th className="w-[21%] pb-2">Progress</th>
+          <th className="w-[24%] pb-2">Notes</th>
         </tr>
       </thead>
       <tbody>
