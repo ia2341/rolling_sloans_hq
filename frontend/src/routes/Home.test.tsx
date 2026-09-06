@@ -288,7 +288,7 @@ describe('Home', () => {
     await waitFor(() => expect(screen.queryAllByRole('table')).toHaveLength(0))
   })
 
-  it('shows the setup checklist for an admin viewing an empty draft Semester, with numbered items and Open/Review buttons', async () => {
+  it('shows the setup checklist for an admin viewing an empty draft Semester, with numbered items and Get Started/Review buttons', async () => {
     mockFetchOnce(200, {
       context: adminContext(),
       data: homePayload({
@@ -350,15 +350,45 @@ describe('Home', () => {
     ).toBeInTheDocument()
 
     const rosterRow = screen.getByText('1. Roster').closest('li') as HTMLElement
-    expect(
-      within(rosterRow).getByRole('link', { name: 'Review' }),
-    ).toBeInTheDocument()
+    const rosterLink = within(rosterRow).getByRole('link', { name: 'Review' })
+    expect(rosterLink).toBeInTheDocument()
+    expect(rosterLink).toHaveAttribute('href', '/members?intent=edit-roster')
+
     const setlistRow = screen
       .getByText('2. Setlist')
       .closest('li') as HTMLElement
-    expect(
-      within(setlistRow).getByRole('link', { name: 'Open' }),
-    ).toBeInTheDocument()
+    const setlistLink = within(setlistRow).getByRole('link', {
+      name: 'Get Started',
+    })
+    expect(setlistLink).toBeInTheDocument()
+    expect(setlistLink).toHaveAttribute('href', '/setlist?intent=add-songs')
+
+    const patternRow = screen
+      .getByText('3. Rehearsal pattern')
+      .closest('li') as HTMLElement
+    const patternLink = within(patternRow).getByRole('link', {
+      name: 'Get Started',
+    })
+    expect(patternLink).toHaveAttribute(
+      'href',
+      '/schedule/edit?intent=generate-dates',
+    )
+
+    const datesRow = screen
+      .getByText('4. Rehearsal dates')
+      .closest('li') as HTMLElement
+    const datesLink = within(datesRow).getByRole('link', {
+      name: 'Get Started',
+    })
+    expect(datesLink).toHaveAttribute('href', '/schedule/edit')
+
+    const castingRow = screen
+      .getByText('5. Casting')
+      .closest('li') as HTMLElement
+    const castingLink = within(castingRow).getByRole('link', {
+      name: 'Get Started',
+    })
+    expect(castingLink).toHaveAttribute('href', '/schedule/edit')
   })
 
   it('never disables a checklist item and Dismiss removes the panel', async () => {

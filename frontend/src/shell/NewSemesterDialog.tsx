@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 
 import { apiFetch, ApiError } from '../api/client'
 import { useAppContext } from '../api/ContextProvider'
@@ -52,13 +53,17 @@ const TIMING_FIELDS: Array<{
  * fields, only the viewing one's, via `/api/schedule/editor/`), and states
  * what creating it does before the admin commits. `POST`s to
  * `/api/semesters/create/`, which both creates the draft and switches the
- * session's Viewing Semester to it in one call.
+ * session's Viewing Semester to it in one call, then navigates to `/` on
+ * success (issue #374) so the admin lands on Home's setup checklist for
+ * the Semester they just created rather than wherever they opened this
+ * dialog from.
  */
 export function NewSemesterDialog({
   open,
   onOpenChange,
 }: NewSemesterDialogProps) {
   const appContext = useAppContext()
+  const navigate = useNavigate()
   const mostRecentNameRef = useRef('')
   useEffect(() => {
     mostRecentNameRef.current = appContext?.semester_options[0]?.name ?? ''
@@ -115,6 +120,7 @@ export function NewSemesterDialog({
         return
       }
       onOpenChange(false)
+      navigate('/')
     } catch (thrown) {
       setSubmitError(
         thrown instanceof ApiError

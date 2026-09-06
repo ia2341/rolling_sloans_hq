@@ -14,6 +14,7 @@ from django.urls import reverse
 from identity.factories import PersonFactory
 from scheduling.factories import (
     MembershipFactory,
+    PersonRoleFactory,
     RecordingFactory,
     RehearsalFactory,
     RehearsalSongFactory,
@@ -22,7 +23,7 @@ from scheduling.factories import (
     SongFactory,
     SongRoleAssignmentFactory,
 )
-from scheduling.models import Membership, MembershipRole
+from scheduling.models import Membership, MembershipRole, PersonRole
 from scheduling.serializers import (
     serialize_band,
     serialize_person,
@@ -154,7 +155,7 @@ class SerializePersonExactKeySetTests(TestCase):
         semester = SemesterFactory()
         person = PersonFactory(name='Self Placeholder')
         membership = MembershipFactory(person=person, semester=semester)
-        MembershipRole.objects.create(membership=membership, role=RoleFactory(name='Bassist'))
+        PersonRoleFactory(person=person, role=RoleFactory(name='Bassist'))
 
         data = serialize_person(person, semester=semester, is_self=True, can_edit_roles=True, membership=membership)
 
@@ -173,8 +174,8 @@ class SerializePersonExactKeySetTests(TestCase):
 
         self.assertEqual(set(data['songs'][0].keys()), {'song_id', 'song_title', 'artist', 'role_name'})
 
-    def test_no_membership_omits_roles_and_songs_but_not_email_or_recordings(self):
-        """An unsaved Membership (the not-yet-rostered self case) omits `roles`/`songs`/`recordings` entirely."""
+    def test_no_membership_omits_songs_and_recordings_but_not_roles_email_or_available_roles(self):
+        """An unsaved Membership (the not-yet-rostered self case) omits `songs`/`recordings`, but not `roles` (issue #378, ADR-0014)."""
         semester = SemesterFactory()
         person = PersonFactory(name='Fresh Invite Placeholder')
         unsaved_membership = Membership(person=person, semester=semester)
@@ -184,7 +185,7 @@ class SerializePersonExactKeySetTests(TestCase):
         )
 
         self.assertFalse(data['has_membership'])
-        self.assertNotIn('roles', data)
+        self.assertEqual(data['roles'], [])
         self.assertNotIn('songs', data)
         self.assertNotIn('recordings', data)
         self.assertIn('email', data)
@@ -524,7 +525,7 @@ class RecordingSlotsApiViewTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class PersonRolesApiViewTests(TestCase):
-    """`POST /api/members/<pk>/roles/` (issue #333, issue #232)."""
+    """`POST /api/members/<pk>/roles/` (issue #333, issue #232, retargeted at PersonRole by issue #378/ADR-0014)."""
 
     def setUp(self):
         """Build a Semester and log in as an ordinary member before each test."""
@@ -532,8 +533,8 @@ class PersonRolesApiViewTests(TestCase):
         self.person = PersonFactory(password=PASSWORD)
         self.client.login(username=self.person.email, password=PASSWORD)
 
-    def test_first_submission_creates_the_membership(self):
-        """A first-time POST with no prior Membership creates one and writes its Roles."""
+    def test_first_submission_writes_a_standing_personrole_with_no_membership_required(self):
+        """A first-time POST with no prior Membership writes a standing `PersonRole`, and creates no Membership."""
         role = RoleFactory()
 
         response = self.client.post(
@@ -544,10 +545,11 @@ class PersonRolesApiViewTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()['ok'])
-        self.assertTrue(Membership.objects.filter(person=self.person, semester=self.semester).exists())
+        self.assertTrue(PersonRole.objects.filter(person=self.person, role=role).exists())
+        self.assertFalse(Membership.objects.filter(person=self.person, semester=self.semester).exists())
 
-    def test_invalid_role_id_reports_a_field_error_without_writing(self):
-        """A nonexistent Role id reports a field error via the write envelope rather than a 500."""
+    def test_invalid_role_id_reports_a_non_field_error_without_writing(self):
+        """A nonexistent Role id reports a non-field error via the write envelope rather than a 500."""
         response = self.client.post(
             reverse('api-member-roles', args=[self.person.pk]),
             data={'role_ids': [999999]},
@@ -557,4 +559,5 @@ class PersonRolesApiViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertFalse(body['ok'])
-        self.assertIn('roles', body['errors'])
+        self.assertTrue(body['non_field_errors'])
+        self.assertFalse(PersonRole.objects.filter(person=self.person).exists())

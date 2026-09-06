@@ -30,6 +30,28 @@ function dismissedChecklistKey(semesterId: number): string {
   return `rs-home-checklist-dismissed-${semesterId}`
 }
 
+/**
+ * Carries a checklist row's deep-link intent onto its destination (issue
+ * #374), so "Get Started" doesn't just navigate but starts the workflow
+ * that row names -- Roster's editor, the Setlist's Add-songs sheet, or the
+ * rehearsal pattern's Generate-dates modal. `rehearsal_dates`/`casting`
+ * keep navigating to the plain destination: dates already gets the
+ * pattern modal offered by the `rehearsal_pattern` row, and there's
+ * nothing single to open for casting.
+ */
+function checklistLinkFor(item: SetupChecklistItem): string {
+  switch (item.key) {
+    case 'roster':
+      return `${item.destination}?intent=edit-roster`
+    case 'setlist':
+      return `${item.destination}?intent=add-songs`
+    case 'rehearsal_pattern':
+      return `${item.destination}?intent=generate-dates`
+    default:
+      return item.destination
+  }
+}
+
 /** Keyboard handler making a non-anchor "clickable row" (a card, a table row) activate on Enter/Space like a link would. */
 function activateOnEnterOrSpace(onActivate: () => void) {
   return (event: KeyboardEvent) => {
@@ -542,7 +564,7 @@ function SetupChecklistPanel({
   )
 }
 
-/** One numbered checklist item: its done-checkbox, status line and an always-enabled Open/Review button. */
+/** One numbered checklist item: its done-checkbox, status line and an always-enabled Get Started/Review button, deep-linked with this row's `?intent=` (issue #374). */
 function SetupChecklistRow({
   item,
   number,
@@ -567,10 +589,10 @@ function SetupChecklistRow({
         </div>
       </div>
       <Link
-        to={item.destination}
+        to={checklistLinkFor(item)}
         className="shrink-0 rounded border border-rs-border px-3 py-1.5 text-sm"
       >
-        {item.is_done ? 'Review' : 'Open'}
+        {item.is_done ? 'Review' : 'Get Started'}
       </Link>
     </li>
   )

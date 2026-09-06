@@ -4,71 +4,22 @@ Every other Django Form/FormSet this module used to define existed solely
 to serve a page under `scheduling/views.py`, all retired by issue #341's
 cutover to the React SPA — the new `/api/` surfaces validate their own
 request bodies directly (see `scheduling/api_views.py` and
-`scheduling/serializers.py`), never through a Django Form. `MembershipRolesForm`
-and `DeclareConflictForm` below are the two survivors: both are still
-imported by `scheduling/api_views.py`, which reuses them as-is rather than
-reimplementing the same validation twice.
+`scheduling/serializers.py`), never through a Django Form. `DeclareConflictForm`
+below is the one survivor, still imported by `scheduling/api_views.py`,
+which reuses it as-is rather than reimplementing the same validation
+twice. `MembershipRolesForm` used to live here too; issue #378 (ADR-0014)
+retargeted Role-editing on `/members/<pk>/` at the person-level
+`PersonRole` model, via `scheduling.services.sync_person_roles()` instead
+of a Django Form, so it was removed rather than left unused.
 """
 
-from typing import ClassVar
-
 from django import forms
-from django.db import transaction
 
-from scheduling.models import Membership, MembershipRole, Role
 from scheduling.services import (
     CONFLICT_DECLARATION_CHOICES,
     CONFLICT_EARLY_DEPARTURE,
     CONFLICT_LATE_ARRIVAL,
 )
-
-
-class MembershipRolesForm(forms.ModelForm):
-    """Edits a Membership's declared Roles for its Semester.
-
-    Bound to `Membership` for the POST/redirect/GET convention, but the
-    only field is `roles`, a virtual multi-select synced against
-    `MembershipRole` rows in `save()` since that's a through model with no
-    other data of its own.
-    """
-
-    roles = forms.ModelMultipleChoiceField(
-        queryset=Role.objects.filter(is_active=True),
-        required=False,
-        widget=forms.CheckboxSelectMultiple,
-    )
-
-    class Meta:
-        model = Membership
-        fields: ClassVar[list[str]] = []
-
-    def __init__(self, *args, **kwargs):
-        """Seed `roles`' initial value from the instance's current MembershipRoles, if it's saved."""
-        super().__init__(*args, **kwargs)
-        if self.instance.pk:
-            self.fields['roles'].initial = Role.objects.filter(membershiprole__membership=self.instance)
-
-    def save(self, commit=True):
-        """Persist the Membership (creating it on first save) and sync its MembershipRole rows atomically."""
-        if commit:
-            with transaction.atomic():
-                membership = super().save(commit=True)
-                self._sync_roles(membership)
-        else:
-            membership = super().save(commit=False)
-            self.save_m2m = lambda: self._sync_roles(membership)
-        return membership
-
-    def _sync_roles(self, membership):
-        """Replace membership's MembershipRole rows with exactly the submitted roles."""
-        selected_roles = self.cleaned_data['roles']
-        MembershipRole.objects.filter(membership=membership).exclude(role__in=selected_roles).delete()
-        existing_role_ids = set(
-            MembershipRole.objects.filter(membership=membership).values_list('role_id', flat=True)
-        )
-        for role in selected_roles:
-            if role.id not in existing_role_ids:
-                MembershipRole.objects.create(membership=membership, role=role)
 
 
 class DeclareConflictForm(forms.Form):

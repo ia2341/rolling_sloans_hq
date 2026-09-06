@@ -30,7 +30,9 @@ Both routes are member-facing surfaces for every logged-in Person, admins includ
 
 ## `/members/<int:pk>/` — the person page
 
-**Admin (edit mode)** below is issue #232's relaxed POST guard: the same always-inline `MembershipRolesForm` a Person sees on their own page also renders, and saves, for an admin viewing anyone else's page. It changes nothing about the Teammate/Self columns for a non-admin viewer, and it is **not** a third rendering mode with its own template branch — an admin viewing their own page still just gets the Self behavior. There is no batch, no Preview, and no remove control here at any cardinality (removal stays on `/members/`, per issue #232).
+**Admin (edit mode)** below is issue #232's relaxed POST guard, since retargeted at the person-level `PersonRole` model (issue #378, ADR-0014): the same always-inline Declared-roles editor a Person sees on their own page also renders, and saves, for an admin viewing anyone else's page. It changes nothing about the Teammate/Self columns for a non-admin viewer, and it is **not** a third rendering mode with its own template branch — an admin viewing their own page still just gets the Self behavior. There is no batch, no Preview, and no remove control here at any cardinality (removal stays on `/members/`, per issue #232).
+
+**The Role-section carve-out is deliberately narrow (issue #378).** Admin status unlocks write access to exactly one section of this page — the Declared-roles editor — and nothing else. Every other row in every table below keeps its ordinary Teammate/Self verdict for an admin viewer: an admin reading a teammate's page gets the same `email: never`, `Conflict: never`, `Recordings: never` (etc.) a plain teammate gets, with `can_edit_roles` as the *only* extra capability the payload grants. This mirrors admin-toggle-admin-status elsewhere in the app: a scoped, single-purpose admin action bolted onto a read-only surface, never a page-wide "admin can edit everything" switch. `PersonApiViewerStateTests.test_admin_viewing_a_teammate_gets_the_teammate_key_set_except_can_edit_roles` (`scheduling/tests/test_person_page_visibility.py`) pins exactly this: an admin's payload differs from a teammate's by `can_edit_roles`/`available_roles` alone, key for key.
 
 ### `Person` (`identity/models.py`)
 
@@ -46,15 +48,15 @@ Both routes are member-facing surfaces for every logged-in Person, admins includ
 | `is_staff`, `is_superuser` | ❌ never | ❌ never | ❌ never | Mirrors of `is_admin` (`Person.save()`) |
 | Permission/group relations (`PermissionsMixin`) | ❌ never | ❌ never | ❌ never | No Group/Permission scheme exists to render |
 
-### `Membership`, `MembershipRole`, `Role` (`scheduling/models.py`)
+### `Membership`, `Role` (`scheduling/models.py`), `PersonRole` (person-level, ADR-0014)
 
-Current `Semester` only, per ADR 0001 — there is no past-semester history on this page.
+`Membership.semester` stays current-`Semester`-only, per ADR 0001 — there is no past-semester history on this page. Declared Roles no longer are: since ADR-0014/issue #378, they live on `PersonRole`, a person-level fact with no Semester dimension, so this section renders and edits (via `PersonRolesApiView`/`services.sync_person_roles()`) regardless of whether `person` holds a Membership in the viewing Semester at all — see the not-in-semester self case below, which used to omit this section entirely and no longer does.
 
 | Field | Teammate | Self | Admin (edit mode) | Notes |
 | --- | --- | --- | --- | --- |
 | `Membership.semester` → `Semester.name` | ✅ | ✅ | ✅ | Page heading |
-| `MembershipRole.role` → `Role.name` | ✅ | ✅ read + **write** | ✅ read + **write** | Self edits via the always-inline `MembershipRolesForm`; an admin edits the same form on anyone's page (issue #232); no edit toggle either way |
-| `Role.is_active` | ❌ never | ❌ never | ❌ never | A declared Role that has since been retired still renders by name; the flag itself is never shown |
+| `PersonRole.role` → `Role.name` | ✅ | ✅ read + **write** | ✅ read + **write** | Self edits via the always-inline Declared-roles editor; an admin edits the same control on anyone's page (issues #232, #378) — the one field this page's admin carve-out unlocks; no edit toggle either way |
+| `Role.is_active` | ❌ never | ❌ never | ❌ never | A declared Role that has since been retired still renders by name; the flag itself is never shown. The editable catalog (`available_roles`) offers only active Roles |
 | `Semester.default_*` timing fields | ❌ never | ❌ never | ❌ never | Not candidates on this page |
 
 ### `SongRoleAssignment` and the `Song` fields it reaches
@@ -121,10 +123,10 @@ This section states a verdict the "anything not listed is `never`" default alrea
 `/members/<pk>/` 404s for a Person with no current-`Semester` `Membership` — **except** your own pk, which preserves the unsaved-`Membership` path so a newly-invited member can declare Roles before an admin rosters them. In that state the page renders:
 
 - `Person.name`, `Person.email`, and the change-password link
-- the inline `MembershipRolesForm`, bound to the unsaved `Membership`
-- an explicit empty-state line
+- the inline Declared-roles editor, bound to `PersonRole` (issue #378, ADR-0014) — **present and editable even with no Membership at all**, since a standing Role declaration is a person-level fact, not a Membership one; this is the one section issue #378 moved off the not-yet-rostered empty state
+- an explicit empty-state line for assigned Songs
 
-and renders **no** declared-Roles list and **no** assigned-Songs section at all — not a zero. A `0` there is indistinguishable from "rostered but idle", and this Person is not on the roster.
+and renders **no** assigned-Songs section at all — not a zero. A `0` there is indistinguishable from "rostered but idle", and this Person is not on the roster. (Declared Roles used to be omitted here too, for the same reason; that no longer applies since `PersonRole` doesn't need a Membership to exist — see ADR-0014's "Consequences".)
 
 The self-only Recordings section is absent here too, for the same reason rather than as a privacy call: a Recording hangs off a `RehearsalSong` in some `Semester`, so a Person with no `Membership` in the current one has no rows this page could list.
 

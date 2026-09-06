@@ -1,5 +1,12 @@
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 
 import { apiFetch, ApiError } from '../api/client'
 import { useAppContext } from '../api/ContextProvider'
@@ -289,7 +296,9 @@ function flagsFor(
  * /api/schedule/editor/` round trip; every write (Save, the generation
  * diff, Deal/Shuffle) fills this route's own Pending Buffer client-side
  * and commits nothing until the Save popup's "Save changes" is pressed
- * (ADR 0008).
+ * (ADR 0008). A `?intent=generate-dates` query param (issue #374, from
+ * Home's setup checklist) opens the generate-dates modal once the initial
+ * read has landed, then strips itself so reloading doesn't repeat it.
  */
 export function ScheduleEdit() {
   usePageTitle('Edit schedule')
@@ -311,6 +320,8 @@ export function ScheduleEdit() {
   const [liveStats, setLiveStats] =
     useState<ScheduleEditorLiveStatsPayload | null>(null)
   const [liveStatsError, setLiveStatsError] = useState<string | null>(null)
+  const [searchParams, setSearchParams] = useSearchParams()
+  const handledIntentRef = useRef(false)
 
   const load = useCallback(() => {
     void apiFetch<ReadEnvelope<ScheduleEditorPayload>>(
@@ -329,6 +340,33 @@ export function ScheduleEdit() {
   useEffect(() => {
     load()
   }, [load])
+
+  // `?intent=generate-dates` (issue #374): Home's Rehearsal-pattern
+  // checklist row lands here already offering the "Generate rehearsal
+  // dates…" modal, exactly as if that button had been clicked. Guarded by
+  // a ref so it fires exactly once per mount even though `payload` may
+  // update again later.
+  useEffect(() => {
+    if (payload === null) return
+    if (handledIntentRef.current) return
+    if (searchParams.get('intent') !== 'generate-dates') return
+    handledIntentRef.current = true
+    // Deferred a tick (rather than calling these setters inline) so this
+    // reads as reacting to an external signal -- the URL -- rather than
+    // synchronously cascading renders straight out of the effect body.
+    void Promise.resolve().then(() => {
+      setGenerateModalKey((previous) => previous + 1)
+      setGenerateOpen(true)
+      setSearchParams(
+        (previous) => {
+          const params = new URLSearchParams(previous)
+          params.delete('intent')
+          return params
+        },
+        { replace: true },
+      )
+    })
+  }, [payload, searchParams, setSearchParams])
 
   const isDirty = useCallback(
     (draft: DraftRehearsal): boolean => {
