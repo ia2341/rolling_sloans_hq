@@ -125,7 +125,23 @@ export interface NextRehearsal {
   date: string
 }
 
-/** `data` shape of `GET /api/songs/<pk>/`. `next_rehearsal` is absent entirely for a non-admin viewer. */
+/** One `RoleFillStatus` (issue #207, #339): a Role Requirement's target vs. actual headcount. */
+export interface RoleRequirement {
+  role_id: number
+  role_name: string
+  target: number
+  actual: number
+  is_understaffed: boolean
+  is_retired_role: boolean
+}
+
+/** One Role the Requirements editor's `+ Add role requirement` control may offer (issue #339). */
+export interface AddableRole {
+  id: number
+  name: string
+}
+
+/** `data` shape of `GET /api/songs/<pk>/`. `next_rehearsal`/`available_roles` are absent entirely for a non-admin viewer. */
 export interface SongPayload {
   id: number
   title: string
@@ -134,7 +150,53 @@ export interface SongPayload {
   position: number
   notes: string
   cast: CastEntry[]
+  role_requirements: RoleRequirement[]
   recording_groups: RecordingGroup[]
   rehearsed_at: RehearsedAtRow[]
   next_rehearsal?: NextRehearsal | null
+  available_roles?: AddableRole[]
+}
+
+/** One `/api/songs/<pk>/requirements/{preview,save}/` request body entry (issue #339, mirroring `scheduling/api_builders.py`'s wire shape). */
+export interface SongRoleRequirementEntryWire {
+  role_id: number
+  count: number
+}
+
+/** `/api/songs/<pk>/requirements/{preview,save}/` request body (issue #339, mirroring `scheduling/services.py`'s `SongRoleRequirementBuffer`). */
+export interface SongRoleRequirementBufferWire {
+  semester_id: number
+  semester_updated_at: string
+  entries: SongRoleRequirementEntryWire[]
+}
+
+/** One `SongRoleRequirementAddition`, as `serialize_song_role_requirement_fallout()` emits it. */
+export interface SongRoleRequirementAdditionWire {
+  role_name: string
+  count: number
+}
+
+/** One `SongRoleRequirementCountChange`, as `serialize_song_role_requirement_fallout()` emits it. */
+export interface SongRoleRequirementCountChangeWire {
+  role_name: string
+  before: number
+  after: number
+}
+
+/** One `SongRoleRequirementRemoval`, as `serialize_song_role_requirement_fallout()` emits it. */
+export interface SongRoleRequirementRemovalWire {
+  role_name: string
+  is_retired_role: boolean
+}
+
+/** `SongRoleRequirementFallout`, as `serialize_song_role_requirement_fallout()` emits it -- the Requirements Preview response's `fallout` value. */
+export interface SongRoleRequirementFalloutWire {
+  is_blocked: boolean
+  block_message: string
+  is_stale: boolean
+  pending_adds: SongRoleRequirementAdditionWire[]
+  pending_edits: SongRoleRequirementCountChangeWire[]
+  pending_removals: SongRoleRequirementRemovalWire[]
+  loud: string[]
+  quiet: string[]
 }

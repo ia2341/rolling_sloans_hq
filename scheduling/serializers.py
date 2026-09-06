@@ -42,6 +42,8 @@ from scheduling.services import (
     SetlistEditBuffer,
     SetlistEditFallout,
     SetlistSongDeletion,
+    SongRoleRequirementBuffer,
+    SongRoleRequirementFallout,
     SpotifyImportCandidate,
 )
 
@@ -309,8 +311,32 @@ def _serialize_next_rehearsal(rehearsal):
     return {'id': rehearsal.pk, 'date': rehearsal.date.isoformat()}
 
 
+def _serialize_role_fill_status(status) -> dict:
+    """Return one `RoleFillStatus`: the Role's name and its target-vs-actual fill state (issue #207, #339).
+
+    Includes a Requirement naming a retired Role (`is_retired_role`),
+    never filtered out — real data an admin may want to clear (issue
+    #207) — and is rendered to every viewer, not just an admin: a member
+    reads it to notice an under-staffed Role and volunteer (issue #339
+    user story 35).
+    """
+    return {
+        'role_id': status.role.pk,
+        'role_name': status.role.name,
+        'target': status.target,
+        'actual': status.actual,
+        'is_understaffed': status.is_understaffed,
+        'is_retired_role': status.is_retired_role,
+    }
+
+
+def _serialize_addable_role(role) -> dict:
+    """Return one Role offered by the Requirements editor's "+ Add role requirement" control: `id`/`name`."""
+    return {'id': role.pk, 'name': role.name}
+
+
 def serialize_song(song, *, is_admin: bool, next_rehearsal) -> dict:
-    """Return the `/api/songs/<pk>/` `data` shape for `song` (issue #330).
+    """Return the `/api/songs/<pk>/` `data` shape for `song` (issue #330, #339).
 
     `next_rehearsal` is the admin-only ADR-0009 pointer's target — pass
     `None` for a member viewer or when there's nothing upcoming, and it's
@@ -318,7 +344,10 @@ def serialize_song(song, *, is_admin: bool, next_rehearsal) -> dict:
     member's payload carries no admin-only key at all. Carries no
     `Conflict`, `ConflictWindow` or `Backup` field, and no attendance
     inference (ADR 0005); `is_role_mismatch` is rendered here deliberately
-    (ADR 0002) — see `serialize_setlist()`'s docstring.
+    (ADR 0002) — see `serialize_setlist()`'s docstring. `role_requirements`
+    is rendered for every viewer (issue #339 user story 35); `available_roles`
+    — the Requirements editor's "+ Add role requirement" candidates — is
+    admin-only, omitted entirely for a member (issue #339 user story 34).
     """
     roles = services.active_roles_for(song.semester)
     codes = services.role_codes_for(roles)
@@ -330,11 +359,17 @@ def serialize_song(song, *, is_admin: bool, next_rehearsal) -> dict:
         'position': song.position,
         'notes': song.notes,
         'cast': [_serialize_cast_entry(entry) for entry in services.cast_line_for(song, roles, codes)],
+        'role_requirements': [
+            _serialize_role_fill_status(status) for status in services.fill_status_for(song)
+        ],
         'recording_groups': [_serialize_recording_group(group) for group in services.recording_groups_for(song)],
         'rehearsed_at': [_serialize_rehearsed_at_row(row) for row in services.rehearsed_at_for(song)],
     }
     if is_admin:
         data['next_rehearsal'] = _serialize_next_rehearsal(next_rehearsal) if next_rehearsal is not None else None
+        data['available_roles'] = [
+            _serialize_addable_role(role) for role in services.addable_roles_for_song(song)
+        ]
     return data
 
 
@@ -406,6 +441,67 @@ def serialize_setlist_edit_buffer(buffer: SetlistEditBuffer) -> dict:
         'semester_updated_at': buffer.semester_updated_at.isoformat() if buffer.semester_updated_at else None,
         'rows': [_serialize_setlist_edit_row_echo(row, index) for index, row in enumerate(buffer.rows)],
         'deleted_song_ids': sorted(buffer.deleted_song_ids),
+    }
+
+
+def _serialize_song_role_requirement_entry_echo(entry) -> dict:
+    """Return one `SongRoleRequirementEntry` echoed back in `build_song_role_requirement_buffer_from_request()`'s wire shape."""
+    return {'role_id': entry.role_id, 'count': entry.count}
+
+
+def serialize_song_role_requirement_buffer(buffer: SongRoleRequirementBuffer) -> dict:
+    """Return a `SongRoleRequirementBuffer` echoed back in the Requirements editor's wire shape (issue #339).
+
+    Used only by the Preview endpoint's `values` field on a *successful*
+    build — every submitted value, normalized — never by the Save
+    endpoint, which drops `values` per #326's rule that a write response
+    echoes nothing back.
+    """
+    return {
+        'song_id': buffer.song_id,
+        'semester_id': buffer.semester_id,
+        'semester_updated_at': buffer.semester_updated_at.isoformat() if buffer.semester_updated_at else None,
+        'entries': [_serialize_song_role_requirement_entry_echo(entry) for entry in buffer.entries],
+    }
+
+
+def _serialize_song_role_requirement_addition(addition) -> dict:
+    """Return one `SongRoleRequirementAddition`: the Role name and its target count."""
+    return {'role_name': addition.role_name, 'count': addition.count}
+
+
+def _serialize_song_role_requirement_count_change(change) -> dict:
+    """Return one `SongRoleRequirementCountChange`: the Role name and its before/after target count."""
+    return {'role_name': change.role_name, 'before': change.before, 'after': change.after}
+
+
+def _serialize_song_role_requirement_removal(removal) -> dict:
+    """Return one `SongRoleRequirementRemoval`: the Role name and whether it's since been retired."""
+    return {'role_name': removal.role_name, 'is_retired_role': removal.is_retired_role}
+
+
+def serialize_song_role_requirement_fallout(fallout: SongRoleRequirementFallout) -> dict:
+    """Return a `SongRoleRequirementFallout` as the Requirements editor Preview response's `fallout` value (issue #339).
+
+    Named field-by-field, matching every other serializer in this module.
+    `is_blocked`/`block_message` are included so a caller can tell a
+    genuinely-computed (if empty) Fallout apart from one that never ran,
+    even though the Preview view itself only ever calls this function on a
+    *non*-blocked Fallout (a `WrongViewingSemesterError` is checked for and
+    answered as its own 4xx before `preview_song_role_requirements()` is
+    even called, per #334's "wrong semester_id hard-fails" rule).
+    """
+    return {
+        'is_blocked': fallout.is_blocked,
+        'block_message': fallout.block_message,
+        'is_stale': fallout.is_stale,
+        'pending_adds': [_serialize_song_role_requirement_addition(addition) for addition in fallout.pending_adds],
+        'pending_edits': [_serialize_song_role_requirement_count_change(change) for change in fallout.pending_edits],
+        'pending_removals': [
+            _serialize_song_role_requirement_removal(removal) for removal in fallout.pending_removals
+        ],
+        'loud': list(fallout.loud),
+        'quiet': list(fallout.quiet),
     }
 
 

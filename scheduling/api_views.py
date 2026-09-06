@@ -35,6 +35,7 @@ from scheduling.api_builders import (
     RosterBufferValidationError,
     SemesterDefaultsReapplyBufferValidationError,
     SetlistBufferValidationError,
+    SongRoleRequirementBufferValidationError,
     build_adjudication_buffer_from_request,
     build_assignment_buffer_from_request,
     build_generation_date_range_from_body,
@@ -43,6 +44,7 @@ from scheduling.api_builders import (
     build_roster_buffer_from_request,
     build_semester_defaults_reapply_buffer_from_request,
     build_setlist_buffer_from_request,
+    build_song_role_requirement_buffer_from_request,
 )
 from scheduling.forms import DeclareConflictForm, MembershipRolesForm
 from scheduling.models import (
@@ -73,6 +75,7 @@ from scheduling.services import (
     StaleRosterSemesterError,
     StaleSemesterDefaultsError,
     StaleSetlistSemesterError,
+    StaleSongRoleRequirementsError,
     UnknownConflictError,
     WrongAdjudicationSemesterError,
     WrongViewingSemesterError,
@@ -102,6 +105,92 @@ class SongDetailApiView(ApiView, View):
             next_rehearsal = upcoming[0] if upcoming else None
         data = serializers.serialize_song(song, is_admin=is_admin, next_rehearsal=next_rehearsal)
         return self.read_response(request, data)
+
+
+def _song_in_viewing_semester_or_404(request, pk):
+    """Return the viewing Semester's Song `pk` names, or 404 (ADR 0001, mirrors `SongDetailApiView.get()`)."""
+    semester = services.get_viewing_semester(request)
+    return get_object_or_404(Song, pk=pk, semester=semester)
+
+
+class SongRoleRequirementPreviewApiView(AdminPreviewApiView):
+    """`POST /api/songs/<pk>/requirements/preview/`: the Requirements editor's Preview, run for real and rolled back (issue #339, ADR 0008)."""
+
+    def run_preview(self, request, pk):
+        """Build the Requirements edit Buffer from the JSON body and return its rendered Fallout envelope.
+
+        Mirrors `SetlistPreviewApiView.run_preview()`: a
+        `SongRoleRequirementBufferValidationError` renders as `ok: false`
+        with per-row `errors`/`non_field_errors` and the raw submitted body
+        echoed back as `values`; a `semester_id` that doesn't match the
+        viewing Semester is answered as the shared 409 before
+        `preview_song_role_requirements()` is ever called, so that
+        function's `is_blocked` Fallout shape never has to double as this
+        endpoint's 4xx contract. `pk` is 404'd against the viewing
+        Semester first (ADR 0001), the same as `SongDetailApiView.get()`.
+        """
+        _song_in_viewing_semester_or_404(request, pk)
+        viewing_semester = services.get_viewing_semester(request)
+        try:
+            buffer = build_song_role_requirement_buffer_from_request(request, song_id=pk, viewing_semester=viewing_semester)
+        except SongRoleRequirementBufferValidationError as error:
+            return self.write_response(
+                request, ok=False, errors=error.row_errors, non_field_errors=error.non_field_errors,
+                fallout=None, values=error.raw_body,
+            )
+
+        if viewing_semester is None or buffer.semester_id != viewing_semester.pk:
+            return _wrong_semester_response(
+                "This Requirements edit Buffer's Semester doesn't match the Semester you're currently viewing."
+            )
+
+        fallout = services.preview_song_role_requirements(buffer, viewing_semester=viewing_semester)
+        return self.write_response(
+            request, ok=True,
+            fallout=serializers.serialize_song_role_requirement_fallout(fallout),
+            values=serializers.serialize_song_role_requirement_buffer(buffer),
+        )
+
+
+class SongRoleRequirementSaveApiView(AdminApiView, View):
+    """`POST /api/songs/<pk>/requirements/save/`: the Requirements editor's Save — the real, committing write (issue #339)."""
+
+    def post(self, request, pk):
+        """Build the Requirements edit Buffer from the JSON body and apply it, or report why it couldn't be applied.
+
+        Calls the same `build_song_role_requirement_buffer_from_request()`
+        the Preview endpoint calls, then the unchanged
+        `apply_song_role_requirements()`. A wrong `semester_id` answers the
+        shared 409 before `apply_song_role_requirements()` is even called;
+        a `StaleSongRoleRequirementsError` is reported as `ok: false` with
+        a `non_field_errors` message rather than a hard 4xx, per ADR 0008's
+        "stale is reported, never refused" rule. `values` is omitted on
+        every response here, per #326's rule that a write response doesn't
+        echo the Buffer back.
+        """
+        _song_in_viewing_semester_or_404(request, pk)
+        viewing_semester = services.get_viewing_semester(request)
+        try:
+            buffer = build_song_role_requirement_buffer_from_request(request, song_id=pk, viewing_semester=viewing_semester)
+        except SongRoleRequirementBufferValidationError as error:
+            return self.write_response(
+                request, ok=False, errors=error.row_errors, non_field_errors=error.non_field_errors,
+                fallout=None, values=None,
+            )
+
+        if viewing_semester is None or buffer.semester_id != viewing_semester.pk:
+            return _wrong_semester_response(
+                "This Requirements edit Buffer's Semester doesn't match the Semester you're currently viewing."
+            )
+
+        try:
+            services.apply_song_role_requirements(buffer, viewing_semester=viewing_semester)
+        except WrongViewingSemesterError as error:
+            return _wrong_semester_response(str(error))
+        except StaleSongRoleRequirementsError as error:
+            return self.write_response(request, ok=False, non_field_errors=[str(error)], fallout=None, values=None)
+
+        return self.write_response(request, ok=True, values=None)
 
 
 def _wrong_semester_response(message: str) -> JsonResponse:

@@ -1394,6 +1394,20 @@ def addable_roles_for(matrix: AssignmentMatrix) -> list[Role]:
     return list(Role.objects.filter(is_active=True).exclude(pk__in=existing_role_ids).order_by('name'))
 
 
+def addable_roles_for_song(song) -> list[Role]:
+    """Return active Roles `song` has no Requirement for yet, ordered by name (issue #339).
+
+    Backs the Requirements editor's "+ Add role requirement" control: the
+    add control offers only Roles the current Buffer's save wouldn't
+    reject as a duplicate (the `unique_role_requirement_per_song`
+    constraint's backstop). Mirrors `addable_roles_for()`'s shape, scoped
+    to one Song's existing Requirements rather than an assignment matrix's
+    columns.
+    """
+    existing_role_ids = set(SongRoleRequirement.objects.filter(song=song).values_list('role_id', flat=True))
+    return list(Role.objects.filter(is_active=True).exclude(pk__in=existing_role_ids).order_by('name'))
+
+
 def _matrix_entries_by_song_role(songs, roles, rehearsal_song_ids):
     """Return {(song_id, role_id): [AssignmentMatrixEntry, ...]} for every assignment/Backup among `songs`/`roles` (issue #208, #216).
 
@@ -3678,14 +3692,21 @@ class SongRoleRequirementBuffer:
 def apply_song_role_requirements(buffer: SongRoleRequirementBuffer, *, viewing_semester: Semester) -> Song:
     """Apply a Song's Role Requirement creates, count changes and deletions in one transaction (issue #209).
 
-    This surface ships no `preview_` sibling, deliberately: applying ADR
-    0008's own test — is there fallout only the server can compute? — the
-    answer is no on both counts. Deleting a Requirement destroys nothing
-    and cascades nowhere (no SongRoleAssignment, Role, or other Song's
-    Requirements are touched), and unfilled count is target minus actual,
-    which the Song page already renders in read mode via `fill_status_for()`.
-    Asking an admin to confirm a computation the page already shows them
-    would be ceremony, not safety.
+    **This surface's earlier "no preview needed" judgement no longer
+    holds (issue #339) — its premise changed, not its reasoning.** Applying
+    ADR 0008's own test against *this write alone* still comes back "no":
+    deleting a Requirement destroys nothing and cascades nowhere, and
+    unfilled count is target minus actual, which the Song page already
+    renders in read mode via `fill_status_for()`. What changed is #306:
+    every admin edit surface now saves through one shared Save popup, and
+    that popup renders from a serialized Fallout returned by a `preview_*()`
+    call — with none here, the popup has nothing to render. The choice was
+    then between forking the popup (reintroducing the second,
+    non-`preview_*`-backed save path #308 exists to prevent) or giving this
+    surface its own Save button (teaching a second save gesture, the one
+    surface where "nothing is written yet" would be least obvious). Issue
+    #339 adds `preview_song_role_requirements()`/`SongRoleRequirementFallout`
+    rather than either — see that function's docstring for the shape.
 
     Takes no Semester row lock: nothing here renumbers positions, the same
     reasoning #130 and `apply_roster_edits()` document.
@@ -3737,6 +3758,188 @@ def apply_song_role_requirements(buffer: SongRoleRequirementBuffer, *, viewing_s
                 existing.save(update_fields=['count'])
 
     return song
+
+
+@dataclass(frozen=True)
+class SongRoleRequirementAddition:
+    """One brand-new Requirement a Song Role Requirement edit Buffer would create (issue #339)."""
+
+    role_name: str
+    count: int
+
+
+@dataclass(frozen=True)
+class SongRoleRequirementCountChange:
+    """One existing Requirement whose target count the Buffer would change (issue #339)."""
+
+    role_name: str
+    before: int
+    after: int
+
+
+@dataclass(frozen=True)
+class SongRoleRequirementRemoval:
+    """One existing Requirement the Buffer would delete (issue #339).
+
+    `is_retired_role` mirrors `RoleFillStatus.is_retired_role` — a
+    Requirement naming a Role that's since been deactivated is real data
+    worth clearing, not a filtered-out row, per issue #207.
+    """
+
+    role_name: str
+    is_retired_role: bool
+
+
+@dataclass(frozen=True)
+class SongRoleRequirementFallout:
+    """Every observable consequence of a Song Role Requirement edit Buffer, computed without committing it (issue #339, ADR 0008).
+
+    `is_blocked` mirrors `apply_song_role_requirements()`'s Validation
+    Errors (wrong Semester, stale stamp) with no Fallout computed at all.
+    `pending_adds`/`pending_edits`/`pending_removals` let the Save popup's
+    "What changes" section name each operation in this surface's own terms
+    — "Roles — Lead Vocals, 2 → 3", "Add — Keys, 1", "Delete — Bass" —
+    rather than a generic diff. `loud`/`quiet` are the two ADR-0002 tiers;
+    neither ever blocks a save, and this surface's honest `loud` answer is
+    usually empty (nothing here destroys a Recording or an Assignment) —
+    an empty `loud` list renders as an empty tier, never suppressed or
+    invented to look busy.
+    """
+
+    is_blocked: bool
+    block_message: str
+    is_stale: bool
+    pending_adds: list[SongRoleRequirementAddition]
+    pending_edits: list[SongRoleRequirementCountChange]
+    pending_removals: list[SongRoleRequirementRemoval]
+    loud: list[str]
+    quiet: list[str]
+
+
+def _blocked_song_role_requirement_fallout(block_message: str, *, is_stale: bool = False) -> SongRoleRequirementFallout:
+    """Return a SongRoleRequirementFallout reporting a hard block, with every Fallout/pending list empty."""
+    return SongRoleRequirementFallout(
+        is_blocked=True,
+        block_message=block_message,
+        is_stale=is_stale,
+        pending_adds=[],
+        pending_edits=[],
+        pending_removals=[],
+        loud=[],
+        quiet=[],
+    )
+
+
+def preview_song_role_requirements(
+    buffer: SongRoleRequirementBuffer, *, viewing_semester: Semester,
+) -> SongRoleRequirementFallout:
+    """Run the real `apply_song_role_requirements()` for `buffer` and report every observable consequence, without committing it (issue #339, ADR 0008).
+
+    This function's write is real — it must be called inside a transaction
+    the *caller* rolls back (a Preview view's `PreviewMixin` does this; a
+    test calling this directly must wrap it the same way, per
+    `assert_preview_writes_nothing`). Called outside such a transaction,
+    this function corrupts the database.
+
+    No `_lock_semester()` here either — mirrors `apply_song_role_requirements()`,
+    since nothing on this surface renumbers Song positions. No `on_commit()`
+    registration is needed: this surface sends no mail and deletes no R2
+    object, so there is no irreversible external effect for a rollback to
+    have to discard.
+
+    Snapshots the Song's existing Requirements and `fill_status_for()`
+    *before* calling the real `apply_song_role_requirements()` (with a
+    copy of `buffer` whose `semester_updated_at` is swapped for the
+    Semester's current value, so the real function's own staleness check
+    always passes and the write actually runs), then again *after*, to
+    derive the tiers. A `WrongViewingSemesterError` or
+    `StaleSongRoleRequirementsError` from `apply_song_role_requirements()`
+    is reported as `is_blocked` with no Fallout computed at all, rather
+    than re-implementing either check here.
+    """
+    if viewing_semester is None or buffer.semester_id != viewing_semester.pk:
+        return _blocked_song_role_requirement_fallout(
+            "This Requirements edit Buffer's Semester doesn't match the Semester you're currently viewing."
+        )
+
+    current_semester = Semester.objects.get(pk=viewing_semester.pk)
+    is_stale = buffer.semester_updated_at != current_semester.updated_at
+
+    song = Song.objects.get(pk=buffer.song_id, semester=current_semester)
+    existing_by_role_id = {
+        requirement.role_id: requirement
+        for requirement in SongRoleRequirement.objects.filter(song=song).select_related('role')
+    }
+    fill_status_before_by_role_id = {status.role.pk: status for status in fill_status_for(song)}
+
+    role_ids_in_play = set(existing_by_role_id) | {entry.role_id for entry in buffer.entries}
+    role_names_by_id = dict(Role.objects.filter(pk__in=role_ids_in_play).values_list('pk', 'name'))
+    declared_role_ids = set(
+        MembershipRole.objects.filter(
+            role_id__in=role_ids_in_play, membership__semester=current_semester,
+        ).values_list('role_id', flat=True)
+    )
+
+    apply_buffer = replace(buffer, semester_updated_at=current_semester.updated_at)
+    try:
+        apply_song_role_requirements(apply_buffer, viewing_semester=viewing_semester)
+    except (WrongViewingSemesterError, StaleSongRoleRequirementsError) as error:
+        return _blocked_song_role_requirement_fallout(str(error), is_stale=is_stale)
+
+    fill_status_after_by_role_id = {status.role.pk: status for status in fill_status_for(song)}
+
+    wanted_role_ids = {entry.role_id for entry in buffer.entries}
+    pending_adds: list[SongRoleRequirementAddition] = []
+    pending_edits: list[SongRoleRequirementCountChange] = []
+    quiet: list[str] = []
+
+    for entry in buffer.entries:
+        role_name = role_names_by_id[entry.role_id]
+        existing = existing_by_role_id.get(entry.role_id)
+        after_status = fill_status_after_by_role_id.get(entry.role_id)
+        if existing is None:
+            pending_adds.append(SongRoleRequirementAddition(role_name=role_name, count=entry.count))
+            if after_status is not None and after_status.is_understaffed:
+                quiet.append(
+                    f'{role_name} now needs {after_status.target} and {after_status.actual} '
+                    f"{'is' if after_status.actual == 1 else 'are'} cast."
+                )
+            if entry.role_id not in declared_role_ids:
+                quiet.append(f'No one on the Roster has declared {role_name} yet.')
+        elif existing.count != entry.count:
+            pending_edits.append(
+                SongRoleRequirementCountChange(role_name=role_name, before=existing.count, after=entry.count)
+            )
+            if entry.count > existing.count and after_status is not None and after_status.is_understaffed:
+                quiet.append(
+                    f'{role_name} now needs {after_status.target} and {after_status.actual} '
+                    f"{'is' if after_status.actual == 1 else 'are'} cast."
+                )
+
+    pending_removals: list[SongRoleRequirementRemoval] = []
+    for role_id, existing in existing_by_role_id.items():
+        if role_id in wanted_role_ids:
+            continue
+        role_name = role_names_by_id[role_id]
+        pending_removals.append(
+            SongRoleRequirementRemoval(role_name=role_name, is_retired_role=not existing.role.is_active)
+        )
+        before_status = fill_status_before_by_role_id.get(role_id)
+        if before_status is not None and before_status.actual > 0:
+            quiet.append(f'Removing the {role_name} requirement does not un-cast anyone — the standing assignment stands.')
+        if not existing.role.is_active:
+            quiet.append(f'{role_name} is a retired Role — this Requirement is now cleared.')
+
+    return SongRoleRequirementFallout(
+        is_blocked=False,
+        block_message='',
+        is_stale=is_stale,
+        pending_adds=pending_adds,
+        pending_edits=pending_edits,
+        pending_removals=pending_removals,
+        loud=[],
+        quiet=quiet,
+    )
 
 
 class StaleRehearsalSemesterError(ValueError):

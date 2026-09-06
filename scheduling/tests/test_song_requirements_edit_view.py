@@ -3,7 +3,7 @@
 from datetime import timedelta
 
 from django.test import TestCase, override_settings
-from django.urls import NoReverseMatch, reverse
+from django.urls import reverse
 from django.utils import timezone
 
 from identity.factories import PersonFactory
@@ -14,10 +14,7 @@ from scheduling.factories import (
     SongRoleRequirementFactory,
 )
 from scheduling.models import SongRoleRequirement
-from scheduling.services import (
-    VIEWING_SEMESTER_SESSION_KEY,
-    apply_song_role_requirements,
-)
+from scheduling.services import VIEWING_SEMESTER_SESSION_KEY
 
 PASSWORD = 'a-strong-test-password-123'
 
@@ -462,28 +459,10 @@ class SongRequirementAddRoleExclusionTests(TestCase):
         self.assertContains(response, 'already has a Requirement')
         self.assertNotContains(response, f'value="{role.pk}" selected')
 
-
-class NoPreviewEndpointTests(TestCase):
-    """This surface ships no `preview_` sibling, deliberately (see `apply_song_role_requirements()`'s docstring).
-
-    Deleting a Requirement destroys nothing and cascades nowhere, and
-    unfilled count is target minus actual — both already rendered on the
-    Song page in read mode — so ADR 0008's "is there fallout only the
-    server can compute?" test comes back negative for this surface. A
-    later "fix for consistency" adding a preview endpoint or a
-    `preview_song_role_requirements()` service function should fail this
-    test, not pass review.
-    """
-
-    def test_no_preview_route_exists_for_song_requirements(self):
-        """No URL name resembling a Song-requirements Preview endpoint resolves."""
-        for name in ('song-requirements-preview', 'song-requirements-edit-preview'):
-            with self.assertRaises(NoReverseMatch):
-                reverse(f'scheduling:{name}')
-
-    def test_apply_song_role_requirements_has_no_preview_sibling(self):
-        """No `preview_song_role_requirements` function exists in the services layer."""
-        import scheduling.services as services_module
-
-        self.assertFalse(hasattr(services_module, 'preview_song_role_requirements'))
-        self.assertTrue(callable(apply_song_role_requirements))
+# `NoPreviewEndpointTests` (the deliberate tripwire asserting this surface
+# shipped no `preview_*` sibling) is deleted here, not merely edited: issue
+# #339 reverses that decision under the SPA cutover's Save-popup shape (see
+# `apply_song_role_requirements()`'s updated docstring). Its positive
+# replacement — the `/api/` preview route resolves, and
+# `services.preview_song_role_requirements` exists and is callable — lives
+# in `scheduling/tests/test_api_song_role_requirements.py`.

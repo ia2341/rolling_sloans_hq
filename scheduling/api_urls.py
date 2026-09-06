@@ -36,6 +36,14 @@ urlpatterns = [
     path('setlist/save/', api_views.SetlistSaveApiView.as_view(), name='api-setlist-save'),
     path('setlist/spotify/', api_views.SetlistSpotifyImportApiView.as_view(), name='api-setlist-spotify'),
     path('songs/<int:pk>/', api_views.SongDetailApiView.as_view(), name='api-song-detail'),
+    path(
+        'songs/<int:pk>/requirements/preview/',
+        api_views.SongRoleRequirementPreviewApiView.as_view(), name='api-song-requirements-preview',
+    ),
+    path(
+        'songs/<int:pk>/requirements/save/',
+        api_views.SongRoleRequirementSaveApiView.as_view(), name='api-song-requirements-save',
+    ),
     path('schedule/', api_views.ScheduleApiView.as_view(), name='api-schedule'),
     path(
         'schedule/<int:rehearsal_id>/conflict/',
