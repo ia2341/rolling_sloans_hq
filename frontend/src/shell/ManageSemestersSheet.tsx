@@ -28,7 +28,9 @@ type LifecycleDialog =
 
 /**
  * `Manage semesters`'s sheet (issue #329): every Semester's row — name,
- * status, four counts, and its lifecycle actions — in one wide dialog.
+ * status, four counts, and its lifecycle actions — in one extra-wide
+ * dialog (issue #404), laid out as a grid so each field lines up in the
+ * same column across rows.
  * There is deliberately no "Switch to" control here (that's the Viewing
  * dropdown's job); this sheet is for Publish/Reapply/Delete only. Fetches
  * `/api/semesters/management-rows/` once per open, mirroring the other
@@ -60,7 +62,7 @@ export function ManageSemestersSheet({
         open={open}
         onOpenChange={onOpenChange}
         title="Manage semesters"
-        wide
+        xwide
       >
         <div className="flex flex-col gap-3">
           {state.status === 'error' && (
@@ -76,24 +78,22 @@ export function ManageSemestersSheet({
               {rows.map((row) => (
                 <li
                   key={row.id}
-                  className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between"
+                  className="grid grid-cols-1 gap-2 py-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,15rem)_auto] sm:items-center sm:gap-4"
                 >
-                  <div className="flex flex-col gap-1">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium">{row.name}</span>
-                      <SemesterStatusChip status={row.status} />
-                      {row.is_viewing && (
-                        <span className="rounded-full bg-rs-border/60 px-2 py-0.5 text-xs font-medium">
-                          Editing
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-xs text-rs-muted">
-                      {row.member_count} members · {row.song_count} songs ·{' '}
-                      {row.rehearsal_count} rehearsals · {row.recording_count}{' '}
-                      recordings
-                    </p>
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium">{row.name}</span>
+                    <SemesterStatusChip status={row.status} />
+                    {row.is_viewing && (
+                      <span className="rounded-full bg-rs-border/60 px-2 py-0.5 text-xs font-medium">
+                        Editing
+                      </span>
+                    )}
                   </div>
+                  <p className="text-xs text-rs-muted">
+                    {row.member_count} members · {row.song_count} songs ·{' '}
+                    {row.rehearsal_count} rehearsals · {row.recording_count}{' '}
+                    recordings
+                  </p>
                   <div className="flex shrink-0 gap-2">
                     <button
                       type="button"

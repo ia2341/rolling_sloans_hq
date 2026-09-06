@@ -12,8 +12,10 @@ interface ResponsiveDialogProps {
   children: ReactNode
   /** Footer buttons, ordered dismiss then commit (issue #328). */
   footer?: ReactNode
-  /** The wide variant used by grid-shaped dialogs (~520px vs. the ~560px default), per issue #328. */
+  /** The wide variant used by grid-shaped dialogs (~720px vs. the ~560px default), per issue #328 (corrected by issue #404 — it was narrower than the default). */
   wide?: boolean
+  /** The extra-wide variant for a dialog whose rows carry many columns of content (~1040px), per issue #404 — currently only `ManageSemestersSheet`. */
+  xwide?: boolean
 }
 
 /**
@@ -35,9 +37,15 @@ export function ResponsiveDialog({
   children,
   footer,
   wide = false,
+  xwide = false,
 }: ResponsiveDialogProps) {
   const isPhone = useIsPhone()
   const previouslyFocused = useRef<HTMLElement | null>(null)
+  const maxWidthClass = xwide
+    ? 'max-w-[1040px]'
+    : wide
+      ? 'max-w-[720px]'
+      : 'max-w-[560px]'
 
   useEffect(() => {
     if (open)
@@ -59,7 +67,7 @@ export function ResponsiveDialog({
               ? 'inset-x-0 bottom-0 max-h-[85vh] rounded-t-xl'
               : cn(
                   'left-1/2 top-1/2 max-h-[85vh] w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 rounded-lg',
-                  wide ? 'max-w-[520px]' : 'max-w-[560px]',
+                  maxWidthClass,
                 ),
           )}
         >
