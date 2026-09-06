@@ -11,22 +11,27 @@ import {
 
 /**
  * One Role's performers as plain, linked text — no pills (UI overhaul: the
- * app no longer color-codes performers as pills). An unfilled Role shows
- * its short code plus "unfilled"; a filled one stacks each performer's
- * name, linking to their person page, with the viewer's own name marked
- * "(you)" and a role-mismatch marker (ADR 0002) on its own line. Shared by
+ * app no longer color-codes performers as pills). An unfilled Role renders
+ * its short code plus a plain "-" (issue #365 -- a member should never read
+ * the word "unfilled" as if a slot were broken); a filled one stacks each
+ * performer's name, linking to their person page, with the viewer's own
+ * name marked "(you)" and, for an admin viewer only, a compact
+ * `RoleMismatchBadge` (ADR 0002) beside a mismatched performer's name -- the
+ * underlying fact is never rendered to a non-admin (issue #365). Shared by
  * the Setlist table (one `CastCell` per role column) and the Song page's
  * `CastTable` (one `CastCell` per row).
  */
 export function CastCell({
   entry,
   viewerId,
+  isAdmin,
 }: {
   entry: CastEntry
   viewerId?: number
+  isAdmin: boolean
 }) {
   if (entry.performers.length === 0) {
-    return <span className="text-xs text-rs-muted">{entry.code} unfilled</span>
+    return <span className="text-xs text-rs-muted">{entry.code} -</span>
   }
   return (
     <div className="flex flex-col gap-1">
@@ -38,14 +43,47 @@ export function CastCell({
           {performer.id === viewerId && (
             <span className="text-xs text-rs-muted"> (you)</span>
           )}
-          {performer.is_role_mismatch && (
-            <div className="text-xs text-rs-muted">
-              ◦ role not on membership
-            </div>
-          )}
+          {performer.is_role_mismatch && isAdmin && <RoleMismatchBadge />}
         </div>
       ))}
     </div>
+  )
+}
+
+/**
+ * Compact visual marker for a Role Assignment saved outside the assigned
+ * Person's Membership roles (ADR 0002, `is_role_mismatch`) -- admin-only,
+ * since the underlying fact is never shown to a non-admin (issue #365).
+ * Exported so a future admin-only grid (issue #366, Band tab redesign) can
+ * reuse the same visual vocabulary instead of inventing its own; a caller
+ * must only mount this once the viewer is confirmed to be an admin, and
+ * should pair it with `RoleMismatchLegend` near the table it appears in.
+ */
+export function RoleMismatchBadge() {
+  return (
+    <span
+      title="Assigned outside this member's usual roles"
+      aria-label="Assigned outside this member's usual roles"
+      className="ml-1 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-rs-warning-bg text-[10px] font-bold leading-none text-rs-warning-fg"
+    >
+      !
+    </span>
+  )
+}
+
+/**
+ * One-line, admin-only explainer for `RoleMismatchBadge`, meant to be
+ * rendered once near a cast table/grid rather than repeated per cell. It
+ * renders unconditionally itself -- the caller is responsible for only
+ * mounting it once the viewer is confirmed to be an admin, exactly like
+ * `RoleMismatchBadge` itself.
+ */
+export function RoleMismatchLegend() {
+  return (
+    <p className="flex items-center gap-1 pb-2 text-xs text-rs-muted">
+      <RoleMismatchBadge /> Highlighted cells are assigned outside that member's
+      usual roles.
+    </p>
   )
 }
 
@@ -57,9 +95,11 @@ export function CastCell({
 export function CastTable({
   cast,
   viewerId,
+  isAdmin,
 }: {
   cast: CastEntry[]
   viewerId?: number
+  isAdmin: boolean
 }) {
   return (
     <table className="w-full border-collapse text-left text-sm">
@@ -76,7 +116,7 @@ export function CastTable({
               {entry.role_name}
             </td>
             <td className="border border-rs-border px-2 py-2 align-top">
-              <CastCell entry={entry} viewerId={viewerId} />
+              <CastCell entry={entry} viewerId={viewerId} isAdmin={isAdmin} />
             </td>
           </tr>
         ))}
@@ -139,21 +179,28 @@ function mergedPerformersFor(
     .map(({ performer }) => performer)
 }
 
-/** One merged cell (e.g. every Vocals Role's performers together) — an "unfilled" placeholder when empty. */
+/**
+ * One merged cell (e.g. every Vocals Role's performers together) — a plain
+ * "-" placeholder when empty (issue #365), and, for an admin viewer only, a
+ * `RoleMismatchBadge` beside a mismatched performer's name instead of an
+ * inline text line.
+ */
 function CastGridCell({
   column,
   cast,
   viewerId,
   nameFor,
+  isAdmin,
 }: {
   column: CastGridColumn
   cast: CastEntry[]
   viewerId?: number
   nameFor: (fullName: string) => string
+  isAdmin: boolean
 }) {
   const performers = mergedPerformersFor(column, cast)
   if (performers.length === 0) {
-    return <span className="text-xs text-rs-muted">unfilled</span>
+    return <span className="text-xs text-rs-muted">-</span>
   }
   return (
     <div className="flex flex-col gap-1">
@@ -174,11 +221,7 @@ function CastGridCell({
           {performer.has_conflict === true && (
             <span className="text-xs text-rs-muted"> away</span>
           )}
-          {performer.is_role_mismatch && (
-            <div className="text-xs text-rs-muted">
-              ◦ role not on membership
-            </div>
-          )}
+          {performer.is_role_mismatch && isAdmin && <RoleMismatchBadge />}
         </div>
       ))}
     </div>
@@ -194,6 +237,11 @@ function CastGridCell({
  * on it but a link or button navigates via `onOpenRow`. Performer names
  * are shortened to a first name (or `"First L."` on a collision) by
  * `shortenNames()`, scoped to whoever actually appears in `rows`.
+ *
+ * `isAdmin` gates the per-cell `RoleMismatchBadge` (issue #365, ADR 0002) --
+ * it defaults to `true` so an existing caller that hasn't been updated to
+ * pass it (e.g. the Schedule's "Running order & assignments" view) keeps its
+ * prior unconditional display rather than silently losing the marker.
  */
 export function CastGridTable({
   roles,
@@ -201,12 +249,14 @@ export function CastGridTable({
   viewerId,
   onOpenRow,
   renderRecordingCell,
+  isAdmin = true,
 }: {
   roles: { id: number; name: string }[]
   rows: CastGridRow[]
   viewerId?: number
   onOpenRow: (songId: number) => void
   renderRecordingCell: (row: CastGridRow) => ReactNode
+  isAdmin?: boolean
 }) {
   const columns = useMemo(() => buildCastGridColumns(roles), [roles])
   const nameFor = useMemo(() => {
@@ -275,6 +325,7 @@ export function CastGridTable({
                     cast={row.cast}
                     viewerId={viewerId}
                     nameFor={nameFor}
+                    isAdmin={isAdmin}
                   />
                 </td>
               ))}
