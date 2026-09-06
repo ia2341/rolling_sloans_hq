@@ -118,7 +118,7 @@ export function SaveChangesDialog({
                   key={`${change.op}-${change.object}-${index}`}
                   className="text-sm"
                 >
-                  <span className="mr-1 rounded bg-rs-border/60 px-1.5 py-0.5 text-xs font-medium uppercase">
+                  <span className="mr-1 rounded bg-rs-border/60 px-1.5 py-0.5 text-xs font-semibold uppercase">
                     {change.op}
                   </span>
                   <span className="font-semibold">{change.object}</span>

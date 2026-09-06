@@ -232,7 +232,7 @@ function NextRehearsalTimeline({ card }: { card: NextRehearsalCardData }) {
               key={slot.song_id}
               to={`/songs/${slot.song_id}`}
               onClick={(event) => event.stopPropagation()}
-              className={`flex h-10 min-w-0 flex-1 items-center justify-center border-r border-rs-border px-1 text-center text-[11px] leading-tight last:border-r-0 ${
+              className={`flex h-10 min-w-0 flex-1 items-center justify-center border-r border-rs-border px-1 text-center text-xs leading-tight last:border-r-0 ${
                 slot.is_viewer
                   ? 'bg-rs-accent text-rs-accent-fg'
                   : 'bg-rs-border/30 text-rs-fg'
@@ -551,7 +551,7 @@ function SetupChecklistPanel({
   return (
     <section className="mb-6 rounded border border-rs-border p-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold">
+        <h2 className="text-sm font-semibold uppercase text-rs-muted">
           Setting up {checklist.semester_name}
         </h2>
         <span className="rounded-full border border-dashed border-rs-border px-2 py-0.5 text-xs text-rs-muted">

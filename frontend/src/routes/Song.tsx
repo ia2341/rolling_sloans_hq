@@ -276,7 +276,7 @@ export function Song() {
                 key={group.rehearsal_id}
                 className="rounded border border-rs-border p-3"
               >
-                <p className="text-sm font-medium">
+                <p className="font-medium">
                   {formatRehearsalDate(group.date)}
                   {group.start_time !== null && group.end_time !== null
                     ? ` · ${formatClockTime(group.start_time)}–${formatClockTime(group.end_time)}`
