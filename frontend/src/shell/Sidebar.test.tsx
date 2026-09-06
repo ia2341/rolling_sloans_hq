@@ -83,17 +83,26 @@ describe('Sidebar', () => {
     expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled()
   })
 
-  it('renders without error before any Semester has been published', () => {
+  it('renders with only + New semester before any Semester exists', () => {
     setContext(
       adminContext({
         viewing_semester: null,
         live_semester: null,
         semester_warning: false,
+        semester_options: [],
       }),
     )
     renderShell(<Sidebar />)
 
     expect(screen.getByText('No Semester published yet.')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled()
+    expect(
+      screen.getByRole('button', { name: '+ New semester' }),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Publish' }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Save changes' }),
+    ).not.toBeInTheDocument()
   })
 })

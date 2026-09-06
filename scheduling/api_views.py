@@ -33,6 +33,7 @@ from scheduling.api_builders import (
     RehearsalBufferValidationError,
     RehearsalPatternInputError,
     RosterBufferValidationError,
+    SemesterDefaultsReapplyBufferValidationError,
     SetlistBufferValidationError,
     build_adjudication_buffer_from_request,
     build_assignment_buffer_from_request,
@@ -40,6 +41,7 @@ from scheduling.api_builders import (
     build_rehearsal_buffer_from_request,
     build_rehearsal_pattern_input_from_body,
     build_roster_buffer_from_request,
+    build_semester_defaults_reapply_buffer_from_request,
     build_setlist_buffer_from_request,
 )
 from scheduling.forms import DeclareConflictForm, MembershipRolesForm
@@ -50,21 +52,26 @@ from scheduling.models import (
     Rehearsal,
     RehearsalSong,
     Role,
+    Semester,
     Song,
 )
 from scheduling.services import (
     DealInfeasibleError,
     EmptySetlistError,
+    InvalidSemesterNameError,
+    LiveSemesterDeletionError,
     NoEligibleRehearsalsError,
     PastRehearsalEditError,
     RecordingUploadError,
     RehearsalPatternCollisionError,
     RunningOrderValidationError,
     SelfRemovalError,
+    SemesterDefaultsReapplyBlockedError,
     StaleAdjudicationSemesterError,
     StaleAssignmentSemesterError,
     StaleRehearsalSemesterError,
     StaleRosterSemesterError,
+    StaleSemesterDefaultsError,
     StaleSetlistSemesterError,
     UnknownConflictError,
     WrongAdjudicationSemesterError,
@@ -1043,6 +1050,210 @@ class AssignmentSaveApiView(AdminApiView, View):
         except WrongViewingSemesterError as error:
             return _wrong_semester_response(str(error))
         except StaleAssignmentSemesterError as error:
+            return self.write_response(request, ok=False, non_field_errors=[str(error)], fallout=None, values=None)
+
+        return self.write_response(request, ok=True, values=None)
+
+
+class SemesterManagementRowsApiView(AdminApiView, View):
+    """`GET /api/semesters/management-rows/`: every Semester's row for the Manage-semesters sheet, in one round trip (issue #329)."""
+
+    def get(self, request):
+        """Return every `SemesterManagementRow` for the requesting admin."""
+        rows = services.semester_management_rows(request)
+        return self.read_response(request, serializers.serialize_semester_management_rows(rows))
+
+
+class SemesterPublishImpactApiView(AdminApiView, View):
+    """`GET /api/semesters/<pk>/publish-impact/`: what publishing `pk` would do to the incumbent Live Semester (issue #329)."""
+
+    def get(self, request, pk):
+        """Return `pk`'s `SemesterPublishImpact`, or 404 if the Semester no longer exists."""
+        semester = get_object_or_404(Semester, pk=pk)
+        impact = services.semester_publish_impact(semester)
+        return self.read_response(request, serializers.serialize_semester_publish_impact(impact))
+
+
+class SemesterDeletionSummaryApiView(AdminApiView, View):
+    """`GET /api/semesters/<pk>/deletion-summary/`: what deleting `pk` would destroy, for the Delete popup (issue #329).
+
+    Wraps `semester_deletion_summary()` unchanged — the four counts are
+    computed there and must not be recomputed anywhere else.
+    """
+
+    def get(self, request, pk):
+        """Return `pk`'s `SemesterDeletionSummary`, or 404 if the Semester no longer exists."""
+        semester = get_object_or_404(Semester, pk=pk)
+        summary = services.semester_deletion_summary(semester)
+        return self.read_response(request, serializers.serialize_semester_deletion_summary(summary))
+
+
+class SemesterSelectApiView(AdminApiView, View):
+    """`POST /api/semesters/select/`: records this session's Viewing Semester selection, or clears it (issue #329).
+
+    Takes `{"semester_id": <int> | null}` and calls `set_viewing_semester()`
+    and nothing else — mirrors the pre-SPA `SemesterSelectView`'s "an
+    unknown pk clears the selection" silent-fallback behavior rather than
+    404ing, so a stale client-side option list can't turn into an error.
+    Returns the envelope with no extra `data`: the shell's context (its
+    `viewing_semester`/`semester_options`) is what actually changes.
+    """
+
+    def post(self, request):
+        """Parse `semester_id` off the JSON body, select (or clear) it, and return the updated envelope."""
+        body = self.parse_json_body(request)
+        semester_id = body.get('semester_id') if isinstance(body, dict) else None
+        if semester_id is not None and (isinstance(semester_id, bool) or not isinstance(semester_id, int)):
+            return JsonResponse({'context': self.build_context(request), 'error': 'malformed_payload'}, status=400)
+        semester = Semester.objects.filter(pk=semester_id).first() if semester_id is not None else None
+        services.set_viewing_semester(request, semester)
+        return self.write_response(request, ok=True, values=None)
+
+
+class SemesterCreateApiView(AdminApiView, View):
+    """`POST /api/semesters/create/`: creates a new draft Semester and selects it as this session's Viewing Semester (issue #329).
+
+    A blank or case-insensitive-duplicate `name` is `InvalidSemesterNameError`,
+    reported as a per-field error at HTTP 200 (a rejected input, not a
+    client protocol error) — every other malformed field (a missing name,
+    or a non-integer/negative timing default) is a genuine 4xx, since 4xx
+    stays reserved for auth, staleness and malformed payloads.
+    """
+
+    #: The six timing-default fields `create_semester()` takes as `**timing_defaults`, matching `SemesterSetupForm`.
+    TIMING_DEFAULT_FIELDS = (
+        'default_rehearsal_duration_minutes',
+        'default_setup_grace_minutes',
+        'default_teardown_grace_minutes',
+        'default_song_slot_count',
+        'default_arrival_buffer_minutes',
+        'default_departure_buffer_minutes',
+    )
+
+    def post(self, request):
+        """Create the submitted Semester, select it, and return the envelope — or a 400/200-with-field-error."""
+        body = self.parse_json_body(request)
+        if not isinstance(body, dict):
+            return JsonResponse({'context': self.build_context(request), 'error': 'malformed_payload'}, status=400)
+
+        name = body.get('name')
+        if not isinstance(name, str):
+            return JsonResponse({'context': self.build_context(request), 'error': 'malformed_payload'}, status=400)
+
+        timing_defaults = {}
+        for field in self.TIMING_DEFAULT_FIELDS:
+            value = body.get(field)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                return JsonResponse(
+                    {'context': self.build_context(request), 'error': 'malformed_payload'}, status=400,
+                )
+            timing_defaults[field] = value
+
+        try:
+            semester = services.create_semester(name=name, **timing_defaults)
+        except InvalidSemesterNameError as error:
+            return self.write_response(request, ok=False, errors={'name': [str(error)]})
+
+        services.set_viewing_semester(request, semester)
+        return self.write_response(request, ok=True, values=None)
+
+
+class SemesterPublishApiView(AdminApiView, View):
+    """`POST /api/semesters/<pk>/publish/`: publishes `pk`, making it the Live Semester (issue #329).
+
+    Re-publishing the already-live Semester is a harmless re-stamp,
+    allowed through this same path — rollback is publishing an older
+    Semester here. There is no unpublish endpoint (ADR 0010).
+    """
+
+    def post(self, request, pk):
+        """Publish `pk` and return the envelope, or 404 if it no longer exists."""
+        semester = get_object_or_404(Semester, pk=pk)
+        services.publish_semester(semester)
+        return self.write_response(request, ok=True, values=None)
+
+
+class SemesterDeleteApiView(AdminApiView, View):
+    """`POST /api/semesters/<pk>/delete/`: hard-deletes `pk` and its cascade (issue #329, ADR 0011).
+
+    The Live Semester refusal lives inside `delete_semester()` itself, not
+    just here (ADR 0011) — reported as `ok: false` with `non_field_errors`
+    rather than a 4xx, since a hand-crafted delete of the Live Semester
+    must be *refused*, not merely protocol-rejected.
+    """
+
+    def post(self, request, pk):
+        """Delete `pk`, or report the Live-Semester refusal, or 404 if it no longer exists."""
+        semester = get_object_or_404(Semester, pk=pk)
+        try:
+            services.delete_semester(semester)
+        except LiveSemesterDeletionError as error:
+            return self.write_response(request, ok=False, non_field_errors=[str(error)])
+        return self.write_response(request, ok=True, values=None)
+
+
+class SemesterDefaultsReapplyPreviewApiView(AdminPreviewApiView):
+    """`POST /api/semesters/reapply-defaults/preview/`: the Reapply-defaults surface's Preview, run for real and rolled back (issue #329, ADR 0008)."""
+
+    def run_preview(self, request):
+        """Build the Reapply-defaults Buffer from the JSON body and return its rendered Fallout envelope.
+
+        Delegates all parsing to `build_semester_defaults_reapply_buffer_from_request()` —
+        the same function `SemesterDefaultsReapplySaveApiView.post()`
+        calls. A `SemesterDefaultsReapplyBufferValidationError` (a missing
+        or malformed `semester_id`/`semester_updated_at`) renders as
+        `ok: false` with `non_field_errors`; there is no `values` echo on
+        that path, since this Buffer carries nothing to echo beyond the
+        two identity fields the client already has. Unlike the Setlist/
+        Roster/Rehearsal Preview endpoints, there is no wrong-semester 409
+        check here — this surface is addressed by `semester_id` alone,
+        with no session-scoped Viewing Semester ambiguity to guard
+        against (`SemesterDefaultsReapplyBuffer`'s own docstring).
+        `preview_semester_defaults_reapply()` reports a
+        `StaleSemesterDefaultsError`/`SemesterDefaultsReapplyBlockedError`
+        as `fallout.is_blocked`/`is_stale` itself, so there is no `except`
+        clause to write here either.
+        """
+        viewing_semester = services.get_viewing_semester(request)
+        try:
+            buffer = build_semester_defaults_reapply_buffer_from_request(request, viewing_semester=viewing_semester)
+        except SemesterDefaultsReapplyBufferValidationError as error:
+            return self.write_response(
+                request, ok=False, non_field_errors=error.non_field_errors, fallout=None, values=None,
+            )
+
+        fallout = services.preview_semester_defaults_reapply(buffer)
+        return self.write_response(
+            request, ok=True, fallout=serializers.serialize_semester_defaults_fallout(fallout),
+        )
+
+
+class SemesterDefaultsReapplySaveApiView(AdminApiView, View):
+    """`POST /api/semesters/reapply-defaults/save/`: the Reapply-defaults surface's Save — the real, committing write (issue #329)."""
+
+    def post(self, request):
+        """Build the Reapply-defaults Buffer from the JSON body and apply it, or report why it couldn't be applied.
+
+        Calls the same `build_semester_defaults_reapply_buffer_from_request()`
+        the Preview endpoint calls, then the unchanged
+        `apply_semester_defaults_reapply()`. A `StaleSemesterDefaultsError`
+        or `SemesterDefaultsReapplyBlockedError` is reported as
+        `ok: false` with `non_field_errors`, mirroring the other Save
+        endpoints' staleness/blocked handling — `apply_semester_defaults_reapply()`'s
+        own transaction has already rolled back by the time either
+        `except` clause runs.
+        """
+        viewing_semester = services.get_viewing_semester(request)
+        try:
+            buffer = build_semester_defaults_reapply_buffer_from_request(request, viewing_semester=viewing_semester)
+        except SemesterDefaultsReapplyBufferValidationError as error:
+            return self.write_response(
+                request, ok=False, non_field_errors=error.non_field_errors, fallout=None, values=None,
+            )
+
+        try:
+            services.apply_semester_defaults_reapply(buffer)
+        except (StaleSemesterDefaultsError, SemesterDefaultsReapplyBlockedError) as error:
             return self.write_response(request, ok=False, non_field_errors=[str(error)], fallout=None, values=None)
 
         return self.write_response(request, ok=True, values=None)

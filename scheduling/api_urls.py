@@ -96,6 +96,30 @@ urlpatterns = [
         'schedule/<int:rehearsal_id>/assignments/save/',
         api_views.AssignmentSaveApiView.as_view(), name='api-schedule-assignments-save',
     ),
+    path(
+        'semesters/management-rows/',
+        api_views.SemesterManagementRowsApiView.as_view(), name='api-semesters-management-rows',
+    ),
+    path(
+        'semesters/<int:pk>/publish-impact/',
+        api_views.SemesterPublishImpactApiView.as_view(), name='api-semesters-publish-impact',
+    ),
+    path(
+        'semesters/<int:pk>/deletion-summary/',
+        api_views.SemesterDeletionSummaryApiView.as_view(), name='api-semesters-deletion-summary',
+    ),
+    path('semesters/select/', api_views.SemesterSelectApiView.as_view(), name='api-semesters-select'),
+    path('semesters/create/', api_views.SemesterCreateApiView.as_view(), name='api-semesters-create'),
+    path('semesters/<int:pk>/publish/', api_views.SemesterPublishApiView.as_view(), name='api-semesters-publish'),
+    path('semesters/<int:pk>/delete/', api_views.SemesterDeleteApiView.as_view(), name='api-semesters-delete'),
+    path(
+        'semesters/reapply-defaults/preview/',
+        api_views.SemesterDefaultsReapplyPreviewApiView.as_view(), name='api-semesters-reapply-defaults-preview',
+    ),
+    path(
+        'semesters/reapply-defaults/save/',
+        api_views.SemesterDefaultsReapplySaveApiView.as_view(), name='api-semesters-reapply-defaults-save',
+    ),
     path('conflicts/', api_views.ConflictAdjudicationIndexApiView.as_view(), name='api-conflicts-index'),
     path(
         'conflicts/<int:rehearsal_id>/',
