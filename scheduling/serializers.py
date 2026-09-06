@@ -1228,38 +1228,26 @@ def serialize_assignment_edit_buffer(buffer: AssignmentEditBuffer) -> dict:
     }
 
 
-def _picker_conflict_notes_for(rehearsal) -> dict:
-    """Return `{person_id: note}` for every Person with a Conflict against `rehearsal` (issue #338, user story 15).
+def _picker_conflicted_person_ids_for(rehearsal) -> set:
+    """Return the set of Person ids with any Conflict against `rehearsal` (issue #338, user story 15).
 
     A marker only, never a reason, a declaration type or a time (ADR
-    0005): a full Conflict reads "away all evening"; a partial Conflict
-    reads "away <start>-<end>" from its first declared Window. Always
-    empty for the Dress Rehearsal, which no Conflict may point at
-    (ADR-0006), so this never runs a query that could only return nothing.
+    0005 / `_serialize_matrix_entry`'s `has_conflict`). Always empty for
+    the Dress Rehearsal, which no Conflict may point at (ADR-0006), so
+    this never runs a query that could only return nothing.
     """
     if rehearsal.is_full_setlist:
-        return {}
-    notes = {}
-    for conflict in Conflict.objects.filter(rehearsal=rehearsal).prefetch_related('conflictwindow_set'):
-        if conflict.type == Conflict.FULL_CONFLICT:
-            notes[conflict.person_id] = 'away all evening'
-            continue
-        windows = list(conflict.conflictwindow_set.all())
-        if windows:
-            window = windows[0]
-            start = window.unavailable_start.strftime('%H:%M')
-            end = window.unavailable_end.strftime('%H:%M')
-            notes[conflict.person_id] = f'away {start}–{end}'
-    return notes
+        return set()
+    return set(Conflict.objects.filter(rehearsal=rehearsal).values_list('person_id', flat=True))
 
 
-def _serialize_picker_option(option, *, conflict_notes) -> dict:
-    """Return one `AssignmentPickerOption`: the Person by name, whether they declared the cell's Role, and a conflict note if any (issue #338)."""
+def _serialize_picker_option(option, *, conflicted_person_ids) -> dict:
+    """Return one `AssignmentPickerOption`: the Person by name, whether they declared the cell's Role, and a bare conflict marker (issue #338, ADR 0005)."""
     return {
         'person_id': option.person.pk,
         'person_name': option.person.name,
         'has_declared_role': option.has_declared_role,
-        'conflict_note': conflict_notes.get(option.person.pk),
+        'has_conflict': option.person.pk in conflicted_person_ids,
     }
 
 
@@ -1274,20 +1262,26 @@ def serialize_assignment_picker(picker: AssignmentPickerResult, rehearsal) -> di
     renders that as the structural "no per-song slots to assign against"
     explanation (ADR-0006), never as an empty list with no reason given.
     """
-    conflict_notes = _picker_conflict_notes_for(rehearsal)
+    conflicted_person_ids = _picker_conflicted_person_ids_for(rehearsal)
     return {
         'song_id': picker.song.pk,
         'song_title': picker.song.title,
         'role_id': picker.role.pk,
         'role_name': picker.role.name,
         'rehearsal_song_id': picker.rehearsal_song_id,
-        'declared': [_serialize_picker_option(option, conflict_notes=conflict_notes) for option in picker.declared],
-        'others': [_serialize_picker_option(option, conflict_notes=conflict_notes) for option in picker.others],
+        'declared': [
+            _serialize_picker_option(option, conflicted_person_ids=conflicted_person_ids) for option in picker.declared
+        ],
+        'others': [
+            _serialize_picker_option(option, conflicted_person_ids=conflicted_person_ids) for option in picker.others
+        ],
         'backup_declared': [
-            _serialize_picker_option(option, conflict_notes=conflict_notes) for option in picker.backup_declared
+            _serialize_picker_option(option, conflicted_person_ids=conflicted_person_ids)
+            for option in picker.backup_declared
         ],
         'backup_others': [
-            _serialize_picker_option(option, conflict_notes=conflict_notes) for option in picker.backup_others
+            _serialize_picker_option(option, conflicted_person_ids=conflicted_person_ids)
+            for option in picker.backup_others
         ],
     }
 

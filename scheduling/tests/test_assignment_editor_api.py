@@ -256,20 +256,21 @@ class PickerTests(TestCase):
         self.assertEqual(envelope['data']['backup_declared'], [])
         self.assertEqual(envelope['data']['backup_others'], [])
 
-    def test_full_conflict_carries_an_away_note_and_no_reason_text(self):
-        """A Person with a full Conflict for this Rehearsal is marked with a note that never leaks their reason (ADR 0005)."""
+    def test_full_conflict_carries_a_bare_marker_and_no_reason_text(self):
+        """A Person with a full Conflict for this Rehearsal is marked `has_conflict: True`, never their reason (ADR 0005)."""
         ConflictFactory(
             person=self.declaring_membership.person, rehearsal=self.rehearsal,
             type=Conflict.FULL_CONFLICT, reason='a private medical reason',
         )
 
-        _response, envelope = _get_json(self, _picker_url(self.rehearsal, self.song, self.role))
+        response, envelope = _get_json(self, _picker_url(self.rehearsal, self.song, self.role))
 
         option = next(
             o for o in envelope['data']['declared'] if o['person_id'] == self.declaring_membership.person_id
         )
-        self.assertIsNotNone(option['conflict_note'])
-        self.assertNotIn('medical', option['conflict_note'])
+        self.assertIs(option['has_conflict'], True)
+        self.assertNotIn('conflict_note', option)
+        self.assertNotIn('medical', response.content.decode())
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)

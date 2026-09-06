@@ -27,6 +27,7 @@ interface PendingEntry {
   coveringForName: string | null
 }
 
+/** One grid cell's rendered occupant, merging a server `MatrixEntry` and any not-yet-saved pick into one shape. */
 interface DisplayEntry {
   key: string
   kind: 'assignment' | 'backup'
@@ -44,14 +45,17 @@ interface DisplayRole {
   name: string
 }
 
+/** Abbreviates a Role's name to a 3-letter code for the "unfilled" placeholder. */
 function roleCode(name: string): string {
   return name.slice(0, 3).toUpperCase()
 }
 
+/** Builds the stable key a pending pick is tracked under, so a re-pick of the same cell overwrites rather than duplicates it. */
 function entryKey(songId: number, roleId: number, personId: number): string {
   return `${songId}:${roleId}:${personId}`
 }
 
+/** Adapts a server `MatrixEntry` (an already-saved Assignment or Backup) into the grid's rendered `DisplayEntry` shape. */
 function fromServerEntry(entry: MatrixEntry): DisplayEntry {
   return {
     key: `${entry.kind}-${entry.id}`,
@@ -65,6 +69,7 @@ function fromServerEntry(entry: MatrixEntry): DisplayEntry {
   }
 }
 
+/** Adapts a not-yet-saved `PendingEntry` pick into the grid's rendered `DisplayEntry` shape, marked `pending: true`. */
 function fromPendingEntry(kind: 'assignment' | 'backup', pending: PendingEntry): DisplayEntry {
   return {
     key: `pending-${pending.key}`,
@@ -78,6 +83,7 @@ function fromPendingEntry(kind: 'assignment' | 'backup', pending: PendingEntry):
   }
 }
 
+/** Finds the one `MatrixCell` in `row` for `roleId`, or `undefined` for a client-only "+ Add role" column the server never returned. */
 function cellFor(row: MatrixRow, roleId: number): MatrixCell | undefined {
   return row.cells.find((cell) => cell.role_id === roleId)
 }
@@ -112,6 +118,7 @@ export function AssignmentEditor({ rehearsalId }: AssignmentEditorProps) {
   )
   const [saveOpen, setSaveOpen] = useState(false)
 
+  /** Clears every unsaved pick/removal, restoring the grid to what the server last returned. */
   const resetPendingBuffer = useCallback(() => {
     setRemovedAssignmentIds(new Set())
     setAddedEntries(new Map())
@@ -120,6 +127,7 @@ export function AssignmentEditor({ rehearsalId }: AssignmentEditorProps) {
     setExtraRoles([])
   }, [])
 
+  /** (Re-)fetches this Rehearsal's matrix from the shared Schedule endpoint and resets the pending buffer to match. */
   const load = useCallback(() => {
     void apiFetch<ReadEnvelope<SchedulePayload>>(`/api/schedule/?rehearsal=${rehearsalId}`).then((envelope) => {
       setDetail(envelope.data.selected)
@@ -146,6 +154,7 @@ export function AssignmentEditor({ rehearsalId }: AssignmentEditorProps) {
   const changeCount =
     removedAssignmentIds.size + addedEntries.size + removedBackupIds.size + addedBackupEntries.size
 
+  /** Serializes the pending buffer's state into the `AssignmentEditBufferInput` wire shape `preview`/`save` post, or `null` with no viewed Semester. */
   const buildBufferInput = useCallback((): AssignmentEditBufferInput | null => {
     if (semester === null) return null
     return {
@@ -168,6 +177,7 @@ export function AssignmentEditor({ rehearsalId }: AssignmentEditorProps) {
     }
   }, [semester, removedAssignmentIds, addedEntries, removedBackupIds, addedBackupEntries])
 
+  /** Posts the pending buffer to `.../assignments/preview/` and adapts its response into `SaveChangesDialog`'s `PreviewResult` shape. */
   const preview = useCallback(async (): Promise<PreviewResult> => {
     const body = buildBufferInput()
     if (body === null) {
@@ -186,6 +196,7 @@ export function AssignmentEditor({ rehearsalId }: AssignmentEditorProps) {
     return { ok: true, changes: [], fallout: { loud: envelope.fallout.loud, quiet: envelope.fallout.quiet } }
   }, [buildBufferInput, rehearsalId])
 
+  /** Posts the pending buffer to `.../assignments/save/` and, on success, closes the save dialog and reloads from the server. */
   const confirmSave = useCallback(() => {
     const body = buildBufferInput()
     if (body === null) return
@@ -208,6 +219,7 @@ export function AssignmentEditor({ rehearsalId }: AssignmentEditorProps) {
     requestSave: () => setSaveOpen(true),
   })
 
+  /** Returns the `DisplayEntry` list for one grid cell: the server's saved entries (minus pending removals) plus any pending picks. */
   const displayEntriesFor = useCallback(
     (songId: number, roleId: number, cell: MatrixCell | undefined): DisplayEntry[] => {
       const entries: DisplayEntry[] = []
@@ -231,6 +243,7 @@ export function AssignmentEditor({ rehearsalId }: AssignmentEditorProps) {
     [removedAssignmentIds, removedBackupIds, addedEntries, addedBackupEntries],
   )
 
+  /** Removes one entry: drops it from the pending-add map if it was never saved, otherwise queues its id for removal on save. */
   const removeEntry = useCallback(
     (entry: DisplayEntry) => {
       if (entry.pending) {
@@ -260,6 +273,7 @@ export function AssignmentEditor({ rehearsalId }: AssignmentEditorProps) {
     [],
   )
 
+  /** Lists a cell's current standing assignees (server-saved minus pending removals, plus pending adds) for the picker's "Covering for" menu. */
   const standingAssigneesFor = useCallback(
     (songId: number, roleId: number): { id: number; name: string }[] => {
       const row = detail?.rows.find((candidate) => candidate.song_id === songId)
@@ -275,6 +289,7 @@ export function AssignmentEditor({ rehearsalId }: AssignmentEditorProps) {
     [detail, removedAssignmentIds, addedEntries],
   )
 
+  /** Records a picker choice as a pending standing Assignment on the open cell, then closes the picker. */
   const pickAssigned = useCallback(
     (option: AssignmentPickerOption) => {
       if (pickerCell === null) return
@@ -297,6 +312,7 @@ export function AssignmentEditor({ rehearsalId }: AssignmentEditorProps) {
     [pickerCell],
   )
 
+  /** Records a picker choice as a pending, this-evening-only Backup on the open cell, then closes the picker. */
   const pickBackup = useCallback(
     (option: AssignmentPickerOption, rehearsalSongId: number, coveringFor: { id: number; name: string } | null) => {
       if (pickerCell === null) return
@@ -439,6 +455,7 @@ export function AssignmentEditor({ rehearsalId }: AssignmentEditorProps) {
   )
 }
 
+/** One grid-cell occupant's pill: name, badges (backup/away/role-mismatch), and a remove control. */
 function AssignmentEditorPill({
   entry,
   hue,
@@ -471,6 +488,7 @@ function AssignmentEditorPill({
   )
 }
 
+/** One (Song, Role) grid cell: its occupant pills, an "unfilled" placeholder when empty, and the "+" picker trigger. */
 function AssignmentEditorCell({
   songId,
   songTitle,
@@ -518,6 +536,7 @@ function formatClockTime(isoTime: string): string {
   return isoTime.slice(0, 5)
 }
 
+/** Desktop rendering of the assignment grid: one row per Song, one column per Role. */
 function AssignmentEditorTable({
   roles,
   rows,
@@ -570,6 +589,7 @@ function AssignmentEditorTable({
   )
 }
 
+/** Phone rendering of the assignment grid (`useIsPhone`): one card per Song, stacking each Role's cell inside it. */
 function AssignmentEditorCards({
   roles,
   rows,
@@ -614,6 +634,7 @@ function AssignmentEditorCards({
   )
 }
 
+/** One picker-list row: a Person's name plus a bare "Conflict" marker (ADR 0005), clickable to make that pick. */
 function PickerOptionRow({
   option,
   onPick,
@@ -629,12 +650,18 @@ function PickerOptionRow({
         className="flex w-full items-center justify-between rounded px-2 py-1 text-left text-sm hover:bg-rs-border/40"
       >
         <span>{option.person_name}</span>
-        {option.conflict_note !== null && <span className="text-xs text-rs-muted">{option.conflict_note}</span>}
+        {option.has_conflict && <span className="text-xs text-rs-muted">Conflict</span>}
       </button>
     </li>
   )
 }
 
+/**
+ * The "+" cell's picker dialog (issue #338, story 15): fetches
+ * `.../assignments/picker/<song_id>/<role_id>/` for this one cell and
+ * offers Assigned (declared-first) and Backup (this-evening-only)
+ * sections, each with a "Show all members" expansion.
+ */
 function AssignmentPickerDialog({
   rehearsalId,
   cell,
@@ -710,7 +737,7 @@ function AssignmentPickerDialog({
                           <span>{option.person_name}</span>
                           <span className="text-xs text-rs-muted">
                             Has not declared {cell.roleName}
-                            {option.conflict_note !== null ? ` · ${option.conflict_note}` : ''}
+                            {option.has_conflict ? ' · Conflict' : ''}
                           </span>
                         </button>
                       </li>
@@ -782,7 +809,7 @@ function AssignmentPickerDialog({
                               <span>{option.person_name}</span>
                               <span className="text-xs text-rs-muted">
                                 Has not declared {cell.roleName}
-                                {option.conflict_note !== null ? ` · ${option.conflict_note}` : ''}
+                                {option.has_conflict ? ' · Conflict' : ''}
                               </span>
                             </button>
                           </li>

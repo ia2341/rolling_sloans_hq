@@ -66,9 +66,9 @@ function pickerPayload() {
       role_id: 5,
       role_name: 'Guitar',
       rehearsal_song_id: 200,
-      declared: [{ person_id: 9, person_name: 'Riley Song', has_declared_role: true, conflict_note: null }],
+      declared: [{ person_id: 9, person_name: 'Riley Song', has_declared_role: true, has_conflict: false }],
       others: [],
-      backup_declared: [{ person_id: 12, person_name: 'Jordan Wren', has_declared_role: true, conflict_note: null }],
+      backup_declared: [{ person_id: 12, person_name: 'Jordan Wren', has_declared_role: true, has_conflict: false }],
       backup_others: [],
     },
   }

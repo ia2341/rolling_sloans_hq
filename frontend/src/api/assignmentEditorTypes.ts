@@ -4,8 +4,8 @@ export interface AssignmentPickerOption {
   person_id: number
   person_name: string
   has_declared_role: boolean
-  /** A marker only, never a reason (ADR 0005): e.g. "away all evening" or "away 19:40–20:15". */
-  conflict_note: string | null
+  /** A bare marker only, never a reason, a declaration type or a time (ADR 0005). */
+  has_conflict: boolean
 }
 
 /** `data` shape of `GET /api/schedule/<id>/assignments/picker/<song_id>/<role_id>/` — its own shape, not the write envelope. */
