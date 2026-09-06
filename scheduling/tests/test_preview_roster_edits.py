@@ -11,6 +11,7 @@ from identity.models import Person
 from scheduling.factories import (
     ConflictFactory,
     MembershipFactory,
+    PersonRoleFactory,
     RehearsalFactory,
     RoleFactory,
     SemesterFactory,
@@ -171,11 +172,17 @@ class PreviewRosterEditsTests(TestCase):
 
         self.assertTrue(any('No Roles Left' in line for line in fallout.quiet))
 
-    def test_quiet_fallout_flags_a_newly_mismatched_assignment(self):
-        """Dropping a declared Role that an existing SongRoleAssignment relies on reports quiet Fallout."""
+    def test_dropping_a_membership_role_no_longer_produces_a_mismatch_quiet_line(self):
+        """Dropping a roster-declared MembershipRole raises no quiet Fallout on its own (issue #377, ADR-0014).
+
+        is_role_mismatch now reads the person-level PersonRole, which this
+        Buffer's Role-set reconciliation doesn't touch -- migrating the
+        Roster editor's Role declaration onto PersonRole is separate work.
+        """
         person = PersonFactory(name='Mismatch Person')
         membership = MembershipFactory(person=person, semester=self.semester)
         MembershipRole.objects.create(membership=membership, role=self.role)
+        PersonRoleFactory(person=person, role=self.role)
         song = SongFactory(semester=self.semester, title='Mismatch Song')
         assignment = SongRoleAssignmentFactory(song=song, role=self.role, person=person)
         self.assertFalse(assignment.is_role_mismatch)
@@ -183,7 +190,7 @@ class PreviewRosterEditsTests(TestCase):
 
         fallout = self._preview(buffer)
 
-        self.assertTrue(any('Mismatch Person' in line and 'Mismatch Song' in line for line in fallout.quiet))
+        self.assertFalse(any('Mismatch Person' in line and 'Mismatch Song' in line for line in fallout.quiet))
         assignment.refresh_from_db()
         self.assertFalse(assignment.is_role_mismatch)
 

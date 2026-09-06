@@ -3236,10 +3236,11 @@ def apply_roster_edits(buffer: RosterEditBuffer, *, viewing_semester: Semester, 
     `Conflict` rows for them, since both point at `Person` rather than at
     `Membership` and would otherwise survive un-rostered. A prior Semester's
     rows for the same Person are untouched. Role-set changes go through
-    ordinary `MembershipRole` creates/deletes so the model's own
-    `post_save`/`post_delete` signals re-evaluate `is_role_mismatch` on
-    every affected `SongRoleAssignment`/`Backup` — this function never
-    recomputes that flag by hand.
+    ordinary `MembershipRole` creates/deletes, which no longer drive
+    `is_role_mismatch` (issue #377, ADR-0014): that flag now reads the
+    person-level `PersonRole`, which this reconciliation doesn't touch —
+    migrating the Roster editor's Role declaration onto `PersonRole` is
+    separate work.
 
     Each of `buffer.pending_invites` (issue #336) is created via
     `identity.services.invite_person(..., send_via_on_commit=True)` and

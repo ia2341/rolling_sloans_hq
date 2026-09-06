@@ -11,6 +11,7 @@ from identity.models import Person
 from scheduling.factories import (
     ConflictFactory,
     MembershipFactory,
+    PersonRoleFactory,
     RehearsalFactory,
     RoleFactory,
     SemesterFactory,
@@ -92,11 +93,20 @@ class ApplyRosterEditsTests(TestCase):
             {keep_role.pk, add_role.pk},
         )
 
-    def test_role_removal_reevaluates_is_role_mismatch_through_the_model(self):
-        """Dropping a declared Role flips is_role_mismatch on that Person's existing SongRoleAssignment for it, via the model's own signal."""
+    def test_role_removal_no_longer_touches_is_role_mismatch(self):
+        """Dropping a roster-declared MembershipRole leaves is_role_mismatch untouched (issue #377, ADR-0014).
+
+        is_role_mismatch now reads the person-level PersonRole, which the
+        Roster editor's Role-set reconciliation doesn't write to (that
+        surface still edits MembershipRole -- migrating it to PersonRole is
+        separate work, tracked against the person-page Role editor). A
+        PersonRole declared independently of this Buffer keeps the
+        assignment unflagged even after its MembershipRole is dropped.
+        """
         person = PersonFactory()
         membership = MembershipFactory(person=person, semester=self.semester)
         MembershipRole.objects.create(membership=membership, role=self.role)
+        PersonRoleFactory(person=person, role=self.role)
         song = SongFactory(semester=self.semester)
         assignment = SongRoleAssignmentFactory(song=song, role=self.role, person=person)
         self.assertFalse(assignment.is_role_mismatch)
@@ -105,7 +115,7 @@ class ApplyRosterEditsTests(TestCase):
         apply_roster_edits(buffer, viewing_semester=self.semester, requesting_admin=self.admin)
 
         assignment.refresh_from_db()
-        self.assertTrue(assignment.is_role_mismatch)
+        self.assertFalse(assignment.is_role_mismatch)
 
     def test_removal_purges_membership_roles_assignments_and_conflicts_for_that_semester(self):
         """Removing a Person deletes their Membership, declared Roles, Role Assignments and Conflicts scoped to the Semester, with non-trivial counts."""
