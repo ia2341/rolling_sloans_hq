@@ -97,6 +97,14 @@ describe('SemesterPanel', () => {
         }),
     })
     vi.stubGlobal('fetch', fetchSpy)
+    const reloadSpy = vi.fn()
+    // jsdom's real `location.reload` throws "not implemented" navigation
+    // noise, so stub the whole `location` object with a spy in its place
+    // (issue #363: a successful select now hard-reloads the page).
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: { ...window.location, reload: reloadSpy },
+    })
 
     const user = userEvent.setup()
     renderShell(<SemesterPanel collapsed={false} />)
@@ -114,6 +122,7 @@ describe('SemesterPanel', () => {
     await waitFor(() =>
       expect(screen.getByText(/Viewing: Spring 2026/)).toBeInTheDocument(),
     )
+    await waitFor(() => expect(reloadSpy).toHaveBeenCalledOnce())
   })
 
   it('renders with only + New semester before any Semester exists', () => {
