@@ -6,6 +6,7 @@ import {
   computeChangeCount,
   mapSetlistPreviewToResult,
   moveAliveRow,
+  moveAliveRowTo,
   rowBadges,
   rowsFromPayload,
   type EditRow,
@@ -144,6 +145,68 @@ describe('moveAliveRow', () => {
   it('returns rows unchanged when there is nowhere to move', () => {
     const rows = [existingRow({ rowKey: 'a' }), existingRow({ rowKey: 'b' })]
     const result = moveAliveRow(rows, 'a', -1)
+    expect(result).toBe(rows)
+  })
+})
+
+describe('moveAliveRowTo', () => {
+  it('moves a row forward across several positions, one moveAliveRow step at a time', () => {
+    const rows = [
+      existingRow({ rowKey: 'a' }),
+      existingRow({ rowKey: 'b' }),
+      existingRow({ rowKey: 'c' }),
+      existingRow({ rowKey: 'd' }),
+    ]
+    const result = moveAliveRowTo(rows, 'a', 2)
+    expect(result.map((row) => row.rowKey)).toEqual(['b', 'c', 'a', 'd'])
+  })
+
+  it('moves a row backward across several positions', () => {
+    const rows = [
+      existingRow({ rowKey: 'a' }),
+      existingRow({ rowKey: 'b' }),
+      existingRow({ rowKey: 'c' }),
+      existingRow({ rowKey: 'd' }),
+    ]
+    const result = moveAliveRowTo(rows, 'd', 0)
+    expect(result.map((row) => row.rowKey)).toEqual(['d', 'a', 'b', 'c'])
+  })
+
+  it('produces the same end state a drag to any target would as N single-step moves', () => {
+    const rows = [
+      existingRow({ rowKey: 'a' }),
+      existingRow({ rowKey: 'b' }),
+      existingRow({ rowKey: 'c' }),
+    ]
+    let stepwise = rows
+    stepwise = moveAliveRow(stepwise, 'c', -1)
+    stepwise = moveAliveRow(stepwise, 'c', -1)
+    const dragged = moveAliveRowTo(rows, 'c', 0)
+    expect(dragged.map((row) => row.rowKey)).toEqual(
+      stepwise.map((row) => row.rowKey),
+    )
+  })
+
+  it('skips over deleted rows the same way moveAliveRow does', () => {
+    const rows = [
+      existingRow({ rowKey: 'a' }),
+      existingRow({ rowKey: 'b', deleted: true }),
+      existingRow({ rowKey: 'c' }),
+      existingRow({ rowKey: 'd' }),
+    ]
+    const result = moveAliveRowTo(rows, 'a', 2)
+    expect(result.map((row) => row.rowKey)).toEqual(['c', 'b', 'd', 'a'])
+  })
+
+  it('returns rows unchanged when the row is already at toAliveIndex', () => {
+    const rows = [existingRow({ rowKey: 'a' }), existingRow({ rowKey: 'b' })]
+    const result = moveAliveRowTo(rows, 'a', 0)
+    expect(result).toBe(rows)
+  })
+
+  it('returns rows unchanged for an unknown rowKey', () => {
+    const rows = [existingRow({ rowKey: 'a' }), existingRow({ rowKey: 'b' })]
+    const result = moveAliveRowTo(rows, 'missing', 1)
     expect(result).toBe(rows)
   })
 })

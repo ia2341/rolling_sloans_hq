@@ -126,6 +126,34 @@ export function moveAliveRow(
   return next
 }
 
+/**
+ * Reorders `rowKey` to sit at `toAliveIndex` among the surviving rows (UI
+ * overhaul round 2: the setlist editor's drag-and-drop reorder), by
+ * repeatedly applying `moveAliveRow` one step at a time in the needed
+ * direction. This is the one function a drop handler calls -- it produces
+ * exactly the Buffer state N one-step up/down moves would, rather than
+ * reimplementing position math for drag. Returns `rows` unchanged if
+ * `rowKey` isn't found or is already at `toAliveIndex`.
+ */
+export function moveAliveRowTo(
+  rows: EditRow[],
+  rowKey: string,
+  toAliveIndex: number,
+): EditRow[] {
+  let current = rows
+  for (;;) {
+    const aliveIndices = current.reduce<number[]>((indices, row, index) => {
+      if (!row.deleted) indices.push(index)
+      return indices
+    }, [])
+    const fullIndex = current.findIndex((row) => row.rowKey === rowKey)
+    const fromAliveIndex = aliveIndices.indexOf(fullIndex)
+    if (fromAliveIndex === -1 || fromAliveIndex === toAliveIndex) return current
+    const direction = toAliveIndex > fromAliveIndex ? 1 : -1
+    current = moveAliveRow(current, rowKey, direction)
+  }
+}
+
 /** True if `row` differs from its saved snapshot; always `false` for a brand-new row (nothing to diff against). */
 export function isEdited(row: EditRow): boolean {
   if (row.original === null) return false

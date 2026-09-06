@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 
 import { apiFetch } from '../api/client'
 import { useAppContext } from '../api/ContextProvider'
@@ -18,7 +18,7 @@ import {
   buildBufferWire,
   computeChangeCount,
   mapSetlistPreviewToResult,
-  moveAliveRow,
+  moveAliveRowTo,
   rowsFromPayload,
   type EditRow,
   type SetlistWriteEnvelope,
@@ -87,12 +87,8 @@ export function Setlist() {
     [],
   )
 
-  const moveUp = useCallback((rowKey: string) => {
-    setRows((current) => moveAliveRow(current, rowKey, -1))
-  }, [])
-
-  const moveDown = useCallback((rowKey: string) => {
-    setRows((current) => moveAliveRow(current, rowKey, 1))
+  const reorderRow = useCallback((rowKey: string, toAliveIndex: number) => {
+    setRows((current) => moveAliveRowTo(current, rowKey, toAliveIndex))
   }, [])
 
   const deleteRow = useCallback((rowKey: string) => {
@@ -212,8 +208,7 @@ export function Setlist() {
           rows={rows}
           rowErrors={rowErrors}
           onUpdateField={updateField}
-          onMoveUp={moveUp}
-          onMoveDown={moveDown}
+          onReorder={reorderRow}
           onDelete={deleteRow}
           onUndoDelete={undoDelete}
           isPhone={isPhone}
@@ -276,7 +271,14 @@ function SetlistEditSessionRegistrar({
   return null
 }
 
-/** The phone layout: one card per Song, no horizontal scroll (issue #330). */
+/**
+ * The phone layout: one card per Song, no horizontal scroll (issue #330).
+ * The whole card navigates to `/songs/{id}` on activation (UI overhaul
+ * round 2) -- Recordings are read on that page now rather than shown here,
+ * so the only entry point this card keeps is the "+" upload trigger, which
+ * stops the click from bubbling into the card's own navigation since it
+ * goes to a different destination (`/profile?song={id}`).
+ */
 function SetlistCards({
   songs,
   viewerId,
@@ -284,15 +286,35 @@ function SetlistCards({
   songs: SetlistPayload['songs']
   viewerId?: number
 }) {
+  const navigate = useNavigate()
   return (
     <ul className="flex flex-col gap-3">
       {songs.map((song) => (
-        <li key={song.id} className="rounded border border-rs-border p-3">
+        <li
+          key={song.id}
+          onClick={(event) => {
+            if ((event.target as HTMLElement).closest('a, button')) return
+            navigate(`/songs/${song.id}`)
+          }}
+          onKeyDown={(event) => {
+            if (event.key !== 'Enter' && event.key !== ' ') return
+            if ((event.target as HTMLElement).closest('a, button')) return
+            event.preventDefault()
+            navigate(`/songs/${song.id}`)
+          }}
+          tabIndex={0}
+          role="button"
+          aria-label={`Open ${song.title}`}
+          className="cursor-pointer rounded border border-rs-border p-3 hover:bg-rs-border/10"
+        >
           <div className="flex items-start justify-between gap-2">
             <p className="font-medium">
               {song.position}. {song.title}
             </p>
-            <span className="text-sm text-rs-muted">{song.length}</span>
+            <div className="flex items-center gap-3">
+              <span className="text-sm text-rs-muted">{song.length}</span>
+              <AddRecordingLink song={song} />
+            </div>
           </div>
           <p className="text-sm text-rs-muted">{song.artist}</p>
           <ul className="flex flex-col gap-2 pt-2">
@@ -308,14 +330,23 @@ function SetlistCards({
           {song.notes !== '' && (
             <p className="pt-2 text-sm text-rs-muted">{song.notes}</p>
           )}
-          <RecordingEntryPoints song={song} label="no takes yet" />
         </li>
       ))}
     </ul>
   )
 }
 
-/** The desktop layout: one table row per Song, one column per Role (issue: pills/tables UI overhaul), plus a second full-width row for notes when it has any (issue #330). */
+/**
+ * The desktop layout: one table row per Song, one column per Role (issue:
+ * pills/tables UI overhaul), plus a second full-width row for notes when it
+ * has any (issue #330). Each Song row is itself the "Open" control now (UI
+ * overhaul round 2) -- clicking anywhere on the row navigates to
+ * `/songs/{id}`, so the Recordings column and the separate "Open" link are
+ * both gone; a member's takes are read on that page instead. The trailing
+ * column keeps only the "+" upload trigger, which stops its click from
+ * bubbling into the row's own navigation since it goes to a different
+ * destination (`/profile?song={id}`).
+ */
 function SetlistTable({
   roles,
   songs,
@@ -325,6 +356,7 @@ function SetlistTable({
   songs: SetlistPayload['songs']
   viewerId?: number
 }) {
+  const navigate = useNavigate()
   const columnCount = 4 + roles.length
   return (
     <table className="w-full border-collapse text-left text-sm">
@@ -338,14 +370,28 @@ function SetlistTable({
             </th>
           ))}
           <th className="border border-rs-border px-2 py-2">Length</th>
-          <th className="border border-rs-border px-2 py-2">Recordings</th>
           <th className="border border-rs-border px-2 py-2" />
         </tr>
       </thead>
       <tbody>
         {songs.map((song) => (
           <Fragment key={song.id}>
-            <tr>
+            <tr
+              onClick={(event) => {
+                if ((event.target as HTMLElement).closest('a, button')) return
+                navigate(`/songs/${song.id}`)
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== 'Enter' && event.key !== ' ') return
+                if ((event.target as HTMLElement).closest('a, button')) return
+                event.preventDefault()
+                navigate(`/songs/${song.id}`)
+              }}
+              tabIndex={0}
+              role="button"
+              aria-label={`Open ${song.title}`}
+              className="cursor-pointer hover:bg-rs-border/10"
+            >
               <td className="border border-rs-border px-2 py-2 align-top">
                 {song.position}
               </td>
@@ -365,10 +411,7 @@ function SetlistTable({
                 {song.length}
               </td>
               <td className="border border-rs-border px-2 py-2 align-top">
-                <RecordingEntryPoints song={song} label="—" />
-              </td>
-              <td className="border border-rs-border px-2 py-2 align-top">
-                <Link to={`/songs/${song.id}`}>Open</Link>
+                <AddRecordingLink song={song} />
               </td>
             </tr>
             {song.notes !== '' && (
@@ -388,32 +431,16 @@ function SetlistTable({
   )
 }
 
-/** ▶ (play, with a count) and + (upload preselected to this Song) — the Setlist's two Recordings entry points (issue #330). */
-function RecordingEntryPoints({
-  song,
-  label,
-}: {
-  song: SetlistPayload['songs'][number]
-  label: string
-}) {
+/** The "+" upload trigger (issue #330), relocated onto the row/card itself (UI overhaul round 2) -- `stopPropagation` keeps a click here from also firing the row's own navigation to `/songs/{id}`, since this goes to `/profile?song={id}` instead. */
+function AddRecordingLink({ song }: { song: SetlistPayload['songs'][number] }) {
   return (
-    <div className="flex items-center gap-3 pt-2 text-sm">
-      {song.recording_count > 0 ? (
-        <Link
-          to={`/songs/${song.id}`}
-          aria-label={`Play ${song.title}'s takes`}
-        >
-          ▶ {song.recording_count}
-        </Link>
-      ) : (
-        <span className="text-rs-muted">{label}</span>
-      )}
-      <Link
-        to={`/profile?song=${song.id}`}
-        aria-label={`Add a recording of ${song.title}`}
-      >
-        +
-      </Link>
-    </div>
+    <Link
+      to={`/profile?song=${song.id}`}
+      aria-label={`Add a recording of ${song.title}`}
+      onClick={(event) => event.stopPropagation()}
+      className="text-rs-accent"
+    >
+      +
+    </Link>
   )
 }
