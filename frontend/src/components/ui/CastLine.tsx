@@ -239,9 +239,10 @@ function CastGridCell({
  * `shortenNames()`, scoped to whoever actually appears in `rows`.
  *
  * `isAdmin` gates the per-cell `RoleMismatchBadge` (issue #365, ADR 0002) --
- * it defaults to `true` so an existing caller that hasn't been updated to
- * pass it (e.g. the Schedule's "Running order & assignments" view) keeps its
- * prior unconditional display rather than silently losing the marker.
+ * the underlying fact is never shown to a non-admin, so both callers (the
+ * Setlist and the Schedule's "Running order & assignments" view) must pass
+ * the viewer's actual admin status; there's no default that could be safe
+ * for both an admin and a non-admin caller.
  */
 export function CastGridTable({
   roles,
@@ -249,14 +250,14 @@ export function CastGridTable({
   viewerId,
   onOpenRow,
   renderRecordingCell,
-  isAdmin = true,
+  isAdmin,
 }: {
   roles: { id: number; name: string }[]
   rows: CastGridRow[]
   viewerId?: number
   onOpenRow: (songId: number) => void
   renderRecordingCell: (row: CastGridRow) => ReactNode
-  isAdmin?: boolean
+  isAdmin: boolean
 }) {
   const columns = useMemo(() => buildCastGridColumns(roles), [roles])
   const nameFor = useMemo(() => {
