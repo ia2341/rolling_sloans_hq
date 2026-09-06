@@ -894,18 +894,23 @@ class RecordingSlotOption:
 
 
 def recording_slot_options_for(semester, song=None) -> list[RecordingSlotOption]:
-    """Return `semester`'s RehearsalSong slots as Upload-a-take picker options, optionally narrowed to one Song (issue #333).
+    """Return `semester`'s past-or-today RehearsalSong slots as Upload-a-take picker options, optionally narrowed to one Song (issue #395, amending #333).
 
     Ordered by Rehearsal date then slot order, mirroring
-    `RecordingUploadView`'s existing picker. Returns every slot in the
-    Semester regardless of who was cast on it — the note the picker itself
-    renders is what tells an uploader they might be uploading someone
-    else's take.
+    `RecordingUploadView`'s existing picker. Returns every eligible slot in
+    the Semester regardless of who was cast on it — the note the picker
+    itself renders is what tells an uploader they might be uploading
+    someone else's take. Narrowed to Rehearsals dated today or earlier
+    (the mirror image of `future_rehearsals_for()`'s `date__gte` filter):
+    a Rehearsal that hasn't happened yet can't have a recording, so #395
+    excludes it from the picker rather than letting an uploader pick a
+    slot that can only ever fail to save.
     """
     if semester is None:
         return []
+    today = timezone.localdate()
     rehearsal_songs = (
-        RehearsalSong.objects.filter(rehearsal__semester=semester)
+        RehearsalSong.objects.filter(rehearsal__semester=semester, rehearsal__date__lte=today)
         .select_related('rehearsal', 'song')
         .order_by('rehearsal__date', 'order')
     )
