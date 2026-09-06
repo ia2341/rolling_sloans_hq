@@ -6,14 +6,14 @@ This repo is public as a showcase of what was built. It contains no real member 
 
 ## Stack
 
-Django 6.1 on Postgres, server-rendered templates with full-page POST/redirect
-flows, and a vendored progressive-enhancement layer (Pico.css, HTMX, Alpine,
-SortableJS). No `package.json`, no bundler, no node toolchain, no CDN and no
-DRF — the seam for any future API is `services.py`, endpoint-per-interaction,
-not an HTTP layer. Recordings live in a private Cloudflare R2 bucket
-(`django-storages`), transactional mail goes out through Resend
-(`django-anymail`), WhiteNoise serves static assets, and an optional Spotify
-Client Credentials integration turns a public playlist link into setlist rows.
+Django 6.1 on Postgres serving a same-origin JSON `/api/`, and a
+React/TypeScript single-page app (`frontend/`, built by Vite) as the entire
+client. No CDN and no DRF — the seam for any future API is `services.py`,
+endpoint-per-interaction, not a resource-shaped HTTP layer. Recordings live in
+a private Cloudflare R2 bucket (`django-storages`), transactional mail goes
+out through Resend (`django-anymail`), WhiteNoise serves static assets, and an
+optional Spotify Client Credentials integration turns a public playlist link
+into setlist rows.
 
 ## Architecture
 
@@ -23,11 +23,11 @@ Two Django apps:
 - **`scheduling`** — the domain model for semesters, membership, roles, songs, rehearsals, and recordings. See [`CONTEXT.md`](CONTEXT.md) for the ubiquitous language (e.g. "Song" is scoped to one semester and never reused across terms).
 
 `scheduling/services.py` is the **read-model layer, not just a write layer**.
-Views are deliberately thin: they resolve the viewing Semester, call service
-functions, and hand the returned dataclasses straight to a template. Every
-derived read — attendance inference, rehearsal progress, the Song x Role x
-Person assignment matrix, recording grouping, presigned R2 URLs — lives in
-services rather than in a view or a template tag.
+`/api/` views are deliberately thin: they resolve the viewing Semester, call
+service functions, and hand the returned dataclasses to a hand-written
+serializer. Every derived read — attendance inference, rehearsal progress,
+the Song x Role x Person assignment matrix, recording grouping, presigned R2
+URLs — lives in services rather than in a view or a serializer.
 
 Every admin edit surface is built from the same three parts: unsaved edits
 collect into a frozen-dataclass **Pending Buffer**, `apply_*(buffer, ...)`
@@ -52,6 +52,10 @@ Several design decisions that reject the "obvious" alternative are recorded as A
 - [`0009`](docs/adr/0009-assignment-grid-per-rehearsal-lens.md) — semester-wide Standing Assignments are edited through a per-Rehearsal grid, because the availability check that makes the edit safe is only computable through a Rehearsal.
 - [`0010`](docs/adr/0010-live-semester-is-greatest-published-at.md) — the Live Semester is simply the greatest `published_at`: no status enum, no singleton pointer row, no unpublish. Rollback is re-publishing an older Semester through the same code path.
 - [`0011`](docs/adr/0011-semester-deletion-is-a-hard-delete.md) — deleting a Semester is a real hard delete, cascading to its recordings' stored objects; a deliberate exception to the soft-delete convention, and the Live Semester is always refused.
+- [`0012`](docs/adr/0012-spa-migration-and-api-contract.md) — the portal is a React/TypeScript SPA over a same-origin JSON `/api/`, reversing the no-bundler decision but not the no-CDN or no-DRF ones.
+- [`0013`](docs/adr/0013-password-authentication.md) — sign-in is email and password over Django's stock machinery, reversing an earlier plan for passwordless emailed codes.
+
+`0005` was later amended to permit an unattributed, admin-only aggregate count — the boundary it draws is about attribution, not arithmetic.
 
 Configuration (`config/settings.py`) is entirely environment-driven via `django-environ` — no setting is ever a literal secret.
 
@@ -69,6 +73,15 @@ so they must be *present* for the app to boot — the `.env.example` placeholder
 are enough to run and test everything except a real recording upload. Spotify
 is genuinely optional: with `SPOTIFY_CLIENT_ID`/`SPOTIFY_CLIENT_SECRET` unset,
 playlist import degrades to a message rather than an error.
+
+The frontend needs its own build once, so `SpaIndexView` has a manifest to
+read:
+
+```bash
+cd frontend && npm ci && npm run build && cd ..
+```
+
+The Django test suite doesn't need this — it never builds or serves the SPA.
 
 ## Running
 
@@ -104,25 +117,24 @@ python manage.py test identity.tests.test_login.LoginViewTests.test_valid_login
 ruff check .
 ```
 
-## Static assets
+## Frontend and static assets
 
-The admin UI stack is vendored, pinned and committed under the top-level
-`static/` directory — HTMX, Alpine, [Pico.css](https://picocss.com) and
-SortableJS, each with its version in the filename, plus one hand-written
-override sheet (`static/css/app.css`) built on CSS custom properties as
-tokens. There is no `package.json`, no bundler and no CDN: a CDN would
-announce every member's IP and referer to a third party on each page load of
-what is meant to be a private portal. Bumping a library means downloading the
-new file, renaming it, and updating the `{% static %}` reference.
+`frontend/` is an ordinary Vite + React + TypeScript app with pinned npm
+dependencies and a committed `package-lock.json` — ordinary tooling, ordinary
+Dependabot visibility. There is still no CDN reference anywhere: this is a
+private, auth-gated portal, and a CDN would announce every member's IP and
+referer to a third party on each page load. `npm run build` writes
+`frontend/dist/`, which a Django view (`SpaIndexView`) serves via Vite's
+build manifest, never as a static file.
 
 In production WhiteNoise serves whatever `collectstatic` wrote to
-`STATIC_ROOT`, so the deploy build must run it — that is what `build.sh` is
-for, and it is the host's build command.
+`STATIC_ROOT`, so the deploy build must run the frontend build *first* — that
+ordering is what `build.sh` does, and it is the host's build command.
 
 ## Deploy
 
 ```bash
-./build.sh   # pip install, collectstatic, migrate — the host's build command
+./build.sh   # pip install, npm build, collectstatic, migrate — the host's build command
 ```
 
 ## Deploy-config smoke test
@@ -133,7 +145,7 @@ python manage.py check --deploy
 
 ## CI
 
-`.github/workflows/ci.yml` runs `ruff check .`, `manage.py test --parallel` against a real Postgres service, `manage.py check --deploy` under production-like environment variables, and a scan that fails the build on any committed `.env`/`.pem`/`.key`/`id_rsa`/`id_ed25519` file.
+`.github/workflows/ci.yml` runs `ruff check .`; `manage.py test --parallel` against a real Postgres service; a node job (`npm ci`, lint, format check, typecheck, the Vitest suite, then `npm run build`); a build job that builds the frontend, runs `manage.py check --deploy` under production-like environment variables, and `collectstatic`; and a scan that fails the build on any committed `.env`/`.pem`/`.key`/`id_rsa`/`id_ed25519` file.
 
 ## Contributing
 
