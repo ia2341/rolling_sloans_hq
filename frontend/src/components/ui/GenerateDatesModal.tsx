@@ -76,6 +76,7 @@ export function GenerateDatesModal({
   const [tickedCreates, setTickedCreates] = useState<Set<number>>(new Set())
   const [tickedRetimes, setTickedRetimes] = useState<Set<number>>(new Set())
   const [tickedOrphans, setTickedOrphans] = useState<Set<number>>(new Set())
+  const [addingSkipDate, setAddingSkipDate] = useState(false)
 
   const addRehearsalTime = () => {
     setForm((previous) => ({
@@ -115,6 +116,9 @@ export function GenerateDatesModal({
         { start_date: date, end_date: null } satisfies SkipDateRow,
       ],
     }))
+    // Leave the picker open (issue #360): "+ Add skip date" is unbounded, so
+    // the next date is one more pick away rather than one more button click.
+    setAddingSkipDate(true)
   }
 
   const removeSkipDate = (index: number) => {
@@ -318,14 +322,25 @@ export function GenerateDatesModal({
               </li>
             ))}
           </ul>
-          <input
-            type="date"
-            aria-label="Add skip date"
-            onChange={(event) => {
-              addSkipDate(event.target.value)
-              event.target.value = ''
-            }}
-          />
+          {addingSkipDate ? (
+            <input
+              type="date"
+              aria-label="Add skip date"
+              autoFocus
+              onChange={(event) => {
+                addSkipDate(event.target.value)
+                event.target.value = ''
+              }}
+            />
+          ) : (
+            <button
+              type="button"
+              onClick={() => setAddingSkipDate(true)}
+              className="text-sm text-rs-accent"
+            >
+              + Add skip date
+            </button>
+          )}
         </div>
 
         <button

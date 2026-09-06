@@ -148,9 +148,18 @@ describe('GenerateDatesModal', () => {
     await user.click(screen.getByText('+ Add weekly time'))
     expect(screen.getByLabelText('Day of week')).toBeInTheDocument()
 
+    await user.click(
+      screen.getByRole('button', { name: '+ Add skip date' }),
+    )
     const skipDateInput = screen.getByLabelText('Add skip date')
     await user.type(skipDateInput, '2026-03-24')
     expect(await screen.findByText('2026-03-24')).toBeInTheDocument()
+
+    // The picker stays open (unbounded add) so a second date can be added
+    // without clicking "+ Add skip date" again.
+    await user.type(screen.getByLabelText('Add skip date'), '2026-03-25')
+    expect(await screen.findByText('2026-03-25')).toBeInTheDocument()
+    expect(screen.getByText('2026-03-24')).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: 'Preview' }))
     await screen.findByText('Create · 1')
