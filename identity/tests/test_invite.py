@@ -17,7 +17,9 @@ from identity.models import Person
 from identity.services import (
     AlreadyHasPasswordError,
     EmailDeliveryError,
+    add_person,
     invite_person,
+    invite_status_for,
     resend_invite,
 )
 
@@ -83,6 +85,55 @@ class InvitePersonTests(TestCase):
             invite_person(**args)
 
         self.assertFalse(Person.objects.filter(email=args['email']).exists())
+
+    def test_stamps_invited_at(self):
+        """A successful invite stamps invited_at (issue #397)."""
+        person = invite_person(**invite_args())
+
+        self.assertIsNotNone(person.invited_at)
+        self.assertIsNotNone(Person.objects.get(pk=person.pk).invited_at)
+
+
+class AddPersonTests(TestCase):
+    """`add_person()`: create a Person with no invite sent at all (issue #397)."""
+
+    def test_creates_person_with_unusable_password_and_no_invite(self):
+        """A successful add creates a Person with no usable password, unset invited_at, and sends no mail."""
+        args = invite_args()
+
+        person = add_person(**args)
+
+        self.assertFalse(person.has_usable_password())
+        self.assertIsNone(person.invited_at)
+        self.assertEqual(len(mail.outbox), 0)
+        self.assertEqual(Person.objects.get(pk=person.pk).email, args['email'])
+
+
+class InviteStatusForTests(TestCase):
+    """`invite_status_for()`: the three-way lifecycle status (issue #397)."""
+
+    def test_not_yet_invited_for_a_person_never_invited(self):
+        person = add_person(**invite_args())
+
+        self.assertEqual(invite_status_for(person), 'not_yet_invited')
+
+    def test_invited_for_a_person_with_a_sent_invite_and_no_password(self):
+        person = invite_person(**invite_args())
+
+        self.assertEqual(invite_status_for(person), 'invited')
+
+    def test_accepted_for_a_person_with_a_usable_password(self):
+        person = PersonFactory(password='a-strong-password-123')
+
+        self.assertEqual(invite_status_for(person), 'accepted')
+
+    def test_accepted_takes_precedence_over_a_stale_invited_at(self):
+        """A Person who set a password after being invited reads 'accepted', not 'invited'."""
+        person = invite_person(**invite_args())
+        person.set_password('a-strong-password-123')
+        person.save(update_fields=['password'])
+
+        self.assertEqual(invite_status_for(person), 'accepted')
 
 
 @override_settings(EMAIL_BACKEND='django.core.mail.backends.console.EmailBackend')
@@ -241,6 +292,16 @@ class ResendInviteTests(TestCase):
             resend_invite(person)
 
         self.assertEqual(len(mail.outbox), 0)
+
+    def test_stamps_invited_at_for_a_never_invited_person(self):
+        """resend_invite() on a not-yet-invited Person (issue #397) sends and stamps invited_at, same as a fresh invite."""
+        person = add_person(**invite_args())
+        self.assertIsNone(person.invited_at)
+
+        resend_invite(person)
+
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIsNotNone(Person.objects.get(pk=person.pk).invited_at)
 
 
 class InvitePersonSendModeTests(TestCase):

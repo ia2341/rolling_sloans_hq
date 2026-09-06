@@ -273,3 +273,17 @@ class ApplyRosterEditsInviteTests(TransactionTestCase):
 
         self.assertEqual(len(mail.outbox), 1)
         self.assertIn('deferred@example.com', mail.outbox[0].to)
+
+    def test_send_invite_false_creates_a_person_and_rosters_them_with_no_mail(self):
+        """A staged row with send_invite=False (issue #397) creates a Person, rosters them, and sends no mail at all."""
+        buffer = self._buffer(
+            [RosterInvite(name='Staged Member', email='staged-member@example.com', send_invite=False)],
+        )
+
+        apply_roster_edits(buffer, viewing_semester=self.semester, requesting_admin=self.admin)
+
+        person = Person.objects.get(email='staged-member@example.com')
+        self.assertFalse(person.has_usable_password())
+        self.assertIsNone(person.invited_at)
+        Membership.objects.get(person=person, semester=self.semester)
+        self.assertEqual(len(mail.outbox), 0)

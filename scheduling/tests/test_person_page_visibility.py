@@ -190,12 +190,13 @@ class PersonApiViewerStateTests(TestCase):
         self.assertTrue(admin_data['can_edit_roles'])
         self.assertNotIn('available_roles', teammate_data)
         self.assertIn('available_roles', admin_data)
+        self.assertIn('invite_status', admin_data)
         self.assertEqual(
-            set(teammate_data.keys()) | {'can_edit_roles', 'available_roles'},
+            set(teammate_data.keys()) | {'can_edit_roles', 'available_roles', 'invite_status'},
             set(admin_data.keys()) | {'can_edit_roles'},
         )
         for key in teammate_data:
-            if key in ('can_edit_roles', 'available_roles'):
+            if key in ('can_edit_roles', 'available_roles', 'invite_status'):
                 continue
             self.assertEqual(teammate_data[key], admin_data[key], f'{key} differed between teammate and admin viewer')
 

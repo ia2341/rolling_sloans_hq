@@ -197,6 +197,87 @@ describe('Person', () => {
     await waitFor(() => expect(roleFetch).toHaveBeenCalledTimes(1))
   })
 
+  it('renders no Invite action for a teammate viewer or the self viewer (issue #397)', async () => {
+    mockFetchByUrl({
+      '/api/members/2/': () => ({
+        status: 200,
+        body: { context: memberContext(), data: teammatePayload() },
+      }),
+    })
+    renderPerson('/members/2')
+
+    await screen.findByRole('heading', { name: 'Alex Kim' })
+    expect(
+      screen.queryByRole('button', { name: /^Invite/ }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('lets an admin invite a not-yet-invited teammate, disabling the button once sent (issue #397)', async () => {
+    const inviteFetch = vi.fn()
+    mockFetchByUrl({
+      '/api/members/2/invite/': () => {
+        inviteFetch()
+        return {
+          status: 200,
+          body: {
+            context: memberContext({
+              viewer: { ...memberContext().viewer, is_admin: true },
+            }),
+            ok: true,
+            errors: {},
+            non_field_errors: [],
+            fallout: null,
+            values: null,
+            data: adminViewingTeammatePayload({ invite_status: 'invited' }),
+          },
+        }
+      },
+      '/api/members/2/': () => ({
+        status: 200,
+        body: {
+          context: memberContext({
+            viewer: { ...memberContext().viewer, is_admin: true },
+          }),
+          data: adminViewingTeammatePayload({
+            invite_status: 'not_yet_invited',
+          }),
+        },
+      }),
+    })
+
+    const user = (await import('@testing-library/user-event')).default.setup()
+    renderPerson('/members/2')
+
+    const inviteButton = await screen.findByRole('button', { name: 'Invite' })
+    await user.click(inviteButton)
+
+    await waitFor(() => expect(inviteFetch).toHaveBeenCalledTimes(1))
+    const sentButton = await screen.findByRole('button', {
+      name: 'Invite sent',
+    })
+    expect(sentButton).toBeDisabled()
+  })
+
+  it('renders no Invite action once a teammate has accepted (issue #397)', async () => {
+    mockFetchByUrl({
+      '/api/members/2/': () => ({
+        status: 200,
+        body: {
+          context: memberContext({
+            viewer: { ...memberContext().viewer, is_admin: true },
+          }),
+          data: adminViewingTeammatePayload({ invite_status: 'accepted' }),
+        },
+      }),
+    })
+    renderPerson('/members/2')
+
+    await screen.findByRole('heading', { name: 'Alex Kim' })
+    expect(
+      screen.queryByRole('button', { name: /^Invite/ }),
+    ).not.toBeInTheDocument()
+  })
+
   it('does not render a "Deliberately absent" card, for any viewer state (issue #363)', async () => {
     mockFetchByUrl({
       '/api/members/2/': () => ({

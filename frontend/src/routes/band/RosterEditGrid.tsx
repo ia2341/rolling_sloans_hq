@@ -67,7 +67,12 @@ export function RosterEditGrid({
                     }
                   />
                   {row.isRoleMismatch && <RoleMismatchBadge />}
-                  {row.isPendingInvite && (
+                  {row.inviteStatus === 'not_yet_invited' && (
+                    <span className="rounded-full border border-dashed border-rs-border px-2 py-0.5 text-xs text-rs-muted">
+                      not yet invited
+                    </span>
+                  )}
+                  {row.inviteStatus === 'invited' && (
                     <span className="rounded-full border border-dashed border-rs-border px-2 py-0.5 text-xs text-rs-muted">
                       invited · not active yet
                     </span>
@@ -94,7 +99,7 @@ export function RosterEditGrid({
                   {row.songCount} song{row.songCount === 1 ? '' : 's'}
                 </p>
                 {!row.deleted &&
-                  row.isPendingInvite &&
+                  row.inviteStatus !== 'accepted' &&
                   row.personId !== null && (
                     <button
                       type="button"
@@ -104,7 +109,9 @@ export function RosterEditGrid({
                     >
                       {resentPersonIds.has(row.personId)
                         ? 'Invite sent'
-                        : 'Invite again'}
+                        : row.inviteStatus === 'not_yet_invited'
+                          ? 'Invite'
+                          : 'Invite again'}
                     </button>
                   )}
                 {row.deleted ? (

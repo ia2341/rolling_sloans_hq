@@ -29,12 +29,14 @@ interface AddPeopleSheetProps {
  * phone via `ResponsiveDialog`, its three sources are sections behind a
  * `SegmentedControl` rather than three stacked forms -- import from the
  * prior Semester's roster, add an already-active but unrostered member, or
- * invite someone brand new. All three land in the same Pending Buffer via
- * `onAddRows`, so invite-as-part-of-the-edit and import-from-prior-semester
- * fold into one edit session per the issue's requirement. Nothing here
- * writes anything -- ticked candidates and a typed invite both become
- * ordinary Buffer rows only once "Add to the buffer" is pressed; the real
- * write is still the toolbar's Save changes -> the shared Save popup.
+ * invite someone brand new -- and (issue #397) a checkbox in that third
+ * section to stage them `'not_yet_invited'` instead, with no invite email
+ * sent. All three sources land in the same Pending Buffer via `onAddRows`,
+ * so invite-as-part-of-the-edit and import-from-prior-semester fold into
+ * one edit session per the issue's requirement. Nothing here writes
+ * anything -- ticked candidates and a typed invite both become ordinary
+ * Buffer rows only once "Add to the buffer" is pressed; the real write is
+ * still the toolbar's Save changes -> the shared Save popup.
  */
 export function AddPeopleSheet({
   open,
@@ -52,6 +54,7 @@ export function AddPeopleSheet({
 
   const [inviteName, setInviteName] = useState('')
   const [inviteEmail, setInviteEmail] = useState('')
+  const [inviteSendNow, setInviteSendNow] = useState(true)
 
   function resetAndClose() {
     setSource('import')
@@ -62,6 +65,7 @@ export function AddPeopleSheet({
     setExistingTicked(new Set())
     setInviteName('')
     setInviteEmail('')
+    setInviteSendNow(true)
     onOpenChange(false)
   }
 
@@ -126,7 +130,9 @@ export function AddPeopleSheet({
       })
     } else if (source === 'invite') {
       if (inviteName.trim() && EMAIL_PATTERN.test(inviteEmail.trim())) {
-        rows.push(newInviteRow(inviteName.trim(), inviteEmail.trim()))
+        rows.push(
+          newInviteRow(inviteName.trim(), inviteEmail.trim(), inviteSendNow),
+        )
       }
     }
     if (rows.length > 0) onAddRows(rows)
@@ -284,9 +290,18 @@ export function AddPeopleSheet({
               className="mt-1 block w-full rounded border border-rs-border px-2 py-1 text-sm"
             />
           </div>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={inviteSendNow}
+              onChange={(event) => setInviteSendNow(event.target.checked)}
+            />
+            Send the invite email now
+          </label>
           <p className="text-xs text-rs-muted">
-            They can declare their Roles on their own Person page once they've
-            signed in.
+            {inviteSendNow
+              ? "They can declare their Roles on their own Person page once they've signed in."
+              : "They'll be added with no invite sent — invite them later from their Person page or the Roster."}
           </p>
         </div>
       )}

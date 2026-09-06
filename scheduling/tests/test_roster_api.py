@@ -195,29 +195,34 @@ class RosterReadTests(TestCase):
         self.role = RoleFactory()
 
     def test_roster_read_lists_active_and_invited_members_with_no_email(self):
-        """The read model lists every Membership, distinguishes invited-vs-active, and never carries email (ADR 0005)."""
+        """The read model lists every Membership, distinguishes invite status, and never carries email (ADR 0005, #397)."""
         from identity.factories import PersonFactory
+        from identity.services import invite_person
 
         active_person = PersonFactory(name='Active Person', password='a-strong-test-password-123')
         active_membership = MembershipFactory(person=active_person, semester=self.semester)
         MembershipRole.objects.create(membership=active_membership, role=self.role)
-        invited_person = PersonFactory(name='Invited Person', password=None)
+        invited_person = invite_person(name='Invited Person', email='invited-person@example.com')
         MembershipFactory(person=invited_person, semester=self.semester)
+        not_yet_invited_person = PersonFactory(name='Not Yet Invited Person', password=None)
+        MembershipFactory(person=not_yet_invited_person, semester=self.semester)
 
         response = self.client.get(_roster_url())
         envelope = json.loads(response.content)
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(envelope['data']['active_count'], 1)
-        self.assertEqual(envelope['data']['invited_count'], 1)
+        self.assertEqual(envelope['data']['invited_count'], 2)
         names = {member['name'] for member in envelope['data']['members']}
-        self.assertEqual(names, {'Active Person', 'Invited Person'})
+        self.assertEqual(names, {'Active Person', 'Invited Person', 'Not Yet Invited Person'})
         for member in envelope['data']['members']:
             self.assertNotIn('email', member)
         invited_row = next(m for m in envelope['data']['members'] if m['name'] == 'Invited Person')
+        not_yet_invited_row = next(m for m in envelope['data']['members'] if m['name'] == 'Not Yet Invited Person')
         active_row = next(m for m in envelope['data']['members'] if m['name'] == 'Active Person')
-        self.assertTrue(invited_row['is_pending_invite'])
-        self.assertFalse(active_row['is_pending_invite'])
+        self.assertEqual(invited_row['invite_status'], 'invited')
+        self.assertEqual(not_yet_invited_row['invite_status'], 'not_yet_invited')
+        self.assertEqual(active_row['invite_status'], 'accepted')
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class RosterReadNoSemesterTests(TestCase):
@@ -318,6 +323,40 @@ class ResendInviteTests(TestCase):
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)
+class PersonPageInviteTests(TestCase):
+    """`POST /api/members/<pk>/invite/`: the Person page's Invite action (issue #397), mounted on the same view as the Roster editor's resend-invite."""
+
+    def setUp(self):
+        """Log in a synthetic admin."""
+        admin_client(self)
+
+    def test_inviting_a_not_yet_invited_person_sends_mail_and_updates_status(self):
+        """Inviting a Person `add_person()` created sends the first invite and flips their status to 'invited'."""
+        from identity.services import add_person
+
+        person = add_person(name='Not Yet Invited Person', email='not-yet-invited@example.com')
+
+        response, envelope = _post_json(self, reverse('api-member-invite', args=[person.pk]), {})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(envelope['ok'])
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(envelope['data']['invite_status'], 'invited')
+
+    def test_inviting_an_active_person_is_refused(self):
+        """Inviting a Person who already has a usable password is refused with ok: false."""
+        from identity.factories import PersonFactory
+
+        active = PersonFactory(name='Active Person', password='a-strong-test-password-123')
+
+        response, envelope = _post_json(self, reverse('api-member-invite', args=[active.pk]), {})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(envelope['ok'])
+        self.assertTrue(envelope['non_field_errors'])
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
 class PreviewValidBufferTests(TestCase):
     """A valid Roster edit Buffer's Preview renders Fallout, echoes `values`, writes nothing and sends no mail."""
 
@@ -346,6 +385,26 @@ class PreviewValidBufferTests(TestCase):
         self.assertIn('New Invitee', envelope['fallout']['pending_invites'])
         self.assertEqual(envelope['values']['invites'][0]['email'], 'new-invitee@example.com')
         self.assertFalse(Person.objects.filter(email='new-invitee@example.com').exists())
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_valid_buffer_with_send_invite_false_previews_ok_and_reports_added_without_invite(self):
+        """A row with send_invite: false (issue #397) previews `ok: true`, lists the name in pending_added_without_invite, and mails nothing."""
+        body = _valid_body(self.semester, invites=[
+            {
+                'row_key': 'invite-1', 'name': 'Staged Only',
+                'email': 'staged-only@example.com', 'send_invite': False,
+            },
+        ])
+
+        response = assert_preview_writes_nothing(
+            self, _preview_url(), models_to_check=[Person, Membership], semester=self.semester, json_body=body,
+        )
+        envelope = json.loads(response.content)
+
+        self.assertTrue(envelope['ok'])
+        self.assertIn('Staged Only', envelope['fallout']['pending_added_without_invite'])
+        self.assertNotIn('Staged Only', envelope['fallout']['pending_invites'])
+        self.assertFalse(Person.objects.filter(email='staged-only@example.com').exists())
         self.assertEqual(len(mail.outbox), 0)
 
 
@@ -514,3 +573,22 @@ class SaveCommitsTests(TransactionTestCase):
         self.assertTrue(Membership.objects.filter(person=person, semester=self.semester).exists())
         self.assertEqual(len(mail.outbox), 1)
         self.assertIn('brand-new@example.com', mail.outbox[0].to)
+
+    def test_valid_save_with_send_invite_false_creates_a_person_and_sends_no_mail(self):
+        """A Save with send_invite: false (issue #397) creates the Person, rosters them, and sends no mail at all."""
+        body = _valid_body(self.semester, invites=[
+            {
+                'row_key': 'invite-1', 'name': 'Staged Only',
+                'email': 'staged-only@example.com', 'send_invite': False,
+            },
+        ])
+
+        response, envelope = _post_json(self, _save_url(), body)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(envelope['ok'])
+        person = Person.objects.get(email='staged-only@example.com')
+        self.assertFalse(person.has_usable_password())
+        self.assertIsNone(person.invited_at)
+        self.assertTrue(Membership.objects.filter(person=person, semester=self.semester).exists())
+        self.assertEqual(len(mail.outbox), 0)
