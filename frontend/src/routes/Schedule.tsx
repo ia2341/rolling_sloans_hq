@@ -13,6 +13,7 @@ import type {
   Timeline,
 } from '../api/scheduleTypes'
 import type { ReadEnvelope, WriteEnvelope } from '../api/types'
+import { AssignmentEditor } from '../components/assignments/AssignmentEditor'
 import { PageHead } from '../components/ui/PageHead'
 import { roleHueVar } from '../components/ui/RoleLegend'
 import { ResponsiveDialog } from '../components/ui/ResponsiveDialog'
@@ -40,6 +41,7 @@ export function Schedule() {
   const appContext = useAppContext()
   const [searchParams, setSearchParams] = useSearchParams()
   const [data, setData] = useState<SchedulePayload | null>(null)
+  const [editingAssignments, setEditingAssignments] = useState(false)
 
   const rehearsalParam = searchParams.get('rehearsal')
   const subView: SubView = searchParams.get('view') === 'all' ? 'all' : 'next'
@@ -72,6 +74,7 @@ export function Schedule() {
 
   const selectRehearsal = useCallback(
     (id: number) => {
+      setEditingAssignments(false)
       setSearchParams(
         (previous) => {
           const params = new URLSearchParams(previous)
@@ -138,10 +141,16 @@ export function Schedule() {
                 <button
                   type="button"
                   disabled={!selected.can_edit_assignments}
-                  title="Assignment editing (issue #338)"
+                  title={
+                    selected.can_edit_assignments
+                      ? undefined
+                      : 'A past Rehearsal is not editable here (ADR 0009); the Dress Rehearsal always is.'
+                  }
+                  onClick={() => setEditingAssignments((previous) => !previous)}
+                  aria-pressed={editingAssignments}
                   className="rounded border border-rs-border px-3 py-1.5 text-sm font-medium disabled:opacity-50"
                 >
-                  Edit assignments
+                  {editingAssignments ? 'Done editing' : 'Edit assignments'}
                 </button>
               )}
             </div>
@@ -172,6 +181,7 @@ export function Schedule() {
             allRows={allRows}
             onSelectRehearsal={selectRehearsal}
             onDataChanged={load}
+            editingAssignments={editingAssignments}
           />
         )
       ) : (
@@ -224,11 +234,13 @@ function ThisRehearsal({
   allRows,
   onSelectRehearsal,
   onDataChanged,
+  editingAssignments,
 }: {
   detail: RehearsalDetail
   allRows: ScheduleListRow[]
   onSelectRehearsal: (id: number) => void
   onDataChanged: () => void
+  editingAssignments: boolean
 }) {
   return (
     <div>
@@ -245,11 +257,15 @@ function ThisRehearsal({
         availability={detail.availability}
         onChanged={onDataChanged}
       />
-      <AssignmentGrid
-        roles={detail.roles}
-        rows={detail.rows}
-        isDress={detail.is_dress}
-      />
+      {editingAssignments ? (
+        <AssignmentEditor rehearsalId={detail.id} />
+      ) : (
+        <AssignmentGrid
+          roles={detail.roles}
+          rows={detail.rows}
+          isDress={detail.is_dress}
+        />
+      )}
     </div>
   )
 }

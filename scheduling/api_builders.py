@@ -51,6 +51,7 @@ from scheduling.models import Conflict, Role, Song
 from scheduling.services import (
     AdjudicationBuffer,
     AdjudicationEntry,
+    AssignmentEditBuffer,
     RehearsalEditBuffer,
     RehearsalEditRow,
     RehearsalPatternInput,
@@ -945,6 +946,169 @@ def build_roster_buffer_from_request(request, *, viewing_semester) -> RosterEdit
         pending_invites=invites,
     )
 
+class AssignmentBufferValidationError(ValidationError):
+    """Raised by `build_assignment_buffer_from_request()` for a JSON body that can't become an `AssignmentEditBuffer` (issue #338).
+
+    Simpler than `RosterBufferValidationError`/`SetlistBufferValidationError`:
+    every field here is an id, or a flat tuple of ids, never a per-row
+    edit a client renders back beside one input — there is no `row_key`
+    to attribute a failure to, so a malformed submission is reported as
+    `non_field_errors` alone.
+    """
+
+    def __init__(self, *, non_field_errors):
+        """Store the submission-wide failure messages."""
+        super().__init__('The submitted assignment edit could not be validated.')
+        self.non_field_errors = non_field_errors
+
+
+def _assignment_expect_nullable_int(value):
+    """Return `value` as an `int`, or `None` for a JSON `null` or anything else that doesn't cleanly parse.
+
+    Unlike `_expect_nullable_int()`, a malformed value here is dropped to
+    `None` rather than raising a field error — `covering_for_id` is
+    advisory (ADR-0007), so a garbled pick is worth losing on its own,
+    never worth failing the whole submission over.
+    """
+    if value is None:
+        return None
+    return _expect_int(value)
+
+
+def _parse_assignment_id_set(raw_values):
+    """Return the subset of `raw_values` that parse as ints, as a `frozenset` (issue #338, mirrors `_parse_assignment_ids()`)."""
+    if not isinstance(raw_values, list):
+        return frozenset()
+    return frozenset(parsed for value in raw_values if (parsed := _expect_int(value)) is not None)
+
+
+def _parse_added_assignment_entries(raw_values):
+    """Return `raw_values` as a `frozenset` of `(song_id, role_id, person_id)` tuples, dropping any malformed entry (issue #338)."""
+    if not isinstance(raw_values, list):
+        return frozenset()
+    entries = set()
+    for entry in raw_values:
+        if not isinstance(entry, dict):
+            continue
+        song_id = _expect_int(entry.get('song_id'))
+        role_id = _expect_int(entry.get('role_id'))
+        person_id = _expect_int(entry.get('person_id'))
+        if song_id is None or role_id is None or person_id is None:
+            continue
+        entries.add((song_id, role_id, person_id))
+    return frozenset(entries)
+
+
+def _parse_added_backup_entries(raw_values):
+    """Return `raw_values` as a `frozenset` of `(rehearsal_song_id, role_id, person_id, covering_for_id)` tuples (issue #338).
+
+    `covering_for_id` may be `null` (ADR-0007: recording it is a choice,
+    never a demand) — dropped to `None` the same way
+    `_assignment_expect_nullable_int()` drops a garbled one.
+    """
+    if not isinstance(raw_values, list):
+        return frozenset()
+    entries = set()
+    for entry in raw_values:
+        if not isinstance(entry, dict):
+            continue
+        rehearsal_song_id = _expect_int(entry.get('rehearsal_song_id'))
+        role_id = _expect_int(entry.get('role_id'))
+        person_id = _expect_int(entry.get('person_id'))
+        if rehearsal_song_id is None or role_id is None or person_id is None:
+            continue
+        covering_for_id = _assignment_expect_nullable_int(entry.get('covering_for_id'))
+        entries.add((rehearsal_song_id, role_id, person_id, covering_for_id))
+    return frozenset(entries)
+
+
+def _parse_backup_covering_for_updates(raw_values):
+    """Return `raw_values` as a `frozenset` of `(backup_id, covering_for_id)` pairs, dropping any entry with no usable `backup_id` (issue #338)."""
+    if not isinstance(raw_values, list):
+        return frozenset()
+    updates = set()
+    for entry in raw_values:
+        if not isinstance(entry, dict):
+            continue
+        backup_id = _expect_int(entry.get('backup_id'))
+        if backup_id is None:
+            continue
+        covering_for_id = _assignment_expect_nullable_int(entry.get('covering_for_id'))
+        updates.add((backup_id, covering_for_id))
+    return frozenset(updates)
+
+
+def build_assignment_buffer_from_request(request, *, viewing_semester) -> AssignmentEditBuffer:
+    """Parse `request`'s JSON body into an `AssignmentEditBuffer` (issue #338).
+
+    The ONE place a submitted assignment edit JSON body becomes an
+    `AssignmentEditBuffer` — `/api/schedule/<id>/assignments/preview/`
+    and `/api/schedule/<id>/assignments/save/` both call it, never fork
+    it, mirroring `build_setlist_buffer_from_request()`'s ADR-0008 "preview
+    and save cannot disagree" guarantee. Ports `scheduling/views.py`'s
+    `_build_assignment_buffer()` (and its `_parse_assignment_ids()`/
+    `_parse_added_entries()`/`_parse_added_backup_entries()`/
+    `_parse_backup_covering_for_updates()` helpers) from form-encoded POST
+    fields to one JSON body — this ticket reimplements no derivation, only
+    the wire shape changes.
+
+    Wire shape::
+
+        {
+            "semester_id": 1,
+            "semester_updated_at": "2026-01-01T00:00:00.000000+00:00",
+            "removed_assignment_ids": [1, 2],
+            "added_entries": [{"song_id": 1, "role_id": 2, "person_id": 3}],
+            "removed_backup_ids": [4],
+            "added_backup_entries": [
+                {"rehearsal_song_id": 5, "role_id": 2, "person_id": 6, "covering_for_id": null}
+            ],
+            "backup_covering_for_updates": [{"backup_id": 7, "covering_for_id": 8}]
+        }
+
+    Every id list/entry is shape-checked only — whether a `song_id`,
+    `role_id`, `person_id` or Backup id actually names a live row `buffer`
+    can touch is `apply_song_role_assignments()`'s job, which already
+    silently skips anything outside `viewing_semester`/`rehearsal` (issue
+    #338's Implementation Decisions: "this ticket reimplements no
+    derivation"). Only a missing/malformed `semester_id` or
+    `semester_updated_at` — both required for either staleness check to
+    run at all — raises `AssignmentBufferValidationError`.
+    """
+    from config.views import ApiView
+
+    body = ApiView().parse_json_body(request)
+    if not isinstance(body, dict):
+        raise AssignmentBufferValidationError(non_field_errors=['Expected a JSON object.'])
+
+    non_field_errors = []
+
+    semester_id = _expect_int(body.get('semester_id'))
+    if semester_id is None:
+        non_field_errors.append('semester_id is required and must be an integer.')
+
+    semester_updated_at = None
+    raw_stamp = body.get('semester_updated_at')
+    if not isinstance(raw_stamp, str) or not raw_stamp:
+        non_field_errors.append('semester_updated_at is required and must be an ISO datetime string.')
+    else:
+        semester_updated_at = parse_datetime(raw_stamp)
+        if semester_updated_at is None:
+            non_field_errors.append('semester_updated_at could not be parsed as an ISO datetime.')
+
+    if non_field_errors:
+        raise AssignmentBufferValidationError(non_field_errors=non_field_errors)
+
+    return AssignmentEditBuffer(
+        semester_id=semester_id,
+        semester_updated_at=semester_updated_at,
+        removed_assignment_ids=_parse_assignment_id_set(body.get('removed_assignment_ids', [])),
+        added_entries=_parse_added_assignment_entries(body.get('added_entries', [])),
+        removed_backup_ids=_parse_assignment_id_set(body.get('removed_backup_ids', [])),
+        added_backup_entries=_parse_added_backup_entries(body.get('added_backup_entries', [])),
+        backup_covering_for_updates=_parse_backup_covering_for_updates(body.get('backup_covering_for_updates', [])),
+    )
+
 
 class SemesterDefaultsReapplyBufferValidationError(ValidationError):
     """Raised by `build_semester_defaults_reapply_buffer_from_request()` for a JSON body that can't become a `SemesterDefaultsReapplyBuffer` (issue #329).
@@ -1018,8 +1182,6 @@ def build_semester_defaults_reapply_buffer_from_request(request, *, viewing_seme
         raise SemesterDefaultsReapplyBufferValidationError(non_field_errors=non_field_errors)
 
     return SemesterDefaultsReapplyBuffer(semester_id=semester_id, semester_updated_at=semester_updated_at)
-
-
 class AdjudicationBufferValidationError(ValidationError):
     """Raised by `build_adjudication_buffer_from_request()` for a JSON body that can't become an `AdjudicationBuffer` (issue #340).
 

@@ -156,7 +156,47 @@ describe('ScheduleEdit', () => {
 
   it('keeps the same Rehearsal open when switching to Assignments mode and back', async () => {
     mockMatchMedia(false)
-    mockFetchOnce(200, { context: adminContext(), data: editorPayload() })
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        json: () => Promise.resolve({ context: adminContext(), data: editorPayload() }),
+      })
+      .mockResolvedValue({
+        status: 200,
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            context: adminContext(),
+            data: {
+              semester_name: 'Fall 2026',
+              schedule: { past: [], future: [] },
+              selected: {
+                id: 1,
+                date: '2026-03-10',
+                start_time: '19:00:00',
+                end_time: '21:00:00',
+                is_dress: false,
+                is_past: false,
+                can_edit_assignments: true,
+                timeline: {
+                  slots: [], window_start: '19:00:00', window_end: '21:00:00',
+                  viewer_song_count: 0, total_song_count: 0, viewer_start_time: null, viewer_end_time: null,
+                  is_dress_rehearsal: false,
+                },
+                availability: {
+                  declaration_type: null, type_label: null, declared_time: null, reason: null,
+                  status: null, admin_note: null, is_dress: false, is_editable: true,
+                },
+                roles: [],
+                rows: [],
+                addable_roles: [],
+              },
+            },
+          }),
+      })
+    vi.stubGlobal('fetch', fetchSpy)
 
     renderScheduleEdit()
     const user = userEvent.setup()
@@ -166,7 +206,7 @@ describe('ScheduleEdit', () => {
     await screen.findByLabelText('First Song slot count')
 
     await user.click(screen.getByRole('radio', { name: 'Assignments' }))
-    expect(await screen.findByText('Assignment editing ships in issue #338.')).toBeInTheDocument()
+    expect(await screen.findByText('Editing standing assignments.')).toBeInTheDocument()
 
     await user.click(screen.getByRole('radio', { name: 'Running order' }))
     expect(await screen.findByLabelText('First Song slot count')).toBeInTheDocument()
