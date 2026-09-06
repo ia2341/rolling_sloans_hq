@@ -2,7 +2,9 @@
 
 from datetime import date, time, timedelta
 
+from django.db import connection
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
 from identity.factories import PersonFactory
@@ -1112,6 +1114,89 @@ class RehearsalScheduleForTests(TestCase):
 
         self.assertEqual(schedule.past, [])
         self.assertEqual(schedule.future, [])
+
+    def test_row_carries_the_running_order_and_your_songs(self):
+        """Each row's `songs`/`your_rehearsal_songs` match what `assignment_matrix_for()`/`slots_for_person()` would have reported, per-Rehearsal (issue #394)."""
+        rehearsal = RehearsalFactory(semester=self.semester, date=timezone.localdate() + timedelta(days=1))
+        assigned_song = SongFactory(semester=self.semester, position=1)
+        other_song = SongFactory(semester=self.semester, position=2)
+        RehearsalSongFactory(song=assigned_song, rehearsal=rehearsal, order=1)
+        RehearsalSongFactory(song=other_song, rehearsal=rehearsal, order=2)
+        SongRoleAssignmentFactory(song=assigned_song, person=self.person)
+
+        schedule = rehearsal_schedule_for(self.semester, self.person)
+
+        row = schedule.future[0]
+        self.assertEqual([song.pk for song in row.songs], [assigned_song.pk, other_song.pk])
+        self.assertEqual([rs.song_id for rs in row.your_rehearsal_songs], [assigned_song.pk])
+
+    def test_attendance_suggestion_matches_the_single_rehearsal_derivation_needed_at_one_end(self):
+        """A row's batched `attendance_suggestion` matches `attendance_suggestion_for()`'s own per-Rehearsal computation when the Person is needed at only one end (issue #394).
+
+        Guards the bulk derivation in `_regular_attendance_suggestion_from_slots()`
+        against drifting from `_regular_rehearsal_attendance_suggestion()`/
+        `Rehearsal.attendance_for()`, which callers outside the All-rehearsals
+        list (e.g. `timeline_for()`) still use directly.
+        """
+        rehearsal = RehearsalFactory(semester=self.semester, date=timezone.localdate() + timedelta(days=1))
+        first_song = SongFactory(semester=self.semester, position=1)
+        second_song = SongFactory(semester=self.semester, position=2)
+        RehearsalSongFactory(song=first_song, rehearsal=rehearsal, order=1)
+        RehearsalSongFactory(song=second_song, rehearsal=rehearsal, order=2)
+        SongRoleAssignmentFactory(song=second_song, person=self.person)  # needed at the end only, not the start
+
+        schedule = rehearsal_schedule_for(self.semester, self.person)
+
+        row = schedule.future[0]
+        self.assertEqual(row.attendance_suggestion, attendance_suggestion_for(rehearsal, self.person))
+
+    def test_attendance_suggestion_matches_the_single_rehearsal_derivation_needed_at_both_ends(self):
+        """The batched suggestion also matches the single-Rehearsal derivation when the Person is needed for the whole window (issue #394)."""
+        rehearsal = RehearsalFactory(semester=self.semester, date=timezone.localdate() + timedelta(days=1))
+        first_song = SongFactory(semester=self.semester, position=1)
+        second_song = SongFactory(semester=self.semester, position=2)
+        RehearsalSongFactory(song=first_song, rehearsal=rehearsal, order=1)
+        RehearsalSongFactory(song=second_song, rehearsal=rehearsal, order=2)
+        SongRoleAssignmentFactory(song=first_song, person=self.person)
+        SongRoleAssignmentFactory(song=second_song, person=self.person)
+
+        schedule = rehearsal_schedule_for(self.semester, self.person)
+
+        row = schedule.future[0]
+        suggestion = row.attendance_suggestion
+        self.assertEqual(suggestion, attendance_suggestion_for(rehearsal, self.person))
+        self.assertEqual(suggestion.arrival_time, rehearsal.start_time)
+        self.assertEqual(suggestion.departure_time, rehearsal.end_time)
+
+    def test_query_count_does_not_scale_with_rehearsal_count(self):
+        """Building the schedule for a Semester with many Rehearsals costs the same query count as one with few (issue #394).
+
+        Guards against re-introducing a per-Rehearsal query (e.g. calling
+        `assignment_matrix_for()`/`slots_for_person()` in a loop over
+        Rehearsals) — the regression this ticket fixes, which made the
+        All-rehearsals list's cost scale with the Semester's Rehearsal
+        count instead of staying flat.
+        """
+        def _build_rehearsal(day_offset):
+            rehearsal = RehearsalFactory(
+                semester=self.semester, date=timezone.localdate() + timedelta(days=day_offset),
+            )
+            song = SongFactory(semester=self.semester, position=day_offset)
+            RehearsalSongFactory(song=song, rehearsal=rehearsal, order=1)
+            SongRoleAssignmentFactory(song=song, person=self.person)
+            return rehearsal
+
+        _build_rehearsal(1)
+        _build_rehearsal(2)
+        with CaptureQueriesContext(connection) as few:
+            rehearsal_schedule_for(self.semester, self.person)
+
+        for offset in range(3, 9):
+            _build_rehearsal(offset)
+        with CaptureQueriesContext(connection) as many:
+            rehearsal_schedule_for(self.semester, self.person)
+
+        self.assertEqual(len(few.captured_queries), len(many.captured_queries))
 
 
 class ActiveRolesForTests(TestCase):

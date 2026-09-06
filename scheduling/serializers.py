@@ -26,7 +26,6 @@ from scheduling.models import (
     RehearsalPattern,
     RehearsalSong,
     Song,
-    slots_for_person,
 )
 from scheduling.services import (
     AssignmentEditBuffer,
@@ -695,13 +694,17 @@ def _serialize_your_song_entry(rehearsal_song) -> dict:
 def _serialize_schedule_list_row(row, *, viewer, conflict_rows, is_admin, pending_counts, today) -> dict:
     """Return one `RehearsalListRow` for the All-rehearsals sub-view: identity, song count, the viewer's state, their songs, and (admin) a pending count.
 
-    `your_songs` reuses `slots_for_person()` — the same union of standing
-    assignments and Backups that decides attendance (ADR 0007) — so this
-    list can never disagree with why the viewer is or isn't needed there.
-    `songs` is the whole Rehearsal's Running Order (issue: All-rehearsals
-    pills/tables card overhaul) — every Song in `RehearsalSong.order`
-    sequence (the live setlist order for the Dress Rehearsal, ADR 0003),
-    reusing `assignment_matrix_for()`'s own row order so this card can
+    `your_songs`/`songs` both read off `row.songs`/`row.your_rehearsal_songs`
+    — precomputed in bulk by `services.rehearsal_schedule_for()` for every
+    Rehearsal in the Semester at once (issue #394), rather than this
+    function re-deriving them per row via `assignment_matrix_for()`/
+    `slots_for_person()` the way it used to (which made the All-rehearsals
+    list's cost scale with the Semester's Rehearsal count). `your_songs`
+    still carries the same union of standing assignments and Backups that
+    decides attendance (ADR 0007) — so this list can never disagree with
+    why the viewer is or isn't needed there — and `songs` is still the
+    whole Rehearsal's Running Order in `RehearsalSong.order` sequence (the
+    live setlist order for the Dress Rehearsal, ADR 0003), so this card can
     never disagree with the per-Rehearsal grid about what plays when.
     `availability` reuses `serialize_availability()` — the viewer's own
     Conflict only, never a teammate's (ADR 0005), same as the
@@ -715,19 +718,14 @@ def _serialize_schedule_list_row(row, *, viewer, conflict_rows, is_admin, pendin
     declarable).
     """
     rehearsal = row.rehearsal
-    matrix = services.assignment_matrix_for(rehearsal)
+    your_songs = sorted(row.your_rehearsal_songs, key=lambda rehearsal_song: rehearsal_song.song.position)
     data = {
         **_serialize_rehearsal_summary(rehearsal, today=today),
-        'song_count': len(matrix.rows),
-        'songs': [{'id': matrix_row.song.pk, 'title': matrix_row.song.title} for matrix_row in matrix.rows],
+        'song_count': len(row.songs),
+        'songs': [{'id': song.pk, 'title': song.title} for song in row.songs],
         'your_state': _serialize_your_state(rehearsal, conflict_rows.get(rehearsal.pk), row.attendance_suggestion),
         'availability': serialize_availability(rehearsal, conflict_rows.get(rehearsal.pk)),
-        'your_songs': [
-            _serialize_your_song_entry(rehearsal_song)
-            for rehearsal_song in (
-                slots_for_person(rehearsal, viewer).select_related('song').order_by('song__position')
-            )
-        ],
+        'your_songs': [_serialize_your_song_entry(rehearsal_song) for rehearsal_song in your_songs],
     }
     if is_admin and rehearsal.pk in pending_counts:
         data['pending_count'] = pending_counts[rehearsal.pk]
