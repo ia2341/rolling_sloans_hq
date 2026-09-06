@@ -8,8 +8,11 @@ the `PersonRolesApiView` write path. Privacy verdicts (ADR 0005/0002/0007)
 live in `test_person_page_visibility.py`, not here.
 """
 
+from datetime import timedelta
+
 from django.test import TestCase, override_settings
 from django.urls import reverse
+from django.utils import timezone
 
 from identity.factories import PersonFactory
 from scheduling.factories import (
@@ -29,7 +32,11 @@ from scheduling.serializers import (
     serialize_person,
     serialize_person_recordings,
 )
-from scheduling.services import active_roster_for, unassigned_role_holders_for
+from scheduling.services import (
+    active_roster_for,
+    recording_slot_options_for,
+    unassigned_role_holders_for,
+)
 from scheduling.tests.api_test_helpers import admin_client, select
 
 PASSWORD = 'a-strong-test-password-123'
@@ -222,7 +229,10 @@ class SerializePersonRecordingsExactKeySetTests(TestCase):
         """An `upload_slots` entry carries exactly the documented picker-option keys."""
         semester = SemesterFactory()
         person = PersonFactory()
-        RehearsalSongFactory(song=SongFactory(semester=semester), rehearsal=RehearsalFactory(semester=semester))
+        RehearsalSongFactory(
+            song=SongFactory(semester=semester),
+            rehearsal=RehearsalFactory(semester=semester, date=timezone.now().date()),
+        )
 
         data = serialize_person_recordings(person, semester)
 
@@ -230,6 +240,40 @@ class SerializePersonRecordingsExactKeySetTests(TestCase):
             set(data['upload_slots'][0].keys()),
             {'id', 'song_id', 'song_title', 'rehearsal_date', 'start_time', 'end_time'},
         )
+
+
+class RecordingSlotOptionsForTests(TestCase):
+    """`recording_slot_options_for()` only offers Rehearsals dated today or earlier (issue #395)."""
+
+    def test_excludes_a_future_rehearsal(self):
+        """A slot on a Rehearsal dated after today is never offered."""
+        semester = SemesterFactory()
+        song = SongFactory(semester=semester)
+        RehearsalSongFactory(
+            song=song, rehearsal=RehearsalFactory(semester=semester, date=timezone.now().date() + timedelta(days=1)),
+        )
+
+        self.assertEqual(recording_slot_options_for(semester), [])
+
+    def test_includes_a_rehearsal_dated_today(self):
+        """A slot on a Rehearsal dated today (not just strictly in the past) is offered."""
+        semester = SemesterFactory()
+        song = SongFactory(semester=semester)
+        rehearsal_song = RehearsalSongFactory(
+            song=song, rehearsal=RehearsalFactory(semester=semester, date=timezone.now().date()),
+        )
+
+        self.assertEqual([option.id for option in recording_slot_options_for(semester)], [rehearsal_song.pk])
+
+    def test_includes_a_past_rehearsal(self):
+        """A slot on a Rehearsal dated before today is offered."""
+        semester = SemesterFactory()
+        song = SongFactory(semester=semester)
+        rehearsal_song = RehearsalSongFactory(
+            song=song, rehearsal=RehearsalFactory(semester=semester, date=timezone.now().date() - timedelta(days=7)),
+        )
+
+        self.assertEqual([option.id for option in recording_slot_options_for(semester)], [rehearsal_song.pk])
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)
@@ -451,13 +495,16 @@ class PersonApiViewOlderSemesterRecordingsTests(TestCase):
     `get_viewing_semester()` honours an admin's session selection
     regardless of liveness (ADR 0010), and neither
     `serialize_person_recordings()` nor `recording_slot_options_for()`
-    filter by `published_at` or by Rehearsal date — see
-    `scheduling/services.py`'s `person_recordings_for()`/
-    `recording_slot_options_for()` docstrings. This test recreates the
-    reported scenario end-to-end (an admin, a real Membership, and a real
-    eligible `RehearsalSong` in an older, non-live Semester) to confirm the
-    read model already exposes the affordance there, pinning that as a
-    regression test rather than shipping a fix for a bug that isn't there.
+    filter by `published_at` — see `scheduling/services.py`'s
+    `person_recordings_for()`/`recording_slot_options_for()` docstrings.
+    (`recording_slot_options_for()` does filter by Rehearsal date since
+    issue #395 — dated today or earlier only — so this test uses an
+    explicitly past-dated Rehearsal to stay eligible.) This test recreates
+    the reported scenario end-to-end (an admin, a real Membership, and a
+    real eligible `RehearsalSong` in an older, non-live Semester) to
+    confirm the read model already exposes the affordance there, pinning
+    that as a regression test rather than shipping a fix for a bug that
+    isn't there.
     """
 
     def test_upload_slots_and_recordings_block_present_for_a_selected_older_semester(self):
@@ -467,7 +514,8 @@ class PersonApiViewOlderSemesterRecordingsTests(TestCase):
         admin = admin_client(self)
         MembershipFactory(person=admin, semester=older_semester)
         rehearsal_song = RehearsalSongFactory(
-            song=SongFactory(semester=older_semester), rehearsal=RehearsalFactory(semester=older_semester),
+            song=SongFactory(semester=older_semester),
+            rehearsal=RehearsalFactory(semester=older_semester, date=timezone.now().date() - timedelta(days=1)),
         )
         select(self, older_semester)
 
@@ -507,7 +555,10 @@ class RecordingSlotsApiViewTests(TestCase):
     def test_returns_the_same_shape_serialize_person_recordings_does(self):
         """The response carries `upload_slots` for the current viewer, matching a fresh Person-page load."""
         semester = SemesterFactory()
-        RehearsalSongFactory(song=SongFactory(semester=semester), rehearsal=RehearsalFactory(semester=semester))
+        RehearsalSongFactory(
+            song=SongFactory(semester=semester),
+            rehearsal=RehearsalFactory(semester=semester, date=timezone.now().date()),
+        )
 
         response = self.client.get(recording_slots_api_url())
 

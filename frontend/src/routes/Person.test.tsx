@@ -500,4 +500,120 @@ describe('Person', () => {
       screen.queryByText('Password was successfully updated'),
     ).not.toBeInTheDocument()
   })
+
+  it('locks the Song select to the preselected Song (issue #395) rather than merely defaulting to it', async () => {
+    const payload = selfPayload({
+      recordings: {
+        count: 0,
+        items: [],
+        upload_slots: [
+          {
+            id: 10,
+            song_id: 5,
+            song_title: 'Other Song',
+            rehearsal_date: '2026-03-01',
+            start_time: null,
+            end_time: null,
+          },
+          {
+            id: 11,
+            song_id: 7,
+            song_title: 'Preselected Song',
+            rehearsal_date: '2026-03-08',
+            start_time: null,
+            end_time: null,
+          },
+        ],
+      },
+    })
+    mockFetchByUrl({
+      '/api/members/1/': () => ({
+        status: 200,
+        body: { context: memberContext(), data: payload },
+      }),
+      '/api/members/recordings/slots/': () => ({
+        status: 200,
+        body: { context: memberContext(), data: payload.recordings },
+      }),
+    })
+
+    const user = (await import('@testing-library/user-event')).default.setup()
+    renderPerson('/members/1?song=7')
+
+    await user.click(
+      await screen.findByRole('button', { name: '+ Add Recording' }),
+    )
+    await screen.findByText('Upload a take')
+
+    const songSelect = screen.getByLabelText(/Which song is this a take of/i)
+    expect(songSelect).toBeDisabled()
+
+    const rehearsalSelect = screen.getByLabelText(
+      /Which rehearsal is this a take from/i,
+    )
+    expect(within(rehearsalSelect).getByText('2026-03-08')).toBeInTheDocument()
+    expect(
+      within(rehearsalSelect).queryByText('2026-03-01'),
+    ).not.toBeInTheDocument()
+  })
+
+  it('lets a context-free "+ Add Recording" pick any Song, then narrows rehearsal dates to that Song', async () => {
+    const payload = selfPayload({
+      recordings: {
+        count: 0,
+        items: [],
+        upload_slots: [
+          {
+            id: 10,
+            song_id: 5,
+            song_title: 'Song A',
+            rehearsal_date: '2026-03-01',
+            start_time: null,
+            end_time: null,
+          },
+          {
+            id: 11,
+            song_id: 7,
+            song_title: 'Song B',
+            rehearsal_date: '2026-03-08',
+            start_time: null,
+            end_time: null,
+          },
+        ],
+      },
+    })
+    mockFetchByUrl({
+      '/api/members/1/': () => ({
+        status: 200,
+        body: { context: memberContext(), data: payload },
+      }),
+      '/api/members/recordings/slots/': () => ({
+        status: 200,
+        body: { context: memberContext(), data: payload.recordings },
+      }),
+    })
+
+    const user = (await import('@testing-library/user-event')).default.setup()
+    renderPerson('/members/1')
+
+    await user.click(
+      await screen.findByRole('button', { name: '+ Add Recording' }),
+    )
+    await screen.findByText('Upload a take')
+
+    const songSelect = screen.getByLabelText(/Which song is this a take of/i)
+    expect(songSelect).not.toBeDisabled()
+
+    const rehearsalSelect = screen.getByLabelText(
+      /Which rehearsal is this a take from/i,
+    )
+    expect(within(rehearsalSelect).getByText('2026-03-01')).toBeInTheDocument()
+
+    await user.selectOptions(songSelect, 'Song B')
+
+    expect(within(rehearsalSelect).getByText('2026-03-08')).toBeInTheDocument()
+    expect(
+      within(rehearsalSelect).queryByText('2026-03-01'),
+    ).not.toBeInTheDocument()
+  })
 })

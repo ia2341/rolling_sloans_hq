@@ -18,7 +18,7 @@ type UploadState =
 interface RecordingUploadDialogProps {
   /** Closes the dialog — the caller is expected to only render this component while it should be open (mirrors `AssignmentPickerDialog`'s convention), so this is the only half of the usual `open`/`onOpenChange` pair it needs. */
   onOpenChange: (open: boolean) => void
-  /** Narrows the slot picker to one Song's slots when opened from that Song's own "+" (issue: UI overhaul round 2) — `null` from Profile's "Add Recording", which offers every slot. */
+  /** Locks the Song picker to this Song, non-changeable, when opened from that Song's own "+" (issue #395, amending UI overhaul round 2) — `null` from Profile's context-free "Add Recording", which offers every Song. */
   preselectedSongId?: number | null
   /** Handed the requester's fresh Recordings block after a successful save, so a caller can refresh whatever it renders (a Song's `recording_groups`, or Profile's own list) without a second round trip. */
   onUploaded: (block: PersonRecordingsBlock) => void
@@ -34,8 +34,9 @@ interface RecordingUploadDialogProps {
  * "reset" — no effect here ever has to notice the dialog closing. Fetches
  * its own `GET /api/members/recordings/slots/` on mount rather than
  * requiring a caller to already hold a `PersonRecordingsBlock` (a Song
- * page never loads one), so the same three-step flow — pick a slot,
- * choose a file, confirm — works from any call site. Never round-trips
+ * page never loads one), so the same flow — pick a song, pick a
+ * rehearsal date, choose a file, confirm — works from any call site.
+ * Never round-trips
  * through the Django app server for the file itself (ADR 0004): the
  * presign/upload steps are unchanged from the original Profile-only
  * implementation.
@@ -57,19 +58,14 @@ export function RecordingUploadDialog({
     })
   }, [])
 
-  const filteredSlots = useMemo(() => {
-    if (preselectedSongId === null) return slots
-    const narrowed = slots.filter((slot) => slot.song_id === preselectedSongId)
-    return narrowed.length > 0 ? narrowed : slots
-  }, [slots, preselectedSongId])
-
   return (
     <ResponsiveDialog open onOpenChange={onOpenChange} title="Upload a take">
       {!slotsLoaded ? (
         <p className="text-sm text-rs-muted">Loading…</p>
       ) : (
         <UploadForm
-          slots={filteredSlots}
+          slots={slots}
+          preselectedSongId={preselectedSongId}
           onUploaded={(block) => {
             onUploaded(block)
             onOpenChange(false)
@@ -80,15 +76,59 @@ export function RecordingUploadDialog({
   )
 }
 
-/** The actual pick-a-slot/choose-a-file/confirm form, unchanged in behavior from the original Profile-only `UploadCard`. */
+/**
+ * The pick-a-song/pick-a-rehearsal-date/choose-a-file/confirm form (issue
+ * #395: previously one combined Song×Rehearsal dropdown, which grew hard
+ * to scan with a full setlist and schedule and could offer a not-yet-run
+ * Rehearsal that can't have a recording). `slots` already excludes future
+ * Rehearsals — `recording_slot_options_for()` narrows to today-or-earlier
+ * server-side — so splitting it into two selects is pure client-side
+ * narrowing of what's already fetched, no new endpoint needed. When
+ * `preselectedSongId` is set (opened via a specific Song's own "+"), the
+ * Song select is locked to it rather than merely defaulted, per the
+ * issue: a caller that already knows the Song shouldn't let the popup
+ * wander to a different one.
+ */
 function UploadForm({
   slots,
+  preselectedSongId,
   onUploaded,
 }: {
   slots: PersonRecordingsBlock['upload_slots']
+  preselectedSongId: number | null
   onUploaded: (block: PersonRecordingsBlock) => void
 }) {
-  const [slotId, setSlotId] = useState<number | ''>(slots[0]?.id ?? '')
+  const songOptions = useMemo(() => {
+    const titleBySongId = new Map<number, string>()
+    for (const slot of slots) {
+      if (!titleBySongId.has(slot.song_id)) {
+        titleBySongId.set(slot.song_id, slot.song_title)
+      }
+    }
+    return Array.from(titleBySongId, ([id, title]) => ({ id, title }))
+  }, [slots])
+
+  const [songId, setSongId] = useState<number | ''>(
+    preselectedSongId ?? songOptions[0]?.id ?? '',
+  )
+  const songIsLocked = preselectedSongId !== null
+
+  const rehearsalSlots = useMemo(
+    () => slots.filter((slot) => slot.song_id === songId),
+    [slots, songId],
+  )
+
+  const [slotId, setSlotId] = useState<number | ''>(rehearsalSlots[0]?.id ?? '')
+  const [slotIdForSongId, setSlotIdForSongId] = useState(songId)
+  if (songId !== slotIdForSongId) {
+    // Adjusting state during render (not an effect) when the chosen Song
+    // changes — the React-recommended pattern for a derived reset, since
+    // an effect's setState here would cascade an extra render for no
+    // reason: https://react.dev/learn/you-might-not-need-an-effect
+    setSlotIdForSongId(songId)
+    setSlotId(rehearsalSlots[0]?.id ?? '')
+  }
+
   const [note, setNote] = useState('')
   const [upload, setUpload] = useState<UploadState>({ step: 'idle' })
   const [isSaving, setIsSaving] = useState(false)
@@ -177,25 +217,56 @@ function UploadForm({
   return (
     <div>
       <p className="text-xs text-rs-muted">
-        1. Pick a slot → 2. Choose a file → 3. Confirm
+        1. Pick a song → 2. Pick a rehearsal date → 3. Choose a file → 4.
+        Confirm
       </p>
 
       <label className="mt-3 flex flex-col gap-1 text-sm">
-        Which slot is this a take of?
+        Which song is this a take of?
+        <select
+          value={songId}
+          disabled={songIsLocked}
+          onChange={(event) => setSongId(Number(event.target.value))}
+          className="rounded border border-rs-border px-2 py-1 disabled:opacity-75"
+        >
+          {songIsLocked ? (
+            <option value={preselectedSongId ?? ''}>
+              {songOptions.find((song) => song.id === preselectedSongId)
+                ?.title ?? 'This song'}
+            </option>
+          ) : (
+            <>
+              {songOptions.length === 0 && (
+                <option value="">No songs yet</option>
+              )}
+              {songOptions.map((song) => (
+                <option key={song.id} value={song.id}>
+                  {song.title}
+                </option>
+              ))}
+            </>
+          )}
+        </select>
+      </label>
+
+      <label className="mt-3 flex flex-col gap-1 text-sm">
+        Which rehearsal is this a take from?
         <select
           value={slotId}
           onChange={(event) => setSlotId(Number(event.target.value))}
           className="rounded border border-rs-border px-2 py-1"
         >
-          {slots.length === 0 && <option value="">No slots yet</option>}
-          {slots.map((slot) => (
+          {rehearsalSlots.length === 0 && (
+            <option value="">No past rehearsal dates for this song yet</option>
+          )}
+          {rehearsalSlots.map((slot) => (
             <option key={slot.id} value={slot.id}>
-              {slot.song_title} — {slot.rehearsal_date}
+              {slot.rehearsal_date}
             </option>
           ))}
         </select>
         <span className="text-xs text-rs-muted">
-          A recording belongs to one song at one rehearsal. Slots you
+          A recording belongs to one song at one rehearsal. Rehearsals you
           weren&apos;t at are listed too — you might be uploading someone
           else&apos;s take.
         </span>
