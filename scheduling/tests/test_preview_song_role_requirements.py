@@ -6,13 +6,14 @@ from django.utils import timezone
 
 from scheduling.factories import (
     MembershipFactory,
+    PersonRoleFactory,
     RoleFactory,
     SemesterFactory,
     SongFactory,
     SongRoleAssignmentFactory,
     SongRoleRequirementFactory,
 )
-from scheduling.models import MembershipRole, SongRoleRequirement
+from scheduling.models import SongRoleRequirement
 from scheduling.services import (
     SongRoleRequirementBuffer,
     SongRoleRequirementEntry,
@@ -121,14 +122,23 @@ class PreviewSongRoleRequirementsTests(TestCase):
         self.assertTrue(any('has declared' in message for message in fallout.quiet))
 
     def test_an_added_requirement_for_a_declared_role_gets_no_undeclared_note(self):
-        """A Role at least one Membership has declared gets no "nobody has declared" quiet note."""
+        """A Role at least one rostered Person has declared (PersonRole, ADR-0014) gets no "nobody has declared" quiet note."""
         membership = MembershipFactory(semester=self.semester)
-        MembershipRole.objects.create(membership=membership, role=self.role)
+        PersonRoleFactory(person=membership.person, role=self.role)
         buffer = self._buffer(entries=[SongRoleRequirementEntry(role_id=self.role.pk, count=1)])
 
         fallout = self._preview(buffer)
 
         self.assertFalse(any('has declared' in message for message in fallout.quiet))
+
+    def test_a_declared_role_from_a_non_rostered_person_still_gets_the_undeclared_note(self):
+        """A PersonRole declared by someone not on this Semester's Roster doesn't satisfy the "declared" check."""
+        PersonRoleFactory(role=self.role)  # no Membership in self.semester
+        buffer = self._buffer(entries=[SongRoleRequirementEntry(role_id=self.role.pk, count=1)])
+
+        fallout = self._preview(buffer)
+
+        self.assertTrue(any('has declared' in message for message in fallout.quiet))
 
     def test_wrong_semester_id_is_blocked_with_every_list_empty_and_no_write(self):
         """A wrong semester_id returns is_blocked with every list empty and no write."""

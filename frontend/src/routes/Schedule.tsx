@@ -656,7 +656,7 @@ function AssignmentGrid({
       </div>
       <div className="flex flex-wrap gap-3 pb-2 text-xs text-rs-muted">
         <span>away — a declared conflict</span>
-        {isPhone && <span>◦ role not on membership</span>}
+        {isPhone && <span>◦ role not declared</span>}
         <span>(backup) covering a slot</span>
       </div>
       {!isPhone && isAdmin && <RoleMismatchLegend />}
@@ -721,7 +721,7 @@ function AssignmentCellEntries({
           )}
           {entry.is_role_mismatch && (
             <div className="text-xs text-rs-muted">
-              ◦ role not on membership
+              ◦ role not declared
             </div>
           )}
         </div>

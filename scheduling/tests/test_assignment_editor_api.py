@@ -21,6 +21,7 @@ from scheduling.factories import (
     BackupFactory,
     ConflictFactory,
     MembershipFactory,
+    PersonRoleFactory,
     RehearsalFactory,
     RehearsalSongFactory,
     RoleFactory,
@@ -31,7 +32,6 @@ from scheduling.factories import (
 from scheduling.models import (
     Backup,
     Conflict,
-    MembershipRole,
     SongRoleAssignment,
     SongRoleRequirement,
 )
@@ -219,7 +219,7 @@ class PickerTests(TestCase):
         self.role = RoleFactory()
         self.rehearsal_song = RehearsalSongFactory(rehearsal=self.rehearsal, song=self.song)
         self.declaring_membership = MembershipFactory(semester=self.semester)
-        MembershipRole.objects.create(membership=self.declaring_membership, role=self.role)
+        PersonRoleFactory(person=self.declaring_membership.person, role=self.role)
         self.other_membership = MembershipFactory(semester=self.semester)
 
     def test_declared_members_are_split_from_others(self):
