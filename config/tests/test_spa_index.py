@@ -11,6 +11,7 @@ import json
 import tempfile
 from pathlib import Path
 
+from django.conf import settings
 from django.contrib.staticfiles.finders import find
 from django.core.exceptions import ImproperlyConfigured
 from django.core.management import call_command
@@ -146,15 +147,28 @@ class RouteOrderingTests(TestCase):
         self.assertNotIn(b'<div id="root">', response.content)
 
     def test_static_asset_reaches_whitenoise_not_the_shell(self):
-        """A collected static asset is served by WhiteNoise, ahead of URL resolution reaching the catch-all."""
-        self.assertIsNotNone(find('css/app.css'))
+        """A collected static asset is served by WhiteNoise, ahead of URL resolution reaching the catch-all.
 
-        with (
-            tempfile.TemporaryDirectory() as static_root,
-            override_settings(STATIC_ROOT=static_root),
-        ):
-            call_command('collectstatic', '--no-input', verbosity=0)
-            response = self.client.get('/static/css/app.css')
+        Issue #341 deleted the vendored stack and its override sheet, so the
+        top-level `static/` STATICFILES_DIRS entry no longer has a committed
+        file to point at. A synthetic one, written under a temp dir added to
+        STATICFILES_DIRS for the duration of the test, stands in for it —
+        mirroring how the manifest tests above stand in for a real `npm run
+        build` rather than depending on one.
+        """
+        with tempfile.TemporaryDirectory() as extra_static_dir:
+            asset_path = Path(extra_static_dir) / 'probe.css'
+            asset_path.write_text('body { color: #111; }')
+
+            with override_settings(STATICFILES_DIRS=[*settings.STATICFILES_DIRS, extra_static_dir]):
+                self.assertIsNotNone(find('probe.css'))
+
+                with (
+                    tempfile.TemporaryDirectory() as static_root,
+                    override_settings(STATIC_ROOT=static_root),
+                ):
+                    call_command('collectstatic', '--no-input', verbosity=0)
+                    response = self.client.get('/static/probe.css')
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.get('Content-Type', '').startswith('text/css'))
