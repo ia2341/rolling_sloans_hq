@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 
 import { apiFetch, ApiError } from '../api/client'
 import { useAppContext } from '../api/ContextProvider'
+import { notifyViewingSemesterChanged } from '../api/viewingSemesterChangeStore'
 import type { ScheduleEditorPayload } from '../api/scheduleEditorTypes'
 import type {
   CreateSemesterBody,
@@ -56,7 +57,10 @@ const TIMING_FIELDS: Array<{
  * session's Viewing Semester to it in one call, then navigates to `/` on
  * success (issue #374) so the admin lands on Home's setup checklist for
  * the Semester they just created rather than wherever they opened this
- * dialog from.
+ * dialog from. Also bumps `viewingSemesterChangeStore`'s counter (issue
+ * #402): `navigate('/')` is a no-op when this dialog was opened from Home
+ * itself, so Home needs its own signal that the Semester underneath it
+ * changed.
  */
 export function NewSemesterDialog({
   open,
@@ -120,6 +124,7 @@ export function NewSemesterDialog({
         return
       }
       onOpenChange(false)
+      notifyViewingSemesterChanged()
       navigate('/')
     } catch (thrown) {
       setSubmitError(
