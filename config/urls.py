@@ -19,11 +19,13 @@ urlpatterns = [
     # No explicit /static/ entry is needed: `runserver` serves STATICFILES_DIRS
     # itself when DEBUG is True, and WhiteNoise's middleware serves STATIC_ROOT
     # in production — neither goes through this URLconf.
-    path('', include('scheduling.urls')),
-    # Catch-all, deliberately last: every path not claimed above hands the
-    # SPA its shell, which renders its own 404 client-side (issue #325).
-    # This is what lets the old Django portal and the in-progress SPA
-    # coexist on this branch with no feature flag — the catch-all only ever
-    # picks up paths the old app never claimed.
-    path('<path:unmatched_path>', SpaIndexView.as_view(), name='spa-index'),
+    # The root path, named separately from the catch-all below so it stays
+    # reverse()-able with no arguments (LOGIN_REDIRECT_URL depends on that).
+    # `<path:...>` requires at least one character, so it never matches ''
+    # itself — the old Django portal (scheduling.urls, gone as of issue #341)
+    # used to claim root; now this does.
+    path('', SpaIndexView.as_view(), name='spa-index'),
+    # Catch-all, deliberately last: every other path not claimed above hands
+    # the SPA its shell, which renders its own 404 client-side (issue #325).
+    path('<path:unmatched_path>', SpaIndexView.as_view(), name='spa-index-catchall'),
 ]

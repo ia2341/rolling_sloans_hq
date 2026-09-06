@@ -19,8 +19,10 @@ from django.urls import reverse
 
 from config import checks
 
-# The root path is already claimed by scheduling's Overview page, so tests
-# aimed at the catch-all use a path no existing app route defines.
+# Every page-shaped route reaches the SPA catch-all since issue #341's
+# cutover, but these tests still use a path distinct from admin/, /accounts/
+# and /api/, so they exercise the catch-all specifically rather than one of
+# those earlier-claimed namespaces.
 UNCLAIMED_PATH = '/an-unclaimed-spa-path/'
 
 FAKE_ENTRY_FILE = 'assets/index-deadbeef.js'
@@ -145,14 +147,14 @@ class RouteOrderingTests(TestCase):
 
     def test_static_asset_reaches_whitenoise_not_the_shell(self):
         """A collected static asset is served by WhiteNoise, ahead of URL resolution reaching the catch-all."""
-        self.assertIsNotNone(find('vendor/pico-2.1.1.min.css'))
+        self.assertIsNotNone(find('css/app.css'))
 
         with (
             tempfile.TemporaryDirectory() as static_root,
             override_settings(STATIC_ROOT=static_root),
         ):
             call_command('collectstatic', '--no-input', verbosity=0)
-            response = self.client.get('/static/vendor/pico-2.1.1.min.css')
+            response = self.client.get('/static/css/app.css')
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.get('Content-Type', '').startswith('text/css'))
