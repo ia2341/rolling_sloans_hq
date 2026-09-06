@@ -130,19 +130,19 @@ function editorPayload(
 }
 
 describe('ScheduleEdit', () => {
-  it('shows only one open Rehearsal at a time on a phone viewport', async () => {
+  it('shows only one open Rehearsal card at a time', async () => {
     mockMatchMedia(true)
     mockFetchOnce(200, { context: adminContext(), data: editorPayload() })
 
     renderScheduleEdit()
 
     const user = userEvent.setup()
-    await screen.findByText('2026-03-10', { exact: false })
+    await screen.findByRole('button', { name: 'Expand 2026-03-10' })
 
-    await user.click(screen.getByText('2026-03-10', { exact: false }))
+    await user.click(screen.getByRole('button', { name: 'Expand 2026-03-10' }))
     expect(await screen.findByLabelText('First Song slot count')).toBeVisible()
 
-    await user.click(screen.getByText('2026-03-17', { exact: false }))
+    await user.click(screen.getByRole('button', { name: 'Expand 2026-03-17' }))
     expect(
       screen.queryByLabelText('First Song slot count'),
     ).not.toBeInTheDocument()
@@ -342,5 +342,114 @@ describe('ScheduleEdit', () => {
     within(
       screen.getByText('Past rehearsals — not editable').closest('details')!,
     ).getByText(/2026-01-01/)
+  })
+
+  it('renders "Randomize Rehearsal Plan" as a single label, with no Re-roll/Generate schedule text and no Flags/Actions columns', async () => {
+    mockMatchMedia(false)
+    mockFetchOnce(200, { context: adminContext(), data: editorPayload() })
+
+    renderScheduleEdit()
+
+    await screen.findByRole('button', { name: 'Expand 2026-03-10' })
+    expect(
+      screen.getByRole('button', { name: 'Randomize Rehearsal Plan' }),
+    ).toBeInTheDocument()
+    expect(screen.queryByText('Re-roll')).not.toBeInTheDocument()
+    expect(screen.queryByText('Generate schedule')).not.toBeInTheDocument()
+    expect(screen.queryByText('Flags')).not.toBeInTheDocument()
+    expect(screen.queryByText('Actions')).not.toBeInTheDocument()
+    expect(screen.getAllByLabelText('Date').length).toBeGreaterThan(0)
+    expect(screen.getAllByLabelText('Start time').length).toBeGreaterThan(0)
+  })
+
+  it('replaces the Remove/Restore button with a trash-can control that still toggles deletion', async () => {
+    mockMatchMedia(false)
+    mockFetchOnce(200, { context: adminContext(), data: editorPayload() })
+
+    renderScheduleEdit()
+    const user = userEvent.setup()
+
+    await screen.findByRole('button', { name: 'Expand 2026-03-10' })
+    expect(
+      screen.queryByRole('button', { name: 'Remove' }),
+    ).not.toBeInTheDocument()
+
+    const deleteButton = screen.getByRole('button', {
+      name: 'Delete rehearsal on 2026-03-10',
+    })
+    await user.click(deleteButton)
+
+    expect(
+      screen.getByRole('button', { name: 'Restore rehearsal on 2026-03-10' }),
+    ).toBeInTheDocument()
+  })
+
+  it('never renders a per-Rehearsal Shuffle button', async () => {
+    mockMatchMedia(false)
+    mockFetchOnce(200, { context: adminContext(), data: editorPayload() })
+
+    renderScheduleEdit()
+
+    await screen.findByRole('button', { name: 'Expand 2026-03-10' })
+    fireEvent.click(screen.getByRole('button', { name: 'Expand 2026-03-10' }))
+    await screen.findByLabelText('First Song slot count')
+
+    expect(
+      screen.queryByRole('button', { name: 'Shuffle' }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('shows the live stats panel from the debounced stats endpoint', async () => {
+    mockMatchMedia(false)
+    const fetchSpy = vi.fn().mockImplementation((url: string) => {
+      if (url === '/api/schedule/editor/stats/') {
+        return Promise.resolve({
+          status: 200,
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              context: adminContext(),
+              ok: true,
+              errors: {},
+              non_field_errors: [],
+              fallout: null,
+              values: null,
+              data: {
+                unresolved_conflict_count: 2,
+                old_max_wait_minutes: 30,
+                new_max_wait_minutes: 15,
+                highest_slot_songs: [
+                  { song_id: 1, song_title: 'First Song', total_slot_count: 4 },
+                ],
+                lowest_slot_songs: [
+                  {
+                    song_id: 2,
+                    song_title: 'Second Song',
+                    total_slot_count: 1,
+                  },
+                ],
+              },
+            }),
+        })
+      }
+      return Promise.resolve({
+        status: 200,
+        ok: true,
+        json: () =>
+          Promise.resolve({ context: adminContext(), data: editorPayload() }),
+      })
+    })
+    vi.stubGlobal('fetch', fetchSpy)
+
+    renderScheduleEdit()
+
+    await screen.findByRole('button', { name: 'Expand 2026-03-10' })
+    expect(
+      await screen.findByText(/2 assignments overlapping a declared Conflict/),
+    ).toBeInTheDocument()
+    expect(screen.getByText(/30 min/)).toBeInTheDocument()
+    expect(screen.getByText(/15 min/)).toBeInTheDocument()
+    expect(screen.getByText(/First Song \(4\)/)).toBeInTheDocument()
+    expect(screen.getByText(/Second Song \(1\)/)).toBeInTheDocument()
   })
 })

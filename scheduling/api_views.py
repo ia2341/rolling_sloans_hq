@@ -41,6 +41,7 @@ from scheduling.api_builders import (
     build_generation_date_range_from_body,
     build_rehearsal_buffer_from_request,
     build_rehearsal_pattern_input_from_body,
+    build_rehearsal_reorder_buffer_from_request,
     build_roster_buffer_from_request,
     build_semester_defaults_reapply_buffer_from_request,
     build_setlist_buffer_from_request,
@@ -1040,6 +1041,68 @@ class ScheduleEditorShuffleApiView(AdminApiView, View):
         return self.read_response(request, serializers.serialize_shuffle_rows(rows))
 
 
+class ScheduleEditorStatsApiView(AdminPreviewApiView):
+    """`POST /api/schedule/editor/stats/`: the "Randomize Rehearsal Plan" stats panel, recomputed live off the admin's own unsaved Buffer (ADR 0008).
+
+    Takes the exact same JSON body as `/api/schedule/editor/preview/`
+    (`build_rehearsal_buffer_from_request()` is the same builder both
+    call), but answers a different question: not "what would saving cost"
+    but "what does this plan look like right now" — unresolved Conflict
+    overlaps, the old-vs-new longest per-Rehearsal wait, and the
+    busiest/quietest Songs. Fired debounced on every edit the ScheduleEdit
+    route makes to its Buffer (date/time/dress-flag/running-order/add/
+    delete), not only on Save, so it wears its own POST-only Preview
+    sibling rather than piggybacking on the Save-popup-only
+    `ScheduleEditorPreviewApiView`. Runs the real `apply_rehearsal_edits()`
+    (via `services.compute_schedule_editor_live_stats()`) inside
+    `PreviewMixin`'s transaction, which always rolls it back — nothing this
+    endpoint does can ever commit.
+    """
+
+    def run_preview(self, request):
+        """Build the Rehearsal edit Buffer from the JSON body and return its live stats, or why it couldn't be computed.
+
+        Mirrors `ScheduleEditorPreviewApiView.run_preview()`'s error
+        handling exactly, since both endpoints share the same Buffer
+        builder and the same underlying `apply_rehearsal_edits()` call: a
+        malformed body is a row-keyed Validation Error, a wrong
+        `semester_id` is the shared 409, and a `StaleRehearsalSemesterError`/
+        `PastRehearsalEditError`/`RunningOrderValidationError` from the
+        real apply is reported as `ok: false` with `non_field_errors`
+        rather than a stats payload — the panel shows its last-known
+        numbers rather than a crash when an edit is transiently invalid
+        (e.g. a row still mid-edit with no date yet).
+        """
+        viewing_semester = services.get_viewing_semester(request)
+        try:
+            buffer = build_rehearsal_buffer_from_request(request, viewing_semester=viewing_semester)
+        except RehearsalBufferValidationError as error:
+            return self.write_response(
+                request,
+                ok=False,
+                errors=error.row_errors,
+                non_field_errors=error.non_field_errors,
+                fallout=None,
+                values=error.raw_body,
+            )
+
+        if viewing_semester is None or buffer.semester_id != viewing_semester.pk:
+            return _wrong_semester_response(
+                "This Rehearsal edit Buffer's Semester doesn't match the Semester you're currently viewing."
+            )
+
+        try:
+            stats = services.compute_schedule_editor_live_stats(buffer, viewing_semester=viewing_semester)
+        except WrongViewingSemesterError as error:
+            return _wrong_semester_response(str(error))
+        except (StaleRehearsalSemesterError, PastRehearsalEditError, RunningOrderValidationError) as error:
+            return self.write_response(request, ok=False, non_field_errors=[str(error)], fallout=None, values=None)
+
+        return self.write_response(
+            request, ok=True, fallout=None, values=None, data=serializers.serialize_schedule_editor_live_stats(stats),
+        )
+
+
 def _editable_assignment_rehearsal_or_404(request, rehearsal_id):
     """Return the viewing Semester's Rehearsal `rehearsal_id` names that also offers edit mode on its assignment grid, or 404 (issue #338, ADR-0009).
 
@@ -1162,6 +1225,108 @@ class AssignmentSaveApiView(AdminApiView, View):
             return _wrong_semester_response(str(error))
         except StaleAssignmentSemesterError as error:
             return self.write_response(request, ok=False, non_field_errors=[str(error)], fallout=None, values=None)
+
+        return self.write_response(request, ok=True, values=None)
+
+
+def _reorderable_rehearsal_or_404(request, rehearsal_id):
+    """Return the viewing Semester's Rehearsal `rehearsal_id` names that offers a Running Order to reorder, or 404 ("Edit Rehearsal" consolidation).
+
+    Reuses `services.assignment_grid_is_editable()` — the same
+    editability rule the assignment grid uses, since "Edit Rehearsal" now
+    fronts both — but additionally refuses the Dress Rehearsal: it holds
+    no `RehearsalSong` rows to reorder at all (ADR-0003), a structural
+    exclusion rather than a Validation Error the client would have to
+    render.
+    """
+    rehearsal = _editable_assignment_rehearsal_or_404(request, rehearsal_id)
+    if rehearsal.is_full_setlist:
+        raise Http404("The Dress Rehearsal has no Running Order of its own to reorder (ADR 0003).")
+    return rehearsal
+
+
+class RunningOrderReorderPreviewApiView(AdminPreviewApiView):
+    """`POST /api/schedule/<rehearsal_id>/running-order/preview/`: the "Edit Rehearsal" drag-and-drop's Preview, run for real and rolled back (ADR 0008).
+
+    A thin sibling of `AssignmentPreviewApiView`, sharing its Rehearsal's
+    write surface (`apply_rehearsal_edits()`/`preview_rehearsal_edits()`,
+    the same functions the bulk `ScheduleEditorPreviewApiView` calls) but
+    with its own request-parsing function
+    (`build_rehearsal_reorder_buffer_from_request()`) scoped to a pure
+    reorder of one already-existing Rehearsal, never a whole grid's worth
+    of rows.
+    """
+
+    def run_preview(self, request, rehearsal_id):
+        """Build the reorder-only Rehearsal edit Buffer from the JSON body and return its rendered Fallout envelope for `rehearsal_id`.
+
+        Mirrors `AssignmentPreviewApiView.run_preview()`: the same
+        `build_rehearsal_reorder_buffer_from_request()`
+        `RunningOrderReorderSaveApiView.post()` calls, so Preview and Save
+        of an identical body can never disagree about what Buffer they
+        describe.
+        """
+        rehearsal = _reorderable_rehearsal_or_404(request, rehearsal_id)
+        viewing_semester = services.get_viewing_semester(request)
+        try:
+            buffer = build_rehearsal_reorder_buffer_from_request(request, rehearsal=rehearsal)
+        except RehearsalBufferValidationError as error:
+            return self.write_response(
+                request, ok=False, errors=None, non_field_errors=error.non_field_errors, fallout=None, values=None,
+            )
+
+        if viewing_semester is None or buffer.semester_id != viewing_semester.pk:
+            return _wrong_semester_response(
+                "This Rehearsal edit Buffer's Semester doesn't match the Semester you're currently viewing."
+            )
+
+        fallout = services.preview_rehearsal_edits(buffer, viewing_semester=viewing_semester)
+        return self.write_response(
+            request,
+            ok=True,
+            fallout=serializers.serialize_rehearsal_edit_fallout(fallout),
+            values=None,
+        )
+
+
+class RunningOrderReorderSaveApiView(AdminApiView, View):
+    """`POST /api/schedule/<rehearsal_id>/running-order/save/`: the "Edit Rehearsal" drag-and-drop's Save — the real, committing write."""
+
+    def post(self, request, rehearsal_id):
+        """Build the reorder-only Rehearsal edit Buffer from the JSON body and apply it, or report why it couldn't be applied.
+
+        Mirrors `AssignmentSaveApiView.post()`: the same
+        `build_rehearsal_reorder_buffer_from_request()` the Preview
+        endpoint calls, then the unchanged `apply_rehearsal_edits()`. A
+        `StaleRehearsalSemesterError`, `PastRehearsalEditError` or
+        `RunningOrderValidationError` is reported as `ok: false` with
+        `non_field_errors`, matching `ScheduleEditorSaveApiView.post()` —
+        none leaves partial writes behind, since `apply_rehearsal_edits()`'s
+        own transaction has already rolled back by the time any of these
+        `except` clauses run.
+        """
+        rehearsal = _reorderable_rehearsal_or_404(request, rehearsal_id)
+        viewing_semester = services.get_viewing_semester(request)
+        try:
+            buffer = build_rehearsal_reorder_buffer_from_request(request, rehearsal=rehearsal)
+        except RehearsalBufferValidationError as error:
+            return self.write_response(
+                request, ok=False, errors=None, non_field_errors=error.non_field_errors, fallout=None, values=None,
+            )
+
+        if viewing_semester is None or buffer.semester_id != viewing_semester.pk:
+            return _wrong_semester_response(
+                "This Rehearsal edit Buffer's Semester doesn't match the Semester you're currently viewing."
+            )
+
+        try:
+            services.apply_rehearsal_edits(buffer, viewing_semester=viewing_semester)
+        except WrongViewingSemesterError as error:
+            return _wrong_semester_response(str(error))
+        except (StaleRehearsalSemesterError, PastRehearsalEditError, RunningOrderValidationError) as error:
+            return self.write_response(
+                request, ok=False, non_field_errors=[str(error)], fallout=None, values=None,
+            )
 
         return self.write_response(request, ok=True, values=None)
 

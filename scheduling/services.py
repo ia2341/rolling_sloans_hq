@@ -12,7 +12,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from django.contrib.auth.hashers import UNUSABLE_PASSWORD_PREFIX
 from django.core.files.storage import storages
 from django.db import IntegrityError, models, transaction
-from django.db.models import Count, Q
+from django.db.models import Count, Q, Sum
 from django.utils import timezone
 
 from identity.models import Person
@@ -5550,3 +5550,170 @@ def shuffle_rehearsal_running_order(rehearsal: Rehearsal) -> list[DealtRow]:
             free.append(row)
 
     return _pin_and_fill(len(rehearsal_songs), pinned, free, random.Random())
+
+
+# --- ScheduleEdit "Randomize Rehearsal Plan" live stats panel ------------
+#
+# Additive to the Deal/Shuffle machinery above, not a replacement for any
+# of it: `deal_running_orders()`/`shuffle_rehearsal_running_order()` are
+# left untouched. This section answers "what does the plan on screen right
+# now look like" for the `/schedule/edit/` stats panel, recomputed live off
+# the admin's own unsaved Pending Buffer (ADR 0008: run the real
+# `apply_rehearsal_edits()` inside a transaction the *caller* rolls back,
+# never a second pure implementation of `breaks_for`/`_assignment_fallout_lines`).
+
+
+def _minutes_between(start_time: time, end_time: time) -> int:
+    """Return the whole number of minutes between two `time` values on the same day, for a `Break`'s duration."""
+    return int((datetime.combine(date.min, end_time) - datetime.combine(date.min, start_time)).total_seconds() // 60)
+
+
+def _max_wait_minutes_for_semester(semester: Semester) -> int | None:
+    """Return the single longest gap (in minutes) any Person sits through between their own songs at any one future Rehearsal in `semester`, or `None` if nobody has one.
+
+    Reuses `breaks_for()` (issue #96) rather than re-deriving a Person's
+    idle-time gaps a second way — this is simply the maximum over every
+    `(future Rehearsal, band member)` pair's own `breaks_for()` result,
+    scoped to `future_rehearsals_for()`'s non-Dress, dated-today-or-later
+    set (ADR-0003: the Dress Rehearsal has no Running Order to compute a
+    gap from, and a past Rehearsal isn't part of "the plan" an admin is
+    currently shaping).
+    """
+    rehearsals = future_rehearsals_for(semester)
+    if not rehearsals:
+        return None
+    persons = list(Person.objects.filter(membership__semester=semester).distinct())
+    max_minutes: int | None = None
+    for rehearsal in rehearsals:
+        for person in persons:
+            for one_break in breaks_for(rehearsal, person):
+                minutes = _minutes_between(one_break.start_time, one_break.end_time)
+                if max_minutes is None or minutes > max_minutes:
+                    max_minutes = minutes
+    return max_minutes
+
+
+def _unresolved_conflict_count_for(semester: Semester) -> int:
+    """Return the total count of loud Conflict/Conflict-Window-overlap Fallout lines across every future Rehearsal in `semester`.
+
+    Reuses `_assignment_fallout_lines()` (issue #212, ADR-0009) — the same
+    function the per-Rehearsal assignment editor's own Preview already
+    raises "an assigned Person who can't be there that evening" from —
+    rather than reimplementing the overlap check. Scoped to
+    `future_rehearsals_for()` (non-Dress, per ADR-0006, and not-yet-past),
+    since a past Rehearsal's Conflicts can no longer be "resolved" by
+    editing the plan.
+    """
+    total = 0
+    for rehearsal in future_rehearsals_for(semester):
+        songs, _, _ = _matrix_songs(rehearsal)
+        if not songs:
+            continue
+        loud, _ = _assignment_fallout_lines(rehearsal, songs)
+        total += len(loud)
+    return total
+
+
+@dataclass(frozen=True)
+class SongSlotTotal:
+    """One Song's summed `RehearsalSong.slot_count` across every Rehearsal in a Semester, for the stats panel's busiest/quietest lists."""
+
+    song_id: int
+    song_title: str
+    total_slot_count: int
+
+
+def _song_slot_totals(semester: Semester) -> list[SongSlotTotal]:
+    """Return every Semester Song's summed rehearsal `slot_count`, most-rehearsed first.
+
+    Sums `RehearsalSong.slot_count` across *every* Rehearsal currently
+    holding that Song (including past ones, deliberately: "how much this
+    Song has been rehearsed all term" is a term-wide total, not a
+    still-to-come one) — never `Song.length`, which CLAUDE.md is explicit
+    carries no scheduling authority. A Song with no Running Order rows at
+    all (never yet dealt into a Rehearsal) is included at `total_slot_count
+    = 0`, so it can still surface on the "lowest" side.
+    """
+    songs = list(Song.objects.filter(semester=semester))
+    totals_by_song_id = dict(
+        RehearsalSong.objects.filter(rehearsal__semester=semester)
+        .values_list('song_id')
+        .annotate(total=Sum('slot_count'))
+        .values_list('song_id', 'total')
+    )
+    totals = [
+        SongSlotTotal(
+            song_id=song.pk, song_title=song.title, total_slot_count=totals_by_song_id.get(song.pk, 0),
+        )
+        for song in songs
+    ]
+    totals.sort(key=lambda entry: (-entry.total_slot_count, entry.song_title))
+    return totals
+
+
+@dataclass(frozen=True)
+class ScheduleEditorLiveStats:
+    """The `/schedule/edit/` "Randomize Rehearsal Plan" stats panel's whole read model, recomputed live off an unsaved Buffer.
+
+    `old_max_wait_minutes`/`new_max_wait_minutes` are `None` when the
+    Semester has no future Rehearsal (or nobody has a gap) to measure at
+    all — the panel renders that as "—", not a misleading zero.
+    `highest_slot_songs`/`lowest_slot_songs` are each at most 3 entries,
+    already sorted (`highest_slot_songs` descending, `lowest_slot_songs`
+    ascending) so the view/serializer does no further ranking, and are
+    disjoint — a setlist with 6 or fewer Songs never double-lists the same
+    Song on both sides.
+    """
+
+    unresolved_conflict_count: int
+    old_max_wait_minutes: int | None
+    new_max_wait_minutes: int | None
+    highest_slot_songs: list[SongSlotTotal]
+    lowest_slot_songs: list[SongSlotTotal]
+
+
+def compute_schedule_editor_live_stats(buffer: RehearsalEditBuffer, *, viewing_semester: Semester) -> ScheduleEditorLiveStats:
+    """Run the real `apply_rehearsal_edits()` for `buffer` and report the stats panel's whole read model, without committing it (ADR-0008).
+
+    This function's write is real — it must be called inside a transaction
+    the *caller* rolls back, exactly like `preview_rehearsal_edits()`.
+    Called outside such a transaction, this function corrupts the
+    database. Deliberately calls `apply_rehearsal_edits()` itself rather
+    than composing with `preview_rehearsal_edits()`: the latter also calls
+    `apply_rehearsal_edits()` for real, and running it twice against the
+    same Buffer in one transaction would double up the "apply, snapshot,
+    re-derive" work for no benefit — this function needs only the
+    post-apply state, not `preview_rehearsal_edits()`'s own before/after
+    Recording diff.
+
+    `old_max_wait_minutes` is measured *before* the Buffer is applied,
+    `new_max_wait_minutes` after — the panel's one before/after
+    comparison. `unresolved_conflict_count` and the slot-count outlier
+    lists are read only from the post-apply (i.e. "if you saved this
+    right now") state, since there is no "old" reading for either that the
+    panel's copy asks for. Propagates whatever `apply_rehearsal_edits()`
+    itself raises (`WrongViewingSemesterError`, `StaleRehearsalSemesterError`,
+    `PastRehearsalEditError`, `RunningOrderValidationError`) uncaught,
+    mirroring `preview_song_role_assignments()`'s contract — the view
+    catches and reports these the same way its Buffer preview/save
+    endpoints already do, rather than this function re-deciding how.
+    """
+    old_max_wait_minutes = _max_wait_minutes_for_semester(viewing_semester)
+
+    apply_rehearsal_edits(buffer, viewing_semester=viewing_semester)
+
+    current_semester = Semester.objects.get(pk=viewing_semester.pk)
+    new_max_wait_minutes = _max_wait_minutes_for_semester(current_semester)
+    unresolved_conflict_count = _unresolved_conflict_count_for(current_semester)
+    slot_totals = _song_slot_totals(current_semester)
+    highest_slot_songs = slot_totals[:3]
+    highest_song_ids = {entry.song_id for entry in highest_slot_songs}
+    lowest_slot_songs = [entry for entry in reversed(slot_totals) if entry.song_id not in highest_song_ids][:3]
+
+    return ScheduleEditorLiveStats(
+        unresolved_conflict_count=unresolved_conflict_count,
+        old_max_wait_minutes=old_max_wait_minutes,
+        new_max_wait_minutes=new_max_wait_minutes,
+        highest_slot_songs=highest_slot_songs,
+        lowest_slot_songs=lowest_slot_songs,
+    )
