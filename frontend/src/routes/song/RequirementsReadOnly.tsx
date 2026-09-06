@@ -18,7 +18,7 @@ export function RequirementsReadOnly({
       {requirements.map((status) => (
         <li
           key={status.role_id}
-          className={`rounded-full border px-2 py-0.5 text-xs ${
+          className={`rounded-full border px-2 py-0.5 text-xs font-medium ${
             status.is_understaffed
               ? 'border-rs-warning-border text-rs-warning-fg'
               : 'border-rs-border text-rs-muted'

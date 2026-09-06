@@ -639,7 +639,7 @@ function AssignmentEditorCell({
         type="button"
         aria-label={`Assign ${role.name} on ${songTitle}`}
         onClick={() => onOpenPicker(songId, songTitle, role.id, role.name)}
-        className="rounded-full border border-rs-border px-1.5 text-xs leading-5"
+        className="rounded-full border border-rs-border px-1.5 text-xs font-medium leading-5"
       >
         +
       </button>
