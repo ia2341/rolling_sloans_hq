@@ -603,4 +603,46 @@ describe('Setlist edit mode', () => {
     expect(fetchSpy.mock.calls[2]?.[0]).toBe('/api/setlist/save/')
     expect(fetchSpy.mock.calls[3]?.[0]).toBe('/api/setlist/')
   })
+
+  it('starts editing and opens the Add-songs sheet for ?intent=add-songs, then strips the param (issue #374)', async () => {
+    mockFetchOnce(200, {
+      context: adminContext(),
+      data: setlistPayload(),
+    })
+
+    renderShell(
+      <>
+        <Setlist />
+        <LocationSpy />
+      </>,
+      ['/setlist?intent=add-songs'],
+    )
+
+    // The sheet's own dialog title, plus the editor's underlying grid
+    // (`Title for row 1`) proving `startEditing()` also ran -- the trigger
+    // button itself is `aria-hidden` behind the open dialog, so it isn't
+    // queried directly here.
+    expect(
+      await screen.findByRole('heading', { name: 'Add songs' }),
+    ).toBeInTheDocument()
+    expect(screen.getByLabelText('Title for row 1')).toBeInTheDocument()
+    await waitFor(() =>
+      expect(screen.getByTestId('location')).toHaveTextContent('/setlist'),
+    )
+    expect(screen.getByTestId('location')).not.toHaveTextContent('intent')
+  })
+
+  it('does nothing for a plain load with no ?intent (issue #374)', async () => {
+    mockFetchOnce(200, {
+      context: adminContext(),
+      data: setlistPayload(),
+    })
+
+    renderShell(<Setlist />, ['/setlist'])
+
+    expect(
+      await screen.findByRole('button', { name: 'Edit setlist' }),
+    ).toBeInTheDocument()
+    expect(screen.queryByText('Add songs')).not.toBeInTheDocument()
+  })
 })

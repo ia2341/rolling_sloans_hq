@@ -1,5 +1,6 @@
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { useLocation } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { resetContextForTests, setContext } from '../api/contextStore'
@@ -7,6 +8,12 @@ import { adminContext } from '../test/fixtures'
 import { mockMatchMedia } from '../test/mockMatchMedia'
 import { renderShell } from '../test/renderShell'
 import { NewSemesterDialog } from './NewSemesterDialog'
+
+/** Renders the current route's pathname as text, standing in for a router outlet so a test can assert a successful create navigated (issue #374). */
+function LocationSpy() {
+  const location = useLocation()
+  return <p data-testid="location">{location.pathname}</p>
+}
 
 const existingOption = {
   id: 10,
@@ -158,5 +165,48 @@ describe('NewSemesterDialog', () => {
     await user.click(screen.getByRole('button', { name: 'Create Fall 2026' }))
 
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false))
+  })
+
+  it('navigates to Home on success, so the admin lands on the setup checklist for the new Semester (issue #374)', async () => {
+    setContext(adminContext({ semester_options: options }))
+    stubFetchSequence([
+      {
+        status: 200,
+        body: {
+          context: adminContext({ semester_options: options }),
+          data: { semester_defaults: null },
+        },
+      },
+      {
+        status: 200,
+        body: {
+          context: adminContext({ semester_options: options }),
+          ok: true,
+          errors: {},
+          non_field_errors: [],
+          fallout: null,
+          values: null,
+          data: null,
+        },
+      },
+    ])
+    const user = userEvent.setup()
+    const onOpenChange = vi.fn()
+    renderShell(
+      <>
+        <NewSemesterDialog open onOpenChange={onOpenChange} />
+        <LocationSpy />
+      </>,
+      ['/somewhere-else'],
+    )
+
+    await waitFor(() =>
+      expect(screen.getByDisplayValue('Spring 2026')).toBeInTheDocument(),
+    )
+    await user.click(screen.getByRole('button', { name: /Create/ }))
+
+    await waitFor(() =>
+      expect(screen.getByTestId('location')).toHaveTextContent('/'),
+    )
   })
 })

@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 
 import { apiFetch } from '../api/client'
 import { useAppContext } from '../api/ContextProvider'
@@ -41,7 +41,10 @@ type EditField = 'title' | 'artist' | 'length' | 'notes'
  * arrives. An admin viewer also gets a `RoleMismatchLegend` above the cast
  * table/cards, explaining the per-cell `RoleMismatchBadge` (issue #365,
  * ADR 0002) -- a non-admin sees neither, since the underlying fact is
- * never rendered to a non-admin.
+ * never rendered to a non-admin. A `?intent=add-songs` query param (issue
+ * #374, from Home's setup checklist) starts editing and opens the
+ * Add-songs sheet once the initial read has landed, then strips itself so
+ * reloading doesn't repeat it.
  */
 export function Setlist() {
   usePageTitle('Setlist')
@@ -56,6 +59,8 @@ export function Setlist() {
   const [addSheetOpen, setAddSheetOpen] = useState(false)
   const [saveDialogOpen, setSaveDialogOpen] = useState(false)
   const [uploadSongId, setUploadSongId] = useState<number | null>(null)
+  const [searchParams, setSearchParams] = useSearchParams()
+  const handledIntentRef = useRef(false)
 
   const load = useCallback(() => {
     void apiFetch<ReadEnvelope<SetlistPayload>>('/api/setlist/').then(
@@ -127,6 +132,33 @@ export function Setlist() {
   const addRows = useCallback((newRows: EditRow[]) => {
     setRows((current) => [...current, ...newRows])
   }, [])
+
+  // `?intent=add-songs` (issue #374): Home's Setlist checklist row lands
+  // here already mid-workflow -- Edit setlist, then the Add-songs sheet --
+  // rather than just on the plain read view. Guarded by a ref (not state)
+  // so it fires exactly once per mount even though `data` may update again
+  // later (e.g. after a save reloads it).
+  useEffect(() => {
+    if (data === null) return
+    if (handledIntentRef.current) return
+    if (searchParams.get('intent') !== 'add-songs') return
+    handledIntentRef.current = true
+    // Deferred a tick (rather than calling these setters inline) so this
+    // reads as reacting to an external signal -- the URL -- rather than
+    // synchronously cascading renders straight out of the effect body.
+    void Promise.resolve().then(() => {
+      startEditing()
+      setAddSheetOpen(true)
+      setSearchParams(
+        (previous) => {
+          const params = new URLSearchParams(previous)
+          params.delete('intent')
+          return params
+        },
+        { replace: true },
+      )
+    })
+  }, [data, searchParams, setSearchParams, startEditing])
 
   const previewSetlist = useCallback((): Promise<PreviewResult> => {
     if (viewingSemester === null) {
