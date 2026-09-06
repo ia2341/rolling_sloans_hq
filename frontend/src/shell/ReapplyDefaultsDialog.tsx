@@ -131,10 +131,7 @@ export function ReapplyDefaultsDialog({
         </>
       }
     >
-      <p className="mb-3 text-sm text-rs-muted">
-        Computed by running the real save and rolling it back (ADR 0008).
-        Nothing has been written.
-      </p>
+      <p className="mb-3 text-sm text-rs-muted">Nothing has been written.</p>
 
       {isLoading && (
         <div data-testid="reapply-loading" className="animate-pulse space-y-2">

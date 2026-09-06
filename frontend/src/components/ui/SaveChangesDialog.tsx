@@ -63,7 +63,6 @@ export function SaveChangesDialog({
       }
     >
       <p className="mb-3 text-sm text-rs-muted">
-        Computed by running the real save and rolling it back (ADR 0008).
         Nothing has been written, and no file has been deleted, by opening this.
       </p>
 

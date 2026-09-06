@@ -1134,12 +1134,7 @@ function RehearsalRowEditor({
 
   return (
     <div className="flex flex-col gap-3 py-2">
-      {draft.isFullSetlist ? (
-        <p className="text-sm text-rs-muted">
-          The Dress Rehearsal's songs are derived live from the current setlist
-          (ADR 0003) — it has no Running Order of its own.
-        </p>
-      ) : (
+      {draft.isFullSetlist ? null : (
         <>
           <RehearsalContextBar
             rehearsal={contextBarRehearsal}

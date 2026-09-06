@@ -41,13 +41,7 @@ export function RehearsalOverview({
         <strong>{formatRehearsalDate(date)}</strong>
         {isDress && ' · dress rehearsal'}
       </p>
-      {timeline.is_dress_rehearsal ? (
-        <p className="pt-2 text-sm text-rs-muted">
-          Whole setlist, whole window ({formatClockTime(timeline.window_start)}–
-          {formatClockTime(timeline.window_end)}) — the dress rehearsal runs the
-          current setlist live (ADR 0003).
-        </p>
-      ) : timeline.viewer_song_count === 0 ? (
+      {timeline.is_dress_rehearsal ? null : timeline.viewer_song_count === 0 ? (
         <p className="pt-2 text-sm text-rs-muted">
           You are not on any song here.
         </p>

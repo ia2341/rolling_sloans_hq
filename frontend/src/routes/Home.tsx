@@ -521,11 +521,6 @@ function SetupChecklistPanel({
           Draft
         </span>
       </div>
-      <p className="pt-1 text-xs text-rs-muted">
-        They are numbered because two of them genuinely wait on the others — but
-        nothing is locked, and you can do them in any order, or not at all. Each
-        one is just its ordinary tab.
-      </p>
       <ul className="pt-2">
         {checklist.items.map((item, index) => (
           <SetupChecklistRow key={item.key} item={item} number={index + 1} />
@@ -576,17 +571,9 @@ function SetupChecklistRow({
     <li className="flex items-center justify-between border-b border-rs-border py-2 text-sm last:border-b-0">
       <div className="flex items-center gap-2">
         <input type="checkbox" checked={item.is_done} readOnly disabled />
-        <div>
-          <p>
-            {number}. {item.label}
-          </p>
-          <p className="text-xs text-rs-muted">
-            {item.status}
-            {!item.is_done &&
-              item.waiting_on !== null &&
-              ` — ${item.waiting_on}`}
-          </p>
-        </div>
+        <p>
+          {number}. {item.label}
+        </p>
       </div>
       <Link
         to={checklistLinkFor(item)}

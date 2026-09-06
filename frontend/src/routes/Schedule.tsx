@@ -15,11 +15,7 @@ import type {
 import type { ReadEnvelope, WriteEnvelope } from '../api/types'
 import { AssignmentEditor } from '../components/assignments/AssignmentEditor'
 import { RecordingUploadDialog } from '../components/recordings/RecordingUploadDialog'
-import {
-  CastGridTable,
-  RoleMismatchLegend,
-  type CastGridRow,
-} from '../components/ui/CastLine'
+import { CastGridTable, type CastGridRow } from '../components/ui/CastLine'
 import { PageHead } from '../components/ui/PageHead'
 import { RehearsalOverview } from '../components/ui/RehearsalOverview'
 import { ResponsiveDialog } from '../components/ui/ResponsiveDialog'
@@ -149,11 +145,6 @@ export function Schedule() {
                   <button
                     type="button"
                     disabled={!selected.can_edit_assignments}
-                    title={
-                      selected.can_edit_assignments
-                        ? undefined
-                        : 'A past Rehearsal is not editable here (ADR 0009); the Dress Rehearsal always is.'
-                    }
                     onClick={() => setEditingAssignments(true)}
                     className="rounded border border-rs-border px-3 py-1.5 text-sm font-medium disabled:opacity-50"
                   >
@@ -337,10 +328,15 @@ function AvailabilityBlock({
         <h2 className="text-sm font-semibold uppercase text-rs-muted">
           Your availability
         </h2>
-        <p className="pt-1 text-sm">
-          Attendance is required at the dress rehearsal. There is nothing to
-          declare here (ADR 0006).
-        </p>
+        <div className="flex items-center justify-between pt-1">
+          <button
+            type="button"
+            disabled
+            className="rounded border border-rs-border px-3 py-1.5 text-sm disabled:opacity-50"
+          >
+            Declare a conflict
+          </button>
+        </div>
       </section>
     )
   }
@@ -388,10 +384,6 @@ function AvailabilityBlock({
                 From an admin: {availability.admin_note}
               </p>
             )}
-          <p className="text-xs text-rs-muted">
-            Your reason and this decision are visible to you and to admins only
-            — never on a page another member can read (ADR 0005).
-          </p>
           {availability.is_editable && (
             <div className="flex gap-2 pt-2">
               <button
@@ -584,15 +576,6 @@ function DeclareDialog({
           className="mt-1 block w-full rounded border border-rs-border px-2 py-1 text-sm"
         />
       </div>
-      <p className="pt-2 text-xs text-rs-muted">
-        Only admins ever see this reason. It never renders on a page another
-        member can read — including for an admin browsing as a member (ADR
-        0005).
-      </p>
-      <p className="text-xs text-rs-muted">
-        The dress rehearsal takes no conflict: attendance there is required (ADR
-        0006), so it is not offered.
-      </p>
     </ResponsiveDialog>
   )
 }
@@ -654,18 +637,6 @@ function AssignmentGrid({
           Running order & assignments
         </h2>
       </div>
-      <div className="flex flex-wrap gap-3 pb-2 text-xs text-rs-muted">
-        <span>away — a declared conflict</span>
-        {isPhone && <span>◦ role not declared</span>}
-        <span>(backup) covering a slot</span>
-      </div>
-      {!isPhone && isAdmin && <RoleMismatchLegend />}
-      {isDress && (
-        <p className="pb-2 text-sm text-rs-muted">
-          The dress rehearsal has no running order of its own — it runs the
-          setlist as it stands today (ADR 0003).
-        </p>
-      )}
       {isPhone ? (
         <AssignmentCards rows={rows} isDress={isDress} />
       ) : (
@@ -861,20 +832,13 @@ function RehearsalCard({
         <YourStateChip state={row.your_state} />
         <span className="text-rs-muted">{row.song_count} songs</span>
       </div>
-      {row.is_dress ? (
-        <p className="text-xs text-rs-muted">
-          Entire Setlist — the dress rehearsal runs it live (ADR 0003), so
-          there's nothing to list per Song.
-        </p>
-      ) : (
-        row.your_songs.length > 0 && (
-          <div>
-            <p className="text-xs font-semibold uppercase text-rs-muted">
-              Your songs
-            </p>
-            <YourSongsList songs={row.your_songs} />
-          </div>
-        )
+      {!row.is_dress && row.your_songs.length > 0 && (
+        <div>
+          <p className="text-xs font-semibold uppercase text-rs-muted">
+            Your songs
+          </p>
+          <YourSongsList songs={row.your_songs} />
+        </div>
       )}
       {row.pending_count !== undefined && (
         <p className="text-xs text-rs-muted">{row.pending_count} pending</p>

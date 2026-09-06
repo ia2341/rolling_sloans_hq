@@ -30,7 +30,6 @@ export function SemesterPanel({ collapsed }: SemesterPanelProps) {
   const editSession = useEditSession()
   const { items } = useSemesterOptionItems()
   const viewingSemester = appContext?.viewing_semester ?? null
-  const liveSemester = appContext?.live_semester ?? null
   const isBlocked = editSession?.blockedReason != null
 
   const [newOpen, setNewOpen] = useState(false)
@@ -81,12 +80,6 @@ export function SemesterPanel({ collapsed }: SemesterPanelProps) {
           </button>
         }
       />
-      {viewingSemester.status !== 'live' && liveSemester !== null && (
-        <p className="text-xs text-rs-muted">
-          Not what members see — they see {liveSemester.name}
-        </p>
-      )}
-
       <div className="flex gap-2">
         <button
           type="button"

@@ -649,10 +649,8 @@ export function AssignmentEditor({
       >
         <p className="font-semibold">Editing standing assignments.</p>
         <p>
-          A change here applies to{' '}
-          <strong>every rehearsal and the concert</strong>, not just this
-          evening (ADR 0009). To cover one evening only, add a{' '}
-          <strong>Backup</strong> from the same picker.
+          To cover one evening only, add a <strong>Backup</strong> from the same
+          picker.
         </p>
       </div>
 
@@ -713,11 +711,6 @@ export function AssignmentEditor({
         onOpenChange={setAddRoleOpen}
         title="Add a Role column"
       >
-        <p className="pb-2 text-sm text-rs-muted">
-          Adding a column here writes no Role Requirement (ADR 0009) — it only
-          opens this session's grid up to casting a Role nobody wrote a target
-          for.
-        </p>
         <ul className="flex flex-col gap-1">
           {addableRoles.map((role) => (
             <li key={role.id}>
@@ -809,9 +802,7 @@ function AssignmentEditorPill({
       {entry.hasConflict && (
         <span className="rounded bg-rs-border px-1">away</span>
       )}
-      {entry.isRoleMismatch && (
-        <span title="Role not declared for them (ADR 0002)">◦</span>
-      )}
+      {entry.isRoleMismatch && <span>◦</span>}
       <button
         type="button"
         aria-label={`Remove ${entry.personName}`}
@@ -1242,12 +1233,7 @@ function AssignmentPickerDialog({
             <p className="pb-1 text-xs text-rs-muted">
               This rehearsal only — the standing assignment above is unaffected
             </p>
-            {payload.rehearsal_song_id === null ? (
-              <p className="text-sm text-rs-muted">
-                A Dress Rehearsal has no per-song slots to assign against, so a
-                Backup isn't possible here (ADR 0006).
-              </p>
-            ) : (
+            {payload.rehearsal_song_id === null ? null : (
               <>
                 {standingAssignees.length > 0 && (
                   <label className="mb-1 flex items-center gap-2 text-xs text-rs-muted">

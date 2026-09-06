@@ -345,9 +345,6 @@ describe('Home', () => {
     await screen.findByText('Setting up Fall 2026 (draft)')
     expect(screen.getByText('1. Roster')).toBeInTheDocument()
     expect(screen.getByText('5. Casting')).toBeInTheDocument()
-    expect(
-      screen.getByText('Needs the pattern first', { exact: false }),
-    ).toBeInTheDocument()
 
     const rosterRow = screen.getByText('1. Roster').closest('li') as HTMLElement
     const rosterLink = within(rosterRow).getByRole('link', { name: 'Review' })

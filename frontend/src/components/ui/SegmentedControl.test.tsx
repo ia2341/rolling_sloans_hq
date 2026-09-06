@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { SegmentedControl } from './SegmentedControl'
 
 describe('SegmentedControl', () => {
-  it("exposes an accessible group label and reads the disabled half's reason as a title", () => {
+  it('exposes an accessible group label and disables an option', () => {
     render(
       <SegmentedControl
         ariaLabel="Rehearsal scope"
@@ -15,7 +15,7 @@ describe('SegmentedControl', () => {
           {
             value: 'all',
             label: 'All rehearsals',
-            disabledReason: 'The Dress Rehearsal has no assignments to edit.',
+            disabled: true,
           },
         ]}
       />,
@@ -26,10 +26,6 @@ describe('SegmentedControl', () => {
     ).toBeInTheDocument()
     const disabledOption = screen.getByRole('radio', { name: 'All rehearsals' })
     expect(disabledOption).toBeDisabled()
-    expect(disabledOption).toHaveAttribute(
-      'title',
-      'The Dress Rehearsal has no assignments to edit.',
-    )
   })
 
   it('goes full width via the max-phone: variant', () => {

@@ -125,11 +125,6 @@ export function ManageSemestersSheet({
                     <button
                       type="button"
                       disabled={row.status === 'live'}
-                      title={
-                        row.status === 'live'
-                          ? 'The Live Semester cannot be deleted - publish another one first (ADR 0011)'
-                          : undefined
-                      }
                       onClick={() =>
                         setDialog({
                           kind: 'delete',
@@ -147,8 +142,7 @@ export function ManageSemestersSheet({
             </ul>
           )}
           <p className="text-xs text-rs-muted">
-            Publishing changes what every member sees. Deleting is permanent and
-            cascades to uploaded recordings (ADR 0011).
+            Publishing changes what every member sees.
           </p>
         </div>
       </ResponsiveDialog>

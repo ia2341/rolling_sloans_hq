@@ -124,7 +124,7 @@ describe('ConflictAdjudicationDetail', () => {
     }
   })
 
-  it('shows the admin-only region by accessible role/name, with the reason and the never-member-facing text', async () => {
+  it('shows the admin-only region by accessible role/name, with the reason', async () => {
     mockMatchMedia(false)
     mockFetchOnce(200, { context: adminContext(), data: detailPayload() })
 
@@ -133,11 +133,6 @@ describe('ConflictAdjudicationDetail', () => {
 
     const regions = screen.getAllByRole('region', { name: 'Admin only' })
     expect(regions).toHaveLength(2)
-    expect(
-      within(regions[0]!).getByText(
-        /Never rendered on any member-facing route, for any viewer\./,
-      ),
-    ).toBeInTheDocument()
     expect(
       within(regions[0]!).getByText('Family event out of town'),
     ).toBeInTheDocument()
