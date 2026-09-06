@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Rolling Sloans</title>
+    {% for url in stylesheet_urls %}
+    <link rel="stylesheet" href="{{ url }}">
+    {% endfor %}
+    {% for url in modulepreload_urls %}
+    <link rel="modulepreload" href="{{ url }}">
+    {% endfor %}
+  </head>
+  <body>
+    <div id="root"></div>
+    {% if vite_client_url %}
+    <script type="module" src="{{ vite_client_url }}"></script>
+    {% endif %}
+    <script type="module" src="{{ script_url }}"></script>
+  </body>
+</html>

@@ -1,0 +1,72 @@
+@import 'tailwindcss';
+
+/* Theme tokens (issue #328): the `--rs-*` custom-property pattern from the
+   outgoing `app.css` carries forward here as Tailwind v4 `@theme` tokens —
+   only the host changes, per CLAUDE.md's design-system section. Each has a
+   light value here and a dark override below, so `bg-rs-*` utilities stay
+   theme-aware without a per-component dark: class. */
+@theme {
+  --color-rs-bg: oklch(99% 0 0);
+  --color-rs-surface: oklch(100% 0 0);
+  --color-rs-fg: oklch(20% 0 0);
+  --color-rs-muted: oklch(50% 0 0);
+  --color-rs-border: oklch(88% 0 0);
+  --color-rs-accent: oklch(52% 0.18 264);
+  --color-rs-accent-fg: oklch(99% 0 0);
+  --color-rs-danger: oklch(55% 0.2 27);
+  --color-rs-warning-bg: oklch(97% 0.08 90);
+  --color-rs-warning-fg: oklch(35% 0.12 70);
+  --color-rs-warning-border: oklch(80% 0.14 80);
+  --color-rs-toolbar-bg: oklch(22% 0 0);
+  --color-rs-toolbar-fg: oklch(98% 0 0);
+
+  --breakpoint-phone: 640px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-rs-bg: oklch(18% 0 0);
+    --color-rs-surface: oklch(23% 0 0);
+    --color-rs-fg: oklch(95% 0 0);
+    --color-rs-muted: oklch(70% 0 0);
+    --color-rs-border: oklch(32% 0 0);
+    --color-rs-accent: oklch(70% 0.16 264);
+    --color-rs-accent-fg: oklch(15% 0 0);
+    --color-rs-danger: oklch(70% 0.18 27);
+    --color-rs-warning-bg: oklch(30% 0.06 80);
+    --color-rs-warning-fg: oklch(92% 0.08 90);
+    --color-rs-warning-border: oklch(45% 0.1 80);
+    --color-rs-toolbar-bg: oklch(10% 0 0);
+    --color-rs-toolbar-fg: oklch(96% 0 0);
+  }
+}
+
+/* Role-hue tokens (issue #328, user stories 36-37): one token per Role slot,
+ * 1-based (the greybox's indices were 0-based — see `RoleLegend`). Hue names
+ * *which Role*; a pill's border and marker name state on top of this
+ * (owned by issue #338). Each has a light and dark value so a pill stays
+ * legible in both color schemes with no per-surface tuning.
+ */
+:root {
+  --role-1: oklch(62% 0.19 25);
+  --role-2: oklch(68% 0.17 95);
+  --role-3: oklch(62% 0.15 150);
+  --role-4: oklch(60% 0.16 230);
+  --role-5: oklch(62% 0.18 300);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --role-1: oklch(70% 0.17 25);
+    --role-2: oklch(75% 0.15 95);
+    --role-3: oklch(70% 0.14 150);
+    --role-4: oklch(70% 0.14 230);
+    --role-5: oklch(72% 0.16 300);
+  }
+}
+
+body {
+  margin: 0;
+  background: var(--color-rs-bg);
+  color: var(--color-rs-fg);
+}

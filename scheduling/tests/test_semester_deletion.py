@@ -1,10 +1,19 @@
-"""Semester deletion, including its Recordings' storage objects (issue #171)."""
+"""semester_deletion_summary() and delete_semester(): the hard-delete cascade and its Recordings' storage objects (issue #171, ADR 0011).
+
+The Django views that used to exercise `delete_semester()` through an
+HTTP round trip were deleted by issue #341's cutover to the React SPA
+(their surviving behavioural coverage lives in `test_semester_api.py`'s
+`DeleteApiTests`/`DeletionSummaryApiTests`), but neither of those touches
+the cascade's row-by-row detail or the R2 on_commit/storage-failure
+handling this module pins directly against the service function — so
+these two classes were kept rather than deleted with the rest of that
+file.
+"""
 
 from unittest.mock import patch
 
 from botocore.exceptions import ClientError, EndpointConnectionError
-from django.test import TestCase, override_settings
-from django.urls import reverse
+from django.test import TestCase
 
 from identity.factories import PersonFactory
 from identity.models import Person
@@ -34,8 +43,6 @@ from scheduling.services import (
     get_live_semester,
     semester_deletion_summary,
 )
-
-PASSWORD = 'a-strong-test-password-123'
 
 
 class SemesterDeletionSummaryTests(TestCase):
@@ -163,137 +170,3 @@ class DeleteSemesterServiceTests(TestCase):
             delete_semester(draft)
 
         recording_storage.return_value.connection.meta.client.delete_object.assert_not_called()
-
-
-@override_settings(SECURE_SSL_REDIRECT=False)
-class AnonymousAccessTests(TestCase):
-    def test_delete_confirm_redirects_anonymous_users_to_login(self):
-        """An anonymous GET to the delete confirmation redirects to the login page."""
-        semester = SemesterFactory(draft=True)
-        url = reverse('scheduling:manage-semesters-delete', args=[semester.pk])
-
-        response = self.client.get(url)
-
-        self.assertRedirects(response, f"{reverse('identity:login')}?next={url}")
-
-    def test_delete_post_redirects_anonymous_users_to_login(self):
-        """An anonymous POST to the delete action redirects to login and deletes nothing."""
-        semester = SemesterFactory(draft=True)
-        url = reverse('scheduling:manage-semesters-delete', args=[semester.pk])
-
-        response = self.client.post(url)
-
-        self.assertRedirects(response, f"{reverse('identity:login')}?next={url}")
-        self.assertTrue(Semester.objects.filter(pk=semester.pk).exists())
-
-
-@override_settings(SECURE_SSL_REDIRECT=False)
-class NonAdminAccessTests(TestCase):
-    @classmethod
-    def setUpTestData(cls):
-        """Build a synthetic non-admin Person to log in as before each test."""
-        cls.person = PersonFactory(password=PASSWORD, is_admin=False)
-
-    def setUp(self):
-        """Log in as the synthetic non-admin Person before each test."""
-        self.client.login(username=self.person.email, password=PASSWORD)
-
-    def test_delete_confirm_is_forbidden_for_non_admin(self):
-        """A logged-in non-admin's GET to the delete confirmation returns 403."""
-        semester = SemesterFactory(draft=True)
-
-        response = self.client.get(reverse('scheduling:manage-semesters-delete', args=[semester.pk]))
-
-        self.assertEqual(response.status_code, 403)
-
-    def test_delete_post_is_forbidden_for_non_admin(self):
-        """A logged-in non-admin's POST to the delete action returns 403 and deletes nothing."""
-        semester = SemesterFactory(draft=True)
-
-        response = self.client.post(reverse('scheduling:manage-semesters-delete', args=[semester.pk]))
-
-        self.assertEqual(response.status_code, 403)
-        self.assertTrue(Semester.objects.filter(pk=semester.pk).exists())
-
-
-@override_settings(SECURE_SSL_REDIRECT=False)
-class SemesterDeleteViewTests(TestCase):
-    @classmethod
-    def setUpTestData(cls):
-        """Build a synthetic admin Person to log in as before each test."""
-        cls.admin = PersonFactory(password=PASSWORD, is_admin=True)
-
-    def setUp(self):
-        """Log in as the synthetic admin Person before each test."""
-        self.client.login(username=self.admin.email, password=PASSWORD)
-
-    def test_confirmation_names_the_four_counts(self):
-        """The confirmation page's context carries all four counts for a non-Live Semester."""
-        draft = SemesterFactory(draft=True)
-        MembershipFactory(semester=draft)
-        SongFactory(semester=draft)
-        rehearsal = RehearsalFactory(semester=draft)
-        RecordingFactory(rehearsal_song__rehearsal=rehearsal)
-
-        response = self.client.get(reverse('scheduling:manage-semesters-delete', args=[draft.pk]))
-
-        self.assertEqual(response.status_code, 200)
-        summary = response.context['summary']
-        self.assertEqual(summary.member_count, 1)
-        self.assertEqual(summary.song_count, 1)
-        self.assertEqual(summary.rehearsal_count, 1)
-        self.assertEqual(summary.recording_count, 1)
-        self.assertContains(response, 'uploaded audio')
-
-    def test_confirmation_offers_no_export_or_keep_branch(self):
-        """The confirmation page presents deletion as one decision, never an export/keep choice."""
-        draft = SemesterFactory(draft=True)
-
-        response = self.client.get(reverse('scheduling:manage-semesters-delete', args=[draft.pk]))
-
-        self.assertNotContains(response, 'export', status_code=200, html=False)
-
-    def test_delete_control_is_absent_for_the_live_semester_confirmation(self):
-        """GETting the delete confirmation for the Live Semester 404s: the control does not exist for it."""
-        live = SemesterFactory()
-
-        response = self.client.get(reverse('scheduling:manage-semesters-delete', args=[live.pk]))
-
-        self.assertEqual(response.status_code, 404)
-
-    def test_delete_link_is_absent_for_the_live_semester_on_the_list(self):
-        """The Semesters list renders no delete link next to the Live Semester."""
-        live = SemesterFactory()
-
-        response = self.client.get(reverse('scheduling:manage-semesters'))
-
-        self.assertNotContains(response, reverse('scheduling:manage-semesters-delete', args=[live.pk]))
-
-    @patch('scheduling.services._recording_storage')
-    def test_post_deletes_a_draft_and_redirects_with_message(self, recording_storage):
-        """POSTing the delete action deletes the target Semester and redirects with a success message."""
-        draft = SemesterFactory(draft=True)
-
-        response = self.client.post(
-            reverse('scheduling:manage-semesters-delete', args=[draft.pk]), follow=True,
-        )
-
-        self.assertRedirects(response, reverse('scheduling:manage-semesters'))
-        self.assertFalse(Semester.objects.filter(pk=draft.pk).exists())
-        messages = [str(m) for m in response.context['messages']]
-        self.assertTrue(any('deleted' in m for m in messages))
-
-    def test_post_refuses_to_delete_the_live_semester(self):
-        """POSTing the delete action against the Live Semester is rejected and it survives."""
-        live = SemesterFactory()
-
-        response = self.client.post(reverse('scheduling:manage-semesters-delete', args=[live.pk]))
-
-        self.assertEqual(response.status_code, 400)
-        self.assertTrue(Semester.objects.filter(pk=live.pk).exists())
-
-    def test_delete_404s_for_a_nonexistent_semester(self):
-        """POSTing the delete action for a nonexistent Semester id 404s."""
-        response = self.client.post(reverse('scheduling:manage-semesters-delete', args=[999999]))
-
-        self.assertEqual(response.status_code, 404)

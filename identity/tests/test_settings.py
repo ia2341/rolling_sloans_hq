@@ -102,6 +102,14 @@ class ProductionSecuritySettingsTests(unittest.TestCase):
         self.assertIn('SITE_URL', result.stderr)
 
 
+class PasswordResetTimeoutTests(unittest.TestCase):
+    def test_password_reset_timeout_is_explicitly_three_days(self):
+        """PASSWORD_RESET_TIMEOUT is declared explicitly (issue #327), not left to Django's coincidentally-equal default."""
+        from django.conf import settings
+
+        self.assertEqual(settings.PASSWORD_RESET_TIMEOUT, 60 * 60 * 24 * 3)
+
+
 class DevSettingsTests(unittest.TestCase):
     def test_tls_settings_not_forced_when_debug_true(self):
         values = load_settings_with_debug('True')

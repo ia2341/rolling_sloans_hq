@@ -97,3 +97,48 @@ class Person(AbstractBaseUser, PermissionsMixin):
     def __str__(self):
         """Return the person's email address as a string."""
         return self.email
+
+
+class LoginAttempt(models.Model):
+    """One row per sign-in POST, win or lose (#327's limit one: failed sign-ins).
+
+    Keyed on the address *as submitted*, not a resolved `Person` FK — a
+    failed attempt may name an address with no account at all, which is
+    exactly the case a guessing attack produces. Counting rows in a window
+    is deliberate over a cache: `CACHES` is unconfigured, so Django falls
+    back to per-process `LocMemCache`, which would silently multiply any
+    limit by the gunicorn worker count (the reasoning #307 established for
+    the login-code work this ticket reverses).
+    """
+
+    email = models.EmailField()
+    ip_address = models.GenericIPAddressField()
+    was_successful = models.BooleanField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes: ClassVar[list] = [
+            models.Index(fields=['email', 'created_at']),
+            models.Index(fields=['ip_address', 'created_at']),
+        ]
+
+
+class AuthEmailRequest(models.Model):
+    """One row per outbound auth email requested: a reset request or a `resend_invite()` (#327's limit two).
+
+    This limit is about Resend quota and sending reputation, not
+    enumeration: an unauthenticated endpoint that triggers third-party
+    email is a way to burn both, which would take down all authentication,
+    invites included. Row-counted for the same worker-count reason as
+    `LoginAttempt`.
+    """
+
+    email = models.EmailField()
+    ip_address = models.GenericIPAddressField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes: ClassVar[list] = [
+            models.Index(fields=['email', 'created_at']),
+            models.Index(fields=['ip_address', 'created_at']),
+        ]

@@ -8,13 +8,66 @@ from config.views import AdminRequiredMixin
 
 from .forms import PersonInviteForm
 from .models import Person
-from .services import invite_person
+from .services import (
+    AlreadyHasPasswordError,
+    invite_person,
+    is_auth_email_rate_limited,
+    is_login_rate_limited,
+    people_with_invite_status,
+    record_auth_email_request,
+    record_login_attempt,
+    resend_invite,
+)
+
+
+def _client_ip(request):
+    """Return the requesting client's IP address, for the rate-limit keys.
+
+    No reverse proxy is configured in front of this project, so
+    `REMOTE_ADDR` is the real client address; there is no `X-Forwarded-For`
+    to trust.
+    """
+    return request.META.get('REMOTE_ADDR', '0.0.0.0')
 
 
 class LoginView(auth_views.LoginView):
-    """Email + password login for a `Person` with a set password."""
+    """Email + password login for a `Person` with a set password (#327).
+
+    Layers the project's first rate limit on top of Django's stock
+    `AuthenticationForm`, which already returns one generic message for both
+    "no such user" and "wrong password" — kept as-is, per #327, so a failed
+    attempt never tells the caller which half was wrong. A successful login
+    cycles the session key for free: `django.contrib.auth.login()` (called
+    by `form_valid`) already does this.
+    """
 
     template_name = 'identity/login.html'
+
+    def post(self, request, *args, **kwargs):
+        """Refuse a rate-limited (email, IP) pair before touching credentials at all; otherwise defer to Django's flow."""
+        email = request.POST.get('username', '')
+        ip_address = _client_ip(request)
+        if is_login_rate_limited(email=email, ip_address=ip_address):
+            return self.render_to_response(self.get_context_data(form=self.get_form(), throttled=True))
+        return super().post(request, *args, **kwargs)
+
+    def form_valid(self, form):
+        """Record the successful attempt, then defer to Django's own login + session-cycle handling."""
+        record_login_attempt(
+            email=form.cleaned_data.get('username', ''),
+            ip_address=_client_ip(self.request),
+            was_successful=True,
+        )
+        return super().form_valid(form)
+
+    def form_invalid(self, form):
+        """Record the failed attempt, then defer to Django's own generic-error rendering."""
+        record_login_attempt(
+            email=self.request.POST.get('username', ''),
+            ip_address=_client_ip(self.request),
+            was_successful=False,
+        )
+        return super().form_invalid(form)
 
 
 class LogoutView(auth_views.LogoutView):
@@ -24,67 +77,68 @@ class LogoutView(auth_views.LogoutView):
 
 
 class SetPasswordConfirmView(auth_views.PasswordResetConfirmView):
-    """The set-password half of the invite flow (issue #24).
+    """The single token route serving both the invite and the forgot-password flow (#327).
 
-    Reuses Django's built-in token validation (single-use, expires per
-    `PASSWORD_RESET_TIMEOUT`) under "set your password" wording rather than
-    "reset your password", since these accounts have never had a password.
+    Merges the previous `SetPasswordConfirmView` and `PasswordResetConfirmView`
+    into one: `has_usable_password()` on the target account picks the
+    copy — "Set your password" for a never-set-password invitee, "Choose a
+    new password" for someone who has reset before — and a successful POST
+    renders inline on the same page instead of redirecting to a separate
+    "done" page, collapsing two routes into this one.
     """
 
     template_name = 'identity/set_password_form.html'
-    success_url = reverse_lazy('identity:set-password-complete')
+    post_reset_login = False
 
+    def get_context_data(self, **kwargs):
+        """Add `has_usable_password` (for the invite-vs-reset copy) and clear `success_url` so nothing redirects."""
+        context = super().get_context_data(**kwargs)
+        context['has_usable_password'] = bool(self.user and self.user.has_usable_password())
+        context['done'] = getattr(self, '_done', False)
+        return context
 
-class SetPasswordCompleteView(auth_views.PasswordResetCompleteView):
-    template_name = 'identity/set_password_complete.html'
+    def form_valid(self, form):
+        """Save the new password and re-render this same page with `done=True`, rather than redirecting."""
+        form.save()
+        self._done = True
+        return self.render_to_response(self.get_context_data(form=form))
 
 
 class PasswordResetRequestView(auth_views.PasswordResetView):
-    """The 'forgot password' request half of the self-serve reset flow (issue #26)."""
+    """The 'forgot your password' request page (#327): one page, no separate "done" redirect.
+
+    Rate-limited on the outbound-email quota limit, keyed on the submitted
+    address and the requesting IP: an unauthenticated endpoint that
+    triggers third-party email can burn Resend's quota and sending
+    reputation, which would take down all authentication, invites
+    included. The response is identical whether the address exists,
+    whether the send actually happened, or (see `throttled` below) whether
+    the request was refused for quota reasons — none of those must become
+    an oracle for whether an account exists.
+    """
 
     template_name = 'identity/password_reset_form.html'
     email_template_name = 'identity/password_reset_email.txt'
     subject_template_name = 'identity/password_reset_subject.txt'
-    success_url = reverse_lazy('identity:password-reset-done')
 
-
-class PasswordResetDoneView(auth_views.PasswordResetDoneView):
-    """Shown after a reset request regardless of whether the email is known, to avoid leaking that."""
-
-    template_name = 'identity/password_reset_done.html'
-
-
-class PasswordResetConfirmView(auth_views.PasswordResetConfirmView):
-    """The confirm half of the reset flow: submitting a new password invalidates the link (issue #26)."""
-
-    template_name = 'identity/password_reset_confirm.html'
-    success_url = reverse_lazy('identity:password-reset-complete')
-
-
-class PasswordResetCompleteView(auth_views.PasswordResetCompleteView):
-    template_name = 'identity/password_reset_complete.html'
-
-
-class PasswordChangeView(auth_views.PasswordChangeView):
-    """Self-serve password change from the profile page (issue #90), gated by the member's current password.
-
-    Distinct from the token-based forgot-password flow above: this requires
-    knowing the current password, so a hijacked session alone can't lock the
-    real member out by changing it.
-    """
-
-    template_name = 'identity/password_change_form.html'
-    success_url = reverse_lazy('identity:password-change-done')
-
-
-class PasswordChangeDoneView(auth_views.PasswordChangeDoneView):
-    """Shown after a successful password change."""
-
-    template_name = 'identity/password_change_done.html'
+    def form_valid(self, form):
+        """Send the reset email (unless rate-limited) and re-render this same page with `sent=True`."""
+        email = form.cleaned_data['email']
+        ip_address = _client_ip(self.request)
+        if is_auth_email_rate_limited(email=email, ip_address=ip_address):
+            return self.render_to_response(self.get_context_data(form=form, throttled=True))
+        record_auth_email_request(email=email, ip_address=ip_address)
+        form.save(
+            email_template_name=self.email_template_name,
+            subject_template_name=self.subject_template_name,
+            use_https=self.request.is_secure(),
+            request=self.request,
+        )
+        return self.render_to_response(self.get_context_data(form=form, sent=True))
 
 
 class PeopleView(AdminRequiredMixin, View):
-    """`/manage/people/`: an admin lists Persons and invites new ones (issue #59, issue #17 user story 13)."""
+    """`/manage/people/`: an admin lists Persons, invites new ones, and re-invites pending ones (#327, issue #59)."""
 
     template_name = 'identity/people.html'
 
@@ -102,9 +156,9 @@ class PeopleView(AdminRequiredMixin, View):
         return render(request, self.template_name, self._build_context(form))
 
     def _build_context(self, form=None):
-        """Build context: the Person roster ordered by name, plus the invite form (fresh if none is given)."""
+        """Build context: the Person roster (with pending-invite status) plus the invite form."""
         return {
-            'people': Person.objects.order_by('name'),
+            'people': people_with_invite_status(),
             'form': form or PersonInviteForm(),
         }
 
@@ -118,4 +172,24 @@ class PersonToggleAdminView(AdminRequiredMixin, View):
         person.is_admin = not person.is_admin
         person.save(update_fields=['is_admin'])
         messages.success(request, f'Updated admin access for {person.email}.')
+        return redirect('identity:people')
+
+
+class PersonResendInviteView(AdminRequiredMixin, View):
+    """`/manage/people/<id>/resend-invite/`: an admin re-sends a dead invite link (#327).
+
+    Refused for a Person who has already set a password — that member's
+    recovery route is the self-serve forgot-password flow, not an admin
+    reset from the roster.
+    """
+
+    def post(self, request, pk):
+        """Re-invite the target Person, or redirect with a refusal message if they already have a password."""
+        person = get_object_or_404(Person, pk=pk)
+        try:
+            resend_invite(person)
+        except AlreadyHasPasswordError:
+            messages.error(request, f'{person.email} has already set a password.')
+        else:
+            messages.success(request, f'Re-sent invite to {person.email}.')
         return redirect('identity:people')

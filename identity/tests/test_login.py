@@ -1,19 +1,37 @@
 """Login + sessions (issue #25): login/logout views and sliding session expiry."""
 
+import json
 import re
+import tempfile
+from datetime import timedelta
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from django.conf import settings
 from django.core import mail
 from django.test import TestCase, override_settings
 from django.urls import reverse
+from django.utils import timezone
 from faker import Faker
 
 from identity.factories import PersonFactory
-from identity.services import invite_person
+from identity.models import LoginAttempt
+from identity.services import MAX_FAILED_LOGIN_ATTEMPTS, invite_person
 
 PASSWORD = 'a-strong-test-password-123'
 fake = Faker()
+
+# A minimal synthetic Vite manifest (mirrors config/tests/test_spa_index.py's
+# fixture), so a redirect landing on the SPA shell (`spa-index`) can resolve
+# without a real `npm run build` output on disk.
+_SYNTHETIC_MANIFEST = {
+    'index.html': {
+        'file': 'assets/index-deadbeef.js',
+        'name': 'index',
+        'src': 'index.html',
+        'isEntry': True,
+    },
+}
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)
@@ -42,6 +60,122 @@ class LoginViewTests(TestCase):
         self.assertFalse(response.wsgi_request.user.is_authenticated)
         self.assertNotIn('_auth_user_id', self.client.session)
 
+    def test_wrong_password_and_unknown_address_give_the_same_message(self):
+        """A wrong password and an unknown address must render an identical failure message (#327)."""
+        person = PersonFactory(password=PASSWORD)
+
+        wrong_password_response = self.client.post(
+            reverse('identity:login'),
+            {'username': person.email, 'password': 'wrong-password'},
+        )
+        unknown_address_response = self.client.post(
+            reverse('identity:login'),
+            {'username': fake.email(domain='example.com'), 'password': PASSWORD},
+        )
+
+        wrong_password_errors = wrong_password_response.context['form'].errors
+        unknown_address_errors = unknown_address_response.context['form'].errors
+        self.assertEqual(wrong_password_errors, unknown_address_errors)
+
+    def test_successful_login_cycles_the_session_key(self):
+        """A successful sign-in cycles the session key (#327), asserted rather than assumed."""
+        person = PersonFactory(password=PASSWORD)
+        session = self.client.session
+        session['probe'] = True
+        session.save()
+        stale_session_key = session.session_key
+
+        self.client.post(
+            reverse('identity:login'),
+            {'username': person.email, 'password': PASSWORD},
+        )
+
+        self.assertNotEqual(self.client.session.session_key, stale_session_key)
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class LoginRateLimitTests(TestCase):
+    """The project's first rate limit: failed sign-ins, keyed on address and on IP (#327)."""
+
+    def test_under_the_limit_still_attempts_authentication(self):
+        """Fewer than the threshold's worth of failures still lets a correct password through."""
+        person = PersonFactory(password=PASSWORD)
+        for _ in range(MAX_FAILED_LOGIN_ATTEMPTS - 1):
+            self.client.post(
+                reverse('identity:login'),
+                {'username': person.email, 'password': 'wrong-password'},
+            )
+
+        response = self.client.post(
+            reverse('identity:login'),
+            {'username': person.email, 'password': PASSWORD},
+        )
+
+        self.assertTrue(response.wsgi_request.user.is_authenticated)
+
+    def test_over_the_limit_refuses_even_a_correct_password(self):
+        """Once an address has racked up enough failures, even the right password is refused."""
+        person = PersonFactory(password=PASSWORD)
+        for _ in range(MAX_FAILED_LOGIN_ATTEMPTS):
+            self.client.post(
+                reverse('identity:login'),
+                {'username': person.email, 'password': 'wrong-password'},
+            )
+
+        response = self.client.post(
+            reverse('identity:login'),
+            {'username': person.email, 'password': PASSWORD},
+        )
+
+        self.assertFalse(response.wsgi_request.user.is_authenticated)
+        self.assertTrue(response.context['throttled'])
+
+    def test_refusal_message_is_identical_for_a_real_and_an_unknown_address(self):
+        """The throttle refusal must not become an oracle for whether the address exists."""
+        person = PersonFactory(password=PASSWORD)
+        unknown_email = fake.email(domain='example.com')
+        for _ in range(MAX_FAILED_LOGIN_ATTEMPTS):
+            self.client.post(
+                reverse('identity:login'),
+                {'username': person.email, 'password': 'wrong-password'},
+            )
+        known_response = self.client.post(
+            reverse('identity:login'),
+            {'username': person.email, 'password': PASSWORD},
+        )
+
+        self.client.cookies.clear()
+        for _ in range(MAX_FAILED_LOGIN_ATTEMPTS):
+            self.client.post(
+                reverse('identity:login'),
+                {'username': unknown_email, 'password': 'wrong-password'},
+            )
+        unknown_response = self.client.post(
+            reverse('identity:login'),
+            {'username': unknown_email, 'password': PASSWORD},
+        )
+
+        self.assertEqual(known_response.status_code, unknown_response.status_code)
+        self.assertTrue(known_response.context['throttled'])
+        self.assertTrue(unknown_response.context['throttled'])
+
+    def test_window_expiring_restores_service(self):
+        """Failures outside the counting window don't count against the limit."""
+        person = PersonFactory(password=PASSWORD)
+        stale_time = timezone.now() - timedelta(minutes=30)
+        for _ in range(MAX_FAILED_LOGIN_ATTEMPTS):
+            attempt = LoginAttempt.objects.create(
+                email=person.email, ip_address='127.0.0.1', was_successful=False,
+            )
+            LoginAttempt.objects.filter(pk=attempt.pk).update(created_at=stale_time)
+
+        response = self.client.post(
+            reverse('identity:login'),
+            {'username': person.email, 'password': PASSWORD},
+        )
+
+        self.assertTrue(response.wsgi_request.user.is_authenticated)
+
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class LogoutViewTests(TestCase):
@@ -60,19 +194,37 @@ class LogoutViewTests(TestCase):
 class LoginRedirectTests(TestCase):
     """A next-less login must land somewhere real, not Django's default /accounts/profile/ (issue #296)."""
 
+    def setUp(self):
+        """Point FRONTEND_MANIFEST_PATH at a synthetic Vite manifest, so a redirect to `spa-index` resolves."""
+        tmp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp_dir.cleanup)
+        manifest_path = Path(tmp_dir.name) / 'manifest.json'
+        manifest_path.write_text(json.dumps(_SYNTHETIC_MANIFEST))
+        override = override_settings(FRONTEND_MANIFEST_PATH=manifest_path)
+        override.enable()
+        self.addCleanup(override.disable)
+
     def test_bounce_then_login_still_honours_next(self):
-        """LoginRequiredMixin's bounce carries ?next=, and a login through it still lands there."""
-        person = PersonFactory(password=PASSWORD)
-        bounce = self.client.get(reverse('scheduling:schedule'), follow=True)
+        """LoginRequiredMixin's bounce carries ?next=, and a login through it still lands there.
+
+        `identity:people` (`/accounts/manage/people/`) is the one surviving
+        page-shaped route gated by `AdminRequiredMixin`/`BaseView` rather
+        than `ApiView` (issue #341: every other Django page moved under
+        `/api/`, which answers an anonymous request with a JSON 401, never
+        a redirect bounce) — so it's the only route left that can still
+        demonstrate this mechanism.
+        """
+        person = PersonFactory(password=PASSWORD, is_admin=True)
+        bounce = self.client.get(reverse('identity:people'), follow=True)
         login_path = bounce.redirect_chain[-1][0]
-        self.assertIn(f'next={reverse("scheduling:schedule")}', login_path)
+        self.assertIn(f'next={reverse("identity:people")}', login_path)
 
         response = self.client.post(
             login_path,
             {'username': person.email, 'password': PASSWORD},
         )
 
-        self.assertRedirects(response, reverse('scheduling:schedule'))
+        self.assertRedirects(response, reverse('identity:people'))
 
     def test_direct_login_visit_then_login_lands_on_a_real_page(self):
         """Visiting /accounts/login/ directly (no ?next=), then logging in, must not 404."""
@@ -83,7 +235,7 @@ class LoginRedirectTests(TestCase):
             {'username': person.email, 'password': PASSWORD},
         )
 
-        self.assertRedirects(response, reverse('scheduling:overview'))
+        self.assertRedirects(response, reverse('spa-index'))
 
     def test_logout_then_login_lands_on_a_real_page(self):
         """Logging out and logging back in (no ?next=) must not 404."""
@@ -96,7 +248,7 @@ class LoginRedirectTests(TestCase):
             {'username': person.email, 'password': PASSWORD},
         )
 
-        self.assertRedirects(response, reverse('scheduling:overview'))
+        self.assertRedirects(response, reverse('spa-index'))
 
     def test_invite_set_password_then_login_lands_on_a_real_page(self):
         """A brand-new invited member's very first login, right after setting their password, must not 404."""
@@ -117,7 +269,7 @@ class LoginRedirectTests(TestCase):
             {'username': person.email, 'password': PASSWORD},
         )
 
-        self.assertRedirects(response, reverse('scheduling:overview'))
+        self.assertRedirects(response, reverse('spa-index'))
 
 
 class LoginUrlSettingTests(TestCase):

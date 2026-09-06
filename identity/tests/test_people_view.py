@@ -34,6 +34,15 @@ class AnonymousAccessTests(TestCase):
 
         self.assertRedirects(response, f"{reverse('identity:login')}?next={url}")
 
+    def test_resend_invite_redirects_anonymous_users_to_login(self):
+        """An anonymous POST to the resend-invite endpoint redirects to the login page."""
+        target = PersonFactory()
+        url = reverse('identity:people-resend-invite', args=[target.pk])
+
+        response = self.client.post(url)
+
+        self.assertRedirects(response, f"{reverse('identity:login')}?next={url}")
+
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class NonAdminAccessTests(TestCase):
@@ -69,6 +78,15 @@ class NonAdminAccessTests(TestCase):
         self.assertEqual(response.status_code, 403)
         self.assertFalse(Person.objects.get(pk=target.pk).is_admin)
 
+    def test_resend_invite_is_forbidden_for_non_admin(self):
+        """A logged-in non-admin's POST to the resend-invite endpoint returns 403 and sends nothing."""
+        target = PersonFactory()
+
+        response = self.client.post(reverse('identity:people-resend-invite', args=[target.pk]))
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(len(mail.outbox), 0)
+
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class PeopleViewGetTests(TestCase):
@@ -90,6 +108,31 @@ class PeopleViewGetTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(other, response.context['people'])
         self.assertIn(self.admin, response.context['people'])
+
+    def test_marks_pending_people_as_pending(self):
+        """A never-set-password Person is flagged is_pending_invite; a settled one is not (#327)."""
+        pending = PersonFactory()
+        settled = PersonFactory(password=PASSWORD)
+
+        response = self.client.get(reverse('identity:people'))
+
+        by_pk = {person.pk: person for person in response.context['people']}
+        self.assertTrue(by_pk[pending.pk].is_pending_invite)
+        self.assertFalse(by_pk[settled.pk].is_pending_invite)
+
+    def test_invite_again_button_present_only_for_pending_people(self):
+        """The 'Invite again' control renders for a pending person and not for a settled one."""
+        pending = PersonFactory()
+        settled = PersonFactory(password=PASSWORD)
+
+        response = self.client.get(reverse('identity:people'))
+
+        self.assertContains(
+            response, reverse('identity:people-resend-invite', args=[pending.pk]),
+        )
+        self.assertNotContains(
+            response, reverse('identity:people-resend-invite', args=[settled.pk]),
+        )
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)
@@ -164,5 +207,48 @@ class PeopleViewPostTests(TestCase):
     def test_toggle_admin_404s_for_unknown_person(self):
         """A toggle-admin POST for a nonexistent Person id returns 404."""
         response = self.client.post(reverse('identity:people-toggle-admin', args=[999999]))
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_resend_invite_re_sends_and_redirects_with_message(self):
+        """A valid resend-invite POST re-sends to a pending Person and redirects with a success message."""
+        target = PersonFactory()
+
+        response = self.client.post(
+            reverse('identity:people-resend-invite', args=[target.pk]), follow=True,
+        )
+
+        self.assertRedirects(response, reverse('identity:people'))
+        self.assertEqual(len(mail.outbox), 1)
+        messages = [str(m) for m in response.context['messages']]
+        self.assertTrue(any(target.email in m for m in messages))
+
+    def test_resend_invite_is_refused_for_a_settled_person(self):
+        """Resend-invite on a Person who already has a usable password is refused with a clear reason."""
+        target = PersonFactory(password=PASSWORD)
+
+        response = self.client.post(
+            reverse('identity:people-resend-invite', args=[target.pk]), follow=True,
+        )
+
+        self.assertRedirects(response, reverse('identity:people'))
+        self.assertEqual(len(mail.outbox), 0)
+        messages = [str(m) for m in response.context['messages']]
+        self.assertTrue(any('already set a password' in m for m in messages))
+
+    def test_resend_invite_does_not_duplicate_the_person(self):
+        """Clicking resend-invite repeatedly never creates a second Person row."""
+        target = PersonFactory()
+        url = reverse('identity:people-resend-invite', args=[target.pk])
+
+        self.client.post(url)
+        self.client.post(url)
+
+        self.assertEqual(Person.objects.filter(email=target.email).count(), 1)
+        self.assertEqual(len(mail.outbox), 2)
+
+    def test_resend_invite_404s_for_unknown_person(self):
+        """A resend-invite POST for a nonexistent Person id returns 404."""
+        response = self.client.post(reverse('identity:people-resend-invite', args=[999999]))
 
         self.assertEqual(response.status_code, 404)
