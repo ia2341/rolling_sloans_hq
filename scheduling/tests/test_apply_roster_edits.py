@@ -93,13 +93,15 @@ class ApplyRosterEditsTests(TestCase):
             {keep_role.pk, add_role.pk},
         )
 
-    def test_role_removal_no_longer_drives_is_role_mismatch(self):
-        """Dropping a declared MembershipRole here has no effect on is_role_mismatch (ADR-0014, issue #377): only PersonRole does now.
+    def test_role_removal_no_longer_touches_is_role_mismatch(self):
+        """Dropping a roster-declared MembershipRole leaves is_role_mismatch untouched (issue #377, ADR-0014).
 
-        Superseded `test_role_removal_reevaluates_is_role_mismatch_through_the_model`,
-        which pinned the retired behavior — `MembershipRole`'s own
-        post_save/post_delete signals used to drive the resweep, before
-        issue #377 repointed it at `PersonRole` exclusively.
+        is_role_mismatch now reads the person-level PersonRole, which the
+        Roster editor's Role-set reconciliation doesn't write to (that
+        surface still edits MembershipRole -- Role declarations are edited
+        via PersonRole on the person page instead, issue #378). A
+        PersonRole declared independently of this Buffer keeps the
+        assignment unflagged even after its MembershipRole is dropped.
         """
         person = PersonFactory()
         membership = MembershipFactory(person=person, semester=self.semester)

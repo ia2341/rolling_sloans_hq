@@ -166,7 +166,7 @@ class ApplySongRoleAssignmentsTests(TestCase):
 
     def test_added_entry_for_a_person_who_has_not_declared_the_role_is_flagged_not_blocked(self):
         """Picking a mismatched Person is allowed with no block; the saved row carries the mismatch flag (ADR-0002)."""
-        membership = MembershipFactory(semester=self.semester)  # no MembershipRole for self.role
+        membership = MembershipFactory(semester=self.semester)  # no PersonRole declared for self.role
         buffer = self._buffer(added_entries=[(self.song.pk, self.role.pk, membership.person.pk)])
 
         apply_song_role_assignments(buffer, viewing_semester=self.semester)

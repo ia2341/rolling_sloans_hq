@@ -7,6 +7,7 @@ from identity.factories import PersonFactory
 from scheduling.factories import (
     BackupFactory,
     ConflictFactory,
+    MembershipFactory,
     PersonRoleFactory,
     RehearsalSongFactory,
     RoleFactory,
@@ -58,17 +59,19 @@ class BackupMismatchTests(TestCase):
         """Recording a Backup for a Role the Person hasn't declared sets is_role_mismatch=True."""
         role = RoleFactory()
         rehearsal_song = RehearsalSongFactory()
-        person = PersonFactory()  # no PersonRole declared
+        person = PersonFactory()
+        MembershipFactory(person=person, semester=rehearsal_song.rehearsal.semester)
 
         backup = BackupFactory(rehearsal_song=rehearsal_song, role=role, person=person)
 
         self.assertTrue(backup.is_role_mismatch)
 
     def test_backup_with_declared_role_is_not_flagged(self):
-        """Recording a Backup for a Role the Person has declared as a standing PersonRole is not flagged."""
+        """Recording a Backup for a Role the Person has declared (person-level, per ADR-0014) is not flagged."""
         role = RoleFactory()
         rehearsal_song = RehearsalSongFactory()
         person = PersonFactory()
+        MembershipFactory(person=person, semester=rehearsal_song.rehearsal.semester)
         PersonRoleFactory(person=person, role=role)
 
         backup = BackupFactory(rehearsal_song=rehearsal_song, role=role, person=person)
@@ -76,10 +79,10 @@ class BackupMismatchTests(TestCase):
         self.assertFalse(backup.is_role_mismatch)
 
     def test_backup_with_no_membership_at_all_is_flagged(self):
-        """A Backup for a Person with no Membership and no declared PersonRole at all is flagged mismatched."""
+        """A Backup for a Person with no Membership in the Semester at all is flagged mismatched."""
         role = RoleFactory()
         rehearsal_song = RehearsalSongFactory()
-        person = PersonFactory()  # no Membership, no PersonRole at all
+        person = PersonFactory()  # no Membership at all
 
         backup = BackupFactory(rehearsal_song=rehearsal_song, role=role, person=person)
 
@@ -90,6 +93,7 @@ class BackupMismatchTests(TestCase):
         role = RoleFactory()
         rehearsal_song = RehearsalSongFactory()
         person = PersonFactory()
+        MembershipFactory(person=person, semester=rehearsal_song.rehearsal.semester)
         backup = BackupFactory(rehearsal_song=rehearsal_song, role=role, person=person)
         self.assertTrue(backup.is_role_mismatch)
 
@@ -99,10 +103,11 @@ class BackupMismatchTests(TestCase):
         self.assertFalse(reloaded.is_role_mismatch)
 
     def test_mismatch_reappears_when_declared_role_is_removed(self):
-        """Removing the matching PersonRole re-flags an existing Backup as mismatched (issue #377's resweep)."""
+        """Removing the matching PersonRole re-flags an existing Backup as mismatched."""
         role = RoleFactory()
         rehearsal_song = RehearsalSongFactory()
         person = PersonFactory()
+        MembershipFactory(person=person, semester=rehearsal_song.rehearsal.semester)
         person_role = PersonRoleFactory(person=person, role=role)
         backup = BackupFactory(rehearsal_song=rehearsal_song, role=role, person=person)
         self.assertFalse(backup.is_role_mismatch)
@@ -117,6 +122,7 @@ class BackupMismatchTests(TestCase):
         role = RoleFactory()
         song = SongFactory()
         person = PersonFactory()
+        MembershipFactory(person=person, semester=song.semester)
         assignment = SongRoleAssignmentFactory(song=song, role=role, person=person)
         self.assertTrue(assignment.is_role_mismatch)
 

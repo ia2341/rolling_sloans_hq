@@ -172,12 +172,12 @@ class PreviewRosterEditsTests(TestCase):
 
         self.assertTrue(any('No Roles Left' in line for line in fallout.quiet))
 
-    def test_role_removal_no_longer_produces_quiet_mismatch_fallout(self):
-        """Dropping a declared MembershipRole here reports no mismatch Fallout (ADR-0014, issue #377): only PersonRole drives is_role_mismatch now.
+    def test_dropping_a_membership_role_no_longer_produces_a_mismatch_quiet_line(self):
+        """Dropping a roster-declared MembershipRole raises no quiet Fallout on its own (issue #377, ADR-0014).
 
-        Superseded `test_quiet_fallout_flags_a_newly_mismatched_assignment`,
-        which pinned the retired behavior from before issue #377 repointed
-        the resweep at `PersonRole` exclusively.
+        is_role_mismatch now reads the person-level PersonRole, which this
+        Buffer's Role-set reconciliation doesn't touch -- Role declarations
+        are edited via PersonRole on the person page instead, issue #378.
         """
         person = PersonFactory(name='Mismatch Person')
         membership = MembershipFactory(person=person, semester=self.semester)

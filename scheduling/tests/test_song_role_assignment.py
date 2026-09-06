@@ -1,10 +1,11 @@
-"""SongRoleAssignment + role-mismatch flag (issue #35, retargeted at PersonRole by ADR-0014/#377)."""
+"""SongRoleAssignment + role-mismatch flag (issue #35, repointed to PersonRole by issue #377)."""
 
 from django.db import IntegrityError, transaction
 from django.test import TestCase
 
 from identity.factories import PersonFactory
 from scheduling.factories import (
+    MembershipFactory,
     PersonRoleFactory,
     RoleFactory,
     SongFactory,
@@ -18,17 +19,19 @@ class SongRoleAssignmentMismatchTests(TestCase):
         """Assigning a Person to a Role they haven't declared sets is_role_mismatch=True."""
         role = RoleFactory()
         song = SongFactory()
-        person = PersonFactory()  # no PersonRole declared
+        person = PersonFactory()
+        MembershipFactory(person=person, semester=song.semester)  # no PersonRole declared
 
         assignment = SongRoleAssignmentFactory(song=song, role=role, person=person)
 
         self.assertTrue(assignment.is_role_mismatch)
 
     def test_assignment_with_declared_role_is_not_flagged(self):
-        """Assigning a Person to a Role they've declared as a standing PersonRole is not flagged."""
+        """Assigning a Person to a Role they've declared (person-level, per ADR-0014) is not flagged."""
         role = RoleFactory()
         song = SongFactory()
         person = PersonFactory()
+        MembershipFactory(person=person, semester=song.semester)
         PersonRoleFactory(person=person, role=role)
 
         assignment = SongRoleAssignmentFactory(song=song, role=role, person=person)
@@ -40,6 +43,7 @@ class SongRoleAssignmentMismatchTests(TestCase):
         role = RoleFactory()
         song = SongFactory()
         person = PersonFactory()
+        MembershipFactory(person=person, semester=song.semester)
         assignment = SongRoleAssignmentFactory(song=song, role=role, person=person)
         self.assertTrue(assignment.is_role_mismatch)
 
@@ -53,6 +57,7 @@ class SongRoleAssignmentMismatchTests(TestCase):
         role = RoleFactory()
         song = SongFactory()
         person = PersonFactory()
+        MembershipFactory(person=person, semester=song.semester)
         person_role = PersonRoleFactory(person=person, role=role)
         assignment = SongRoleAssignmentFactory(song=song, role=role, person=person)
         self.assertFalse(assignment.is_role_mismatch)
@@ -68,6 +73,8 @@ class SongRoleAssignmentMismatchTests(TestCase):
         song = SongFactory()
         watched_person = PersonFactory()
         other_person = PersonFactory()
+        MembershipFactory(person=watched_person, semester=song.semester)
+        MembershipFactory(person=other_person, semester=song.semester)
         assignment = SongRoleAssignmentFactory(song=song, role=role, person=watched_person)
         self.assertTrue(assignment.is_role_mismatch)
 
@@ -76,21 +83,18 @@ class SongRoleAssignmentMismatchTests(TestCase):
         reloaded = SongRoleAssignment.objects.get(pk=assignment.pk)
         self.assertTrue(reloaded.is_role_mismatch)
 
-    def test_declared_role_on_a_different_semesters_assignment_also_clears_mismatch(self):
-        """A standing PersonRole isn't Semester-scoped (ADR-0014): it resweeps every Semester's assignments, not just one."""
+    def test_person_role_declared_with_no_membership_at_all_still_clears_mismatch(self):
+        """PersonRole carries no Semester dimension (ADR-0014), so declaring it needs no Membership to clear a mismatch."""
         role = RoleFactory()
-        person = PersonFactory()
-        first_song = SongFactory(title='Song A')
-        second_song = SongFactory(title='Song B')
-        first_assignment = SongRoleAssignmentFactory(song=first_song, role=role, person=person)
-        second_assignment = SongRoleAssignmentFactory(song=second_song, role=role, person=person)
-        self.assertTrue(first_assignment.is_role_mismatch)
-        self.assertTrue(second_assignment.is_role_mismatch)
+        song = SongFactory()
+        person = PersonFactory()  # no Membership at all
+        assignment = SongRoleAssignmentFactory(song=song, role=role, person=person)
+        self.assertTrue(assignment.is_role_mismatch)
 
         PersonRoleFactory(person=person, role=role)
 
-        self.assertFalse(SongRoleAssignment.objects.get(pk=first_assignment.pk).is_role_mismatch)
-        self.assertFalse(SongRoleAssignment.objects.get(pk=second_assignment.pk).is_role_mismatch)
+        reloaded = SongRoleAssignment.objects.get(pk=assignment.pk)
+        self.assertFalse(reloaded.is_role_mismatch)
 
 
 class SongRoleAssignmentUniquenessTests(TestCase):
