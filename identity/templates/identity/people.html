@@ -15,15 +15,17 @@
   {% for person in people %}
     <li>
       {{ person.name }} ({{ person.email }}) &mdash; {% if person.is_admin %}Admin{% else %}Member{% endif %}
-      {% if person.is_pending_invite %}&mdash; <em>invited, hasn't set a password yet</em>{% endif %}
+      {% if person.invite_status == 'not_yet_invited' %}&mdash; <em>not yet invited</em>
+      {% elif person.invite_status == 'invited' %}&mdash; <em>invited, hasn't set a password yet</em>
+      {% endif %}
       <form method="post" action="{% url 'identity:people-toggle-admin' person.pk %}">
         {% csrf_token %}
         <button type="submit">{% if person.is_admin %}Revoke admin{% else %}Make admin{% endif %}</button>
       </form>
-      {% if person.is_pending_invite %}
+      {% if person.invite_status != 'accepted' %}
       <form method="post" action="{% url 'identity:people-resend-invite' person.pk %}">
         {% csrf_token %}
-        <button type="submit">Invite again</button>
+        <button type="submit">{% if person.invite_status == 'not_yet_invited' %}Invite{% else %}Invite again{% endif %}</button>
       </form>
       {% endif %}
     </li>

@@ -65,6 +65,14 @@ class Person(AbstractBaseUser, PermissionsMixin):
 
     No separate Group/Permission objects back `is_admin` — save() mirrors it
     onto `is_staff`/`is_superuser` directly, per the Identity & Auth spec (#13).
+
+    `invited_at` (issue #397) is null for a Person created without ever
+    sending them an invite email (see `identity.services.add_person`), and
+    stamped by `invite_person()`/`resend_invite()` the moment an invite
+    actually sends. It's the one bit `has_usable_password()` alone can't
+    supply: that flag already tells "Invited" from "Accepted" apart, but
+    collapses "never invited" into the same false as "invited, not yet
+    accepted". See `identity.services.invite_status_for()`.
     """
 
     name = models.CharField(max_length=255)
@@ -72,6 +80,7 @@ class Person(AbstractBaseUser, PermissionsMixin):
     is_admin = models.BooleanField(default=False)
     is_staff = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
+    invited_at = models.DateTimeField(null=True, blank=True)
 
     objects = PersonManager()
 

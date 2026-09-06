@@ -140,7 +140,7 @@ class SerializePersonExactKeySetTests(TestCase):
         )
 
     def test_admin_viewing_a_teammate_adds_only_available_roles(self):
-        """An admin viewing a teammate (can_edit_roles True, is_self False) adds only `available_roles`, never email/recordings."""
+        """An admin viewing a teammate (can_edit_roles True, is_self False) adds `available_roles` and `invite_status`, never email/recordings (#397)."""
         semester = SemesterFactory()
         person = PersonFactory(name='Teammate Placeholder')
         membership = MembershipFactory(person=person, semester=semester)
@@ -151,11 +151,44 @@ class SerializePersonExactKeySetTests(TestCase):
             set(data.keys()),
             {
                 'id', 'name', 'is_self', 'can_edit_roles', 'has_membership', 'semester_name',
-                'roles', 'songs', 'available_roles',
+                'roles', 'songs', 'available_roles', 'invite_status',
             },
         )
         self.assertNotIn('email', data)
         self.assertNotIn('recordings', data)
+
+    def test_invite_status_reflects_the_persons_lifecycle(self):
+        """`invite_status` (admin-viewing-a-teammate only) reads the Person's actual lifecycle state (#397)."""
+        from identity.services import add_person, invite_person
+
+        semester = SemesterFactory()
+        not_yet_invited = add_person(name='Not Yet Invited Placeholder', email='not-yet-invited@example.com')
+        invited = invite_person(name='Invited Placeholder', email='invited-placeholder@example.com')
+        accepted = PersonFactory(name='Accepted Placeholder', password='a-strong-test-password-123')
+        for person in (not_yet_invited, invited, accepted):
+            MembershipFactory(person=person, semester=semester)
+
+        self.assertEqual(
+            serialize_person(
+                not_yet_invited, semester=semester, is_self=False, can_edit_roles=True,
+                membership=Membership.objects.get(person=not_yet_invited),
+            )['invite_status'],
+            'not_yet_invited',
+        )
+        self.assertEqual(
+            serialize_person(
+                invited, semester=semester, is_self=False, can_edit_roles=True,
+                membership=Membership.objects.get(person=invited),
+            )['invite_status'],
+            'invited',
+        )
+        self.assertEqual(
+            serialize_person(
+                accepted, semester=semester, is_self=False, can_edit_roles=True,
+                membership=Membership.objects.get(person=accepted),
+            )['invite_status'],
+            'accepted',
+        )
 
     def test_role_entry_keys(self):
         """A `roles`/`available_roles` entry carries exactly `id`, `name`."""

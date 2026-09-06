@@ -3302,16 +3302,25 @@ class RosterEditEntry:
 
 @dataclass(frozen=True)
 class RosterInvite:
-    """One not-yet-existing Person a Roster edit Buffer proposes to create and roster (issue #336).
+    """One not-yet-existing Person a Roster edit Buffer proposes to create and roster (issue #336, #397).
 
     Carries no `Person` id — there is none yet. Mirrors `RosterEditEntry`'s
     shape but with no Role set: an invited Person's declared Roles are
     theirs to set once they sign in (issue #336 user story 36), so this
     Buffer never carries `role_ids` for a pending invite.
+
+    `send_invite` (issue #397) is the "Invite now" vs "Add without inviting"
+    choice the Add-people sheet's Invite section offers: `True` (the
+    default, and #336's only prior behavior) creates the Person via
+    `identity.services.invite_person()` and mails them immediately;
+    `False` creates them via `identity.services.add_person()` instead,
+    leaving them `'not_yet_invited'` so an admin can stage a roster ahead
+    of actually inviting anyone.
     """
 
     name: str
     email: str
+    send_invite: bool = True
 
 
 @dataclass(frozen=True)
@@ -3426,17 +3435,22 @@ def _apply_roster_edit_entry(entry: RosterEditEntry, semester: Semester) -> None
 
 
 def _apply_roster_invite(invite: RosterInvite, semester: Semester) -> None:
-    """Create `invite`'s Person via `invite_person()` and roster them into `semester` with no declared Roles (issue #336).
+    """Create `invite`'s Person and roster them into `semester` with no declared Roles (issue #336, #397).
 
-    Reuses `invite_person(..., send_via_on_commit=True)` rather than
-    reimplementing the create — the one path to a loggable-in Person stays
-    single. The Membership is created bare (no `MembershipRole` rows): a
-    pending invite's Roles are theirs to declare once they sign in, not an
-    admin's to guess on their behalf.
+    `invite.send_invite` picks the creation path: `invite_person(...,
+    send_via_on_commit=True)` when `True` (mirrors #336's original
+    behavior — the one path to a loggable-in, immediately-invited Person
+    stays single), or `add_person()` when `False`, staging the Person
+    `'not_yet_invited'` with no mail sent at all. Either way the Membership
+    is created bare (no `MembershipRole` rows): a Person's Roles are theirs
+    to declare once they sign in, not an admin's to guess on their behalf.
     """
-    from identity.services import invite_person
+    from identity.services import add_person, invite_person
 
-    person = invite_person(name=invite.name, email=invite.email, send_via_on_commit=True)
+    if invite.send_invite:
+        person = invite_person(name=invite.name, email=invite.email, send_via_on_commit=True)
+    else:
+        person = add_person(name=invite.name, email=invite.email)
     Membership.objects.create(person=person, semester=semester)
 
 
@@ -3462,15 +3476,18 @@ class RosterEditFallout:
     WrongViewingSemesterError or SelfRemovalError) — a Validation Error in
     ADR 0008's terms, never blended with Fallout; `pending_*` and
     `loud`/`quiet` are all empty when blocked, since nothing was computed.
-    `pending_invites` (issue #336) names every Buffer-staged invite by
-    the name it will roster under; no email travels in this list (ADR
-    0005 keeps email off every Roster surface but the removal lines
-    below). `pending_*` name every row's outcome for the Preview's summary list.
-    `loud`/`quiet` are human-readable Fallout messages in the two ADR
-    0002/issue #228 tiers; neither ever blocks a save. `is_stale` flags a
-    `Semester.updated_at` mismatch — reported, never refused, per ADR 0008.
-    Carries no Role-change field (issue #379): this Buffer never touches
-    Role data, so there is nothing to report there.
+    `pending_invites` (issue #336) names every Buffer-staged invite (rows
+    with `send_invite=True`) by the name it will roster under;
+    `pending_added_without_invite` (issue #397) names every staged row
+    added with `send_invite=False` instead — a real new Person, `'not_yet_invited'`,
+    but no mail sent. Neither list carries email (ADR 0005 keeps email off
+    every Roster surface but the removal lines below). `pending_*` name
+    every row's outcome for the Preview's summary list. `loud`/`quiet` are
+    human-readable Fallout messages in the two ADR 0002/issue #228 tiers;
+    neither ever blocks a save. `is_stale` flags a `Semester.updated_at`
+    mismatch — reported, never refused, per ADR 0008. Carries no
+    Role-change field (issue #379): this Buffer never touches Role data,
+    so there is nothing to report there.
     """
 
     is_blocked: bool
@@ -3478,6 +3495,7 @@ class RosterEditFallout:
     is_stale: bool
     pending_adds: list[str]
     pending_invites: list[str]
+    pending_added_without_invite: list[str]
     pending_removals: list[RosterRemoval]
     pending_name_edits: list[str]
     loud: list[str]
@@ -3492,6 +3510,7 @@ def _blocked_roster_fallout(block_message: str, *, is_stale: bool = False) -> Ro
         is_stale=is_stale,
         pending_adds=[],
         pending_invites=[],
+        pending_added_without_invite=[],
         pending_removals=[],
         pending_name_edits=[],
         loud=[],
@@ -3562,7 +3581,8 @@ def preview_roster_edits(buffer: RosterEditBuffer, *, viewing_semester: Semester
         return _blocked_roster_fallout(str(error), is_stale=is_stale)
 
     pending_adds = []
-    pending_invites = [invite.name for invite in buffer.pending_invites]
+    pending_invites = [invite.name for invite in buffer.pending_invites if invite.send_invite]
+    pending_added_without_invite = [invite.name for invite in buffer.pending_invites if not invite.send_invite]
     pending_removals = [
         RosterRemoval(person_id=person_id, name=person.name, email=person.email)
         for person_id, person in removed_people_by_id.items()
@@ -3604,6 +3624,7 @@ def preview_roster_edits(buffer: RosterEditBuffer, *, viewing_semester: Semester
         is_stale=is_stale,
         pending_adds=pending_adds,
         pending_invites=pending_invites,
+        pending_added_without_invite=pending_added_without_invite,
         pending_removals=pending_removals,
         pending_name_edits=pending_name_edits,
         loud=loud,
