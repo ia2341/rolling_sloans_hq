@@ -418,4 +418,86 @@ describe('Person', () => {
     expect(screen.getByText(/Preselected Song/)).toBeInTheDocument()
     expect(screen.queryByText(/Other Song/)).not.toBeInTheDocument()
   })
+
+  /** Issue #398: a successful password save should collapse the form and render a confirmation next to the "Change password" label. */
+  it('collapses the change-password form and shows a success message after a successful save (issue #398)', async () => {
+    mockFetchByUrl({
+      '/api/members/1/': () => ({
+        status: 200,
+        body: { context: memberContext(), data: selfPayload() },
+      }),
+      '/api/password/': () => ({
+        status: 200,
+        body: {
+          context: memberContext(),
+          ok: true,
+          errors: {},
+          non_field_errors: [],
+          fallout: null,
+          values: null,
+          data: null,
+        },
+      }),
+    })
+
+    const user = (await import('@testing-library/user-event')).default.setup()
+    renderPerson('/members/1')
+
+    await user.click(
+      await screen.findByRole('button', { name: 'Change password' }),
+    )
+    await user.type(screen.getByLabelText('Current password'), 'old-pw')
+    await user.type(screen.getByLabelText('New password'), 'new-pw-123')
+    await user.type(screen.getByLabelText('Confirm new password'), 'new-pw-123')
+    await user.click(screen.getByRole('button', { name: 'Save password' }))
+
+    expect(
+      await screen.findByText('Password was successfully updated'),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Change password' }),
+    ).toBeInTheDocument()
+    expect(screen.queryByLabelText('Current password')).not.toBeInTheDocument()
+  })
+
+  /** A stale "saved" confirmation must not survive a reopen-then-cancel with no new save. */
+  it('clears a prior success message once the change-password form is reopened and cancelled', async () => {
+    mockFetchByUrl({
+      '/api/members/1/': () => ({
+        status: 200,
+        body: { context: memberContext(), data: selfPayload() },
+      }),
+      '/api/password/': () => ({
+        status: 200,
+        body: {
+          context: memberContext(),
+          ok: true,
+          errors: {},
+          non_field_errors: [],
+          fallout: null,
+          values: null,
+          data: null,
+        },
+      }),
+    })
+
+    const user = (await import('@testing-library/user-event')).default.setup()
+    renderPerson('/members/1')
+
+    await user.click(
+      await screen.findByRole('button', { name: 'Change password' }),
+    )
+    await user.type(screen.getByLabelText('Current password'), 'old-pw')
+    await user.type(screen.getByLabelText('New password'), 'new-pw-123')
+    await user.type(screen.getByLabelText('Confirm new password'), 'new-pw-123')
+    await user.click(screen.getByRole('button', { name: 'Save password' }))
+    await screen.findByText('Password was successfully updated')
+
+    await user.click(screen.getByRole('button', { name: 'Change password' }))
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    expect(
+      screen.queryByText('Password was successfully updated'),
+    ).not.toBeInTheDocument()
+  })
 })

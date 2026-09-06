@@ -204,13 +204,23 @@ function ChangePasswordRow() {
 
   if (!isOpen) {
     return (
-      <button
-        type="button"
-        onClick={() => setIsOpen(true)}
-        className="mt-3 text-sm text-rs-accent"
-      >
-        Change password
-      </button>
+      <div className="mt-3 flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            setStatus('idle')
+            setIsOpen(true)
+          }}
+          className="text-sm text-rs-accent"
+        >
+          Change password
+        </button>
+        {status === 'saved' && (
+          <span className="text-sm text-rs-muted">
+            Password was successfully updated
+          </span>
+        )}
+      </div>
     )
   }
 
