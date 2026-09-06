@@ -486,7 +486,7 @@ function SetupChecklistPanel({
   return (
     <section className="mb-6 rounded border border-rs-border p-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold">
+        <h2 className="text-sm font-semibold uppercase text-rs-muted">
           Setting up {checklist.semester_name}
         </h2>
         <span className="rounded-full border border-dashed border-rs-border px-2 py-0.5 text-xs text-rs-muted">
