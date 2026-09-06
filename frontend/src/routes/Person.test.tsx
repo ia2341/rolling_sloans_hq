@@ -1,4 +1,4 @@
-import { screen, waitFor } from '@testing-library/react'
+import { screen, waitFor, within } from '@testing-library/react'
 import { Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -148,7 +148,7 @@ describe('Person', () => {
     ).toBeInTheDocument()
   })
 
-  it('renders the "Deliberately absent" card for a teammate viewer', async () => {
+  it('does not render a "Deliberately absent" card, for any viewer state (issue #363)', async () => {
     mockFetchByUrl({
       '/api/members/2/': () => ({
         status: 200,
@@ -156,34 +156,8 @@ describe('Person', () => {
       }),
     })
     renderPerson('/members/2')
-    expect(await screen.findByText(/Deliberately absent\./)).toBeInTheDocument()
-  })
-
-  it('renders the "Deliberately absent" card for the self viewer', async () => {
-    mockFetchByUrl({
-      '/api/members/1/': () => ({
-        status: 200,
-        body: { context: memberContext(), data: selfPayload() },
-      }),
-    })
-    renderPerson('/members/1')
-    expect(await screen.findByText(/Deliberately absent\./)).toBeInTheDocument()
-  })
-
-  it('renders the "Deliberately absent" card for an admin viewing a teammate', async () => {
-    mockFetchByUrl({
-      '/api/members/2/': () => ({
-        status: 200,
-        body: {
-          context: memberContext({
-            viewer: { ...memberContext().viewer, is_admin: true },
-          }),
-          data: adminViewingTeammatePayload(),
-        },
-      }),
-    })
-    renderPerson('/members/2')
-    expect(await screen.findByText(/Deliberately absent\./)).toBeInTheDocument()
+    await screen.findByRole('heading', { name: 'Alex Kim' })
+    expect(screen.queryByText(/Deliberately absent/)).not.toBeInTheDocument()
   })
 
   it('renders "Not on any song yet." for an empty Songs list', async () => {
@@ -227,6 +201,23 @@ describe('Person', () => {
     expect(screen.queryByText('Your recordings')).not.toBeInTheDocument()
     // The always-inline Roles form still renders, so a newly invited member can declare roles.
     expect(screen.getByLabelText('Add a role')).toBeInTheDocument()
+  })
+
+  it('renders "+ add a role" as the select\'s own disabled placeholder option, not a separate pill (issue #363)', async () => {
+    mockFetchByUrl({
+      '/api/members/1/': () => ({
+        status: 200,
+        body: { context: memberContext(), data: selfPayload() },
+      }),
+    })
+
+    renderPerson('/members/1')
+
+    const select = await screen.findByLabelText('Add a role')
+    const placeholder = within(select).getByText('+ add a role')
+    expect(placeholder.tagName).toBe('OPTION')
+    expect(placeholder).toBeDisabled()
+    expect(select).toHaveValue('')
   })
 
   it('stages a Role chip removal locally and only commits it on Save roles', async () => {

@@ -97,6 +97,14 @@ describe('SemesterPanel', () => {
         }),
     })
     vi.stubGlobal('fetch', fetchSpy)
+    const reloadSpy = vi.fn()
+    // jsdom's real `location.reload` throws "not implemented" navigation
+    // noise, so stub the whole `location` object with a spy in its place
+    // (issue #363: a successful select now hard-reloads the page).
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: { ...window.location, reload: reloadSpy },
+    })
 
     const user = userEvent.setup()
     renderShell(<SemesterPanel collapsed={false} />)
@@ -114,6 +122,43 @@ describe('SemesterPanel', () => {
     await waitFor(() =>
       expect(screen.getByText(/Viewing: Spring 2026/)).toBeInTheDocument(),
     )
+    await waitFor(() => expect(reloadSpy).toHaveBeenCalledOnce())
+  })
+
+  it('enables Publish for a previously-published, non-live viewing Semester (rollback, ADR 0010)', () => {
+    setContext(
+      adminContext({
+        viewing_semester: {
+          id: 9,
+          name: 'Spring 2025',
+          status: 'previously_published',
+          published_at: '2025-01-01T00:00:00Z',
+          updated_at: '2025-01-01T00:00:00Z',
+        },
+        semester_options: options,
+      }),
+    )
+    renderShell(<SemesterPanel collapsed={false} />)
+
+    expect(screen.getByRole('button', { name: 'Publish' })).toBeEnabled()
+  })
+
+  it('disables Publish for an admin viewing the already-live Semester', () => {
+    setContext(
+      adminContext({
+        viewing_semester: {
+          id: 10,
+          name: 'Spring 2026',
+          status: 'live',
+          published_at: '2026-01-01T00:00:00Z',
+          updated_at: '2026-01-01T00:00:00Z',
+        },
+        semester_options: options,
+      }),
+    )
+    renderShell(<SemesterPanel collapsed={false} />)
+
+    expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled()
   })
 
   it('renders with only + New semester before any Semester exists', () => {

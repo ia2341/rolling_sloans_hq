@@ -37,7 +37,7 @@ export function TopBar() {
   const canPublish =
     isAdmin &&
     viewingSemester !== null &&
-    viewingSemester.published_at === null &&
+    viewingSemester.status !== 'live' &&
     !isBlocked
 
   return (
