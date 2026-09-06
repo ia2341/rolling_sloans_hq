@@ -180,7 +180,7 @@ class PreviewSongRoleAssignmentsTests(TestCase):
         )
 
     def test_matched_role_raises_no_mismatch_line(self):
-        """A Person who has declared the cell's Role is assigned with no mismatch line."""
+        """A Person who has declared the cell's Role as a standing PersonRole is assigned with no mismatch line."""
         membership = MembershipFactory(semester=self.semester)
         PersonRoleFactory(person=membership.person, role=self.role)
 

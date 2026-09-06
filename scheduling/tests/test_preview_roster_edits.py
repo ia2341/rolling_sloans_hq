@@ -176,8 +176,8 @@ class PreviewRosterEditsTests(TestCase):
         """Dropping a roster-declared MembershipRole raises no quiet Fallout on its own (issue #377, ADR-0014).
 
         is_role_mismatch now reads the person-level PersonRole, which this
-        Buffer's Role-set reconciliation doesn't touch -- migrating the
-        Roster editor's Role declaration onto PersonRole is separate work.
+        Buffer's Role-set reconciliation doesn't touch -- Role declarations
+        are edited via PersonRole on the person page instead, issue #378.
         """
         person = PersonFactory(name='Mismatch Person')
         membership = MembershipFactory(person=person, semester=self.semester)

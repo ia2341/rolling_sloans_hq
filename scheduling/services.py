@@ -924,15 +924,44 @@ def recording_slot_options_for(semester, song=None) -> list[RecordingSlotOption]
     ]
 
 
-def declared_roles_for(membership):
-    """Return `membership`'s declared Roles for its Semester, in name order (issue #138).
+def declared_roles_for_person(person) -> list[Role]:
+    """Return `person`'s standing declared Roles, in name order (issue #138, retargeted at `PersonRole` by ADR-0014/#378).
 
-    Empty for an unsaved Membership — the not-yet-rostered self case on
-    `/members/<pk>/`, which has no MembershipRole rows to reach.
+    Person-level and never Semester-scoped: unlike the retired
+    `declared_roles_for(membership)` this replaces, a Person's declared
+    Roles read the same regardless of whether they hold a Membership in
+    the viewing Semester at all — a not-yet-rostered self case can still
+    have declared Roles here.
     """
-    if membership.pk is None:
-        return Role.objects.none()
-    return Role.objects.filter(membershiprole__membership=membership).order_by('name')
+    return list(Role.objects.filter(personrole__person=person).order_by('name'))
+
+
+class PersonRoleValidationError(Exception):
+    """Raised by `sync_person_roles()` when a submitted role id doesn't name an active Role."""
+
+
+def sync_person_roles(person, role_ids) -> None:
+    """Replace `person`'s `PersonRole` rows with exactly the Roles named by `role_ids` (issue #378).
+
+    A simple field-edit sync, not a Pending Buffer surface (see the PR
+    description's Buffer/no-Buffer note): it renumbers nothing and its only
+    side effect — the `is_role_mismatch` resweep (issue #377) — already
+    happens via `PersonRole`'s own `post_save`/`post_delete` signals no
+    matter how the write is framed, so there is no derivation here for a
+    Preview to run and roll back. Raises `PersonRoleValidationError` if any
+    `role_ids` entry doesn't name an active Role, before writing anything.
+    """
+    role_ids = frozenset(int(role_id) for role_id in role_ids)
+    selected_roles = list(Role.objects.filter(pk__in=role_ids, is_active=True))
+    if len(selected_roles) != len(role_ids):
+        raise PersonRoleValidationError('One or more selected roles are not valid.')
+    existing_role_ids = frozenset(
+        PersonRole.objects.filter(person=person).values_list('role_id', flat=True)
+    )
+    PersonRole.objects.filter(person=person).exclude(role_id__in=role_ids).delete()
+    for role in selected_roles:
+        if role.id not in existing_role_ids:
+            PersonRole.objects.create(person=person, role=role)
 
 
 def mismatched_person_ids_for(semester) -> frozenset[int]:
@@ -3240,11 +3269,10 @@ def apply_roster_edits(buffer: RosterEditBuffer, *, viewing_semester: Semester, 
     `Conflict` rows for them, since both point at `Person` rather than at
     `Membership` and would otherwise survive un-rostered. A prior Semester's
     rows for the same Person are untouched. Role-set changes go through
-    ordinary `MembershipRole` creates/deletes, which no longer drive
-    `is_role_mismatch` (issue #377, ADR-0014): that flag now reads the
-    person-level `PersonRole`, which this reconciliation doesn't touch —
-    migrating the Roster editor's Role declaration onto `PersonRole` is
-    separate work.
+    ordinary `MembershipRole` creates/deletes; this function never
+    recomputes `is_role_mismatch` by hand, but note that `MembershipRole`
+    no longer drives that flag at all (ADR-0014, issue #377) — only
+    `PersonRole` does, edited separately via `sync_person_roles()`.
 
     Each of `buffer.pending_invites` (issue #336) is created via
     `identity.services.invite_person(..., send_via_on_commit=True)` and
