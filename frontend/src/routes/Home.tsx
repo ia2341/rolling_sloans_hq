@@ -1,5 +1,6 @@
+import type { KeyboardEvent } from 'react'
 import { useCallback, useEffect, useState } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 
 import { apiFetch } from '../api/client'
 import { useAppContext } from '../api/ContextProvider'
@@ -22,6 +23,22 @@ import { usePageTitle } from '../shell/PageTitleContext'
 /** `localStorage` key for one Semester's dismissed setup-checklist panel (per-viewer, per-device — issue #332). */
 function dismissedChecklistKey(semesterId: number): string {
   return `rs-home-checklist-dismissed-${semesterId}`
+}
+
+/** Parses an `HH:MM:SS` (or `HH:MM`) wire time to minutes since midnight, for proportional timeline math. */
+function minutesSinceMidnight(isoTime: string): number {
+  const [hours = 0, minutes = 0] = isoTime.split(':').map(Number)
+  return hours * 60 + minutes
+}
+
+/** Keyboard handler making a non-anchor "clickable row" (a card, a table row) activate on Enter/Space like a link would. */
+function activateOnEnterOrSpace(onActivate: () => void) {
+  return (event: KeyboardEvent) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      onActivate()
+    }
+  }
 }
 
 /**
@@ -133,6 +150,8 @@ function NextRehearsalSection({
 }: {
   card: NextRehearsalCardData | null
 }) {
+  const navigate = useNavigate()
+
   return (
     <section className="pb-6">
       <h2 className="text-sm font-semibold uppercase text-rs-muted">
@@ -143,19 +162,22 @@ function NextRehearsalSection({
           You are not needed at any upcoming rehearsal.
         </p>
       ) : (
-        <div className="pt-1">
-          <div className="flex items-center justify-between">
-            <p className="text-sm">
-              <strong>{formatRehearsalDate(card.date)}</strong>
-              {card.is_dress && ' · dress rehearsal'}
-            </p>
-            <Link
-              to={`/schedule?rehearsal=${card.rehearsal_id}`}
-              className="rounded bg-rs-accent px-3 py-1.5 text-sm font-medium text-rs-accent-fg"
-            >
-              Open
-            </Link>
-          </div>
+        // The whole card is the "Open" affordance (issue #358 follow-up): a
+        // clickable div rather than a wrapping <Link>, since the timeline
+        // below nests its own per-Song links and an <a> cannot nest an <a>.
+        <div
+          role="link"
+          tabIndex={0}
+          onClick={() => navigate(`/schedule?rehearsal=${card.rehearsal_id}`)}
+          onKeyDown={activateOnEnterOrSpace(() =>
+            navigate(`/schedule?rehearsal=${card.rehearsal_id}`),
+          )}
+          className="mt-1 cursor-pointer rounded border border-rs-border p-3 transition hover:border-rs-accent hover:shadow-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rs-accent"
+        >
+          <p className="text-sm">
+            <strong>{formatRehearsalDate(card.date)}</strong>
+            {card.is_dress && ' · dress rehearsal'}
+          </p>
           <p className="pt-1 text-sm">
             Arrive around <strong>{formatClockTime(card.arrival_time)}</strong>,
             free to leave around{' '}
@@ -175,36 +197,66 @@ function NextRehearsalTimeline({ card }: { card: NextRehearsalCardData }) {
   if (timeline.is_dress_rehearsal) {
     return (
       <p className="pt-2 text-sm text-rs-muted">
-        Whole setlist, whole window — the dress rehearsal runs the current
-        setlist live (ADR 0003).
+        Whole setlist, whole window ({formatClockTime(card.arrival_time)}–
+        {formatClockTime(card.departure_time)}) — the dress rehearsal runs the
+        current setlist live (ADR 0003).
       </p>
     )
   }
 
+  // Marker positions are percent-along-the-bar, found by mapping the
+  // viewer's own arrival/departure clock times onto the window's span --
+  // clamped in case a stale window edge would otherwise push a marker
+  // outside the bar (e.g. an arrival right at the window's start).
+  const windowStart = minutesSinceMidnight(timeline.window_start)
+  const windowEnd = minutesSinceMidnight(timeline.window_end)
+  const windowSpan = windowEnd - windowStart
+  const percentAlong = (time: string): number => {
+    if (windowSpan <= 0) return 0
+    const raw = ((minutesSinceMidnight(time) - windowStart) / windowSpan) * 100
+    return Math.min(100, Math.max(0, raw))
+  }
+  const arrivalPercent = percentAlong(card.arrival_time)
+  const departurePercent = percentAlong(card.departure_time)
+
   return (
-    <>
-      <div
-        className="mt-2 flex overflow-hidden rounded border border-rs-border"
-        role="img"
-        aria-label="Timeline of the next rehearsal's slots"
-      >
-        {timeline.slots.map((slot) => (
-          <Link
-            key={slot.song_id}
-            to={`/songs/${slot.song_id}`}
-            title={`${slot.song_title} (${formatClockTime(slot.start_time)}–${formatClockTime(slot.end_time)})`}
-            className={`h-6 flex-1 border-r border-rs-border last:border-r-0 ${
-              slot.is_viewer ? 'bg-rs-accent' : 'bg-rs-border/30'
-            }`}
-          />
-        ))}
+    <div className="mt-2" data-testid="next-rehearsal-timeline">
+      <div className="flex justify-between text-xs text-rs-muted">
+        <span>{formatClockTime(timeline.window_start)}</span>
+        <span>{formatClockTime(timeline.window_end)}</span>
       </div>
-      <p className="pt-1 text-xs text-rs-muted">
-        {formatClockTime(timeline.window_start)} · You:{' '}
-        {timeline.viewer_song_count} of {timeline.total_song_count} songs ·{' '}
-        {formatClockTime(timeline.window_end)}
-      </p>
-    </>
+      <div className="relative mt-1">
+        <div className="flex overflow-hidden rounded border border-rs-border">
+          {timeline.slots.map((slot) => (
+            <Link
+              key={slot.song_id}
+              to={`/songs/${slot.song_id}`}
+              onClick={(event) => event.stopPropagation()}
+              className={`flex h-10 min-w-0 flex-1 items-center justify-center border-r border-rs-border px-1 text-center text-[11px] leading-tight last:border-r-0 ${
+                slot.is_viewer
+                  ? 'bg-rs-accent text-rs-accent-fg'
+                  : 'bg-rs-border/30 text-rs-fg'
+              }`}
+            >
+              <span className="line-clamp-2 break-words">
+                {slot.song_title}
+              </span>
+            </Link>
+          ))}
+        </div>
+        {/* Your own arrival/departure ticks, drawn over the bar rather than left to the caption below it. */}
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-y-0 w-0.5 bg-rs-fg"
+          style={{ left: `${arrivalPercent}%` }}
+        />
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-y-0 w-0.5 bg-rs-fg"
+          style={{ left: `${departurePercent}%` }}
+        />
+      </div>
+    </div>
   )
 }
 
@@ -235,6 +287,7 @@ function UpcomingRehearsalsSection({ rows }: { rows: UpcomingRehearsalRow[] }) {
 }
 
 function UpcomingRehearsalsTable({ rows }: { rows: UpcomingRehearsalRow[] }) {
+  const navigate = useNavigate()
   return (
     <table className="w-full pt-1 text-left text-sm">
       <thead>
@@ -248,7 +301,12 @@ function UpcomingRehearsalsTable({ rows }: { rows: UpcomingRehearsalRow[] }) {
         {rows.map((row) => (
           <tr
             key={row.id}
-            className="border-b border-rs-border text-sm last:border-b-0"
+            tabIndex={0}
+            onClick={() => navigate(`/schedule?rehearsal=${row.id}`)}
+            onKeyDown={activateOnEnterOrSpace(() =>
+              navigate(`/schedule?rehearsal=${row.id}`),
+            )}
+            className="cursor-pointer border-b border-rs-border text-sm last:border-b-0 hover:bg-rs-border/20 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-rs-accent"
           >
             <td className="py-2 align-top">
               <div className="flex items-center gap-2">
@@ -278,12 +336,19 @@ function UpcomingRehearsalsTable({ rows }: { rows: UpcomingRehearsalRow[] }) {
 }
 
 function UpcomingRehearsalsCards({ rows }: { rows: UpcomingRehearsalRow[] }) {
+  const navigate = useNavigate()
   return (
     <ul className="pt-1">
       {rows.map((row) => (
         <li
           key={row.id}
-          className="flex items-center justify-between border-b border-rs-border py-2 text-sm last:border-b-0"
+          role="link"
+          tabIndex={0}
+          onClick={() => navigate(`/schedule?rehearsal=${row.id}`)}
+          onKeyDown={activateOnEnterOrSpace(() =>
+            navigate(`/schedule?rehearsal=${row.id}`),
+          )}
+          className="flex cursor-pointer items-center justify-between border-b border-rs-border py-2 text-sm last:border-b-0 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-rs-accent"
         >
           <div className="flex items-center gap-2">
             <span>{formatRehearsalDate(row.date)}</span>
@@ -325,7 +390,7 @@ function SongProgressSection({
     : songs
 
   return (
-    <section className="pb-6">
+    <section className="pb-6" data-testid="song-progress-section">
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-semibold uppercase text-rs-muted">
           Song progress

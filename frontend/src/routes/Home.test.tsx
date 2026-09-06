@@ -1,12 +1,51 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react'
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { HomePayload } from '../api/homeTypes'
+import { ContextProvider } from '../api/ContextProvider'
+import { EditSessionProvider } from '../shell/EditSessionContext'
+import { PageTitleProvider } from '../shell/PageTitleContext'
 import { adminContext, memberContext } from '../test/fixtures'
 import { mockFetchOnce } from '../test/mockFetch'
 import { mockMatchMedia } from '../test/mockMatchMedia'
 import { renderShell } from '../test/renderShell'
 import { Home } from './Home'
+
+/** A stand-in for the `/schedule` destination, showing its full path so a click-to-navigate test can assert on it. */
+function LocationMarker() {
+  const location = useLocation()
+  return (
+    <div data-testid="location">
+      {location.pathname}
+      {location.search}
+    </div>
+  )
+}
+
+/** Like `renderShell`, but with a real `<Routes>` so navigating off Home is observable (issue #358 follow-up: whole-row click navigation). */
+function renderHomeWithRouting() {
+  return render(
+    <MemoryRouter initialEntries={['/']}>
+      <ContextProvider>
+        <EditSessionProvider>
+          <PageTitleProvider>
+            <Routes>
+              <Route path="/" element={<Home />} />
+              <Route path="/schedule" element={<LocationMarker />} />
+            </Routes>
+          </PageTitleProvider>
+        </EditSessionProvider>
+      </ContextProvider>
+    </MemoryRouter>,
+  )
+}
 
 /** A minimal `/api/` `data` payload: one non-Dress upcoming Rehearsal, the viewer on its first Song. */
 function homePayload(overrides: Partial<HomePayload> = {}): HomePayload {
@@ -143,11 +182,55 @@ describe('Home', () => {
     renderShell(<Home />, ['/'])
 
     await screen.findByText(/Arrive around/)
-    expect(screen.getByRole('link', { name: 'Open' })).toHaveAttribute(
-      'href',
-      '/schedule?rehearsal=1',
-    )
+    expect(screen.queryByRole('link', { name: 'Open' })).not.toBeInTheDocument()
     expect(screen.getAllByText('First Song').length).toBeGreaterThan(0)
+  })
+
+  it('makes the whole Next-rehearsal card navigate to the Schedule, without a separate Open button', async () => {
+    mockFetchOnce(200, { context: memberContext(), data: homePayload() })
+
+    renderHomeWithRouting()
+
+    await screen.findByText(/Arrive around/)
+    const card = screen.getByRole('link', { name: /Arrive around/ })
+    expect(card.tagName).not.toBe('A')
+
+    fireEvent.click(card)
+
+    await waitFor(() =>
+      expect(screen.getByTestId('location')).toHaveTextContent(
+        '/schedule?rehearsal=1',
+      ),
+    )
+  })
+
+  it("labels each timeline segment with the Song's name and carries no title tooltip", async () => {
+    mockFetchOnce(200, { context: memberContext(), data: homePayload() })
+
+    renderShell(<Home />, ['/'])
+
+    await screen.findByText(/Arrive around/)
+    const timeline = screen.getByTestId('next-rehearsal-timeline')
+    const songLink = within(timeline).getByRole('link', { name: 'First Song' })
+    expect(songLink).not.toHaveAttribute('title')
+    expect(songLink).toHaveAttribute('href', '/songs/1')
+  })
+
+  it('navigates a clicked Upcoming-rehearsals row to its Schedule rehearsal', async () => {
+    mockFetchOnce(200, { context: memberContext(), data: homePayload() })
+
+    renderHomeWithRouting()
+
+    await screen.findByText('All rehearsals →')
+    fireEvent.click(
+      screen.getByText('Whole window').closest('tr') as HTMLElement,
+    )
+
+    await waitFor(() =>
+      expect(screen.getByTestId('location')).toHaveTextContent(
+        '/schedule?rehearsal=2',
+      ),
+    )
   })
 
   it('reports the explicit not-needed state when there is no qualifying next Rehearsal', async () => {
@@ -176,7 +259,8 @@ describe('Home', () => {
 
     renderShell(<Home />, ['/'])
 
-    await screen.findByText('Second Song')
+    const songProgress = await screen.findByTestId('song-progress-section')
+    await within(songProgress).findByText('Second Song')
     const toggle = screen.getByRole('button', { name: 'My songs only' })
     expect(toggle).toHaveAttribute('aria-pressed', 'false')
 
@@ -184,9 +268,13 @@ describe('Home', () => {
 
     expect(toggle).toHaveAttribute('aria-pressed', 'true')
     await waitFor(() =>
-      expect(screen.queryByText('Second Song')).not.toBeInTheDocument(),
+      expect(
+        within(songProgress).queryByText('Second Song'),
+      ).not.toBeInTheDocument(),
     )
-    expect(screen.getAllByText('First Song').length).toBeGreaterThan(0)
+    expect(
+      within(songProgress).getAllByText('First Song').length,
+    ).toBeGreaterThan(0)
   })
 
   it('renders Song progress (and Upcoming rehearsals) as tables on desktop, and lists on phone', async () => {
