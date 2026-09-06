@@ -1,6 +1,6 @@
 import type { KeyboardEvent } from 'react'
 import { useCallback, useEffect, useState } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 
 import { apiFetch } from '../api/client'
 import { useAppContext } from '../api/ContextProvider'
@@ -11,11 +11,13 @@ import type {
   RehearsalDetail,
   SchedulePayload,
   ScheduleListRow,
-  Timeline,
 } from '../api/scheduleTypes'
 import type { ReadEnvelope, WriteEnvelope } from '../api/types'
 import { AssignmentEditor } from '../components/assignments/AssignmentEditor'
+import { RecordingUploadDialog } from '../components/recordings/RecordingUploadDialog'
+import { CastGridTable, type CastGridRow } from '../components/ui/CastLine'
 import { PageHead } from '../components/ui/PageHead'
+import { RehearsalOverview } from '../components/ui/RehearsalOverview'
 import { ResponsiveDialog } from '../components/ui/ResponsiveDialog'
 import { SegmentedControl } from '../components/ui/SegmentedControl'
 import { useIsPhone } from '../hooks/useIsPhone'
@@ -137,28 +139,29 @@ export function Schedule() {
             <div className="flex gap-2">
               <EditRehearsalsButton />
               <AdjudicateConflictsButton />
-              {selected !== null && (
-                <button
-                  type="button"
-                  disabled={!selected.can_edit_assignments}
-                  title={
-                    selected.can_edit_assignments
-                      ? undefined
-                      : 'A past Rehearsal is not editable here (ADR 0009); the Dress Rehearsal always is.'
-                  }
-                  onClick={() => setEditingAssignments((previous) => !previous)}
-                  aria-pressed={editingAssignments}
-                  className="rounded border border-rs-border px-3 py-1.5 text-sm font-medium disabled:opacity-50"
-                >
-                  {editingAssignments ? 'Done editing' : 'Edit Rehearsal'}
-                </button>
-              )}
+              {subView === 'next' &&
+                selected !== null &&
+                !editingAssignments && (
+                  <button
+                    type="button"
+                    disabled={!selected.can_edit_assignments}
+                    title={
+                      selected.can_edit_assignments
+                        ? undefined
+                        : 'A past Rehearsal is not editable here (ADR 0009); the Dress Rehearsal always is.'
+                    }
+                    onClick={() => setEditingAssignments(true)}
+                    className="rounded border border-rs-border px-3 py-1.5 text-sm font-medium disabled:opacity-50"
+                  >
+                    Edit Rehearsal
+                  </button>
+                )}
             </div>
           ) : undefined
         }
       />
 
-      <div className="pb-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 pb-4">
         <SegmentedControl
           ariaLabel="Schedule view"
           options={[
@@ -174,6 +177,13 @@ export function Schedule() {
           value={subView}
           onChange={(value) => setSubView(value as SubView)}
         />
+        {subView === 'next' && selected !== null && (
+          <RehearsalDateDropdown
+            rows={allRows}
+            selectedId={selected.id}
+            onSelect={selectRehearsal}
+          />
+        )}
       </div>
 
       {subView === 'next' ? (
@@ -184,10 +194,13 @@ export function Schedule() {
         ) : (
           <ThisRehearsal
             detail={selected}
-            allRows={allRows}
-            onSelectRehearsal={selectRehearsal}
             onDataChanged={load}
             editingAssignments={editingAssignments}
+            onExitEditMode={() => {
+              setEditingAssignments(false)
+              load()
+            }}
+            viewerId={appContext?.viewer.id}
           />
         )
       ) : (
@@ -201,7 +214,7 @@ export function Schedule() {
   )
 }
 
-/** Jump to a different Rehearsal's date without leaving `/schedule` — a dropdown, not a row of pills (issue: pills/tables UI overhaul). */
+/** Jump to a different Rehearsal's date without leaving `/schedule` — a dropdown, not a row of pills (issue: pills/tables UI overhaul). Sits on the same line as the rehearsal picker (issue: UI overhaul round 2). */
 function RehearsalDateDropdown({
   rows,
   selectedId,
@@ -212,8 +225,8 @@ function RehearsalDateDropdown({
   onSelect: (id: number) => void
 }) {
   return (
-    <label className="mb-4 block text-sm">
-      <span className="mr-2 text-rs-muted">Jump to</span>
+    <label className="flex items-center gap-2 text-sm">
+      <span className="text-rs-muted">Jump to</span>
       <select
         aria-label="Jump to rehearsal"
         value={selectedId}
@@ -233,25 +246,28 @@ function RehearsalDateDropdown({
 
 function ThisRehearsal({
   detail,
-  allRows,
-  onSelectRehearsal,
   onDataChanged,
   editingAssignments,
+  onExitEditMode,
+  viewerId,
 }: {
   detail: RehearsalDetail
-  allRows: ScheduleListRow[]
-  onSelectRehearsal: (id: number) => void
   onDataChanged: () => void
   editingAssignments: boolean
+  onExitEditMode: () => void
+  viewerId?: number
 }) {
+  const navigate = useNavigate()
+  const [uploadSongId, setUploadSongId] = useState<number | null>(null)
+
   return (
     <div>
-      <RehearsalDateDropdown
-        rows={allRows}
-        selectedId={detail.id}
-        onSelect={onSelectRehearsal}
+      <RehearsalOverview
+        heading="You at this rehearsal"
+        date={detail.date}
+        isDress={detail.is_dress}
+        timeline={detail.timeline}
       />
-      <TimelineView timeline={detail.timeline} />
       <AvailabilityBlock
         rehearsalId={detail.id}
         rehearsalStart={detail.start_time}
@@ -260,85 +276,27 @@ function ThisRehearsal({
         onChanged={onDataChanged}
       />
       {editingAssignments ? (
-        <AssignmentEditor rehearsalId={detail.id} />
+        <AssignmentEditor rehearsalId={detail.id} onDone={onExitEditMode} />
       ) : (
         <AssignmentGrid
           roles={detail.roles}
           rows={detail.rows}
           isDress={detail.is_dress}
+          viewerId={viewerId}
+          onOpenSong={(songId) => navigate(`/songs/${songId}`)}
+          onAddRecording={setUploadSongId}
+        />
+      )}
+      {uploadSongId !== null && (
+        <RecordingUploadDialog
+          onOpenChange={(open) => {
+            if (!open) setUploadSongId(null)
+          }}
+          preselectedSongId={uploadSongId}
+          onUploaded={onDataChanged}
         />
       )}
     </div>
-  )
-}
-
-function TimelineView({ timeline }: { timeline: Timeline }) {
-  if (timeline.is_dress_rehearsal) {
-    return (
-      <section className="pb-4">
-        <h2 className="text-sm font-semibold uppercase text-rs-muted">
-          You at this rehearsal
-        </h2>
-        <p className="pt-1 text-sm">
-          Whole setlist, whole window — {formatClockTime(timeline.window_start)}
-          –{formatClockTime(timeline.window_end)}
-        </p>
-        <p className="text-sm text-rs-muted">
-          The dress rehearsal runs the current setlist live (ADR 0003).
-        </p>
-      </section>
-    )
-  }
-
-  if (timeline.viewer_song_count === 0) {
-    return (
-      <section className="pb-4">
-        <h2 className="text-sm font-semibold uppercase text-rs-muted">
-          You at this rehearsal
-        </h2>
-        <p className="pt-1 text-sm text-rs-muted">
-          You are not on any song here.
-        </p>
-      </section>
-    )
-  }
-
-  return (
-    <section className="pb-4">
-      <h2 className="text-sm font-semibold uppercase text-rs-muted">
-        You at this rehearsal
-      </h2>
-      <p className="pt-1 text-sm">
-        Arrive around{' '}
-        <strong>
-          {formatClockTime(timeline.viewer_start_time ?? timeline.window_start)}
-        </strong>
-        , free to leave around{' '}
-        <strong>
-          {formatClockTime(timeline.viewer_end_time ?? timeline.window_end)}
-        </strong>
-      </p>
-      <div
-        className="mt-2 flex overflow-hidden rounded border border-rs-border"
-        role="img"
-        aria-label="Timeline of tonight's slots"
-      >
-        {timeline.slots.map((slot) => (
-          <div
-            key={slot.song_id}
-            title={`${slot.song_title} (${formatClockTime(slot.start_time)}–${formatClockTime(slot.end_time)})`}
-            className={`h-6 flex-1 border-r border-rs-border last:border-r-0 ${
-              slot.is_viewer ? 'bg-rs-accent' : 'bg-rs-border/30'
-            }`}
-          />
-        ))}
-      </div>
-      <p className="pt-1 text-xs text-rs-muted">
-        {formatClockTime(timeline.window_start)} · You:{' '}
-        {timeline.viewer_song_count} of {timeline.total_song_count} songs ·{' '}
-        {formatClockTime(timeline.window_end)}
-      </p>
-    </section>
   )
 }
 
@@ -635,16 +593,53 @@ function DeclareDialog({
   )
 }
 
+/** Adapts `MatrixRow[]` into `CastGridRow[]` — the shape the Setlist table and this read-only grid now share (issue: UI overhaul round 2, item 11). */
+function matrixRowsToCastGridRows(
+  rows: MatrixRow[],
+  roles: { id: number; name: string; code: string }[],
+): CastGridRow[] {
+  const roleById = new Map(roles.map((role) => [role.id, role]))
+  return rows.map((row) => ({
+    id: row.song_id,
+    position: row.song_position,
+    title: row.song_title,
+    artist: row.song_artist,
+    length: row.song_length,
+    cast: row.cells.map((cell) => {
+      const role = roleById.get(cell.role_id)
+      return {
+        role_id: cell.role_id,
+        role_name: role?.name ?? '',
+        code: role?.code ?? '',
+        performers: cell.entries.map((entry) => ({
+          id: entry.person_id,
+          name: entry.person_name,
+          is_role_mismatch: entry.is_role_mismatch,
+          kind: entry.kind,
+          has_conflict: entry.has_conflict,
+        })),
+      }
+    }),
+  }))
+}
+
 function AssignmentGrid({
   roles,
   rows,
   isDress,
+  viewerId,
+  onOpenSong,
+  onAddRecording,
 }: {
   roles: { id: number; name: string; code: string }[]
   rows: MatrixRow[]
   isDress: boolean
+  viewerId?: number
+  onOpenSong: (songId: number) => void
+  onAddRecording: (songId: number) => void
 }) {
   const isPhone = useIsPhone()
+  const gridRows = matrixRowsToCastGridRows(rows, roles)
 
   return (
     <section className="pb-4">
@@ -654,7 +649,7 @@ function AssignmentGrid({
         </h2>
       </div>
       <div className="flex flex-wrap gap-3 pb-2 text-xs text-rs-muted">
-        <span>⚠ conflict</span>
+        <span>away — a declared conflict</span>
         <span>◦ role not on membership</span>
         <span>(backup) covering a slot</span>
       </div>
@@ -667,7 +662,25 @@ function AssignmentGrid({
       {isPhone ? (
         <AssignmentCards rows={rows} isDress={isDress} />
       ) : (
-        <AssignmentTable roles={roles} rows={rows} isDress={isDress} />
+        <CastGridTable
+          roles={roles}
+          rows={gridRows}
+          viewerId={viewerId}
+          onOpenRow={onOpenSong}
+          renderRecordingCell={(row) => (
+            <button
+              type="button"
+              aria-label={`Add a recording of ${row.title}`}
+              onClick={(event) => {
+                event.stopPropagation()
+                onAddRecording(row.id)
+              }}
+              className="text-rs-accent"
+            >
+              +
+            </button>
+          )}
+        />
       )}
     </section>
   )
@@ -706,58 +719,6 @@ function AssignmentCellEntries({
         </div>
       ))}
     </div>
-  )
-}
-
-function AssignmentTable({
-  roles,
-  rows,
-  isDress,
-}: {
-  roles: { id: number; name: string; code: string }[]
-  rows: MatrixRow[]
-  isDress: boolean
-}) {
-  return (
-    <table className="w-full border-collapse text-left text-sm">
-      <thead>
-        <tr>
-          <th className="border border-rs-border px-2 py-2">
-            {isDress ? '#' : 'Start'}
-          </th>
-          <th className="border border-rs-border px-2 py-2">Song</th>
-          {roles.map((role) => (
-            <th key={role.id} className="border border-rs-border px-2 py-2">
-              {role.name}
-            </th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((row, index) => (
-          <tr key={row.song_id}>
-            <td className="border border-rs-border px-2 py-2 align-top">
-              {isDress
-                ? index + 1
-                : row.start_time !== null
-                  ? formatClockTime(row.start_time)
-                  : ''}
-            </td>
-            <td className="border border-rs-border px-2 py-2 align-top">
-              {row.song_title}
-            </td>
-            {row.cells.map((cell) => (
-              <td
-                key={cell.role_id}
-                className="border border-rs-border px-2 py-2 align-top"
-              >
-                <AssignmentCellEntries entries={cell.entries} />
-              </td>
-            ))}
-          </tr>
-        ))}
-      </tbody>
-    </table>
   )
 }
 
@@ -855,25 +816,6 @@ function activateOnEnterOrSpace(onActivate: () => void) {
   }
 }
 
-/** One card's whole Running Order — every Song on the Rehearsal, not only the viewer's own — as an inline, comma-joined list of links. */
-function RunningOrderInline({ songs }: { songs: ScheduleListRow['songs'] }) {
-  if (songs.length === 0) {
-    return <p className="text-xs text-rs-muted">No songs yet</p>
-  }
-  return (
-    <p className="text-xs text-rs-muted">
-      {songs.map((song, index) => (
-        <span key={song.id}>
-          <Link to={`/songs/${song.id}`} className="text-rs-accent">
-            {song.title}
-          </Link>
-          {index < songs.length - 1 ? ', ' : ''}
-        </span>
-      ))}
-    </p>
-  )
-}
-
 /**
  * One All-rehearsals card (issue: pills/tables UI overhaul, replacing the old table/"Open" button row).
  *
@@ -913,14 +855,20 @@ function RehearsalCard({
         <YourStateChip state={row.your_state} />
         <span className="text-rs-muted">{row.song_count} songs</span>
       </div>
-      <RunningOrderInline songs={row.songs} />
-      {row.your_songs.length > 0 && (
-        <div>
-          <p className="text-xs font-semibold uppercase text-rs-muted">
-            Your songs
-          </p>
-          <YourSongsList songs={row.your_songs} />
-        </div>
+      {row.is_dress ? (
+        <p className="text-xs text-rs-muted">
+          Entire Setlist — the dress rehearsal runs it live (ADR 0003), so
+          there's nothing to list per Song.
+        </p>
+      ) : (
+        row.your_songs.length > 0 && (
+          <div>
+            <p className="text-xs font-semibold uppercase text-rs-muted">
+              Your songs
+            </p>
+            <YourSongsList songs={row.your_songs} />
+          </div>
+        )
       )}
       {row.pending_count !== undefined && (
         <p className="text-xs text-rs-muted">{row.pending_count} pending</p>

@@ -5,7 +5,7 @@ import { useLocation } from 'react-router-dom'
 
 import { useEditSession } from '../shell/EditSessionContext'
 import { adminContext, memberContext } from '../test/fixtures'
-import { mockFetchOnce } from '../test/mockFetch'
+import { mockFetchByUrl, mockFetchOnce } from '../test/mockFetch'
 import { mockMatchMedia } from '../test/mockMatchMedia'
 import { renderShell } from '../test/renderShell'
 import { Setlist } from './Setlist'
@@ -73,9 +73,17 @@ describe('Setlist', () => {
     renderShell(<Setlist />, ['/setlist'])
 
     await screen.findByText('Test Song')
-    expect(screen.queryByText('SIN unfilled')).not.toBeInTheDocument() // Singer is filled
-    expect(screen.getByText('Sam Rivera')).toBeInTheDocument()
-    expect(screen.getByText('DRU unfilled')).toBeInTheDocument()
+    // Singer matches no fixed instrument family, so it keeps its own column
+    // (buildCastGridColumns()); Drummer matches "drum" and becomes the
+    // fixed Drums column. Both are filled/unfilled independently.
+    expect(
+      screen.getByRole('columnheader', { name: 'Singer' }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('columnheader', { name: 'Drums' }),
+    ).toBeInTheDocument()
+    expect(screen.getByText('Sam')).toBeInTheDocument() // shortened -- only one "Sam" in this table
+    expect(screen.getByText('unfilled')).toBeInTheDocument() // Drums has no performer
   })
 
   it('renders a Song with no notes with no notes row at all', async () => {
@@ -114,16 +122,15 @@ describe('Setlist', () => {
     expect(screen.queryByText(/▶/)).not.toBeInTheDocument()
   })
 
-  it('still renders the "+" upload trigger, targeting /profile?song= for the right Song', async () => {
+  it('still renders the "+" upload trigger for the right Song', async () => {
     mockFetchOnce(200, { context: memberContext(), data: setlistPayload() })
 
     renderShell(<Setlist />, ['/setlist'])
 
     await screen.findByText('Test Song')
-    const addLink = screen.getByRole('link', {
-      name: /Add a recording of Test Song/,
-    })
-    expect(addLink).toHaveAttribute('href', '/profile?song=1')
+    expect(
+      screen.getByRole('button', { name: /Add a recording of Test Song/ }),
+    ).toBeInTheDocument()
   })
 
   it('clicking a desktop row navigates to the Song page', async () => {
@@ -161,8 +168,20 @@ describe('Setlist', () => {
     expect(screen.getByTestId('location')).toHaveTextContent('/songs/1')
   })
 
-  it('clicking the "+" upload trigger goes to the upload flow, not the Song page (stopPropagation)', async () => {
-    mockFetchOnce(200, { context: memberContext(), data: setlistPayload() })
+  it('clicking the "+" upload trigger opens the upload popup, not the Song page (stopPropagation)', async () => {
+    mockFetchByUrl({
+      '/api/setlist/': () => ({
+        status: 200,
+        body: { context: memberContext(), data: setlistPayload() },
+      }),
+      '/api/members/recordings/slots/': () => ({
+        status: 200,
+        body: {
+          context: memberContext(),
+          data: { count: 0, items: [], upload_slots: [] },
+        },
+      }),
+    })
     const user = userEvent.setup()
 
     renderShell(
@@ -174,10 +193,13 @@ describe('Setlist', () => {
     )
 
     await user.click(
-      await screen.findByRole('link', { name: /Add a recording of Test Song/ }),
+      await screen.findByRole('button', {
+        name: /Add a recording of Test Song/,
+      }),
     )
 
-    expect(screen.getByTestId('location')).toHaveTextContent('/profile?song=1')
+    expect(await screen.findByText('Upload a take')).toBeInTheDocument()
+    expect(screen.getByTestId('location')).toHaveTextContent('/setlist')
   })
 
   it('renders an explicit empty state for a Semester with no Songs', async () => {

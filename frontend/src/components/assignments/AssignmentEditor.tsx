@@ -19,9 +19,9 @@ import type {
 } from '../../api/scheduleTypes'
 import type { ReadEnvelope, WriteEnvelope } from '../../api/types'
 import { useIsPhone } from '../../hooks/useIsPhone'
+import { shortenNames } from '../../lib/names'
 import { useRegisterEditSession } from '../../shell/EditSessionContext'
 import { ResponsiveDialog } from '../ui/ResponsiveDialog'
-import { roleHueVar } from '../ui/RoleLegend'
 import { SaveChangesDialog } from '../ui/SaveChangesDialog'
 
 /** A standing Assignment or Backup pick that hasn't round-tripped to the server yet (issue #338). */
@@ -109,6 +109,8 @@ function cellFor(row: MatrixRow, roleId: number): MatrixCell | undefined {
 
 interface AssignmentEditorProps {
   rehearsalId: number
+  /** Called after a Discard or a successful Save — returns the Schedule surface to its read-only grid, since Discard and "done editing" are the same action (issue: UI overhaul round 2, item 2). */
+  onDone: () => void
 }
 
 /**
@@ -126,7 +128,10 @@ interface AssignmentEditorProps {
  * per #307's "one endpoint per surface" rule; the picker is the one extra
  * fetch, and only when a cell's "+" is opened.
  */
-export function AssignmentEditor({ rehearsalId }: AssignmentEditorProps) {
+export function AssignmentEditor({
+  rehearsalId,
+  onDone,
+}: AssignmentEditorProps) {
   const isPhone = useIsPhone()
   const [detail, setDetail] = useState<RehearsalDetail | null>(null)
   const [semester, setSemester] = useState<{
@@ -197,15 +202,36 @@ export function AssignmentEditor({ rehearsalId }: AssignmentEditorProps) {
     load()
   }, [load])
 
-  /** Song titles by `RehearsalSong` id, for the Running Order editor to render a reordered id list as titles. */
-  const songTitleByRehearsalSongId = useMemo(() => {
-    const map = new Map<number, string>()
-    for (const row of detail?.rows ?? []) {
-      if (row.rehearsal_song_id !== null)
-        map.set(row.rehearsal_song_id, row.song_title)
-    }
-    return map
-  }, [detail])
+  /**
+   * The grid's rows in the current (possibly reordered) Running Order —
+   * the Running Order editor and the assignment table are one table
+   * (issue: UI overhaul round 2), so a drag on a row both reorders and
+   * shows its assignments in the same place. `null` `runningOrder` (the
+   * Dress Rehearsal, ADR 0003) falls back to the server's own row order,
+   * which is unreorderable there anyway.
+   */
+  const displayRows = useMemo(() => {
+    const rows = detail?.rows ?? []
+    if (runningOrder === null) return rows
+    const byRehearsalSongId = new Map(
+      rows
+        .filter((row) => row.rehearsal_song_id !== null)
+        .map((row) => [row.rehearsal_song_id as number, row]),
+    )
+    return runningOrder
+      .map((id) => byRehearsalSongId.get(id))
+      .filter((row): row is MatrixRow => row !== undefined)
+  }, [detail, runningOrder])
+
+  /** Reorders `runningOrder` by the display-row indices `AssignmentEditorTable`/`AssignmentEditorCards` render at — a drag-and-drop or arrow move on a row. */
+  const reorderDisplayRows = useCallback(
+    (fromIndex: number, toIndex: number) => {
+      setRunningOrder((previous) =>
+        previous === null ? previous : moveItem(previous, fromIndex, toIndex),
+      )
+    },
+    [],
+  )
 
   /** True once `runningOrder` differs from what the server last returned — the Running Order half of `changeCount`. */
   const hasReorderChange =
@@ -226,6 +252,27 @@ export function AssignmentEditor({ rehearsalId }: AssignmentEditorProps) {
       ),
     [detail, extraRoles],
   )
+
+  /**
+   * First-name-only display, disambiguated by last initial on collision
+   * (issue: UI overhaul round 2, item 3) — scoped to every name currently
+   * rendered anywhere in this grid (server-saved entries plus pending
+   * picks), matching the same rule the unified Setlist/Schedule tables use
+   * (`CastLine.tsx`). This surface is a grid of pills, not the Profile page
+   * or the Band roster, so full names don't apply here.
+   */
+  const nameFor = useMemo(() => {
+    const names: string[] = []
+    for (const row of detail?.rows ?? []) {
+      for (const cell of row.cells) {
+        for (const entry of cell.entries) names.push(entry.person_name)
+      }
+    }
+    for (const entry of addedEntries.values()) names.push(entry.personName)
+    for (const entry of addedBackupEntries.values())
+      names.push(entry.personName)
+    return shortenNames(names)
+  }, [detail, addedEntries, addedBackupEntries])
 
   const changeCount =
     removedAssignmentIds.size +
@@ -409,6 +456,7 @@ export function AssignmentEditor({ rehearsalId }: AssignmentEditorProps) {
       if (reorderBody === null) {
         setSaveOpen(false)
         load()
+        onDone()
         return
       }
       void apiFetch<WriteEnvelope>(
@@ -418,16 +466,30 @@ export function AssignmentEditor({ rehearsalId }: AssignmentEditorProps) {
         if (reorderEnvelope.ok) {
           setSaveOpen(false)
           load()
+          onDone()
         }
       })
     })
-  }, [buildBufferInput, rehearsalId, hasReorderChange, buildReorderInput, load])
+  }, [
+    buildBufferInput,
+    rehearsalId,
+    hasReorderChange,
+    buildReorderInput,
+    load,
+    onDone,
+  ])
+
+  /** Discard means "leave edit mode" too — there is no separate "Done editing" affordance (issue: UI overhaul round 2, item 2). */
+  const discard = useCallback(() => {
+    load()
+    onDone()
+  }, [load, onDone])
 
   useRegisterEditSession({
     what: 'this Rehearsal’s assignments and Running Order',
     changeCount,
     blockedReason: null,
-    discard: load,
+    discard,
     requestSave: () => setSaveOpen(true),
   })
 
@@ -491,7 +553,7 @@ export function AssignmentEditor({ rehearsalId }: AssignmentEditorProps) {
     }
   }, [])
 
-  /** Lists a cell's current standing assignees (server-saved minus pending removals, plus pending adds) for the picker's "Covering for" menu. */
+  /** Lists a cell's current standing assignees (server-saved minus pending removals, plus pending adds) for the picker's "Covering for" menu, names shortened per `nameFor`. */
   const standingAssigneesFor = useCallback(
     (songId: number, roleId: number): { id: number; name: string }[] => {
       const row = detail?.rows.find((candidate) => candidate.song_id === songId)
@@ -501,13 +563,19 @@ export function AssignmentEditor({ rehearsalId }: AssignmentEditorProps) {
           (entry) =>
             entry.kind === 'assignment' && !removedAssignmentIds.has(entry.id),
         )
-        .map((entry) => ({ id: entry.person_id, name: entry.person_name }))
+        .map((entry) => ({
+          id: entry.person_id,
+          name: nameFor.get(entry.person_name) ?? entry.person_name,
+        }))
       const fromPending = [...addedEntries.values()]
         .filter((entry) => entry.songId === songId && entry.roleId === roleId)
-        .map((entry) => ({ id: entry.personId, name: entry.personName }))
+        .map((entry) => ({
+          id: entry.personId,
+          name: nameFor.get(entry.personName) ?? entry.personName,
+        }))
       return [...fromServer, ...fromPending]
     },
-    [detail, removedAssignmentIds, addedEntries],
+    [detail, removedAssignmentIds, addedEntries, nameFor],
   )
 
   /** Records a picker choice as a pending standing Assignment on the open cell, then closes the picker. */
@@ -588,37 +656,6 @@ export function AssignmentEditor({ rehearsalId }: AssignmentEditorProps) {
         </p>
       </div>
 
-      <ul className="flex flex-wrap gap-3 text-sm">
-        {roles.map((role, index) => (
-          <li key={role.id} className="flex items-center gap-1.5">
-            <span
-              aria-hidden="true"
-              className="inline-block h-3 w-3 rounded-full"
-              style={{ backgroundColor: roleHueVar(index) }}
-            />
-            {role.name}
-          </li>
-        ))}
-      </ul>
-
-      {runningOrder !== null && (
-        <section className="flex flex-col gap-2">
-          <h2 className="text-sm font-semibold uppercase text-rs-muted">
-            Running order
-          </h2>
-          <p className="text-xs text-rs-muted">
-            Drag a row, or use the arrows, to reorder tonight's Running Order —
-            this changes when each Song happens (and which Conflict Windows
-            overlap it), never the Setlist's concert position.
-          </p>
-          <RunningOrderEditor
-            order={runningOrder}
-            titleById={songTitleByRehearsalSongId}
-            onReorder={setRunningOrder}
-          />
-        </section>
-      )}
-
       <div className="flex flex-wrap gap-3 text-xs text-rs-muted">
         <span>backup — covers one evening only</span>
         <span>away — a declared Conflict</span>
@@ -635,25 +672,39 @@ export function AssignmentEditor({ rehearsalId }: AssignmentEditorProps) {
         </button>
       )}
 
+      {runningOrder !== null && (
+        <p className="text-xs text-rs-muted">
+          Drag a row, or use its arrows, to reorder tonight's Running Order —
+          this changes when each Song happens (and which Conflict Windows
+          overlap it), never the Setlist's concert position.
+        </p>
+      )}
+
       {isPhone ? (
         <AssignmentEditorCards
           roles={roles}
-          rows={detail.rows}
+          rows={displayRows}
           displayEntriesFor={displayEntriesFor}
+          nameFor={nameFor}
           onRemove={removeEntry}
           onOpenPicker={(songId, songTitle, roleId, roleName) =>
             setPickerCell({ songId, songTitle, roleId, roleName })
           }
+          reorderable={runningOrder !== null}
+          onReorderRow={reorderDisplayRows}
         />
       ) : (
         <AssignmentEditorTable
           roles={roles}
-          rows={detail.rows}
+          rows={displayRows}
           displayEntriesFor={displayEntriesFor}
+          nameFor={nameFor}
           onRemove={removeEntry}
           onOpenPicker={(songId, songTitle, roleId, roleName) =>
             setPickerCell({ songId, songTitle, roleId, roleName })
           }
+          reorderable={runningOrder !== null}
+          onReorderRow={reorderDisplayRows}
         />
       )}
 
@@ -730,106 +781,33 @@ function moveItem<T>(list: T[], fromIndex: number, toIndex: number): T[] {
   return next
 }
 
-/**
- * The Running Order sub-grid's reorder control (issue: "Edit Rehearsal"
- * consolidation) — one row per `RehearsalSong`, reorderable by native
- * HTML5 drag-and-drop or by the Move up/down buttons (kept alongside the
- * drag handle for keyboard/screen-reader access, since HTML5 `draggable`
- * offers neither on its own). Purely a local reorder of `order` (an array
- * of `RehearsalSong` ids): nothing here posts a request — the caller only
- * ever submits the buffer's current `order` when "Save" is clicked
- * (ADR 0008's Buffer → preview → apply shape, extended to this surface).
+/** One grid-cell occupant's pill: name, badges (backup/away/role-mismatch), and a remove control.
+ *
+ * Uncolored (issue: UI overhaul round 2) — the Edit Rehearsal grid already
+ * arranges Roles as columns, so a per-Role hue here would be redundant
+ * color-coding rather than information.
  */
-function RunningOrderEditor({
-  order,
-  titleById,
-  onReorder,
-}: {
-  order: number[]
-  titleById: Map<number, string>
-  onReorder: (next: number[]) => void
-}) {
-  const [dragIndex, setDragIndex] = useState<number | null>(null)
-
-  const move = (fromIndex: number, toIndex: number) => {
-    const next = moveItem(order, fromIndex, toIndex)
-    if (next !== order) onReorder(next)
-  }
-
-  return (
-    <ul className="flex flex-col gap-1">
-      {order.map((rehearsalSongId, index) => {
-        const title = titleById.get(rehearsalSongId) ?? 'Unknown song'
-        return (
-          <li
-            key={rehearsalSongId}
-            draggable
-            onDragStart={() => setDragIndex(index)}
-            onDragOver={(event) => event.preventDefault()}
-            onDrop={(event) => {
-              event.preventDefault()
-              if (dragIndex !== null) move(dragIndex, index)
-              setDragIndex(null)
-            }}
-            onDragEnd={() => setDragIndex(null)}
-            className="flex items-center justify-between gap-2 rounded border border-rs-border bg-rs-surface px-2 py-1.5 text-sm"
-          >
-            <span className="flex items-center gap-2">
-              <span aria-hidden="true" className="cursor-grab text-rs-muted">
-                ⠿
-              </span>
-              {title}
-            </span>
-            <span className="flex gap-1">
-              <button
-                type="button"
-                aria-label={`Move ${title} up`}
-                disabled={index === 0}
-                onClick={() => move(index, index - 1)}
-                className="rounded border border-rs-border px-1.5 py-0.5 text-xs disabled:cursor-not-allowed disabled:opacity-30"
-              >
-                ↑
-              </button>
-              <button
-                type="button"
-                aria-label={`Move ${title} down`}
-                disabled={index === order.length - 1}
-                onClick={() => move(index, index + 1)}
-                className="rounded border border-rs-border px-1.5 py-0.5 text-xs disabled:cursor-not-allowed disabled:opacity-30"
-              >
-                ↓
-              </button>
-            </span>
-          </li>
-        )
-      })}
-    </ul>
-  )
-}
-
-/** One grid-cell occupant's pill: name, badges (backup/away/role-mismatch), and a remove control. */
 function AssignmentEditorPill({
   entry,
-  hue,
+  nameFor,
   onRemove,
 }: {
   entry: DisplayEntry
-  hue: string
+  nameFor: Map<string, string>
   onRemove: () => void
 }) {
   return (
     <span
-      style={{ backgroundColor: hue }}
-      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium text-white ${
-        entry.pending ? 'ring-2 ring-white/70' : ''
+      className={`inline-flex items-center gap-1 rounded-full border border-rs-border bg-rs-border/40 px-2 py-0.5 text-xs font-medium text-rs-fg ${
+        entry.pending ? 'ring-2 ring-rs-accent' : ''
       }`}
     >
-      {entry.personName}
+      {nameFor.get(entry.personName) ?? entry.personName}
       {entry.kind === 'backup' && (
-        <span className="rounded bg-black/20 px-1">backup</span>
+        <span className="rounded bg-rs-border px-1">backup</span>
       )}
       {entry.hasConflict && (
-        <span className="rounded bg-black/20 px-1">away</span>
+        <span className="rounded bg-rs-border px-1">away</span>
       )}
       {entry.isRoleMismatch && (
         <span title="Role not on their membership (ADR 0002)">◦</span>
@@ -838,7 +816,7 @@ function AssignmentEditorPill({
         type="button"
         aria-label={`Remove ${entry.personName}`}
         onClick={onRemove}
-        className="ml-0.5 rounded-full px-1 hover:bg-black/20"
+        className="ml-0.5 rounded-full px-1 hover:bg-rs-border"
       >
         ✕
       </button>
@@ -851,22 +829,22 @@ function AssignmentEditorCell({
   songId,
   songTitle,
   role,
-  roleIndex,
   cell,
   displayEntriesFor,
+  nameFor,
   onRemove,
   onOpenPicker,
 }: {
   songId: number
   songTitle: string
   role: DisplayRole
-  roleIndex: number
   cell: MatrixCell | undefined
   displayEntriesFor: (
     songId: number,
     roleId: number,
     cell: MatrixCell | undefined,
   ) => DisplayEntry[]
+  nameFor: Map<string, string>
   onRemove: (entry: DisplayEntry) => void
   onOpenPicker: (
     songId: number,
@@ -876,7 +854,6 @@ function AssignmentEditorCell({
   ) => void
 }) {
   const entries = displayEntriesFor(songId, role.id, cell)
-  const hue = roleHueVar(roleIndex)
   return (
     <div className="flex flex-wrap items-center gap-1">
       {entries.length === 0 ? (
@@ -888,7 +865,7 @@ function AssignmentEditorCell({
           <AssignmentEditorPill
             key={entry.key}
             entry={entry}
-            hue={hue}
+            nameFor={nameFor}
             onRemove={() => onRemove(entry)}
           />
         ))
@@ -910,14 +887,7 @@ function formatClockTime(isoTime: string): string {
   return isoTime.slice(0, 5)
 }
 
-/** Desktop rendering of the assignment grid: one row per Song, one column per Role. */
-function AssignmentEditorTable({
-  roles,
-  rows,
-  displayEntriesFor,
-  onRemove,
-  onOpenPicker,
-}: {
+interface AssignmentGridProps {
   roles: DisplayRole[]
   rows: MatrixRow[]
   displayEntriesFor: (
@@ -925,6 +895,8 @@ function AssignmentEditorTable({
     roleId: number,
     cell: MatrixCell | undefined,
   ) => DisplayEntry[]
+  /** First-name-only display map, scoped to this grid (issue: UI overhaul round 2, item 3). */
+  nameFor: Map<string, string>
   onRemove: (entry: DisplayEntry) => void
   onOpenPicker: (
     songId: number,
@@ -932,11 +904,40 @@ function AssignmentEditorTable({
     roleId: number,
     roleName: string,
   ) => void
-}) {
+  /** Whether rows may be dragged (or moved with the arrows) to reorder the Running Order — `false` on the Dress Rehearsal (ADR 0003), which has none. */
+  reorderable: boolean
+  /** Applies a row move by the display-row indices this grid renders at. */
+  onReorderRow: (fromIndex: number, toIndex: number) => void
+}
+
+/**
+ * Desktop rendering of the assignment grid: one row per Song, one column
+ * per Role. The Running Order editor and this table are the same table
+ * (issue: UI overhaul round 2) — a row is both a Running Order slot and its
+ * assignments, so a drag reorders and edits in the same place rather than
+ * two separate controls for the one Rehearsal.
+ */
+function AssignmentEditorTable({
+  roles,
+  rows,
+  displayEntriesFor,
+  nameFor,
+  onRemove,
+  onOpenPicker,
+  reorderable,
+  onReorderRow,
+}: AssignmentGridProps) {
+  const [dragIndex, setDragIndex] = useState<number | null>(null)
+
   return (
     <table className="w-full text-left text-sm">
       <thead>
         <tr>
+          {reorderable && (
+            <th className="w-6 pb-2" aria-hidden="true">
+              {' '}
+            </th>
+          )}
           <th className="pb-2">Start</th>
           <th className="pb-2">Song</th>
           {roles.map((role) => (
@@ -947,21 +948,66 @@ function AssignmentEditorTable({
         </tr>
       </thead>
       <tbody>
-        {rows.map((row) => (
-          <tr key={row.song_id}>
+        {rows.map((row, index) => (
+          <tr
+            key={row.song_id}
+            draggable={reorderable}
+            onDragStart={() => setDragIndex(index)}
+            onDragOver={(event) => reorderable && event.preventDefault()}
+            onDrop={(event) => {
+              event.preventDefault()
+              if (reorderable && dragIndex !== null)
+                onReorderRow(dragIndex, index)
+              setDragIndex(null)
+            }}
+            onDragEnd={() => setDragIndex(null)}
+            className={reorderable ? 'border-t border-rs-border' : undefined}
+          >
+            {reorderable && (
+              <td className="py-2 align-top">
+                <span className="flex items-center gap-1">
+                  <span
+                    aria-hidden="true"
+                    className="cursor-grab text-rs-muted"
+                  >
+                    ⠿
+                  </span>
+                  <span className="flex flex-col">
+                    <button
+                      type="button"
+                      aria-label={`Move ${row.song_title} up`}
+                      disabled={index === 0}
+                      onClick={() => onReorderRow(index, index - 1)}
+                      className="text-xs leading-none text-rs-muted disabled:cursor-not-allowed disabled:opacity-30"
+                    >
+                      ↑
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Move ${row.song_title} down`}
+                      disabled={index === rows.length - 1}
+                      onClick={() => onReorderRow(index, index + 1)}
+                      className="text-xs leading-none text-rs-muted disabled:cursor-not-allowed disabled:opacity-30"
+                    >
+                      ↓
+                    </button>
+                  </span>
+                </span>
+              </td>
+            )}
             <td className="py-2 align-top">
               {row.start_time !== null ? formatClockTime(row.start_time) : ''}
             </td>
             <td className="py-2 align-top">{row.song_title}</td>
-            {roles.map((role, index) => (
+            {roles.map((role) => (
               <td key={role.id} className="py-2 align-top">
                 <AssignmentEditorCell
                   songId={row.song_id}
                   songTitle={row.song_title}
                   role={role}
-                  roleIndex={index}
                   cell={cellFor(row, role.id)}
                   displayEntriesFor={displayEntriesFor}
+                  nameFor={nameFor}
                   onRemove={onRemove}
                   onOpenPicker={onOpenPicker}
                 />
@@ -974,41 +1020,58 @@ function AssignmentEditorTable({
   )
 }
 
-/** Phone rendering of the assignment grid (`useIsPhone`): one card per Song, stacking each Role's cell inside it. */
+/**
+ * Phone rendering of the assignment grid (`useIsPhone`): one card per Song,
+ * stacking each Role's cell inside it. HTML5 drag-and-drop doesn't work on
+ * touch, so reordering here is the Move up/down arrows only — the same
+ * `onReorderRow` the desktop table's drag-and-drop calls.
+ */
 function AssignmentEditorCards({
   roles,
   rows,
   displayEntriesFor,
+  nameFor,
   onRemove,
   onOpenPicker,
-}: {
-  roles: DisplayRole[]
-  rows: MatrixRow[]
-  displayEntriesFor: (
-    songId: number,
-    roleId: number,
-    cell: MatrixCell | undefined,
-  ) => DisplayEntry[]
-  onRemove: (entry: DisplayEntry) => void
-  onOpenPicker: (
-    songId: number,
-    songTitle: string,
-    roleId: number,
-    roleName: string,
-  ) => void
-}) {
+  reorderable,
+  onReorderRow,
+}: AssignmentGridProps) {
   return (
     <ul className="flex flex-col gap-3">
-      {rows.map((row) => (
+      {rows.map((row, index) => (
         <li key={row.song_id} className="rounded border border-rs-border p-3">
-          <p className="font-medium">
-            {row.start_time !== null
-              ? `${formatClockTime(row.start_time)} · `
-              : ''}
-            {row.song_title}
-          </p>
+          <div className="flex items-center justify-between gap-2">
+            <p className="font-medium">
+              {row.start_time !== null
+                ? `${formatClockTime(row.start_time)} · `
+                : ''}
+              {row.song_title}
+            </p>
+            {reorderable && (
+              <span className="flex shrink-0 gap-1">
+                <button
+                  type="button"
+                  aria-label={`Move ${row.song_title} up`}
+                  disabled={index === 0}
+                  onClick={() => onReorderRow(index, index - 1)}
+                  className="rounded border border-rs-border px-1.5 py-0.5 text-xs disabled:cursor-not-allowed disabled:opacity-30"
+                >
+                  ↑
+                </button>
+                <button
+                  type="button"
+                  aria-label={`Move ${row.song_title} down`}
+                  disabled={index === rows.length - 1}
+                  onClick={() => onReorderRow(index, index + 1)}
+                  className="rounded border border-rs-border px-1.5 py-0.5 text-xs disabled:cursor-not-allowed disabled:opacity-30"
+                >
+                  ↓
+                </button>
+              </span>
+            )}
+          </div>
           <ul className="mt-2 flex flex-col gap-2">
-            {roles.map((role, index) => (
+            {roles.map((role) => (
               <li key={role.id} className="flex flex-col gap-1">
                 <span className="text-xs font-semibold uppercase text-rs-muted">
                   {role.name}
@@ -1017,9 +1080,9 @@ function AssignmentEditorCards({
                   songId={row.song_id}
                   songTitle={row.song_title}
                   role={role}
-                  roleIndex={index}
                   cell={cellFor(row, role.id)}
                   displayEntriesFor={displayEntriesFor}
+                  nameFor={nameFor}
                   onRemove={onRemove}
                   onOpenPicker={onOpenPicker}
                 />
@@ -1032,12 +1095,14 @@ function AssignmentEditorCards({
   )
 }
 
-/** One picker-list row: a Person's name plus a bare "Conflict" marker (ADR 0005), clickable to make that pick. */
+/** One picker-list row: a Person's (shortened) name plus a bare "Conflict" marker (ADR 0005), clickable to make that pick. */
 function PickerOptionRow({
   option,
+  nameFor,
   onPick,
 }: {
   option: AssignmentPickerOption
+  nameFor: Map<string, string>
   onPick: () => void
 }) {
   return (
@@ -1047,7 +1112,7 @@ function PickerOptionRow({
         onClick={onPick}
         className="flex w-full items-center justify-between rounded px-2 py-1 text-left text-sm hover:bg-rs-border/40"
       >
-        <span>{option.person_name}</span>
+        <span>{nameFor.get(option.person_name) ?? option.person_name}</span>
         {option.has_conflict && (
           <span className="text-xs text-rs-muted">Conflict</span>
         )}
@@ -1092,6 +1157,18 @@ function AssignmentPickerDialog({
     ).then((envelope) => setPayload(envelope.data))
   }, [rehearsalId, cell.songId, cell.roleId])
 
+  /** First-name-only display, scoped to this one dialog's candidate list (issue: UI overhaul round 2, item 3). */
+  const nameFor = useMemo(() => {
+    const names = [
+      ...(payload?.declared ?? []).map((option) => option.person_name),
+      ...(payload?.others ?? []).map((option) => option.person_name),
+      ...(payload?.backup_declared ?? []).map((option) => option.person_name),
+      ...(payload?.backup_others ?? []).map((option) => option.person_name),
+      ...standingAssignees.map((assignee) => assignee.name),
+    ]
+    return shortenNames(names)
+  }, [payload, standingAssignees])
+
   const coveringFor = useMemo(
     () =>
       standingAssignees.find((assignee) => assignee.id === coveringForId) ??
@@ -1120,6 +1197,7 @@ function AssignmentPickerDialog({
                 <PickerOptionRow
                   key={option.person_id}
                   option={option}
+                  nameFor={nameFor}
                   onPick={() => onPickAssigned(option)}
                 />
               ))}
@@ -1142,7 +1220,10 @@ function AssignmentPickerDialog({
                           onClick={() => onPickAssigned(option)}
                           className="flex w-full items-center justify-between rounded px-2 py-1 text-left text-sm hover:bg-rs-border/40"
                         >
-                          <span>{option.person_name}</span>
+                          <span>
+                            {nameFor.get(option.person_name) ??
+                              option.person_name}
+                          </span>
                           <span className="text-xs text-rs-muted">
                             Has not declared {cell.roleName}
                             {option.has_conflict ? ' · Conflict' : ''}
@@ -1196,6 +1277,7 @@ function AssignmentPickerDialog({
                     <PickerOptionRow
                       key={option.person_id}
                       option={option}
+                      nameFor={nameFor}
                       onPick={() =>
                         onPickBackup(
                           option,
@@ -1230,7 +1312,10 @@ function AssignmentPickerDialog({
                               }
                               className="flex w-full items-center justify-between rounded px-2 py-1 text-left text-sm hover:bg-rs-border/40"
                             >
-                              <span>{option.person_name}</span>
+                              <span>
+                                {nameFor.get(option.person_name) ??
+                                  option.person_name}
+                              </span>
                               <span className="text-xs text-rs-muted">
                                 Has not declared {cell.roleName}
                                 {option.has_conflict ? ' · Conflict' : ''}

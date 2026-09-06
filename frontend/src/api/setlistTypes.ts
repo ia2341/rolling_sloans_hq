@@ -4,6 +4,9 @@ export interface CastPerformer {
   id: number
   name: string
   is_role_mismatch: boolean
+  /** Absent on the Setlist's own cast (it has no notion of Backup) — present when adapted from a Schedule `MatrixEntry` (issue: UI overhaul round 2, shared cast grid). */
+  kind?: 'assignment' | 'backup'
+  has_conflict?: boolean
 }
 
 export interface CastEntry {

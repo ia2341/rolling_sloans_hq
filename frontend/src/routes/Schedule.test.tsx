@@ -92,6 +92,9 @@ function schedulePayload(
         {
           song_id: 1,
           song_title: 'First Song',
+          song_artist: 'First Artist',
+          song_position: 1,
+          song_length: '3:45',
           start_time: '18:00:00',
           rehearsal_song_id: 100,
           cells: [
@@ -126,15 +129,14 @@ afterEach(() => {
 })
 
 describe('Schedule', () => {
-  it('renders one table with start times and linked assignment names, with no Running order | Assignments mode switch', async () => {
+  it('renders one table with the Song length and linked assignment names, with no Running order | Assignments mode switch', async () => {
     mockFetchOnce(200, { context: memberContext(), data: schedulePayload() })
 
     renderShell(<Schedule />, ['/schedule'])
 
-    await screen.findByText('First Song')
-    expect(screen.getByRole('table')).toBeInTheDocument()
-    expect(screen.getByText('Sam Rivera')).toBeInTheDocument()
-    expect(screen.getAllByText('18:00').length).toBeGreaterThan(0)
+    expect(await screen.findByRole('table')).toBeInTheDocument()
+    expect(screen.getByText('Sam')).toBeInTheDocument()
+    expect(screen.getByText('3:45')).toBeInTheDocument()
     expect(screen.queryByText('Running Order')).not.toBeInTheDocument()
     expect(
       screen.queryByRole('tab', { name: 'Assignments' }),
@@ -152,7 +154,7 @@ describe('Schedule', () => {
 
     renderShell(<Schedule />, ['/schedule'])
 
-    await screen.findByText('First Song')
+    await screen.findByRole('table')
     expect(fetchSpy).toHaveBeenCalledTimes(1)
 
     fireEvent.click(screen.getByRole('radio', { name: 'All rehearsals' }))
@@ -377,8 +379,9 @@ describe('Schedule', () => {
 
     renderShell(<Schedule />, ['/schedule'])
 
-    const teammateLink = await screen.findByText('Teammate Placeholder')
-    expect(teammateLink.closest('div')).toHaveTextContent('⚠ conflict')
+    // Names shorten to a first name (`shortenNames()`) -- "Teammate" is unique among this table's names.
+    const teammateLink = await screen.findByText('Teammate')
+    expect(teammateLink.closest('div')).toHaveTextContent('away')
     expect(screen.queryByText(/reason/i)).not.toBeInTheDocument()
   })
 
@@ -398,7 +401,7 @@ describe('Schedule', () => {
 
     renderShell(<Schedule />, ['/schedule'])
 
-    const backupLink = await screen.findByText('Backup Placeholder')
+    const backupLink = await screen.findByText('Backup')
     expect(backupLink.closest('div')).toHaveTextContent('(backup)')
     expect(screen.queryByText(/covering for/i)).not.toBeInTheDocument()
   })
@@ -409,7 +412,7 @@ describe('Schedule', () => {
 
     renderShell(<Schedule />, ['/schedule'])
 
-    await screen.findByText(/First Song/)
+    await screen.findByText('Available for the whole rehearsal')
     expect(screen.queryByRole('table')).not.toBeInTheDocument()
   })
 
@@ -417,11 +420,12 @@ describe('Schedule', () => {
     const payload = schedulePayload()
     payload.selected!.is_dress = true
     payload.selected!.rows[0]!.start_time = null
+    payload.selected!.timeline.is_dress_rehearsal = true
     mockFetchOnce(200, { context: memberContext(), data: payload })
 
     renderShell(<Schedule />, ['/schedule'])
 
-    await screen.findByText(/First Song/)
+    await screen.findByRole('table')
     expect(
       screen.getByText(
         'The dress rehearsal has no running order of its own — it runs the setlist as it stands today (ADR 0003).',

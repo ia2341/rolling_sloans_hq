@@ -68,6 +68,7 @@ urlpatterns = [
         'members/roster/<int:pk>/resend-invite/',
         api_views.RosterResendInviteApiView.as_view(), name='api-roster-resend-invite',
     ),
+    path('members/recordings/slots/', api_views.RecordingSlotsApiView.as_view(), name='api-recordings-slots'),
     path('members/recordings/presign/', api_views.RecordingPresignApiView.as_view(), name='api-recordings-presign'),
     path('members/recordings/confirm/', api_views.RecordingConfirmApiView.as_view(), name='api-recordings-confirm'),
     path(

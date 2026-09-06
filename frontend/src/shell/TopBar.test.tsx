@@ -1,5 +1,6 @@
 import { screen } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import userEvent from '@testing-library/user-event'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { resetContextForTests, setContext } from '../api/contextStore'
 import { RegisterTestEditSession } from '../test/RegisterTestEditSession'
@@ -41,6 +42,31 @@ describe('TopBar', () => {
     expect(
       screen.queryByRole('button', { name: 'Publish' }),
     ).not.toBeInTheDocument()
+  })
+
+  it('hides Discard with no editing surface registered', () => {
+    setContext(memberContext())
+    renderShell(<TopBar />)
+
+    expect(
+      screen.queryByRole('button', { name: 'Discard' }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('shows an enabled Discard once a surface registers an EditSession, and calls its discard (issue: UI overhaul round 2, item 6 — a phone viewer previously had no way to leave edit mode without saving)', async () => {
+    setContext(adminContext())
+    const discard = vi.fn()
+    const user = userEvent.setup()
+    renderShell(
+      <>
+        <RegisterTestEditSession changeCount={1} discard={discard} />
+        <TopBar />
+      </>,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Discard' }))
+
+    expect(discard).toHaveBeenCalledTimes(1)
   })
 
   it('shows the block note above the bar and disables both actions while blocked', () => {

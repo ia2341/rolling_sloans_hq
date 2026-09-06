@@ -25,3 +25,14 @@ export function formatRehearsalDate(isoDate: string): string {
   const weekday = date.toLocaleDateString('en-US', { weekday: 'long' })
   return `${ordinal(day)} ${monthName}, ${weekday}`
 }
+
+/**
+ * Formats a `YYYY-MM-DD` wire date as `MM/DD` — a compact form for tight
+ * columns (Home's Song-progress table, issue: UI overhaul round 2), where
+ * `formatRehearsalDate()`'s full form ("23rd September, Wednesday") would
+ * crowd out the space a wider Notes column needs.
+ */
+export function formatShortDate(isoDate: string): string {
+  const [, month = 1, day = 1] = isoDate.split('-').map(Number)
+  return `${String(month).padStart(2, '0')}/${String(day).padStart(2, '0')}`
+}

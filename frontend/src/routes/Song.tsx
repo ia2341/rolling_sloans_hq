@@ -6,6 +6,7 @@ import { useAppContext } from '../api/ContextProvider'
 import type { PreviewResult } from '../api/previewTypes'
 import type { SongPayload } from '../api/setlistTypes'
 import type { ReadEnvelope } from '../api/types'
+import { RecordingUploadDialog } from '../components/recordings/RecordingUploadDialog'
 import { CastTable } from '../components/ui/CastLine'
 import { PageHead } from '../components/ui/PageHead'
 import { SaveChangesDialog } from '../components/ui/SaveChangesDialog'
@@ -54,6 +55,7 @@ export function Song() {
   >({})
   const [addSheetOpen, setAddSheetOpen] = useState(false)
   const [saveDialogOpen, setSaveDialogOpen] = useState(false)
+  const [uploadOpen, setUploadOpen] = useState(false)
 
   const load = useCallback(() => {
     void apiFetch<ReadEnvelope<SongPayload>>(`/api/songs/${songId}/`)
@@ -260,12 +262,13 @@ export function Song() {
           <h2 className="text-sm font-semibold uppercase text-rs-muted">
             Recordings
           </h2>
-          <Link
-            to={`/profile?song=${song.id}`}
+          <button
+            type="button"
+            onClick={() => setUploadOpen(true)}
             className="text-sm text-rs-accent"
           >
             + Add a recording
-          </Link>
+          </button>
         </div>
         {song.recording_groups.length === 0 ? (
           <p className="pt-2 text-sm text-rs-muted">No recordings yet.</p>
@@ -336,6 +339,16 @@ export function Song() {
         existingRoleIds={existingRoleIds}
         onAddRole={addRole}
       />
+
+      {uploadOpen && (
+        <RecordingUploadDialog
+          onOpenChange={(open) => {
+            if (!open) setUploadOpen(false)
+          }}
+          preselectedSongId={song.id}
+          onUploaded={load}
+        />
+      )}
 
       {viewingSemester !== null && (
         <SaveChangesDialog

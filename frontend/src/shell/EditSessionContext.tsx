@@ -83,6 +83,17 @@ export function useEditSession(): EditSession | null {
  * `session`'s primitive fields, and clears itself on unmount so navigating
  * away from an edit route can never leave a stale toolbar behind.
  *
+ * Pass `null` when this surface has nothing to register *right now* but
+ * another mounted surface might (e.g. a parent page that hands the toolbar
+ * off to a nested editor for as long as that editor is mounted) — a `null`
+ * call is a complete no-op, it neither registers nor clears. This matters
+ * because child effects run before parent effects: a parent that always
+ * registered *something* (even a disabled stub) would stomp a child's real
+ * session the instant both are mounted, since the child's registration
+ * (running first) would be immediately overwritten by the parent's
+ * (running second) — leaving the toolbar's Discard/Save wired to the
+ * parent's stub until some unrelated change made the child's effect rerun.
+ *
  * `discard`/`requestSave` are read through a ref rather than listed in the
  * effect's dependencies: a caller that passes inline arrow functions (the
  * common case) gives them a new identity every render, and depending on
@@ -90,9 +101,11 @@ export function useEditSession(): EditSession | null {
  * which re-renders this provider, which re-runs the effect — every render,
  * forever.
  */
-export function useRegisterEditSession(session: EditSession): void {
+export function useRegisterEditSession(session: EditSession | null): void {
   const { registerSession, clearSession } = useEditSessionContext()
-  const { what, changeCount, blockedReason } = session
+  const what = session?.what ?? null
+  const changeCount = session?.changeCount ?? null
+  const blockedReason = session?.blockedReason ?? null
 
   const latestSession = useRef(session)
   useEffect(() => {
@@ -100,12 +113,18 @@ export function useRegisterEditSession(session: EditSession): void {
   })
 
   useEffect(() => {
+    // `what`/`changeCount` are `null` exactly when `session` itself is (see
+    // their derivation above) — checking them, rather than `session`
+    // directly, means this effect never has to list `session` itself as a
+    // dependency, which would defeat the point of reading discard/
+    // requestSave through a ref instead (see the docstring above).
+    if (what === null || changeCount === null) return undefined
     registerSession({
       what,
       changeCount,
       blockedReason,
-      discard: () => latestSession.current.discard(),
-      requestSave: () => latestSession.current.requestSave(),
+      discard: () => latestSession.current?.discard(),
+      requestSave: () => latestSession.current?.requestSave(),
     })
     return clearSession
   }, [registerSession, clearSession, what, changeCount, blockedReason])

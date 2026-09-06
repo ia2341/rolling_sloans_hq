@@ -53,6 +53,10 @@ export interface MatrixCell {
 export interface MatrixRow {
   song_id: number
   song_title: string
+  song_artist: string
+  /** The Song's one Setlist (concert) position — the same number the Setlist table's `#` column shows (issue: UI overhaul round 2). */
+  song_position: number
+  song_length: string
   /** Null on the Dress Rehearsal, which has no per-song slot times (ADR 0003). */
   start_time: string | null
   /** Null on the Dress Rehearsal (ADR 0003) — the Running Order reorder surface's row identity. */

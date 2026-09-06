@@ -780,6 +780,28 @@ class RecordingPresignApiView(ApiView, View):
         return self.read_response(request, data)
 
 
+class RecordingSlotsApiView(ApiView, View):
+    """`GET /api/members/recordings/slots/`: the requester's own upload-slot list (issue: UI overhaul round 2).
+
+    Backs the reusable Recording-upload popup, called from surfaces that
+    have no reason to load the whole Person payload just to get
+    `upload_slots` — the Song page's "+" and Profile's own "Add Recording"
+    button both open this one popup. Reuses `serialize_person_recordings()`
+    unchanged, so this is never a second definition of what counts as an
+    upload slot.
+    """
+
+    def get(self, request):
+        """Return the requester's own Recordings block, or an empty one with no Semester being viewed."""
+        semester = services.get_viewing_semester(request)
+        data = (
+            serializers.serialize_person_recordings(request.user, semester)
+            if semester is not None
+            else {'count': 0, 'items': [], 'upload_slots': []}
+        )
+        return self.read_response(request, data)
+
+
 class RecordingConfirmApiView(ApiView, View):
     """`POST /api/members/recordings/confirm/`: confirms an already-uploaded Recording onto a RehearsalSong slot (issue #333).
 
