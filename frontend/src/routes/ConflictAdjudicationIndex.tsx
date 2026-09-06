@@ -53,6 +53,8 @@ export function ConflictAdjudicationIndex() {
       <PageHead
         title="Conflicts"
         subline="Adjudicate Conflicts, Rehearsal by Rehearsal."
+        backTo="/schedule"
+        backLabel="Schedule"
       />
       {rows.length === 0 ? (
         <p className="text-sm text-rs-muted">

@@ -443,6 +443,48 @@ class PersonApiViewTests(TestCase):
         self.assertEqual(response.status_code, 404)
 
 
+def recording_slots_api_url():
+    """Return `/api/members/recordings/slots/`."""
+    return reverse('api-recordings-slots')
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class RecordingSlotsApiViewTests(TestCase):
+    """`GET /api/members/recordings/slots/` (issue: UI overhaul round 2) — backs the reusable upload popup."""
+
+    def setUp(self):
+        """Log in as an ordinary member before each test."""
+        self.person = PersonFactory(password=PASSWORD)
+        self.client.login(username=self.person.email, password=PASSWORD)
+
+    def test_anonymous_request_401s_not_302s(self):
+        """An anonymous request gets the bare 401, matching every other `/api/` endpoint."""
+        self.client.logout()
+
+        response = self.client.get(recording_slots_api_url())
+
+        self.assertEqual(response.status_code, 401)
+        self.assertNotIn('Location', response)
+
+    def test_returns_the_same_shape_serialize_person_recordings_does(self):
+        """The response carries `upload_slots` for the current viewer, matching a fresh Person-page load."""
+        semester = SemesterFactory()
+        RehearsalSongFactory(song=SongFactory(semester=semester), rehearsal=RehearsalFactory(semester=semester))
+
+        response = self.client.get(recording_slots_api_url())
+
+        data = response.json()['data']
+        self.assertEqual(set(data.keys()), {'count', 'items', 'upload_slots'})
+        self.assertEqual(len(data['upload_slots']), 1)
+
+    def test_no_published_semester_returns_the_empty_shape(self):
+        """With no Semester being viewed, the popup gets an empty (not erroring) shape."""
+        response = self.client.get(recording_slots_api_url())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['data'], {'count': 0, 'items': [], 'upload_slots': []})
+
+
 @override_settings(SECURE_SSL_REDIRECT=False)
 class PersonRolesApiViewTests(TestCase):
     """`POST /api/members/<pk>/roles/` (issue #333, issue #232)."""

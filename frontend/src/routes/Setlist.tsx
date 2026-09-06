@@ -1,12 +1,17 @@
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 
 import { apiFetch } from '../api/client'
 import { useAppContext } from '../api/ContextProvider'
 import type { PreviewResult } from '../api/previewTypes'
 import type { SetlistPayload } from '../api/setlistTypes'
 import type { ReadEnvelope } from '../api/types'
-import { CastCell } from '../components/ui/CastLine'
+import { RecordingUploadDialog } from '../components/recordings/RecordingUploadDialog'
+import {
+  CastCell,
+  CastGridTable,
+  type CastGridRow,
+} from '../components/ui/CastLine'
 import { PageHead } from '../components/ui/PageHead'
 import { SaveChangesDialog } from '../components/ui/SaveChangesDialog'
 import { useIsPhone } from '../hooks/useIsPhone'
@@ -46,6 +51,7 @@ export function Setlist() {
   >({})
   const [addSheetOpen, setAddSheetOpen] = useState(false)
   const [saveDialogOpen, setSaveDialogOpen] = useState(false)
+  const [uploadSongId, setUploadSongId] = useState<number | null>(null)
 
   const load = useCallback(() => {
     void apiFetch<ReadEnvelope<SetlistPayload>>('/api/setlist/').then(
@@ -216,12 +222,17 @@ export function Setlist() {
       ) : data.songs.length === 0 ? (
         <p className="text-sm text-rs-muted">No songs yet this Semester.</p>
       ) : isPhone ? (
-        <SetlistCards songs={data.songs} viewerId={appContext?.viewer.id} />
+        <SetlistCards
+          songs={data.songs}
+          viewerId={appContext?.viewer.id}
+          onAddRecording={setUploadSongId}
+        />
       ) : (
         <SetlistTable
           roles={data.roles}
           songs={data.songs}
           viewerId={appContext?.viewer.id}
+          onAddRecording={setUploadSongId}
         />
       )}
 
@@ -230,6 +241,16 @@ export function Setlist() {
         onOpenChange={setAddSheetOpen}
         onAddRows={addRows}
       />
+
+      {uploadSongId !== null && (
+        <RecordingUploadDialog
+          onOpenChange={(open) => {
+            if (!open) setUploadSongId(null)
+          }}
+          preselectedSongId={uploadSongId}
+          onUploaded={load}
+        />
+      )}
 
       {viewingSemester !== null && (
         <SaveChangesDialog
@@ -276,15 +297,18 @@ function SetlistEditSessionRegistrar({
  * The whole card navigates to `/songs/{id}` on activation (UI overhaul
  * round 2) -- Recordings are read on that page now rather than shown here,
  * so the only entry point this card keeps is the "+" upload trigger, which
- * stops the click from bubbling into the card's own navigation since it
- * goes to a different destination (`/profile?song={id}`).
+ * stops the click from bubbling into the card's own navigation and opens
+ * the shared Recording-upload popup (issue: UI overhaul round 2) rather
+ * than navigating to `/profile?song={id}`.
  */
 function SetlistCards({
   songs,
   viewerId,
+  onAddRecording,
 }: {
   songs: SetlistPayload['songs']
   viewerId?: number
+  onAddRecording: (songId: number) => void
 }) {
   const navigate = useNavigate()
   return (
@@ -313,7 +337,17 @@ function SetlistCards({
             </p>
             <div className="flex items-center gap-3">
               <span className="text-sm text-rs-muted">{song.length}</span>
-              <AddRecordingLink song={song} />
+              <button
+                type="button"
+                aria-label={`Add a recording of ${song.title}`}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  onAddRecording(song.id)
+                }}
+                className="text-rs-accent"
+              >
+                +
+              </button>
             </div>
           </div>
           <p className="text-sm text-rs-muted">{song.artist}</p>
@@ -337,110 +371,53 @@ function SetlistCards({
 }
 
 /**
- * The desktop layout: one table row per Song, one column per Role (issue:
- * pills/tables UI overhaul), plus a second full-width row for notes when it
- * has any (issue #330). Each Song row is itself the "Open" control now (UI
- * overhaul round 2) -- clicking anywhere on the row navigates to
- * `/songs/{id}`, so the Recordings column and the separate "Open" link are
- * both gone; a member's takes are read on that page instead. The trailing
- * column keeps only the "+" upload trigger, which stops its click from
- * bubbling into the row's own navigation since it goes to a different
- * destination (`/profile?song={id}`).
+ * The desktop layout: the shared `CastGridTable` (issue: UI overhaul round
+ * 2, item 11) -- `#`, `Song`, `Length`, the fixed instrument columns, then
+ * Add Recording. Each Song row is itself the "Open" control -- clicking
+ * anywhere on it but a link or button navigates to `/songs/{id}`; the
+ * trailing column's "+" opens the shared Recording-upload popup instead of
+ * navigating to `/profile?song={id}`.
  */
 function SetlistTable({
   roles,
   songs,
   viewerId,
+  onAddRecording,
 }: {
   roles: SetlistPayload['roles']
   songs: SetlistPayload['songs']
   viewerId?: number
+  onAddRecording: (songId: number) => void
 }) {
   const navigate = useNavigate()
-  const columnCount = 4 + roles.length
+  const rows: CastGridRow[] = songs.map((song) => ({
+    id: song.id,
+    position: song.position,
+    title: song.title,
+    artist: song.artist,
+    length: song.length,
+    notes: song.notes,
+    cast: song.cast,
+  }))
   return (
-    <table className="w-full border-collapse text-left text-sm">
-      <thead>
-        <tr>
-          <th className="border border-rs-border px-2 py-2">#</th>
-          <th className="border border-rs-border px-2 py-2">Song</th>
-          {roles.map((role) => (
-            <th key={role.id} className="border border-rs-border px-2 py-2">
-              {role.name}
-            </th>
-          ))}
-          <th className="border border-rs-border px-2 py-2">Length</th>
-          <th className="border border-rs-border px-2 py-2" />
-        </tr>
-      </thead>
-      <tbody>
-        {songs.map((song) => (
-          <Fragment key={song.id}>
-            <tr
-              onClick={(event) => {
-                if ((event.target as HTMLElement).closest('a, button')) return
-                navigate(`/songs/${song.id}`)
-              }}
-              onKeyDown={(event) => {
-                if (event.key !== 'Enter' && event.key !== ' ') return
-                if ((event.target as HTMLElement).closest('a, button')) return
-                event.preventDefault()
-                navigate(`/songs/${song.id}`)
-              }}
-              tabIndex={0}
-              role="button"
-              aria-label={`Open ${song.title}`}
-              className="cursor-pointer hover:bg-rs-border/10"
-            >
-              <td className="border border-rs-border px-2 py-2 align-top">
-                {song.position}
-              </td>
-              <td className="border border-rs-border px-2 py-2 align-top">
-                <p className="font-medium">{song.title}</p>
-                <p className="text-rs-muted">{song.artist}</p>
-              </td>
-              {song.cast.map((entry) => (
-                <td
-                  key={entry.role_id}
-                  className="border border-rs-border px-2 py-2 align-top"
-                >
-                  <CastCell entry={entry} viewerId={viewerId} />
-                </td>
-              ))}
-              <td className="border border-rs-border px-2 py-2 align-top">
-                {song.length}
-              </td>
-              <td className="border border-rs-border px-2 py-2 align-top">
-                <AddRecordingLink song={song} />
-              </td>
-            </tr>
-            {song.notes !== '' && (
-              <tr>
-                <td
-                  colSpan={columnCount}
-                  className="border border-rs-border px-2 pb-2 text-rs-muted"
-                >
-                  {song.notes}
-                </td>
-              </tr>
-            )}
-          </Fragment>
-        ))}
-      </tbody>
-    </table>
-  )
-}
-
-/** The "+" upload trigger (issue #330), relocated onto the row/card itself (UI overhaul round 2) -- `stopPropagation` keeps a click here from also firing the row's own navigation to `/songs/{id}`, since this goes to `/profile?song={id}` instead. */
-function AddRecordingLink({ song }: { song: SetlistPayload['songs'][number] }) {
-  return (
-    <Link
-      to={`/profile?song=${song.id}`}
-      aria-label={`Add a recording of ${song.title}`}
-      onClick={(event) => event.stopPropagation()}
-      className="text-rs-accent"
-    >
-      +
-    </Link>
+    <CastGridTable
+      roles={roles}
+      rows={rows}
+      viewerId={viewerId}
+      onOpenRow={(songId) => navigate(`/songs/${songId}`)}
+      renderRecordingCell={(row) => (
+        <button
+          type="button"
+          aria-label={`Add a recording of ${row.title}`}
+          onClick={(event) => {
+            event.stopPropagation()
+            onAddRecording(row.id)
+          }}
+          className="text-rs-accent"
+        >
+          +
+        </button>
+      )}
+    />
   )
 }

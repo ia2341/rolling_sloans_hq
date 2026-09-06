@@ -2133,7 +2133,11 @@ class Timeline:
     for every viewer alike (attendance there is mandatory, ADR-0006).
     `viewer_start_time`/`viewer_end_time` are None for a regular Rehearsal
     the viewer is on no slot of — an empty timeline is itself the answer,
-    not a missing one.
+    not a missing one. For a regular Rehearsal they are the same
+    buffer-shifted arrival/departure `attendance_suggestion_for()` returns
+    (arrival_buffer_minutes/departure_buffer_minutes applied around the
+    viewer's earliest/latest slot), not the raw slot boundary, so this
+    picture never disagrees with the Upcoming-rehearsals list's window.
     """
 
     slots: list[TimelineSlot]
@@ -2180,14 +2184,15 @@ def timeline_for(rehearsal, person) -> Timeline:
         for rehearsal_song in rehearsal_songs
     ]
     viewer_slots = [slot for slot in slots if slot.is_viewer]
+    suggestion = attendance_suggestion_for(rehearsal, person)
     return Timeline(
         slots=slots,
         window_start=rehearsal.start_time,
         window_end=rehearsal.end_time,
         viewer_song_count=len(viewer_slots),
         total_song_count=len(slots),
-        viewer_start_time=viewer_slots[0].start_time if viewer_slots else None,
-        viewer_end_time=viewer_slots[-1].end_time if viewer_slots else None,
+        viewer_start_time=suggestion.arrival_time if suggestion else None,
+        viewer_end_time=suggestion.departure_time if suggestion else None,
         is_dress_rehearsal=False,
     )
 

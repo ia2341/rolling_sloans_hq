@@ -9,9 +9,12 @@ import { SwitchSemesterDialog } from './SwitchSemesterDialog'
 
 /**
  * The phone top bar (issue #328, #329): the page title, naming the surface
- * with the sidebar gone, plus right-aligned Save and Publish — each
- * disabled unless applicable, reading the same state as the sidebar's
- * buttons so the two can never disagree. The stale-Semester `BlockNote`
+ * with the sidebar gone, plus right-aligned Discard (only while an
+ * `EditSession` is registered — issue: UI overhaul round 2, item 6, the
+ * one place a phone viewer could leave edit mode without saving), Save and
+ * Publish — Save/Publish disabled unless applicable, reading the same
+ * state as the sidebar's buttons so the two can never disagree. The
+ * stale-Semester `BlockNote`
  * renders as a strip directly above it when blocked, in the same position
  * in the hierarchy it holds on desktop (above the semester panel). Below
  * the bar itself, a semester strip names a non-live viewing Semester with
@@ -53,6 +56,15 @@ export function TopBar() {
               className="rounded border border-rs-border px-2 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50"
             >
               Publish
+            </button>
+          )}
+          {editSession !== null && (
+            <button
+              type="button"
+              onClick={editSession.discard}
+              className="rounded border border-rs-border px-2 py-1 text-xs font-medium"
+            >
+              Discard
             </button>
           )}
           <button

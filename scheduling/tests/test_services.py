@@ -29,6 +29,7 @@ from scheduling.services import (
     assignment_grid_is_editable,
     assignment_matrix_for,
     assignment_picker_for,
+    attendance_suggestion_for,
     breaks_for,
     cast_line_for,
     conflict_history_for,
@@ -420,19 +421,42 @@ class TimelineForTests(TestCase):
         self.assertFalse(timeline.is_dress_rehearsal)
 
     def test_viewer_on_first_and_last_slot_only(self):
-        """The viewer's start/end span the first and last slot they're on, skipping the unassigned middle one."""
+        """Assigned to both the first and last slot means full-window attendance (matching attendance_suggestion_for)."""
         rehearsal = RehearsalFactory(is_full_setlist=False)
-        first = self._slot(rehearsal, 1, assign=True)
+        self._slot(rehearsal, 1, assign=True)
         self._slot(rehearsal, 2)
-        last = self._slot(rehearsal, 3, assign=True)
+        self._slot(rehearsal, 3, assign=True)
 
         timeline = timeline_for(rehearsal, self.person)
 
         self.assertEqual([slot.is_viewer for slot in timeline.slots], [True, False, True])
         self.assertEqual(timeline.viewer_song_count, 2)
         self.assertEqual(timeline.total_song_count, 3)
-        self.assertEqual(timeline.viewer_start_time, first.start_time)
-        self.assertEqual(timeline.viewer_end_time, last.end_time)
+        self.assertEqual(timeline.viewer_start_time, rehearsal.start_time)
+        self.assertEqual(timeline.viewer_end_time, rehearsal.end_time)
+
+    def test_viewer_start_end_include_arrival_and_departure_buffer(self):
+        """Assigned to a middle slot only (not first/last) shifts start/end by the Rehearsal's arrival/departure buffer.
+
+        Guards against timeline_for() re-diverging from
+        attendance_suggestion_for() (issue: UI overhaul round 2, item 1 —
+        the Home/Schedule timeline previously showed the raw slot boundary
+        with no buffer at all).
+        """
+        rehearsal = RehearsalFactory(
+            is_full_setlist=False, arrival_buffer_minutes=15, departure_buffer_minutes=10,
+        )
+        self._slot(rehearsal, 1)
+        middle = self._slot(rehearsal, 2, assign=True)
+        self._slot(rehearsal, 3)
+
+        timeline = timeline_for(rehearsal, self.person)
+        suggestion = attendance_suggestion_for(rehearsal, self.person)
+
+        self.assertEqual(timeline.viewer_start_time, suggestion.arrival_time)
+        self.assertEqual(timeline.viewer_end_time, suggestion.departure_time)
+        self.assertLess(timeline.viewer_start_time, middle.start_time)
+        self.assertGreater(timeline.viewer_end_time, middle.end_time)
 
     def test_dress_rehearsal_degenerates_to_the_whole_window_and_setlist(self):
         """The Dress Rehearsal has no RehearsalSong rows: the picture is the whole window, for every viewer (ADR-0006)."""

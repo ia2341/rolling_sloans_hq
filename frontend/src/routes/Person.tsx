@@ -6,10 +6,9 @@ import type {
   MemberRole,
   PersonPayload,
   PersonRecordingsBlock,
-  RecordingPresignErrorBody,
-  RecordingPresignReservation,
 } from '../api/memberTypes'
 import type { ReadEnvelope, WriteEnvelope } from '../api/types'
+import { RecordingUploadDialog } from '../components/recordings/RecordingUploadDialog'
 import { PageHead } from '../components/ui/PageHead'
 import { useIsPhone } from '../hooks/useIsPhone'
 import { formatClockTime } from '../lib/formatDate'
@@ -93,9 +92,11 @@ function PersonPage({
     <div className="flex flex-col gap-4">
       <PageHead title={data.name} subline={subline} />
 
-      <DetailsCard data={data} />
-
-      <RolesCard key={data.id} data={data} onDataChange={onDataChange} />
+      <DetailsAndRolesCard
+        key={data.id}
+        data={data}
+        onDataChange={onDataChange}
+      />
 
       {data.songs !== undefined && (
         <SongsCard songs={data.songs} isSelf={data.is_self} />
@@ -104,7 +105,6 @@ function PersonPage({
       {data.recordings !== undefined && (
         <RecordingsCard
           recordings={data.recordings}
-          personId={data.id}
           preselectedSongId={preselectedSongId}
           onRecordingsChange={(recordings) =>
             onDataChange({ ...data, recordings })
@@ -117,10 +117,37 @@ function PersonPage({
   )
 }
 
-/** The Details card: Name, and Email (self only) — plus the self-only change-password row (issue #333). */
-function DetailsCard({ data }: { data: PersonPayload }) {
+/**
+ * Details and Declared roles, one card in two columns rather than two
+ * stacked full-width cards (issue: UI overhaul round 2) — Details on the
+ * left, Declared roles (and its edit controls, when this viewer may use
+ * them) on the right. Stacks on a phone.
+ */
+function DetailsAndRolesCard({
+  data,
+  onDataChange,
+}: {
+  data: PersonPayload
+  onDataChange: (next: PersonPayload) => void
+}) {
   return (
     <section className="rounded border border-rs-border p-4">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 md:divide-x md:divide-rs-border">
+        <div>
+          <DetailsSection data={data} />
+        </div>
+        <div className="md:pl-4">
+          <RolesSection data={data} onDataChange={onDataChange} />
+        </div>
+      </div>
+    </section>
+  )
+}
+
+/** Details section content: Name, and Email (self only) — plus the self-only change-password row (issue #333). */
+function DetailsSection({ data }: { data: PersonPayload }) {
+  return (
+    <div>
       <h2 className="text-sm font-semibold uppercase text-rs-muted">Details</h2>
       <dl className="mt-2 flex flex-col gap-2 text-sm">
         <div>
@@ -135,7 +162,7 @@ function DetailsCard({ data }: { data: PersonPayload }) {
         )}
       </dl>
       {data.is_self && <ChangePasswordRow />}
-    </section>
+    </div>
   )
 }
 
@@ -253,13 +280,14 @@ function ChangePasswordRow() {
 }
 
 /**
- * The Declared roles card (issue #333): editable chips with ✕ and a
+ * Declared roles section content (issue #333): editable chips with ✕ and a
  * `+ add a role` chip plus a **Save roles** button when `can_edit_roles`,
  * read-only chips plus the ownership line otherwise. Removing a chip only
  * *stages* the removal locally — nothing round-trips until **Save roles**
- * is clicked.
+ * is clicked. Sits on the right of the Details section (issue: UI overhaul
+ * round 2) rather than in its own full-width card below it.
  */
-function RolesCard({
+function RolesSection({
   data,
   onDataChange,
 }: {
@@ -281,7 +309,7 @@ function RolesCard({
   if (!data.can_edit_roles) {
     const roles = data.roles ?? []
     return (
-      <section className="rounded border border-rs-border p-4">
+      <div>
         <h2 className="text-sm font-semibold uppercase text-rs-muted">
           Declared roles
         </h2>
@@ -298,7 +326,7 @@ function RolesCard({
         <p className="mt-2 text-sm text-rs-muted">
           Only they (or an admin) can change these.
         </p>
-      </section>
+      </div>
     )
   }
 
@@ -341,7 +369,7 @@ function RolesCard({
   }
 
   return (
-    <section className="rounded border border-rs-border p-4">
+    <div>
       <h2 className="text-sm font-semibold uppercase text-rs-muted">
         Declared roles
       </h2>
@@ -376,7 +404,7 @@ function RolesCard({
       >
         Save roles
       </button>
-    </section>
+    </div>
   )
 }
 
@@ -457,25 +485,18 @@ function SongsCard({
   )
 }
 
-type UploadState =
-  | { step: 'idle' }
-  | { step: 'uploading' }
-  | { step: 'uploaded'; objectKey: string }
-  | { step: 'error'; message: string }
-
-/** Your recordings — self only (issue #333). List, inline player, delete, and the Upload-a-take card. */
+/** Your recordings — self only (issue #333). List, inline player, delete, and the "Add Recording" popup trigger. */
 function RecordingsCard({
   recordings,
-  personId,
   preselectedSongId,
   onRecordingsChange,
 }: {
   recordings: PersonRecordingsBlock
-  personId: number
   preselectedSongId: string | null
   onRecordingsChange: (recordings: PersonRecordingsBlock) => void
 }) {
   const isPhone = useIsPhone()
+  const [uploadOpen, setUploadOpen] = useState(false)
 
   /** Deletes one of the requester's own Recordings and refreshes the block. */
   async function handleDelete(recordingId: number) {
@@ -490,14 +511,23 @@ function RecordingsCard({
 
   return (
     <section className="rounded border border-rs-border p-4">
-      <div className="flex items-baseline justify-between">
+      <div className="flex items-baseline justify-between gap-2">
         <h2 className="text-sm font-semibold uppercase text-rs-muted">
           Your recordings
         </h2>
-        <span className="text-xs text-rs-muted">
-          {recordings.count} upload{recordings.count === 1 ? '' : 's'} · only
-          you can see this
-        </span>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-rs-muted">
+            {recordings.count} upload{recordings.count === 1 ? '' : 's'} · only
+            you can see this
+          </span>
+          <button
+            type="button"
+            onClick={() => setUploadOpen(true)}
+            className="rounded border border-rs-border px-2 py-1 text-xs font-medium text-rs-accent"
+          >
+            + Add Recording
+          </button>
+        </div>
       </div>
 
       {recordings.items.length === 0 ? (
@@ -510,12 +540,17 @@ function RecordingsCard({
         <RecordingTable items={recordings.items} onDelete={handleDelete} />
       )}
 
-      <UploadCard
-        personId={personId}
-        slots={recordings.upload_slots}
-        preselectedSongId={preselectedSongId}
-        onUploaded={(block) => onRecordingsChange(block)}
-      />
+      {uploadOpen && (
+        <RecordingUploadDialog
+          onOpenChange={(open) => {
+            if (!open) setUploadOpen(false)
+          }}
+          preselectedSongId={
+            preselectedSongId !== null ? Number(preselectedSongId) : null
+          }
+          onUploaded={onRecordingsChange}
+        />
+      )}
     </section>
   )
 }
@@ -612,187 +647,6 @@ function RecordingTable({
         ))}
       </tbody>
     </table>
-  )
-}
-
-/** The Upload-a-take card: pick a slot → choose a file → confirm (issue #333). */
-function UploadCard({
-  slots,
-  preselectedSongId,
-  onUploaded,
-}: {
-  personId: number
-  slots: PersonRecordingsBlock['upload_slots']
-  preselectedSongId: string | null
-  onUploaded: (block: PersonRecordingsBlock) => void
-}) {
-  const filteredSlots = useMemo(() => {
-    if (preselectedSongId === null) return slots
-    const songId = Number(preselectedSongId)
-    const narrowed = slots.filter((slot) => slot.song_id === songId)
-    return narrowed.length > 0 ? narrowed : slots
-  }, [slots, preselectedSongId])
-
-  const [slotId, setSlotId] = useState<number | ''>(filteredSlots[0]?.id ?? '')
-  const [note, setNote] = useState('')
-  const [upload, setUpload] = useState<UploadState>({ step: 'idle' })
-  const [isSaving, setIsSaving] = useState(false)
-
-  /** Presigns and uploads the chosen file straight to R2, then marks the upload resolved (issue #333, ADR 0004). */
-  async function handleFileChange(file: File) {
-    setUpload({ step: 'uploading' })
-    let reservation: RecordingPresignReservation
-    try {
-      const response = await fetch('/api/members/recordings/presign/', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          content_type: file.type,
-          file_size: file.size,
-        }),
-      })
-      const body = (await response.json()) as
-        | { context: unknown; data: RecordingPresignReservation }
-        | (RecordingPresignErrorBody & { context: unknown })
-      if (!response.ok) {
-        setUpload({
-          step: 'error',
-          message: (body as RecordingPresignErrorBody).error,
-        })
-        return
-      }
-      reservation = (body as { data: RecordingPresignReservation }).data
-    } catch {
-      setUpload({ step: 'error', message: 'Could not reach the server.' })
-      return
-    }
-
-    const formData = new FormData()
-    for (const [key, value] of Object.entries(reservation.fields)) {
-      formData.append(key, value)
-    }
-    formData.append('file', file)
-
-    try {
-      const uploadResponse = await fetch(reservation.upload_url, {
-        method: 'POST',
-        body: formData,
-      })
-      if (!uploadResponse.ok) {
-        setUpload({ step: 'error', message: 'The upload to storage failed.' })
-        return
-      }
-    } catch {
-      setUpload({ step: 'error', message: 'The upload to storage failed.' })
-      return
-    }
-
-    setUpload({ step: 'uploaded', objectKey: reservation.object_key })
-  }
-
-  /** Confirms the already-uploaded object onto the chosen slot (issue #333). */
-  async function handleSave() {
-    if (upload.step !== 'uploaded' || slotId === '') return
-    setIsSaving(true)
-    const envelope = await apiFetch<WriteEnvelope<PersonRecordingsBlock>>(
-      '/api/members/recordings/confirm/',
-      {
-        method: 'POST',
-        body: JSON.stringify({
-          rehearsal_song_id: slotId,
-          object_key: upload.objectKey,
-          note,
-        }),
-      },
-    )
-    setIsSaving(false)
-    if (envelope.ok && envelope.data !== null) {
-      onUploaded(envelope.data)
-      setNote('')
-      setUpload({ step: 'idle' })
-    } else {
-      setUpload({
-        step: 'error',
-        message:
-          envelope.non_field_errors[0] ?? 'Could not save the recording.',
-      })
-    }
-  }
-
-  const canSave = upload.step === 'uploaded' && slotId !== '' && !isSaving
-
-  return (
-    <div className="mt-4 rounded border border-rs-border p-3">
-      <h3 className="text-sm font-semibold">Upload a take</h3>
-      <p className="mt-1 text-xs text-rs-muted">
-        1. Pick a slot → 2. Choose a file → 3. Confirm
-      </p>
-
-      <label className="mt-3 flex flex-col gap-1 text-sm">
-        Which slot is this a take of?
-        <select
-          value={slotId}
-          onChange={(event) => setSlotId(Number(event.target.value))}
-          className="rounded border border-rs-border px-2 py-1"
-        >
-          {filteredSlots.length === 0 && <option value="">No slots yet</option>}
-          {filteredSlots.map((slot) => (
-            <option key={slot.id} value={slot.id}>
-              {slot.song_title} — {slot.rehearsal_date}
-            </option>
-          ))}
-        </select>
-        <span className="text-xs text-rs-muted">
-          A recording belongs to one song at one rehearsal. Slots you
-          weren&apos;t at are listed too — you might be uploading someone
-          else&apos;s take.
-        </span>
-      </label>
-
-      <label className="mt-3 flex cursor-pointer flex-col items-center gap-1 rounded border border-dashed border-rs-border px-3 py-4 text-center text-sm">
-        Drop an audio file, or browse
-        <span className="text-xs text-rs-muted">
-          Uploads straight to storage, not through the app (ADR 0004).
-        </span>
-        <input
-          type="file"
-          accept="audio/*"
-          className="sr-only"
-          onChange={(event) => {
-            const file = event.target.files?.[0]
-            if (file !== undefined) void handleFileChange(file)
-          }}
-        />
-      </label>
-      {upload.step === 'uploading' && (
-        <p className="mt-1 text-xs text-rs-muted">Uploading…</p>
-      )}
-      {upload.step === 'uploaded' && (
-        <p className="mt-1 text-xs text-rs-muted">Upload complete.</p>
-      )}
-      {upload.step === 'error' && (
-        <p className="mt-1 text-xs text-rs-danger">{upload.message}</p>
-      )}
-
-      <label className="mt-3 flex flex-col gap-1 text-sm">
-        Note (optional)
-        <input
-          type="text"
-          value={note}
-          onChange={(event) => setNote(event.target.value)}
-          className="rounded border border-rs-border px-2 py-1"
-        />
-      </label>
-
-      <button
-        type="button"
-        onClick={() => void handleSave()}
-        disabled={!canSave}
-        className="mt-3 rounded bg-rs-accent px-3 py-1.5 text-sm font-medium text-rs-accent-fg disabled:opacity-50"
-      >
-        Save recording
-      </button>
-    </div>
   )
 }
 

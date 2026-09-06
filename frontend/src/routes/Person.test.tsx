@@ -3,6 +3,7 @@ import { Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { memberContext } from '../test/fixtures'
+import { mockFetchByUrl } from '../test/mockFetch'
 import { mockMatchMedia } from '../test/mockMatchMedia'
 import { renderShell } from '../test/renderShell'
 import { Person } from './Person'
@@ -67,29 +68,6 @@ function adminViewingTeammatePayload(overrides: Record<string, unknown> = {}) {
 }
 
 /** Stubs `window.fetch` with a dispatcher keyed by a substring of the request URL, for tests that need more than one distinct response in sequence. */
-function mockFetchByUrl(
-  handlers: Record<string, () => { status: number; body: unknown }>,
-) {
-  vi.stubGlobal(
-    'fetch',
-    vi.fn().mockImplementation((input: RequestInfo | URL) => {
-      const url = typeof input === 'string' ? input : input.toString()
-      const key = Object.keys(handlers).find((candidate) =>
-        url.includes(candidate),
-      )
-      if (key === undefined) {
-        throw new Error(`No mock handler registered for fetch(${url})`)
-      }
-      const { status, body } = handlers[key]!()
-      return Promise.resolve({
-        status,
-        ok: status >= 200 && status < 300,
-        json: () => Promise.resolve(body),
-      })
-    }),
-  )
-}
-
 beforeEach(() => {
   mockMatchMedia(false)
 })
@@ -313,6 +291,10 @@ describe('Person', () => {
         status: 200,
         body: { context: memberContext(), data: payload },
       }),
+      '/api/members/recordings/slots/': () => ({
+        status: 200,
+        body: { context: memberContext(), data: payload.recordings },
+      }),
       '/api/members/recordings/presign/': () => ({
         status: 200,
         body: {
@@ -330,6 +312,9 @@ describe('Person', () => {
     const user = (await import('@testing-library/user-event')).default.setup()
     renderPerson('/members/1')
 
+    await user.click(
+      await screen.findByRole('button', { name: '+ Add Recording' }),
+    )
     await screen.findByText('Upload a take')
     const saveButton = screen.getByRole('button', { name: 'Save recording' })
     expect(saveButton).toBeDisabled()
@@ -373,10 +358,18 @@ describe('Person', () => {
         status: 200,
         body: { context: memberContext(), data: payload },
       }),
+      '/api/members/recordings/slots/': () => ({
+        status: 200,
+        body: { context: memberContext(), data: payload.recordings },
+      }),
     })
 
+    const user = (await import('@testing-library/user-event')).default.setup()
     renderPerson('/members/1?song=7')
 
+    await user.click(
+      await screen.findByRole('button', { name: '+ Add Recording' }),
+    )
     await screen.findByText('Upload a take')
     expect(screen.getByText(/Preselected Song/)).toBeInTheDocument()
     expect(screen.queryByText(/Other Song/)).not.toBeInTheDocument()

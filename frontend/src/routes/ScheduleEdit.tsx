@@ -481,19 +481,16 @@ export function ScheduleEdit() {
   // The two edit modes are exclusive (issue #338, ADR 0009): while a row
   // is parked in 'assignments' mode, this page's own Running Order
   // Buffer session yields the shared toolbar to `AssignmentEditor`'s own
-  // `useRegisterEditSession` call rather than fighting it for the one
-  // slot `EditSessionContext` holds. Nothing in the Running Order Buffer
-  // itself is lost — `rows`/`deletedIds` still carry it — it just isn't
-  // what the toolbar shows until `mode` flips back.
+  // `useRegisterEditSession` call by registering nothing at all (`null`)
+  // rather than a disabled stub — a stub would still register, and since
+  // child effects run before parent effects, it would stomp
+  // `AssignmentEditor`'s real registration the instant both mount (see
+  // `useRegisterEditSession`'s docstring). Nothing in the Running Order
+  // Buffer itself is lost — `rows`/`deletedIds` still carry it — it just
+  // isn't what the toolbar shows until `mode` flips back.
   useRegisterEditSession(
     mode === 'assignments'
-      ? {
-          what: 'the rehearsal schedule',
-          changeCount: 0,
-          blockedReason: null,
-          discard: () => {},
-          requestSave: () => {},
-        }
+      ? null
       : {
           what: 'the rehearsal schedule',
           changeCount,
@@ -707,6 +704,8 @@ export function ScheduleEdit() {
         subline={
           payload.semester_name !== null ? payload.semester_name : undefined
         }
+        backTo="/schedule"
+        backLabel="Schedule"
       />
 
       <div className="flex flex-col gap-2">
@@ -1117,7 +1116,10 @@ function RehearsalRowEditor({
                 assign against yet.
               </p>
             ) : (
-              <AssignmentEditor rehearsalId={draft.rehearsalId} />
+              <AssignmentEditor
+                rehearsalId={draft.rehearsalId}
+                onDone={() => onModeChange('running-order')}
+              />
             )
           ) : (
             <div className="flex flex-col gap-2">

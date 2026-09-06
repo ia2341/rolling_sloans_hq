@@ -14,21 +14,20 @@ import type {
 } from '../api/homeTypes'
 import type { ReadEnvelope } from '../api/types'
 import { PageHead } from '../components/ui/PageHead'
+import { RehearsalOverview } from '../components/ui/RehearsalOverview'
 import { Toggle } from '../components/ui/Toggle'
 import { useIsPhone } from '../hooks/useIsPhone'
-import { formatClockTime, formatRehearsalDate } from '../lib/formatDate'
+import {
+  formatClockTime,
+  formatRehearsalDate,
+  formatShortDate,
+} from '../lib/formatDate'
 import { PublishSemesterDialog } from '../shell/PublishSemesterDialog'
 import { usePageTitle } from '../shell/PageTitleContext'
 
 /** `localStorage` key for one Semester's dismissed setup-checklist panel (per-viewer, per-device — issue #332). */
 function dismissedChecklistKey(semesterId: number): string {
   return `rs-home-checklist-dismissed-${semesterId}`
-}
-
-/** Parses an `HH:MM:SS` (or `HH:MM`) wire time to minutes since midnight, for proportional timeline math. */
-function minutesSinceMidnight(isoTime: string): number {
-  const [hours = 0, minutes = 0] = isoTime.split(':').map(Number)
-  return hours * 60 + minutes
 }
 
 /** Keyboard handler making a non-anchor "clickable row" (a card, a table row) activate on Enter/Space like a link would. */
@@ -144,7 +143,14 @@ function JustCreatedStatusCard({
   )
 }
 
-/** Home's Next-rehearsal card: date, arrival/departure line and slot timeline, or the explicit not-needed state (issue #332). */
+/**
+ * Home's Next-rehearsal card: the shared `RehearsalOverview` (issue: UI
+ * overhaul round 2, item 1 — the same component Schedule's per-Rehearsal
+ * page renders), wrapped in a clickable "Open" affordance -- a div rather
+ * than a wrapping `<Link>`, since the timeline nests its own per-Song
+ * links and an `<a>` cannot nest an `<a>` -- or the explicit not-needed
+ * state when there's no card at all.
+ */
 function NextRehearsalSection({
   card,
 }: {
@@ -152,110 +158,35 @@ function NextRehearsalSection({
 }) {
   const navigate = useNavigate()
 
-  return (
-    <section className="pb-6">
-      <h2 className="text-sm font-semibold uppercase text-rs-muted">
-        Next rehearsal
-      </h2>
-      {card === null ? (
+  if (card === null) {
+    return (
+      <section className="pb-6">
+        <h2 className="text-sm font-semibold uppercase text-rs-muted">
+          Next rehearsal
+        </h2>
         <p className="pt-1 text-sm text-rs-muted">
           You are not needed at any upcoming rehearsal.
         </p>
-      ) : (
-        // The whole card is the "Open" affordance (issue #358 follow-up): a
-        // clickable div rather than a wrapping <Link>, since the timeline
-        // below nests its own per-Song links and an <a> cannot nest an <a>.
-        <div
-          role="link"
-          tabIndex={0}
-          onClick={() => navigate(`/schedule?rehearsal=${card.rehearsal_id}`)}
-          onKeyDown={activateOnEnterOrSpace(() =>
-            navigate(`/schedule?rehearsal=${card.rehearsal_id}`),
-          )}
-          className="mt-1 cursor-pointer rounded border border-rs-border p-3 transition hover:border-rs-accent hover:shadow-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rs-accent"
-        >
-          <p className="text-sm">
-            <strong>{formatRehearsalDate(card.date)}</strong>
-            {card.is_dress && ' · dress rehearsal'}
-          </p>
-          <p className="pt-1 text-sm">
-            Arrive around <strong>{formatClockTime(card.arrival_time)}</strong>,
-            free to leave around{' '}
-            <strong>{formatClockTime(card.departure_time)}</strong>
-          </p>
-          <NextRehearsalTimeline card={card} />
-        </div>
-      )}
-    </section>
-  )
-}
-
-/** The card's slot picture: a filled bar per Song in the Running Order, or the Dress Rehearsal's whole-window line. */
-function NextRehearsalTimeline({ card }: { card: NextRehearsalCardData }) {
-  const timeline = card.timeline
-
-  if (timeline.is_dress_rehearsal) {
-    return (
-      <p className="pt-2 text-sm text-rs-muted">
-        Whole setlist, whole window ({formatClockTime(card.arrival_time)}–
-        {formatClockTime(card.departure_time)}) — the dress rehearsal runs the
-        current setlist live (ADR 0003).
-      </p>
+      </section>
     )
   }
 
-  // Marker positions are percent-along-the-bar, found by mapping the
-  // viewer's own arrival/departure clock times onto the window's span --
-  // clamped in case a stale window edge would otherwise push a marker
-  // outside the bar (e.g. an arrival right at the window's start).
-  const windowStart = minutesSinceMidnight(timeline.window_start)
-  const windowEnd = minutesSinceMidnight(timeline.window_end)
-  const windowSpan = windowEnd - windowStart
-  const percentAlong = (time: string): number => {
-    if (windowSpan <= 0) return 0
-    const raw = ((minutesSinceMidnight(time) - windowStart) / windowSpan) * 100
-    return Math.min(100, Math.max(0, raw))
-  }
-  const arrivalPercent = percentAlong(card.arrival_time)
-  const departurePercent = percentAlong(card.departure_time)
-
   return (
-    <div className="mt-2" data-testid="next-rehearsal-timeline">
-      <div className="flex justify-between text-xs text-rs-muted">
-        <span>{formatClockTime(timeline.window_start)}</span>
-        <span>{formatClockTime(timeline.window_end)}</span>
-      </div>
-      <div className="relative mt-1">
-        <div className="flex overflow-hidden rounded border border-rs-border">
-          {timeline.slots.map((slot) => (
-            <Link
-              key={slot.song_id}
-              to={`/songs/${slot.song_id}`}
-              onClick={(event) => event.stopPropagation()}
-              className={`flex h-10 min-w-0 flex-1 items-center justify-center border-r border-rs-border px-1 text-center text-xs leading-tight last:border-r-0 ${
-                slot.is_viewer
-                  ? 'bg-rs-accent text-rs-accent-fg'
-                  : 'bg-rs-border/30 text-rs-fg'
-              }`}
-            >
-              <span className="line-clamp-2 break-words">
-                {slot.song_title}
-              </span>
-            </Link>
-          ))}
-        </div>
-        {/* Your own arrival/departure ticks, drawn over the bar rather than left to the caption below it. */}
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-y-0 w-0.5 bg-rs-fg"
-          style={{ left: `${arrivalPercent}%` }}
-        />
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-y-0 w-0.5 bg-rs-fg"
-          style={{ left: `${departurePercent}%` }}
-        />
-      </div>
+    <div
+      role="link"
+      tabIndex={0}
+      onClick={() => navigate(`/schedule?rehearsal=${card.rehearsal_id}`)}
+      onKeyDown={activateOnEnterOrSpace(() =>
+        navigate(`/schedule?rehearsal=${card.rehearsal_id}`),
+      )}
+      className="mb-6 cursor-pointer rounded border border-rs-border p-3 transition hover:border-rs-accent hover:shadow-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rs-accent"
+    >
+      <RehearsalOverview
+        heading="Next rehearsal"
+        date={card.date}
+        isDress={card.is_dress}
+        timeline={card.timeline}
+      />
     </div>
   )
 }
@@ -432,7 +363,7 @@ function ProgressBar({
   const percent = total === 0 ? 0 : Math.round((completed / total) * 100)
   return (
     <div className="flex items-center gap-2">
-      <div className="h-1.5 w-24 overflow-hidden rounded-full bg-rs-border/50">
+      <div className="h-1.5 w-40 overflow-hidden rounded-full bg-rs-border/50">
         <div
           className="h-full rounded-full bg-rs-accent"
           style={{ width: `${percent}%` }}
@@ -471,7 +402,7 @@ function SongProgressCards({ songs }: { songs: SongProgressRow[] }) {
           )}
           {song.next_rehearsal !== null && (
             <p className="pt-1 text-xs text-rs-muted">
-              Next: {formatRehearsalDate(song.next_rehearsal)}
+              Next: {formatShortDate(song.next_rehearsal)}
             </p>
           )}
         </li>
@@ -480,19 +411,27 @@ function SongProgressCards({ songs }: { songs: SongProgressRow[] }) {
   )
 }
 
-/** The desktop layout: one table row per Song, with position, title, artist, length, progress, notes and next rehearsal. */
+/**
+ * The desktop layout: one table row per Song, with position, title,
+ * artist, length, next rehearsal, progress and notes.
+ *
+ * Next rehearsal sits between Length and Progress, and Notes is the wide
+ * column (issue: UI overhaul round 2) — freed up by shortening Next
+ * rehearsal's date to `MM/DD` (`formatShortDate()`) rather than the full
+ * `formatRehearsalDate()` form this table used to render.
+ */
 function SongProgressTable({ songs }: { songs: SongProgressRow[] }) {
   return (
-    <table className="w-full text-left text-sm">
+    <table className="w-full table-fixed text-left text-sm">
       <thead>
         <tr>
-          <th className="pb-2">#</th>
+          <th className="w-8 pb-2">#</th>
           <th className="pb-2">Song</th>
           <th className="pb-2">Artist</th>
-          <th className="pb-2">Length</th>
-          <th className="pb-2">Progress</th>
-          <th className="pb-2">Notes</th>
-          <th className="pb-2">Next rehearsal</th>
+          <th className="w-16 pb-2">Length</th>
+          <th className="w-24 pb-2">Next rehearsal</th>
+          <th className="w-32 pb-2">Progress</th>
+          <th className="w-1/3 pb-2">Notes</th>
         </tr>
       </thead>
       <tbody>
@@ -504,16 +443,16 @@ function SongProgressTable({ songs }: { songs: SongProgressRow[] }) {
             </td>
             <td className="py-2 align-top text-rs-muted">{song.artist}</td>
             <td className="py-2 align-top">{song.length}</td>
+            <td className="py-2 align-top text-rs-muted">
+              {song.next_rehearsal !== null
+                ? formatShortDate(song.next_rehearsal)
+                : '—'}
+            </td>
             <td className="py-2 align-top">
               <ProgressBar completed={song.completed} total={song.total} />
             </td>
             <td className="py-2 align-top text-rs-muted">
               {song.notes !== '' ? song.notes : '—'}
-            </td>
-            <td className="py-2 align-top text-rs-muted">
-              {song.next_rehearsal !== null
-                ? formatRehearsalDate(song.next_rehearsal)
-                : '—'}
             </td>
           </tr>
         ))}

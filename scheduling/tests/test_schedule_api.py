@@ -182,7 +182,13 @@ class SerializeScheduleExactKeySetTests(TestCase):
         data = serialize_schedule(_RequestStub(person), rehearsal.semester, rehearsal_id=rehearsal.pk)
 
         row = data['selected']['rows'][0]
-        self.assertEqual(set(row.keys()), {'song_id', 'song_title', 'start_time', 'rehearsal_song_id', 'cells'})
+        self.assertEqual(
+            set(row.keys()),
+            {
+                'song_id', 'song_title', 'song_artist', 'song_position', 'song_length',
+                'start_time', 'rehearsal_song_id', 'cells',
+            },
+        )
         cell = row['cells'][0]
         self.assertEqual(set(cell.keys()), {'role_id', 'entries'})
         entry = cell['entries'][0]

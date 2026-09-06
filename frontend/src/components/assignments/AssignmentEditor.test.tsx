@@ -142,12 +142,24 @@ function queueFetch(...bodies: unknown[]) {
   return fetchSpy
 }
 
-function renderEditor() {
+/** Mirrors the shell's own `EditToolbar` wiring so a test can trigger the registered `EditSession`'s Discard. */
+function ActiveEditSessionDiscardButton() {
+  const session = useEditSession()
+  if (session === null) return null
+  return (
+    <button type="button" onClick={session.discard}>
+      Discard
+    </button>
+  )
+}
+
+function renderEditor(onDone: () => void = vi.fn()) {
   return render(
     <ContextProvider>
       <EditSessionProvider>
         <ActiveEditSessionSaveButton />
-        <AssignmentEditor rehearsalId={1} />
+        <ActiveEditSessionDiscardButton />
+        <AssignmentEditor rehearsalId={1} onDone={onDone} />
       </EditSessionProvider>
     </ContextProvider>,
   )
@@ -208,9 +220,9 @@ describe('AssignmentEditor', () => {
     await screen.findByRole('heading', { name: 'Assigned' })
 
     const callsBeforePick = fetchSpy.mock.calls.length
-    await user.click(screen.getByRole('button', { name: 'Riley Song' }))
+    await user.click(screen.getByRole('button', { name: 'Riley' }))
 
-    expect(await screen.findByText('Riley Song')).toBeInTheDocument()
+    expect(await screen.findByText('Riley')).toBeInTheDocument()
     expect(fetchSpy.mock.calls.length).toBe(callsBeforePick)
   })
 
@@ -239,8 +251,8 @@ describe('AssignmentEditor', () => {
       screen.getByRole('button', { name: 'Assign Guitar on Song One' }),
     )
     await screen.findByRole('heading', { name: 'Assigned' })
-    await user.click(screen.getByRole('button', { name: 'Riley Song' }))
-    await screen.findByText('Riley Song')
+    await user.click(screen.getByRole('button', { name: 'Riley' }))
+    await screen.findByText('Riley')
 
     await user.click(screen.getByRole('button', { name: /Save 1 change/ }))
 
@@ -270,9 +282,9 @@ describe('AssignmentEditor', () => {
       screen.getByRole('button', { name: 'Assign Guitar on Song One' }),
     )
     await user.click(screen.getByRole('button', { name: 'Show all members' }))
-    await user.click(screen.getByRole('button', { name: /Casey Undeclared/ }))
+    await user.click(screen.getByRole('button', { name: /Casey/ }))
 
-    const pill = await screen.findByText('Casey Undeclared')
+    const pill = await screen.findByText('Casey')
     expect(pill.closest('span')).toHaveTextContent('◦')
   })
 
@@ -281,7 +293,7 @@ describe('AssignmentEditor', () => {
     queueFetch(twoSongSchedulePayload())
 
     renderEditor()
-    await screen.findByRole('heading', { name: 'Running order' })
+    await screen.findByRole('button', { name: 'Move Song One up' })
 
     expect(
       screen.getByRole('button', { name: 'Move Song One up' }),
@@ -300,7 +312,7 @@ describe('AssignmentEditor', () => {
     const user = userEvent.setup()
 
     renderEditor()
-    await screen.findByRole('heading', { name: 'Running order' })
+    await screen.findByRole('button', { name: 'Move Song One up' })
     expect(
       screen.getByRole('button', { name: /Save 0 change/ }),
     ).toBeInTheDocument()
@@ -356,7 +368,7 @@ describe('AssignmentEditor', () => {
     const user = userEvent.setup()
 
     renderEditor()
-    await screen.findByRole('heading', { name: 'Running order' })
+    await screen.findByRole('button', { name: 'Move Song One up' })
     await user.click(screen.getByRole('button', { name: 'Move Song One down' }))
 
     await user.click(screen.getByRole('button', { name: /Save 1 change/ }))
@@ -367,5 +379,20 @@ describe('AssignmentEditor', () => {
     expect(urls.some((url) => url.includes('/running-order/preview/'))).toBe(
       true,
     )
+  })
+
+  it('Discard reloads and calls onDone, since Discard is the only way to leave edit mode (issue: UI overhaul round 2, item 2)', async () => {
+    mockMatchMedia(false)
+    const fetchSpy = queueFetch(schedulePayload(), schedulePayload())
+    const onDone = vi.fn()
+    const user = userEvent.setup()
+
+    renderEditor(onDone)
+    await screen.findByText('Editing standing assignments.')
+
+    await user.click(screen.getByRole('button', { name: 'Discard' }))
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2))
+    expect(onDone).toHaveBeenCalledTimes(1)
   })
 })

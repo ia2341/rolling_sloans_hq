@@ -627,10 +627,21 @@ def _serialize_matrix_row(row, *, is_admin, conflicted_person_ids) -> dict:
     Running Order reorder surface's row identity — the "Edit Rehearsal"
     drag-and-drop submits the reordered list of these ids, unchanged from
     what this same read already carries, rather than a second fetch.
+
+    `song_position`/`song_length` (issue: UI overhaul round 2) let the
+    read-only "Running order & assignments" table share its `#`/`Length`
+    columns with the Setlist table's own `SetlistSong` shape, rather than
+    this row's own `#` column meaning "position in tonight's Running
+    Order" while the Setlist's meant "concert position" — both now name
+    the Song's one Setlist position (ADR 0001's `Song` is semester-scoped,
+    so there is only one).
     """
     return {
         'song_id': row.song.pk,
         'song_title': row.song.title,
+        'song_artist': row.song.artist,
+        'song_position': row.song.position,
+        'song_length': format_song_length(row.song.length),
         'start_time': row.start_time.isoformat() if row.start_time else None,
         'rehearsal_song_id': row.rehearsal_song_id,
         'cells': [
