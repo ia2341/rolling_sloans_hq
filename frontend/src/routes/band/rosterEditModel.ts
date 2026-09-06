@@ -1,5 +1,6 @@
 import type { PreviewChange, PreviewResult } from '../../api/previewTypes'
 import type {
+  InviteStatus,
   RosterEditBufferWire,
   RosterEditFalloutWire,
   RosterEditMember,
@@ -42,11 +43,13 @@ export interface RosterEditRow {
   name: string
   /** Invite rows only; `null` for every existing/imported/added row (ADR 0005 keeps email off every other Roster surface). */
   email: string | null
+  /** Invite rows only (issue #397): `true` mails them immediately on Save, `false` stages them `'not_yet_invited'` with no mail sent. Meaningless for every other origin. */
+  sendInvite: boolean
   /** Struck through and kept in place with Undo, rather than removed from the array -- but only for a row that has something to undo to (`original !== null`); see `deleteRosterRow()`. */
   deleted: boolean
   origin: 'existing' | 'imported' | 'added' | 'invited'
-  /** From the server, for an existing row that never set a password -- backs the "invited · not active yet" badge and "Invite again" control. */
-  isPendingInvite: boolean
+  /** From the server for an existing row (issue #397), or set locally for a row staged this session -- backs the "not yet invited"/"invited · not active yet" badge and the Invite/Invite again control. */
+  inviteStatus: InviteStatus
   isRoleMismatch: boolean
   songCount: number
   /** The saved name at load time, for an existing row -- `null` for a brand-new one (imported, added or invited this session), which has nothing to diff against. */
@@ -68,9 +71,10 @@ export function rowsFromPayload(members: RosterEditMember[]): RosterEditRow[] {
     personId: member.id,
     name: member.name,
     email: null,
+    sendInvite: true,
     deleted: false,
     origin: 'existing',
-    isPendingInvite: member.is_pending_invite,
+    inviteStatus: member.invite_status,
     isRoleMismatch: member.is_role_mismatch,
     songCount: member.song_count,
     original: { name: member.name },
@@ -86,9 +90,10 @@ export function newImportedRow(
     personId: candidate.id,
     name: candidate.name,
     email: null,
+    sendInvite: true,
     deleted: false,
     origin: 'imported',
-    isPendingInvite: false,
+    inviteStatus: 'accepted',
     isRoleMismatch: false,
     songCount: 0,
     original: null,
@@ -102,25 +107,37 @@ export function newAddedRow(person: UnrosteredPerson): RosterEditRow {
     personId: person.id,
     name: person.name,
     email: null,
+    sendInvite: true,
     deleted: false,
     origin: 'added',
-    isPendingInvite: false,
+    inviteStatus: 'accepted',
     isRoleMismatch: false,
     songCount: 0,
     original: null,
   }
 }
 
-/** Builds one Buffer row for a not-yet-existing Person submitted through the Add-people sheet's "Invite new member" section. */
-export function newInviteRow(name: string, email: string): RosterEditRow {
+/**
+ * Builds one Buffer row for a not-yet-existing Person submitted through the
+ * Add-people sheet's "Invite new member" section. `sendInvite` (issue
+ * #397) is the "Invite now" (`true`, the default) vs "Add without
+ * inviting" (`false`) choice; either way this is the same row shape and
+ * the same `origin`, since both create a brand-new Person on Save.
+ */
+export function newInviteRow(
+  name: string,
+  email: string,
+  sendInvite = true,
+): RosterEditRow {
   return {
     rowKey: nextRowKey('invited'),
     personId: null,
     name,
     email,
+    sendInvite,
     deleted: false,
     origin: 'invited',
-    isPendingInvite: false,
+    inviteStatus: sendInvite ? 'invited' : 'not_yet_invited',
     isRoleMismatch: false,
     songCount: 0,
     original: null,
@@ -159,7 +176,7 @@ export function deleteRosterRow(
 export function rowBadges(row: RosterEditRow): PreviewChange['op'][] {
   if (row.deleted) return ['Remove']
   if (row.original === null)
-    return [row.origin === 'invited' ? 'Invite' : 'Add']
+    return [row.origin === 'invited' && row.sendInvite ? 'Invite' : 'Add']
   const badges: PreviewChange['op'][] = []
   if (row.name !== row.original.name) badges.push('Rename')
   return badges
@@ -211,6 +228,7 @@ export function buildBufferWire(
         row_key: row.rowKey,
         name: row.name,
         email: row.email ?? '',
+        send_invite: row.sendInvite,
       })),
   }
 }
@@ -265,6 +283,10 @@ export function mapRosterPreviewToResult(
     })),
     ...fallout.pending_invites.map((name): PreviewChange => ({
       op: 'Invite',
+      object: name,
+    })),
+    ...fallout.pending_added_without_invite.map((name): PreviewChange => ({
+      op: 'Add',
       object: name,
     })),
     ...fallout.pending_name_edits.map((description): PreviewChange => ({

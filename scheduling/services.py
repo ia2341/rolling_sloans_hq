@@ -1050,17 +1050,20 @@ def song_rehearsal_progress(song) -> SongRehearsalProgress:
 def songs_with_progress_for(semester, person) -> list[Song]:
     """Return `semester`'s Songs in position order, each annotated with `.progress`, `.has_assignment` and `.next_rehearsal_date` for `person` (issue #93).
 
-    `.progress` is that Song's `song_rehearsal_progress` (X of Y);
-    `.has_assignment` is True whenever `person` has any SongRoleAssignment
-    on the Song, regardless of is_role_mismatch — the Overview page's "my
-    songs only" filter is intentionally coarser than My Schedule's
-    per-role assignment matrix. `.next_rehearsal_date` is the earliest
-    future Rehearsal whose running order includes this Song (`None` if
-    none is scheduled) — a member-facing "when do I next perform this"
-    date, computed in one batched query rather than once per Song; this
-    is distinct from `_serialize_next_rehearsal`'s admin-only "cast on…"
-    pointer (ADR 0009), which answers a different question (where casting
-    happens next) and stays admin-only.
+    `.progress` is that Song's `song_rehearsal_progress` (X of Y), computed
+    for every Song in the Semester in one grouped aggregate query rather
+    than calling `song_rehearsal_progress()` once per Song (issue #394) —
+    that per-Song query made Home's song-progress table scale with the
+    Semester's Song count. `.has_assignment` is True whenever `person` has
+    any SongRoleAssignment on the Song, regardless of is_role_mismatch —
+    the Overview page's "my songs only" filter is intentionally coarser
+    than My Schedule's per-role assignment matrix. `.next_rehearsal_date`
+    is the earliest future Rehearsal whose running order includes this
+    Song (`None` if none is scheduled) — a member-facing "when do I next
+    perform this" date, computed in one batched query rather than once per
+    Song; this is distinct from `_serialize_next_rehearsal`'s admin-only
+    "cast on…" pointer (ADR 0009), which answers a different question
+    (where casting happens next) and stays admin-only.
     """
     assigned_song_ids = set(
         SongRoleAssignment.objects.filter(
@@ -1075,9 +1078,21 @@ def songs_with_progress_for(semester, person) -> list[Song]:
         .values_list('song_id', 'rehearsal__date')
     ):
         next_rehearsal_date_by_song_id.setdefault(song_id, rehearsal_date)
+    progress_by_song_id: dict[int, SongRehearsalProgress] = {
+        row['song_id']: SongRehearsalProgress(
+            completed=row['completed'], remaining=row['remaining'], total=row['completed'] + row['remaining'],
+        )
+        for row in RehearsalSong.objects.filter(song__semester=semester)
+        .values('song_id')
+        .annotate(
+            completed=Count('pk', filter=Q(rehearsal__date__lt=today)),
+            remaining=Count('pk', filter=Q(rehearsal__date__gte=today)),
+        )
+    }
+    empty_progress = SongRehearsalProgress(completed=0, remaining=0, total=0)
     songs = list(Song.objects.filter(semester=semester).order_by('position'))
     for song in songs:
-        song.progress = song_rehearsal_progress(song)
+        song.progress = progress_by_song_id.get(song.pk, empty_progress)
         song.has_assignment = song.pk in assigned_song_ids
         song.next_rehearsal_date = next_rehearsal_date_by_song_id.get(song.pk)
     return songs
@@ -1273,6 +1288,55 @@ def cast_line_for(song, roles: list[Role], codes: dict[int, str]) -> list[CastRo
         CastRoleEntry(role=role, code=codes[role.id], performers=performers_by_role_id.get(role.id, []))
         for role in roles
     ]
+
+
+def cast_lines_for_semester(semester, roles: list[Role], codes: dict[int, str]) -> dict[int, list[CastRoleEntry]]:
+    """Return every Song in `semester`'s cast line, keyed by Song id — the same result `cast_line_for()` would give per Song, computed in bulk (issue #394).
+
+    Backs `serialize_setlist()`'s All-songs list: calling `cast_line_for()`
+    (which calls `performers_for()`, its own `SongRoleAssignment` query)
+    once per Song made the Setlist's cost scale with the Semester's Song
+    count. This does the whole Semester's worth of Assignments in one
+    query instead, then reshapes them per Song exactly as `cast_line_for()`
+    reshapes one Song's — `is_role_mismatch` is read straight off each
+    Assignment (a stored field, ADR-0002) rather than a second lookup.
+    """
+    assignments = SongRoleAssignment.objects.filter(
+        song__semester=semester,
+    ).select_related('person', 'role').order_by('song_id', 'person__name', 'role__name')
+    performers_by_song_and_role: dict[tuple[int, int], list[CastPerformer]] = defaultdict(list)
+    for assignment in assignments:
+        performers_by_song_and_role[(assignment.song_id, assignment.role_id)].append(
+            CastPerformer(person=assignment.person, is_role_mismatch=assignment.is_role_mismatch),
+        )
+    song_ids = Song.objects.filter(semester=semester).values_list('id', flat=True)
+    return {
+        song_id: [
+            CastRoleEntry(
+                role=role,
+                code=codes[role.id],
+                performers=performers_by_song_and_role.get((song_id, role.id), []),
+            )
+            for role in roles
+        ]
+        for song_id in song_ids
+    }
+
+
+def recording_counts_for_semester(semester) -> dict[int, int]:
+    """Return every Song in `semester`'s all-time Recording count, keyed by Song id, in one query (issue #394).
+
+    The bulk counterpart of `recording_count_for()`: a Song absent from
+    the result has zero Recordings, matching `recording_count_for()`'s own
+    "0 is a normal, valid count" contract for a caller that does
+    `.get(song_id, 0)`.
+    """
+    counts = (
+        Recording.objects.filter(rehearsal_song__song__semester=semester)
+        .values('rehearsal_song__song_id')
+        .annotate(count=Count('id'))
+    )
+    return {row['rehearsal_song__song_id']: row['count'] for row in counts}
 
 
 def setlist_total_running_time(semester) -> str:
@@ -3302,16 +3366,25 @@ class RosterEditEntry:
 
 @dataclass(frozen=True)
 class RosterInvite:
-    """One not-yet-existing Person a Roster edit Buffer proposes to create and roster (issue #336).
+    """One not-yet-existing Person a Roster edit Buffer proposes to create and roster (issue #336, #397).
 
     Carries no `Person` id — there is none yet. Mirrors `RosterEditEntry`'s
     shape but with no Role set: an invited Person's declared Roles are
     theirs to set once they sign in (issue #336 user story 36), so this
     Buffer never carries `role_ids` for a pending invite.
+
+    `send_invite` (issue #397) is the "Invite now" vs "Add without inviting"
+    choice the Add-people sheet's Invite section offers: `True` (the
+    default, and #336's only prior behavior) creates the Person via
+    `identity.services.invite_person()` and mails them immediately;
+    `False` creates them via `identity.services.add_person()` instead,
+    leaving them `'not_yet_invited'` so an admin can stage a roster ahead
+    of actually inviting anyone.
     """
 
     name: str
     email: str
+    send_invite: bool = True
 
 
 @dataclass(frozen=True)
@@ -3426,17 +3499,22 @@ def _apply_roster_edit_entry(entry: RosterEditEntry, semester: Semester) -> None
 
 
 def _apply_roster_invite(invite: RosterInvite, semester: Semester) -> None:
-    """Create `invite`'s Person via `invite_person()` and roster them into `semester` with no declared Roles (issue #336).
+    """Create `invite`'s Person and roster them into `semester` with no declared Roles (issue #336, #397).
 
-    Reuses `invite_person(..., send_via_on_commit=True)` rather than
-    reimplementing the create — the one path to a loggable-in Person stays
-    single. The Membership is created bare (no `MembershipRole` rows): a
-    pending invite's Roles are theirs to declare once they sign in, not an
-    admin's to guess on their behalf.
+    `invite.send_invite` picks the creation path: `invite_person(...,
+    send_via_on_commit=True)` when `True` (mirrors #336's original
+    behavior — the one path to a loggable-in, immediately-invited Person
+    stays single), or `add_person()` when `False`, staging the Person
+    `'not_yet_invited'` with no mail sent at all. Either way the Membership
+    is created bare (no `MembershipRole` rows): a Person's Roles are theirs
+    to declare once they sign in, not an admin's to guess on their behalf.
     """
-    from identity.services import invite_person
+    from identity.services import add_person, invite_person
 
-    person = invite_person(name=invite.name, email=invite.email, send_via_on_commit=True)
+    if invite.send_invite:
+        person = invite_person(name=invite.name, email=invite.email, send_via_on_commit=True)
+    else:
+        person = add_person(name=invite.name, email=invite.email)
     Membership.objects.create(person=person, semester=semester)
 
 
@@ -3462,15 +3540,18 @@ class RosterEditFallout:
     WrongViewingSemesterError or SelfRemovalError) — a Validation Error in
     ADR 0008's terms, never blended with Fallout; `pending_*` and
     `loud`/`quiet` are all empty when blocked, since nothing was computed.
-    `pending_invites` (issue #336) names every Buffer-staged invite by
-    the name it will roster under; no email travels in this list (ADR
-    0005 keeps email off every Roster surface but the removal lines
-    below). `pending_*` name every row's outcome for the Preview's summary list.
-    `loud`/`quiet` are human-readable Fallout messages in the two ADR
-    0002/issue #228 tiers; neither ever blocks a save. `is_stale` flags a
-    `Semester.updated_at` mismatch — reported, never refused, per ADR 0008.
-    Carries no Role-change field (issue #379): this Buffer never touches
-    Role data, so there is nothing to report there.
+    `pending_invites` (issue #336) names every Buffer-staged invite (rows
+    with `send_invite=True`) by the name it will roster under;
+    `pending_added_without_invite` (issue #397) names every staged row
+    added with `send_invite=False` instead — a real new Person, `'not_yet_invited'`,
+    but no mail sent. Neither list carries email (ADR 0005 keeps email off
+    every Roster surface but the removal lines below). `pending_*` name
+    every row's outcome for the Preview's summary list. `loud`/`quiet` are
+    human-readable Fallout messages in the two ADR 0002/issue #228 tiers;
+    neither ever blocks a save. `is_stale` flags a `Semester.updated_at`
+    mismatch — reported, never refused, per ADR 0008. Carries no
+    Role-change field (issue #379): this Buffer never touches Role data,
+    so there is nothing to report there.
     """
 
     is_blocked: bool
@@ -3478,6 +3559,7 @@ class RosterEditFallout:
     is_stale: bool
     pending_adds: list[str]
     pending_invites: list[str]
+    pending_added_without_invite: list[str]
     pending_removals: list[RosterRemoval]
     pending_name_edits: list[str]
     loud: list[str]
@@ -3492,6 +3574,7 @@ def _blocked_roster_fallout(block_message: str, *, is_stale: bool = False) -> Ro
         is_stale=is_stale,
         pending_adds=[],
         pending_invites=[],
+        pending_added_without_invite=[],
         pending_removals=[],
         pending_name_edits=[],
         loud=[],
@@ -3562,7 +3645,8 @@ def preview_roster_edits(buffer: RosterEditBuffer, *, viewing_semester: Semester
         return _blocked_roster_fallout(str(error), is_stale=is_stale)
 
     pending_adds = []
-    pending_invites = [invite.name for invite in buffer.pending_invites]
+    pending_invites = [invite.name for invite in buffer.pending_invites if invite.send_invite]
+    pending_added_without_invite = [invite.name for invite in buffer.pending_invites if not invite.send_invite]
     pending_removals = [
         RosterRemoval(person_id=person_id, name=person.name, email=person.email)
         for person_id, person in removed_people_by_id.items()
@@ -3604,6 +3688,7 @@ def preview_roster_edits(buffer: RosterEditBuffer, *, viewing_semester: Semester
         is_stale=is_stale,
         pending_adds=pending_adds,
         pending_invites=pending_invites,
+        pending_added_without_invite=pending_added_without_invite,
         pending_removals=pending_removals,
         pending_name_edits=pending_name_edits,
         loud=loud,

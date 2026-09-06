@@ -858,7 +858,7 @@ def build_roster_buffer_from_request(request, *, viewing_semester) -> RosterEdit
             ],
             "removed_person_ids": [7, 8],
             "invites": [
-                {"row_key": "invite-1", "name": "...", "email": "..."}
+                {"row_key": "invite-1", "name": "...", "email": "...", "send_invite": true}
             ]
         }
 
@@ -1027,7 +1027,8 @@ def build_roster_buffer_from_request(request, *, viewing_semester) -> RosterEdit
             row_errors[row_key] = field_errors
             continue
 
-        invites.append(RosterInvite(name=name.strip(), email=email))
+        send_invite = raw_invite.get('send_invite', True) is not False
+        invites.append(RosterInvite(name=name.strip(), email=email, send_invite=send_invite))
 
     if row_errors or non_field_errors:
         raise RosterBufferValidationError(row_errors=row_errors, non_field_errors=non_field_errors, raw_body=raw_body)

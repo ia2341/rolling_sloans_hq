@@ -65,9 +65,16 @@ def invite_person(*, name, email, send_via_on_commit=False):
     Preview's rollback (ADR 0008) discards the send along with everything
     else — but that mode forgoes rollback-on-send-failure, since there is
     nothing left to roll back once the transaction has already committed.
+
+    Stamps `invited_at` (issue #397) up front, inside the same transaction
+    as the create — a failed inline send rolls both back together, and an
+    on-commit send has already committed to being sent by the time this
+    returns either way.
     """
     with transaction.atomic():
         person = Person.objects.create_user(email=email, name=name, password=None)
+        person.invited_at = timezone.now()
+        person.save(update_fields=['invited_at'])
         if send_via_on_commit:
             transaction.on_commit(lambda: send_invite_email(person))
         else:
@@ -75,13 +82,35 @@ def invite_person(*, name, email, send_via_on_commit=False):
     return person
 
 
+def add_person(*, name, email):
+    """Create a Person with no usable password and no invite sent (issue #397).
+
+    Lets an admin stage a semester roster — add people, assign their Roles
+    and castings — ahead of actually inviting them. Unlike `invite_person()`
+    this sends no mail and leaves `invited_at` unset, so
+    `invite_status_for()` reads the result as `'not_yet_invited'`. Wrapped
+    in `transaction.atomic()` for symmetry with `invite_person()`, even
+    though there's no side effect here to protect, so a caller composing
+    this inside a larger transaction (the roster edit Buffer) behaves the
+    same either way.
+    """
+    with transaction.atomic():
+        person = Person.objects.create_user(email=email, name=name, password=None)
+    return person
+
+
 def resend_invite(person):
-    """Re-send the set-password invite to a Person who has never set a password.
+    """Send (or re-send) the set-password invite to a Person who has never set a password.
 
     Its own service function rather than a second call to `invite_person()`,
     which *creates* a Person and must never run twice for the same address.
     `resend_invite()` takes an existing Person, regenerates the token (via
-    `send_invite_email` -> `build_set_password_url`) and re-sends.
+    `send_invite_email` -> `build_set_password_url`) and sends.
+
+    Also the one path (issue #397) that turns a `'not_yet_invited'` Person
+    `'invited'`: it doesn't care whether `invited_at` was already set, so
+    the same call serves both the Roster editor's "Invite again" and the
+    Person page's "Invite" action for someone never invited at all.
 
     Refuses a Person with a usable password: that member's recovery route is
     the self-serve forgot-password flow, and an admin must not be able to
@@ -99,19 +128,35 @@ def resend_invite(person):
     if person.has_usable_password():
         raise AlreadyHasPasswordError(f'{person.email} has already set a password')
     send_invite_email(person)
+    person.invited_at = timezone.now()
+    person.save(update_fields=['invited_at'])
     return person
 
 
-def people_with_invite_status():
-    """Return every Person ordered by name, each annotated with `is_pending_invite`.
+def invite_status_for(person):
+    """Return `person`'s invite lifecycle status (issue #397): `'not_yet_invited'`, `'invited'`, or `'accepted'`.
 
-    `is_pending_invite` (the negation of `has_usable_password()`) is a
-    derived read, so it's computed here rather than in the roster template,
-    per the project's "derived reads live in services" convention.
+    Checked in this order because `has_usable_password()` is the terminal
+    state and takes precedence: `invited_at` stays set forever once an
+    invite has ever been sent, so a Person who has since set a password
+    would otherwise misread as merely `'invited'`.
+    """
+    if person.has_usable_password():
+        return 'accepted'
+    if person.invited_at is not None:
+        return 'invited'
+    return 'not_yet_invited'
+
+
+def people_with_invite_status():
+    """Return every Person ordered by name, each annotated with `invite_status` (issue #397).
+
+    A derived read, computed here rather than in the roster template, per
+    the project's "derived reads live in services" convention.
     """
     people = list(Person.objects.order_by('name'))
     for person in people:
-        person.is_pending_invite = not person.has_usable_password()
+        person.invite_status = invite_status_for(person)
     return people
 
 

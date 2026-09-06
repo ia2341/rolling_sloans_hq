@@ -81,6 +81,9 @@ export interface PersonRecordingsBlock {
   upload_slots: RecordingSlotOption[]
 }
 
+/** A Person's invite lifecycle status (issue #397), mirroring `identity.services.invite_status_for()` exactly. */
+export type InviteStatus = 'not_yet_invited' | 'invited' | 'accepted'
+
 /**
  * `data` shape of `GET /api/members/<pk>/`, computed for exactly one of
  * the three viewer states. `email` and `recordings` are present only in
@@ -89,7 +92,9 @@ export interface PersonRecordingsBlock {
  * that section rather than rendering it empty). `roles` (issue #378,
  * ADR-0014) is unconditional — a standing `PersonRole` declaration needs no
  * Membership to exist, so it's never gated by `has_membership` the way
- * `songs` is.
+ * `songs` is. `invite_status` (issue #397) is present only for an admin
+ * viewing a teammate — never for `is_self` (a session implies
+ * `'accepted'`) and never for a plain teammate viewer.
  */
 export interface PersonPayload {
   id: number
@@ -101,6 +106,7 @@ export interface PersonPayload {
   roles: MemberRole[]
   email?: string
   available_roles?: MemberRole[]
+  invite_status?: InviteStatus
   songs?: PersonSong[]
   recordings?: PersonRecordingsBlock
 }
@@ -116,14 +122,15 @@ export interface PersonPayload {
  * One row of `GET /api/members/roster/`'s `members` list — every Membership
  * in the viewing Semester, invited-but-inactive included. No Role data
  * (issue #379): the Roster editor is add/remove-only now, and a Person's
- * declared Roles are set only on their Person page (#378).
+ * declared Roles are set only on their Person page (#378). `invite_status`
+ * (issue #397) replaces the old binary `is_pending_invite`.
  */
 export interface RosterEditMember {
   id: number
   name: string
   song_count: number
   is_role_mismatch: boolean
-  is_pending_invite: boolean
+  invite_status: InviteStatus
 }
 
 /** `data` shape of `GET /api/members/roster/`. No `available_roles` (issue #379): the editor offers no Role-editing control. */
@@ -162,11 +169,18 @@ export interface RosterEditEntryWire {
   name: string
 }
 
-/** One `/api/members/roster/{preview,save}/` request body `invites` row (mirrors `scheduling/services.py`'s `RosterInvite`). */
+/**
+ * One `/api/members/roster/{preview,save}/` request body `invites` row
+ * (mirrors `scheduling/services.py`'s `RosterInvite`). `send_invite`
+ * (issue #397) is the "Invite now" vs "Add without inviting" choice; it's
+ * always sent explicitly here even though the backend defaults it to
+ * `true` when absent.
+ */
 export interface RosterInviteWire {
   row_key: string
   name: string
   email: string
+  send_invite: boolean
 }
 
 /** `/api/members/roster/{preview,save}/` request body (mirrors `scheduling/services.py`'s `RosterEditBuffer`). */
@@ -185,13 +199,20 @@ export interface RosterRemovalWire {
   email: string
 }
 
-/** `RosterEditFallout`, as `serialize_roster_edit_fallout()` emits it -- the `/api/members/roster/preview/` response's `fallout` value. No `pending_role_changes` (issue #379) -- this Buffer never touches Role data. */
+/**
+ * `RosterEditFallout`, as `serialize_roster_edit_fallout()` emits it -- the
+ * `/api/members/roster/preview/` response's `fallout` value. No
+ * `pending_role_changes` (issue #379) -- this Buffer never touches Role
+ * data. `pending_added_without_invite` (issue #397) lists a send_invite:
+ * false row's outcome separately from `pending_invites`.
+ */
 export interface RosterEditFalloutWire {
   is_blocked: boolean
   block_message: string
   is_stale: boolean
   pending_adds: string[]
   pending_invites: string[]
+  pending_added_without_invite: string[]
   pending_removals: RosterRemovalWire[]
   pending_name_edits: string[]
   loud: string[]

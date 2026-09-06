@@ -244,3 +244,15 @@ class PreviewRosterEditsTests(TestCase):
         self.assertEqual(Person.objects.count(), person_count_before)
         self.assertFalse(Person.objects.filter(email='never-created@example.com').exists())
         self.assertEqual(len(mail.outbox), 0)
+
+    def test_pending_added_without_invite_lists_the_staged_names(self):
+        """A Buffer carrying a send_invite=False row reports its name in pending_added_without_invite, not pending_invites (#397)."""
+        buffer = self._buffer(
+            pending_invites=[RosterInvite(name='Staged Only', email='staged-only@example.com', send_invite=False)],
+        )
+
+        fallout = self._preview(buffer)
+
+        self.assertIn('Staged Only', fallout.pending_added_without_invite)
+        self.assertNotIn('Staged Only', fallout.pending_invites)
+        self.assertFalse(fallout.is_blocked)

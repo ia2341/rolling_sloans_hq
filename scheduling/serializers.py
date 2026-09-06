@@ -17,6 +17,7 @@ from django.db.models import Count
 from django.utils import timezone
 
 from identity.serializers import serialize_viewer
+from identity.services import invite_status_for
 from scheduling import services
 from scheduling.fields import format_song_length
 from scheduling.models import (
@@ -235,7 +236,7 @@ def _serialize_cast_entry(entry):
     }
 
 
-def _serialize_setlist_song(song, roles, codes):
+def _serialize_setlist_song(song, cast, recording_count):
     """Return one Setlist row: the Song's own fields, its role-by-role cast line, and its take count."""
     return {
         'id': song.pk,
@@ -244,8 +245,8 @@ def _serialize_setlist_song(song, roles, codes):
         'length': format_song_length(song.length),
         'position': song.position,
         'notes': song.notes,
-        'cast': [_serialize_cast_entry(entry) for entry in services.cast_line_for(song, roles, codes)],
-        'recording_count': services.recording_count_for(song),
+        'cast': [_serialize_cast_entry(entry) for entry in cast],
+        'recording_count': recording_count,
     }
 
 
@@ -257,18 +258,29 @@ def serialize_setlist(semester) -> dict:
     in scope. `is_role_mismatch` is the deliberate exception (ADR 0002):
     `docs/person-page-visibility.md`'s `never` verdict for it is scoped to
     `/members/` and `/members/<pk>/`, not to this surface.
+
+    Cast lines and recording counts come from `services.cast_lines_for_semester()`/
+    `recording_counts_for_semester()` — computed once for every Song in
+    `semester` (issue #394), rather than `cast_line_for()`/
+    `recording_count_for()` once per Song, which made this list's cost
+    scale with the Semester's Song count.
     """
     if semester is None:
         return {'semester_name': None, 'song_count': 0, 'total_running_time': '0:00', 'roles': [], 'songs': []}
     songs = list(Song.objects.filter(semester=semester).order_by('position'))
     roles = services.active_roles_for(semester)
     codes = services.role_codes_for(roles)
+    cast_lines = services.cast_lines_for_semester(semester, roles, codes)
+    recording_counts = services.recording_counts_for_semester(semester)
     return {
         'semester_name': semester.name,
         'song_count': len(songs),
         'total_running_time': services.setlist_total_running_time(semester),
         'roles': [_serialize_role_legend_entry(role, codes) for role in roles],
-        'songs': [_serialize_setlist_song(song, roles, codes) for song in songs],
+        'songs': [
+            _serialize_setlist_song(song, cast_lines.get(song.id, []), recording_counts.get(song.id, 0))
+            for song in songs
+        ],
     }
 
 
@@ -862,22 +874,23 @@ def _serialize_role(role) -> dict:
 
 
 def _serialize_roster_edit_member(membership, *, mismatched_person_ids: frozenset[int]) -> dict:
-    """Return one Roster editor row: name, Song count, mismatch flag and invite status (issue #336, narrowed by #379).
+    """Return one Roster editor row: name, Song count, mismatch flag and invite status (issue #336, narrowed by #379, tri-state by #397).
 
     No `email` (ADR 0005 — it stays off every Roster surface but the
     removal lines in the Save popup). No Role data at all (issue #379):
     the Roster editor is add/remove-only now, and a Person's declared
     Roles are set only on their Person page (#378). `is_role_mismatch` is
-    the ADR 0002 soft flag, never a block; `is_pending_invite` is `not
-    has_usable_password()`, letting the editor show "invited · not active
-    yet" without a second query per row.
+    the ADR 0002 soft flag, never a block; `invite_status` (issue #397) is
+    `identity.services.invite_status_for()`'s three-way read, letting the
+    editor show "not yet invited" / "invited · not active yet" and offer
+    the right action for each without a second query per row.
     """
     return {
         'id': membership.person_id,
         'name': membership.person.name,
         'song_count': membership.songs_count,
         'is_role_mismatch': membership.person_id in mismatched_person_ids,
-        'is_pending_invite': not membership.person.has_usable_password(),
+        'invite_status': invite_status_for(membership.person),
     }
 
 
@@ -928,6 +941,7 @@ def serialize_roster_edit_fallout(fallout: RosterEditFallout) -> dict:
         'is_stale': fallout.is_stale,
         'pending_adds': list(fallout.pending_adds),
         'pending_invites': list(fallout.pending_invites),
+        'pending_added_without_invite': list(fallout.pending_added_without_invite),
         'pending_removals': [_serialize_roster_removal(removal) for removal in fallout.pending_removals],
         'pending_name_edits': list(fallout.pending_name_edits),
         'loud': list(fallout.loud),
@@ -1068,6 +1082,11 @@ def serialize_person(person, *, semester, is_self: bool, can_edit_roles: bool, m
     `Conflict`, `Backup`, `is_role_mismatch` or attendance-inference field
     anywhere, for any viewer, including an admin (ADR 0005, ADR 0007, ADR
     0002) — the boundary is drawn around this surface, not the viewer.
+
+    `invite_status` (issue #397) is present only for an admin viewing a
+    teammate, never for `is_self` (a session implies a usable password, so
+    it's always `'accepted'` with nothing useful to show or do) and never
+    for a non-admin teammate viewer, per this same "absent, not null" rule.
     """
     has_membership = membership is not None and membership.pk is not None
     data = {
@@ -1083,6 +1102,8 @@ def serialize_person(person, *, semester, is_self: bool, can_edit_roles: bool, m
         data['email'] = person.email
     if can_edit_roles:
         data['available_roles'] = [_serialize_role(role) for role in services.active_roles_for(semester)]
+    if not is_self and can_edit_roles:
+        data['invite_status'] = invite_status_for(person)
     if has_membership:
         data['songs'] = [_serialize_person_song(assignment) for assignment in services.assigned_songs_for(person, semester)]
     if is_self and has_membership:

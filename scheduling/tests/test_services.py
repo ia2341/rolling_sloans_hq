@@ -26,6 +26,7 @@ from scheduling.factories import (
 from scheduling.models import Conflict, ConflictWindow, MembershipRole
 from scheduling.services import (
     AssignmentMatrixEntryKind,
+    SongRehearsalProgress,
     active_roles_for,
     addable_roles_for,
     assignment_grid_is_editable,
@@ -34,12 +35,14 @@ from scheduling.services import (
     attendance_suggestion_for,
     breaks_for,
     cast_line_for,
+    cast_lines_for_semester,
     conflict_history_for,
     declare_conflict,
     fill_status_for,
     future_rehearsals_for,
     performers_for,
     recording_count_for,
+    recording_counts_for_semester,
     rehearsal_schedule_for,
     rehearsed_at_for,
     role_codes_for,
@@ -284,6 +287,31 @@ class RecordingCountForTests(TestCase):
         self.assertEqual(recording_count_for(song), 0)
 
 
+class RecordingCountsForSemesterTests(TestCase):
+    def test_matches_recording_count_for_per_song(self):
+        """The bulk result for each Song matches what recording_count_for() would compute for it directly (issue #394)."""
+        semester = SemesterFactory()
+        recorded_song = SongFactory(semester=semester)
+        quiet_song = SongFactory(semester=semester)
+        slot = RehearsalSongFactory(song=recorded_song, rehearsal=RehearsalFactory(semester=semester))
+        RecordingFactory(rehearsal_song=slot)
+        RecordingFactory(rehearsal_song=slot)
+
+        counts = recording_counts_for_semester(semester)
+
+        self.assertEqual(counts.get(recorded_song.pk, 0), recording_count_for(recorded_song))
+        self.assertEqual(counts.get(quiet_song.pk, 0), recording_count_for(quiet_song))
+
+    def test_a_song_with_no_recordings_is_absent_from_the_map(self):
+        """A Song with zero Recordings has no key in the result — callers use .get(song_id, 0) (issue #394)."""
+        semester = SemesterFactory()
+        song = SongFactory(semester=semester)
+
+        counts = recording_counts_for_semester(semester)
+
+        self.assertNotIn(song.pk, counts)
+
+
 class SongsWithProgressForTests(TestCase):
     @classmethod
     def setUpTestData(cls):
@@ -325,6 +353,43 @@ class SongsWithProgressForTests(TestCase):
         songs_by_pk = {song.pk: song for song in songs}
         self.assertTrue(songs_by_pk[my_song.pk].has_assignment)
         self.assertFalse(songs_by_pk[other_song.pk].has_assignment)
+
+    def test_a_song_with_no_rehearsal_songs_gets_zero_progress(self):
+        """A Song with no RehearsalSong rows at all still gets a progress of 0/0/0, not a KeyError (issue #394)."""
+        song = SongFactory(semester=self.semester)
+
+        [returned_song] = songs_with_progress_for(self.semester, self.person)
+
+        self.assertEqual(returned_song, song)
+        self.assertEqual(returned_song.progress, SongRehearsalProgress(completed=0, remaining=0, total=0))
+
+    def test_query_count_does_not_scale_with_song_count(self):
+        """Annotating every Song with its progress costs the same query count regardless of how many Songs the Semester has (issue #394).
+
+        Guards against re-introducing a per-Song query (e.g. calling
+        `song_rehearsal_progress()` in a loop over Songs) — the regression
+        this ticket fixes, which made Home's song-progress table scale
+        with the Semester's Song count instead of staying flat.
+        """
+        def _build_song(position):
+            song = SongFactory(semester=self.semester, position=position)
+            rehearsal = RehearsalFactory(
+                semester=self.semester, date=timezone.localdate() - timedelta(days=position),
+            )
+            RehearsalSongFactory(song=song, rehearsal=rehearsal, order=1)
+            return song
+
+        _build_song(1)
+        _build_song(2)
+        with CaptureQueriesContext(connection) as few:
+            songs_with_progress_for(self.semester, self.person)
+
+        for position in range(3, 9):
+            _build_song(position)
+        with CaptureQueriesContext(connection) as many:
+            songs_with_progress_for(self.semester, self.person)
+
+        self.assertEqual(len(few.captured_queries), len(many.captured_queries))
 
 
 class BreaksForTests(TestCase):
@@ -1291,6 +1356,65 @@ class CastLineForTests(TestCase):
         entries = cast_line_for(song, [role], codes)
 
         self.assertEqual(entries[0].performers, [])
+
+
+class CastLinesForSemesterTests(TestCase):
+    def test_matches_cast_line_for_per_song(self):
+        """Every Song's bulk cast line matches what cast_line_for() would compute for it directly (issue #394)."""
+        semester = SemesterFactory()
+        singer = RoleFactory(name='Singer')
+        drummer = RoleFactory(name='Drummer')
+        first_song = SongFactory(semester=semester)
+        second_song = SongFactory(semester=semester)
+        person = PersonFactory()
+        SongRoleAssignmentFactory(song=first_song, role=singer, person=person)
+        SongRoleAssignmentFactory(song=second_song, role=drummer, person=PersonFactory())
+        codes = role_codes_for([drummer, singer])
+
+        cast_lines = cast_lines_for_semester(semester, [drummer, singer], codes)
+
+        self.assertEqual(cast_lines[first_song.pk], cast_line_for(first_song, [drummer, singer], codes))
+        self.assertEqual(cast_lines[second_song.pk], cast_line_for(second_song, [drummer, singer], codes))
+
+    def test_a_song_with_no_assignments_gets_every_role_empty(self):
+        """A Song with no SongRoleAssignments still gets an entry per Role, each with an empty performers list (issue #394)."""
+        semester = SemesterFactory()
+        song = SongFactory(semester=semester)
+        role = RoleFactory()
+        codes = role_codes_for([role])
+
+        cast_lines = cast_lines_for_semester(semester, [role], codes)
+
+        self.assertEqual(cast_lines[song.pk][0].performers, [])
+
+    def test_query_count_does_not_scale_with_song_count(self):
+        """Building cast lines for every Song in the Semester costs the same query count regardless of Song count (issue #394).
+
+        Guards against re-introducing a per-Song query (e.g. calling
+        `cast_line_for()`/`performers_for()` in a loop over Songs) — the
+        regression this ticket fixes, which made the Setlist's cost scale
+        with the Semester's Song count instead of staying flat.
+        """
+        semester = SemesterFactory()
+        role = RoleFactory()
+        codes = role_codes_for([role])
+
+        def _build_song():
+            song = SongFactory(semester=semester)
+            SongRoleAssignmentFactory(song=song, role=role, person=PersonFactory())
+            return song
+
+        _build_song()
+        _build_song()
+        with CaptureQueriesContext(connection) as few:
+            cast_lines_for_semester(semester, [role], codes)
+
+        for _ in range(6):
+            _build_song()
+        with CaptureQueriesContext(connection) as many:
+            cast_lines_for_semester(semester, [role], codes)
+
+        self.assertEqual(len(few.captured_queries), len(many.captured_queries))
 
 
 class SetlistTotalRunningTimeForTests(TestCase):
