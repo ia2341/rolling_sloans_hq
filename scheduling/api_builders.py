@@ -47,7 +47,7 @@ from django.utils.dateparse import parse_date, parse_datetime, parse_time
 
 from identity.models import Person
 from scheduling.fields import parse_song_length
-from scheduling.models import Conflict, Role, Song
+from scheduling.models import Conflict, RehearsalSong, Role, Song
 from scheduling.services import (
     AdjudicationBuffer,
     AdjudicationEntry,
@@ -566,6 +566,118 @@ def build_rehearsal_buffer_from_request(request, *, viewing_semester) -> Rehears
         rows=rows,
         deleted_rehearsal_ids=deleted_rehearsal_ids,
     )
+
+
+def build_rehearsal_reorder_buffer_from_request(request, *, rehearsal) -> RehearsalEditBuffer:
+    """Parse a pure Running Order reorder request into a one-row `RehearsalEditBuffer` for `rehearsal` (the Schedule surface's "Edit Rehearsal" drag-and-drop).
+
+    Unlike `build_rehearsal_buffer_from_request()` (the bulk multi-Rehearsal
+    editor, which submits every `RehearsalEditRow` field explicitly), this
+    endpoint's caller only ever submits the new order of `rehearsal`'s
+    already-existing `RehearsalSong` rows. Every other `RehearsalEditRow`
+    field — `date`, `start_time`, `end_time`, `is_full_setlist`, and each
+    of the four overrides — and each Running Order row's own `slot_count`
+    are read fresh off the database rather than the request body, so a
+    reorder-only save can never silently change a slot_count or reset an
+    override to the Semester default the way a hand-crafted body naming
+    them explicitly could.
+
+    Wire shape::
+
+        {
+            "semester_id": 1,
+            "semester_updated_at": "2026-01-01T00:00:00.000000+00:00",
+            "ordered_rehearsal_song_ids": [10, 7, 12]
+        }
+
+    Raises `RehearsalBufferValidationError` (with no per-row `row_errors`,
+    since there is only ever the one row here — everything lands in
+    `non_field_errors`) for a missing/malformed `semester_id` or
+    `semester_updated_at`, a non-list `ordered_rehearsal_song_ids`, or a
+    list that doesn't name *exactly* `rehearsal`'s current RehearsalSong
+    ids once each — no id dropped, added, or duplicated — since anything
+    else can't be turned into a well-formed reorder of what's actually
+    there.
+    """
+    from config.views import ApiView
+
+    body = ApiView().parse_json_body(request)
+
+    non_field_errors = []
+    raw_body = body if isinstance(body, dict) else {}
+
+    if not isinstance(body, dict):
+        non_field_errors.append('Expected a JSON object.')
+        raise RehearsalBufferValidationError(
+            row_errors={}, non_field_errors=non_field_errors, raw_rows=[], raw_body=raw_body
+        )
+
+    semester_id = _expect_int(body.get('semester_id'))
+    if semester_id is None:
+        non_field_errors.append('semester_id is required and must be an integer.')
+
+    semester_updated_at = None
+    raw_stamp = body.get('semester_updated_at')
+    if not isinstance(raw_stamp, str) or not raw_stamp:
+        non_field_errors.append('semester_updated_at is required and must be an ISO datetime string.')
+    else:
+        try:
+            semester_updated_at = parse_datetime(raw_stamp)
+        except ValueError:
+            semester_updated_at = None
+        if semester_updated_at is None:
+            non_field_errors.append('semester_updated_at could not be parsed as an ISO datetime.')
+
+    raw_ids = body.get('ordered_rehearsal_song_ids')
+    ordered_ids = []
+    if not isinstance(raw_ids, list):
+        non_field_errors.append('ordered_rehearsal_song_ids must be a list.')
+    else:
+        for entry in raw_ids:
+            rehearsal_song_id = _expect_int(entry)
+            if rehearsal_song_id is None:
+                non_field_errors.append(f'ordered_rehearsal_song_ids contains a non-integer value: {entry!r}.')
+            else:
+                ordered_ids.append(rehearsal_song_id)
+
+    if non_field_errors:
+        raise RehearsalBufferValidationError(
+            row_errors={}, non_field_errors=non_field_errors, raw_rows=[], raw_body=raw_body
+        )
+
+    existing = list(RehearsalSong.objects.filter(rehearsal=rehearsal))
+    existing_by_id = {rehearsal_song.pk: rehearsal_song for rehearsal_song in existing}
+    if len(ordered_ids) != len(existing) or set(ordered_ids) != set(existing_by_id):
+        raise RehearsalBufferValidationError(
+            row_errors={},
+            non_field_errors=[
+                "ordered_rehearsal_song_ids must name exactly this Rehearsal's current Running Order rows, once each — reload and reapply.",
+            ],
+            raw_rows=[], raw_body=raw_body,
+        )
+
+    running_order = [
+        RunningOrderRow(
+            rehearsal_song_id=rehearsal_song_id,
+            song_id=existing_by_id[rehearsal_song_id].song_id,
+            slot_count=existing_by_id[rehearsal_song_id].slot_count,
+        )
+        for rehearsal_song_id in ordered_ids
+    ]
+
+    row = RehearsalEditRow(
+        rehearsal_id=rehearsal.pk,
+        date=rehearsal.date,
+        start_time=rehearsal.start_time,
+        end_time=rehearsal.end_time,
+        is_full_setlist=rehearsal.is_full_setlist,
+        setup_grace_minutes=rehearsal.setup_grace_minutes,
+        teardown_grace_minutes=rehearsal.teardown_grace_minutes,
+        arrival_buffer_minutes=rehearsal.arrival_buffer_minutes,
+        departure_buffer_minutes=rehearsal.departure_buffer_minutes,
+        running_order=running_order,
+    )
+    return RehearsalEditBuffer(semester_id=semester_id, semester_updated_at=semester_updated_at, rows=[row])
 
 
 class RehearsalPatternInputError(ValidationError):

@@ -17,11 +17,24 @@ export interface RosterEntry {
   song_count: number
 }
 
+/**
+ * Admin-only gap flag on `/api/members/`: people with a SongRoleAssignment
+ * this Semester but no Membership row, so their casting is invisible on
+ * the Roster (mirrors `services.unassigned_role_holders_for`). Absent
+ * entirely for a non-admin viewer or when nothing is published, per the
+ * "absent, not null" wire contract.
+ */
+export interface UnassignedRoleHolders {
+  count: number
+  names: string[]
+}
+
 /** `data` shape of `GET /api/members/`. */
 export interface BandPayload {
   semester_name: string | null
   member_count: number
   members: RosterEntry[]
+  unassigned_role_holders?: UnassignedRoleHolders
 }
 
 /** One Role, as a declared-Roles chip or an entry in the editable catalog. */

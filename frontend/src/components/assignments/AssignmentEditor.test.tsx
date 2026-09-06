@@ -2,6 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 
+import type { AssignmentPickerPayload } from '../../api/assignmentEditorTypes'
 import { ContextProvider } from '../../api/ContextProvider'
 import {
   EditSessionProvider,
@@ -62,6 +63,7 @@ function schedulePayload() {
             song_id: 100,
             song_title: 'Song One',
             start_time: '19:00:00',
+            rehearsal_song_id: 200,
             cells: [{ role_id: 5, entries: [] }],
           },
         ],
@@ -71,7 +73,32 @@ function schedulePayload() {
   }
 }
 
-function pickerPayload() {
+/** A two-Song variant of `schedulePayload()`, so the Running Order editor has something to reorder. */
+function twoSongSchedulePayload() {
+  const payload = schedulePayload()
+  payload.data.selected.rows = [
+    {
+      song_id: 100,
+      song_title: 'Song One',
+      start_time: '19:00:00',
+      rehearsal_song_id: 200,
+      cells: [{ role_id: 5, entries: [] }],
+    },
+    {
+      song_id: 101,
+      song_title: 'Song Two',
+      start_time: '19:30:00',
+      rehearsal_song_id: 201,
+      cells: [{ role_id: 5, entries: [] }],
+    },
+  ]
+  return payload
+}
+
+function pickerPayload(): {
+  context: ReturnType<typeof adminContext>
+  data: AssignmentPickerPayload
+} {
   return {
     context: adminContext(),
     data: {
@@ -150,7 +177,7 @@ describe('AssignmentEditor', () => {
     const user = userEvent.setup()
 
     renderEditor()
-    await screen.findByText('Song One')
+    await screen.findAllByText('Song One')
 
     await user.click(
       screen.getByRole('button', { name: 'Assign Guitar on Song One' }),
@@ -174,7 +201,7 @@ describe('AssignmentEditor', () => {
     const user = userEvent.setup()
 
     renderEditor()
-    await screen.findByText('Song One')
+    await screen.findAllByText('Song One')
     await user.click(
       screen.getByRole('button', { name: 'Assign Guitar on Song One' }),
     )
@@ -207,7 +234,7 @@ describe('AssignmentEditor', () => {
     const user = userEvent.setup()
 
     renderEditor()
-    await screen.findByText('Song One')
+    await screen.findAllByText('Song One')
     await user.click(
       screen.getByRole('button', { name: 'Assign Guitar on Song One' }),
     )
@@ -219,6 +246,126 @@ describe('AssignmentEditor', () => {
 
     await waitFor(() =>
       expect(screen.getByText('Someone is away.')).toBeInTheDocument(),
+    )
+  })
+
+  it('picking someone who has not declared the Role shows the mismatch marker on the pending pill', async () => {
+    mockMatchMedia(false)
+    const undeclaredPickerPayload = pickerPayload()
+    undeclaredPickerPayload.data.declared = []
+    undeclaredPickerPayload.data.others = [
+      {
+        person_id: 20,
+        person_name: 'Casey Undeclared',
+        has_declared_role: false,
+        has_conflict: false,
+      },
+    ]
+    queueFetch(schedulePayload(), undeclaredPickerPayload)
+    const user = userEvent.setup()
+
+    renderEditor()
+    await screen.findAllByText('Song One')
+    await user.click(
+      screen.getByRole('button', { name: 'Assign Guitar on Song One' }),
+    )
+    await user.click(screen.getByRole('button', { name: 'Show all members' }))
+    await user.click(screen.getByRole('button', { name: /Casey Undeclared/ }))
+
+    const pill = await screen.findByText('Casey Undeclared')
+    expect(pill.closest('span')).toHaveTextContent('◦')
+  })
+
+  it('Running order renders each Song with Move up/down controls, disabled at the ends', async () => {
+    mockMatchMedia(false)
+    queueFetch(twoSongSchedulePayload())
+
+    renderEditor()
+    await screen.findByRole('heading', { name: 'Running order' })
+
+    expect(
+      screen.getByRole('button', { name: 'Move Song One up' }),
+    ).toBeDisabled()
+    expect(
+      screen.getByRole('button', { name: 'Move Song One down' }),
+    ).not.toBeDisabled()
+    expect(
+      screen.getByRole('button', { name: 'Move Song Two down' }),
+    ).toBeDisabled()
+  })
+
+  it('reordering via Move down marks the surface dirty, gating the Save button on changeCount', async () => {
+    mockMatchMedia(false)
+    queueFetch(twoSongSchedulePayload())
+    const user = userEvent.setup()
+
+    renderEditor()
+    await screen.findByRole('heading', { name: 'Running order' })
+    expect(
+      screen.getByRole('button', { name: /Save 0 change/ }),
+    ).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Move Song One down' }))
+
+    expect(
+      screen.getByRole('button', { name: /Save 1 change/ }),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: /Save 0 change/ }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('Save posts the Running Order Preview endpoint too once a reorder is pending', async () => {
+    mockMatchMedia(false)
+    const fetchSpy = queueFetch(twoSongSchedulePayload(), {
+      context: adminContext(),
+      ok: true,
+      errors: {},
+      non_field_errors: [],
+      fallout: {
+        is_blocked: false,
+        block_message: '',
+        is_stale: false,
+        loud: [],
+        quiet: [],
+      },
+      values: null,
+      data: null,
+    })
+    fetchSpy.mockResolvedValueOnce({
+      status: 200,
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          context: adminContext(),
+          ok: true,
+          errors: {},
+          non_field_errors: [],
+          fallout: {
+            is_blocked: false,
+            block_message: '',
+            is_stale: false,
+            loud: [],
+            quiet: [],
+            doomed_recording_groups: [],
+          },
+          values: null,
+          data: null,
+        }),
+    })
+    const user = userEvent.setup()
+
+    renderEditor()
+    await screen.findByRole('heading', { name: 'Running order' })
+    await user.click(screen.getByRole('button', { name: 'Move Song One down' }))
+
+    await user.click(screen.getByRole('button', { name: /Save 1 change/ }))
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(3))
+    const urls = fetchSpy.mock.calls.map(([url]) => String(url))
+    expect(urls.some((url) => url.includes('/assignments/preview/'))).toBe(true)
+    expect(urls.some((url) => url.includes('/running-order/preview/'))).toBe(
+      true,
     )
   })
 })

@@ -59,3 +59,18 @@ export interface AssignmentEditBufferInput {
   added_backup_entries: AssignmentAddedBackupEntryInput[]
   backup_covering_for_updates: AssignmentBackupCoveringForUpdateInput[]
 }
+
+/** Wire body for `POST /api/schedule/<id>/running-order/{preview,save}/` — the "Edit Rehearsal" drag-and-drop's pure reorder Buffer.
+ *
+ * Every other `RehearsalEditRow` field (date/time/overrides) and each
+ * row's own `slot_count` are read fresh off the database server-side
+ * (`build_rehearsal_reorder_buffer_from_request()`), so this wire shape
+ * only ever names the new order of the Rehearsal's existing
+ * `RehearsalSong` ids — it can never silently change a slot_count or a
+ * Semester default the way a hand-crafted full row could.
+ */
+export interface RunningOrderReorderInput {
+  semester_id: number
+  semester_updated_at: string
+  ordered_rehearsal_song_ids: number[]
+}

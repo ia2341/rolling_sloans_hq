@@ -55,6 +55,8 @@ export interface MatrixRow {
   song_title: string
   /** Null on the Dress Rehearsal, which has no per-song slot times (ADR 0003). */
   start_time: string | null
+  /** Null on the Dress Rehearsal (ADR 0003) — the Running Order reorder surface's row identity. */
+  rehearsal_song_id: number | null
   cells: MatrixCell[]
 }
 
@@ -99,9 +101,13 @@ export interface ScheduleListRow {
   is_dress: boolean
   is_past: boolean
   song_count: number
+  /** Every Song on this Rehearsal, in `RehearsalSong.order` sequence (the live setlist order for the Dress Rehearsal, ADR 0003) — not only the viewer's own. */
+  songs: YourSongEntry[]
   your_state: YourState
   /** Songs in this Rehearsal's running order the viewer is on (standing assignment or Backup — same rule as attendance, ADR 0007). */
   your_songs: YourSongEntry[]
+  /** The viewer's own "Your availability" block for this Rehearsal — the same shape `RehearsalDetail.availability` carries, so the All-rehearsals card's "+ Conflict" can open the one Declare dialog with no second fetch. */
+  availability: Availability
   /** Admin-only: absent for a member, and absent for a past/Dress Rehearsal even for an admin. */
   pending_count?: number
 }

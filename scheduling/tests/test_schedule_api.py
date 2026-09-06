@@ -73,7 +73,10 @@ class SerializeScheduleExactKeySetTests(TestCase):
         row = data['schedule']['future'][0]
         self.assertEqual(
             set(row.keys()),
-            {'id', 'date', 'start_time', 'end_time', 'is_dress', 'is_past', 'song_count', 'your_state', 'your_songs'},
+            {
+                'id', 'date', 'start_time', 'end_time', 'is_dress', 'is_past',
+                'song_count', 'songs', 'your_state', 'your_songs', 'availability',
+            },
         )
 
     def test_schedule_list_row_keys_for_an_admin_add_pending_count(self):
@@ -88,7 +91,7 @@ class SerializeScheduleExactKeySetTests(TestCase):
             set(row.keys()),
             {
                 'id', 'date', 'start_time', 'end_time', 'is_dress', 'is_past',
-                'song_count', 'your_state', 'your_songs', 'pending_count',
+                'song_count', 'songs', 'your_state', 'your_songs', 'availability', 'pending_count',
             },
         )
 
@@ -106,6 +109,23 @@ class SerializeScheduleExactKeySetTests(TestCase):
 
         row = data['schedule']['future'][0]
         self.assertEqual(row['your_songs'], [{'id': assigned_song.pk, 'title': 'Assigned Song'}])
+
+    def test_schedule_list_row_songs_is_the_whole_running_order_in_order(self):
+        """`songs` lists every Song on the Rehearsal, in `RehearsalSong.order` sequence — not only the viewer's own."""
+        person = PersonFactory()
+        rehearsal = RehearsalFactory(date=timezone.localdate() + timedelta(days=1))
+        first_song = SongFactory(semester=rehearsal.semester, title='First Song')
+        second_song = SongFactory(semester=rehearsal.semester, title='Second Song')
+        RehearsalSongFactory(rehearsal=rehearsal, song=second_song, order=2)
+        RehearsalSongFactory(rehearsal=rehearsal, song=first_song, order=1)
+
+        data = serialize_schedule(_RequestStub(person), rehearsal.semester)
+
+        row = data['schedule']['future'][0]
+        self.assertEqual(
+            row['songs'],
+            [{'id': first_song.pk, 'title': 'First Song'}, {'id': second_song.pk, 'title': 'Second Song'}],
+        )
 
     def test_selected_rehearsal_detail_keys_for_a_member(self):
         """A member's selected-Rehearsal detail carries exactly the documented keys, with no admin-only key."""
@@ -162,7 +182,7 @@ class SerializeScheduleExactKeySetTests(TestCase):
         data = serialize_schedule(_RequestStub(person), rehearsal.semester, rehearsal_id=rehearsal.pk)
 
         row = data['selected']['rows'][0]
-        self.assertEqual(set(row.keys()), {'song_id', 'song_title', 'start_time', 'cells'})
+        self.assertEqual(set(row.keys()), {'song_id', 'song_title', 'start_time', 'rehearsal_song_id', 'cells'})
         cell = row['cells'][0]
         self.assertEqual(set(cell.keys()), {'role_id', 'entries'})
         entry = cell['entries'][0]

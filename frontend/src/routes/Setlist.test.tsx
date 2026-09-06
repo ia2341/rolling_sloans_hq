@@ -1,6 +1,7 @@
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { useLocation } from 'react-router-dom'
 
 import { useEditSession } from '../shell/EditSessionContext'
 import { adminContext, memberContext } from '../test/fixtures'
@@ -43,6 +44,17 @@ function setlistPayload(overrides: Record<string, unknown> = {}) {
     ],
     ...overrides,
   }
+}
+
+/** Renders the current route's pathname as text, standing in for a router outlet so a test can assert a row/card's click navigated. */
+function LocationSpy() {
+  const location = useLocation()
+  return (
+    <p data-testid="location">
+      {location.pathname}
+      {location.search}
+    </p>
+  )
 }
 
 beforeEach(() => {
@@ -89,40 +101,83 @@ describe('Setlist', () => {
     ).toBeInTheDocument()
   })
 
-  it('renders "no takes yet" on phone instead of a play control for a Song with no takes', async () => {
-    mockMatchMedia(true)
-    mockFetchOnce(200, { context: memberContext(), data: setlistPayload() })
-
-    renderShell(<Setlist />, ['/setlist'])
-
-    expect(await screen.findByText('no takes yet')).toBeInTheDocument()
-    expect(screen.queryByRole('link', { name: /Play/ })).not.toBeInTheDocument()
-  })
-
-  it('renders "—" on desktop instead of a play control for a Song with no takes', async () => {
-    mockFetchOnce(200, { context: memberContext(), data: setlistPayload() })
-
-    renderShell(<Setlist />, ['/setlist'])
-
-    expect(await screen.findByText('—')).toBeInTheDocument()
-    expect(screen.queryByRole('link', { name: /Play/ })).not.toBeInTheDocument()
-  })
-
-  it('renders ▶ with a count and + with the right targets for a Song with takes', async () => {
+  it('renders no "Recordings" column at all -- takes are read on the Song page now', async () => {
     const payload = setlistPayload()
     payload.songs[0]!.recording_count = 3
     mockFetchOnce(200, { context: memberContext(), data: payload })
 
     renderShell(<Setlist />, ['/setlist'])
 
-    const playLink = await screen.findByRole('link', {
-      name: /Play Test Song's takes/,
-    })
-    expect(playLink).toHaveAttribute('href', '/songs/1')
+    await screen.findByText('Test Song')
+    expect(screen.queryByText('Recordings')).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /Play/ })).not.toBeInTheDocument()
+    expect(screen.queryByText(/▶/)).not.toBeInTheDocument()
+  })
+
+  it('still renders the "+" upload trigger, targeting /profile?song= for the right Song', async () => {
+    mockFetchOnce(200, { context: memberContext(), data: setlistPayload() })
+
+    renderShell(<Setlist />, ['/setlist'])
+
+    await screen.findByText('Test Song')
     const addLink = screen.getByRole('link', {
       name: /Add a recording of Test Song/,
     })
     expect(addLink).toHaveAttribute('href', '/profile?song=1')
+  })
+
+  it('clicking a desktop row navigates to the Song page', async () => {
+    mockFetchOnce(200, { context: memberContext(), data: setlistPayload() })
+    const user = userEvent.setup()
+
+    renderShell(
+      <>
+        <Setlist />
+        <LocationSpy />
+      </>,
+      ['/setlist'],
+    )
+
+    await user.click(await screen.findByText('Test Song'))
+
+    expect(screen.getByTestId('location')).toHaveTextContent('/songs/1')
+  })
+
+  it('clicking a phone card navigates to the Song page', async () => {
+    mockMatchMedia(true)
+    mockFetchOnce(200, { context: memberContext(), data: setlistPayload() })
+    const user = userEvent.setup()
+
+    renderShell(
+      <>
+        <Setlist />
+        <LocationSpy />
+      </>,
+      ['/setlist'],
+    )
+
+    await user.click(await screen.findByText(/Test Song/))
+
+    expect(screen.getByTestId('location')).toHaveTextContent('/songs/1')
+  })
+
+  it('clicking the "+" upload trigger goes to the upload flow, not the Song page (stopPropagation)', async () => {
+    mockFetchOnce(200, { context: memberContext(), data: setlistPayload() })
+    const user = userEvent.setup()
+
+    renderShell(
+      <>
+        <Setlist />
+        <LocationSpy />
+      </>,
+      ['/setlist'],
+    )
+
+    await user.click(
+      await screen.findByRole('link', { name: /Add a recording of Test Song/ }),
+    )
+
+    expect(screen.getByTestId('location')).toHaveTextContent('/profile?song=1')
   })
 
   it('renders an explicit empty state for a Semester with no Songs', async () => {

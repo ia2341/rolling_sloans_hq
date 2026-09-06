@@ -96,6 +96,10 @@ urlpatterns = [
         api_views.ScheduleEditorShuffleApiView.as_view(), name='api-schedule-editor-shuffle',
     ),
     path(
+        'schedule/editor/stats/',
+        api_views.ScheduleEditorStatsApiView.as_view(), name='api-schedule-editor-stats',
+    ),
+    path(
         'schedule/<int:rehearsal_id>/assignments/picker/<int:song_id>/<int:role_id>/',
         api_views.AssignmentPickerApiView.as_view(), name='api-schedule-assignments-picker',
     ),
@@ -106,6 +110,14 @@ urlpatterns = [
     path(
         'schedule/<int:rehearsal_id>/assignments/save/',
         api_views.AssignmentSaveApiView.as_view(), name='api-schedule-assignments-save',
+    ),
+    path(
+        'schedule/<int:rehearsal_id>/running-order/preview/',
+        api_views.RunningOrderReorderPreviewApiView.as_view(), name='api-schedule-running-order-preview',
+    ),
+    path(
+        'schedule/<int:rehearsal_id>/running-order/save/',
+        api_views.RunningOrderReorderSaveApiView.as_view(), name='api-schedule-running-order-save',
     ),
     path(
         'semesters/management-rows/',

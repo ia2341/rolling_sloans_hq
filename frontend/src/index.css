@@ -65,6 +65,12 @@
   }
 }
 
+/* Intentional readability bump (~3pt over the 16px browser default), not a stray override:
+   Tailwind's rem-based text-* utilities scale off this, so the whole type ramp rides along. */
+html {
+  font-size: 19px;
+}
+
 body {
   margin: 0;
   background: var(--color-rs-bg);

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { type DragEvent, useState } from 'react'
 
 import { aliveRows, rowBadges, type EditRow } from './setlistEditModel'
 
@@ -8,8 +8,7 @@ interface SetlistEditGridProps {
   rows: EditRow[]
   rowErrors: Record<string, Record<string, string[]>>
   onUpdateField: (rowKey: string, field: Field, value: string) => void
-  onMoveUp: (rowKey: string) => void
-  onMoveDown: (rowKey: string) => void
+  onReorder: (rowKey: string, toAliveIndex: number) => void
   onDelete: (rowKey: string) => void
   onUndoDelete: (rowKey: string) => void
   isPhone: boolean
@@ -19,22 +18,46 @@ interface SetlistEditGridProps {
  * The setlist editor's grid (issue #335): the Pending Buffer and nothing
  * else -- a struck-through row, a `Moved 5→3` badge, an `Edited` badge and
  * a `New` badge are the edits themselves, so they live here rather than
- * deferred to the Save popup. Up/down steppers are the reordering
- * mechanism on every viewport (issue #335 user story 12); a drag library
- * is deliberately not wired in here -- nothing on this surface may
- * *require* drag to function, and the steppers alone satisfy that.
+ * deferred to the Save popup. Reordering is drag-and-drop (UI overhaul
+ * round 2, replacing the up/down steppers): a dedicated grip handle is the
+ * draggable element, native HTML5 drag events (no new dependency --
+ * `@dnd-kit`/`react-dnd` etc. aren't installed in this repo, see
+ * `package-lock.json`), and every drop calls `onReorder`, which is backed
+ * by `moveAliveRowTo` -- the same one-step `moveAliveRow` the old steppers
+ * used, just applied N times, so a drag produces identical Buffer state to
+ * the arrows it replaced.
  */
 export function SetlistEditGrid({
   rows,
   rowErrors,
   onUpdateField,
-  onMoveUp,
-  onMoveDown,
+  onReorder,
   onDelete,
   onUndoDelete,
   isPhone,
 }: SetlistEditGridProps) {
   const alive = aliveRows(rows)
+  const [draggingKey, setDraggingKey] = useState<string | null>(null)
+
+  const handleDragStart = (rowKey: string) => (event: DragEvent) => {
+    setDraggingKey(rowKey)
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('text/plain', rowKey)
+  }
+
+  const handleDragEnd = () => setDraggingKey(null)
+
+  const handleDragOver = (event: DragEvent) => {
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'move'
+  }
+
+  const handleDrop = (targetAliveIndex: number) => (event: DragEvent) => {
+    event.preventDefault()
+    const draggedKey = event.dataTransfer.getData('text/plain')
+    if (draggedKey) onReorder(draggedKey, targetAliveIndex)
+    setDraggingKey(null)
+  }
 
   if (rows.length === 0) {
     return (
@@ -54,11 +77,14 @@ export function SetlistEditGrid({
             aliveIndex={alive.indexOf(row)}
             aliveCount={alive.length}
             errors={rowErrors[row.rowKey] ?? {}}
+            isDragging={draggingKey === row.rowKey}
             onUpdateField={onUpdateField}
-            onMoveUp={onMoveUp}
-            onMoveDown={onMoveDown}
             onDelete={onDelete}
             onUndoDelete={onUndoDelete}
+            onDragStart={handleDragStart(row.rowKey)}
+            onDragEnd={handleDragEnd}
+            onDragOver={handleDragOver}
+            onDrop={handleDrop(alive.indexOf(row))}
           />
         ))}
       </ul>
@@ -69,6 +95,7 @@ export function SetlistEditGrid({
     <table className="w-full text-left text-sm">
       <thead>
         <tr>
+          <th className="pb-2" />
           <th className="pb-2">#</th>
           <th className="pb-2">Title</th>
           <th className="pb-2">Artist</th>
@@ -88,14 +115,16 @@ export function SetlistEditGrid({
               key={row.rowKey}
               row={row}
               aliveIndex={aliveIndex}
-              aliveCount={alive.length}
               errors={errors}
               badges={badges}
+              isDragging={draggingKey === row.rowKey}
               onUpdateField={onUpdateField}
-              onMoveUp={onMoveUp}
-              onMoveDown={onMoveDown}
               onDelete={onDelete}
               onUndoDelete={onUndoDelete}
+              onDragStart={handleDragStart(row.rowKey)}
+              onDragEnd={handleDragEnd}
+              onDragOver={handleDragOver}
+              onDrop={handleDrop(aliveIndex)}
             />
           )
         })}
@@ -133,34 +162,63 @@ function RowBadges({ badges }: { badges: string[] }) {
   )
 }
 
+/** The grip handle that starts a drag -- the only draggable element in a row, so dragging text inside the title/artist/notes inputs is never mistaken for a reorder. */
+function DragHandle({
+  rowKey,
+  onDragStart,
+  onDragEnd,
+}: {
+  rowKey: string
+  onDragStart: (event: DragEvent) => void
+  onDragEnd: () => void
+}) {
+  return (
+    <span
+      draggable
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      role="img"
+      aria-label={`Drag to reorder row ${rowKey}`}
+      className="inline-block cursor-grab select-none px-1 text-rs-muted active:cursor-grabbing"
+    >
+      ⠿
+    </span>
+  )
+}
+
 function SetlistEditTableRow({
   row,
   aliveIndex,
-  aliveCount,
   errors,
   badges,
+  isDragging,
   onUpdateField,
-  onMoveUp,
-  onMoveDown,
   onDelete,
   onUndoDelete,
+  onDragStart,
+  onDragEnd,
+  onDragOver,
+  onDrop,
 }: {
   row: EditRow
   aliveIndex: number
-  aliveCount: number
   errors: Record<string, string[]>
   badges: string[]
+  isDragging: boolean
   onUpdateField: (rowKey: string, field: Field, value: string) => void
-  onMoveUp: (rowKey: string) => void
-  onMoveDown: (rowKey: string) => void
   onDelete: (rowKey: string) => void
   onUndoDelete: (rowKey: string) => void
+  onDragStart: (event: DragEvent) => void
+  onDragEnd: () => void
+  onDragOver: (event: DragEvent) => void
+  onDrop: (event: DragEvent) => void
 }) {
   const [notesOpen, setNotesOpen] = useState(row.notes !== '')
 
   if (row.deleted) {
     return (
       <tr className="opacity-60">
+        <td className="py-2 align-top" />
         <td className="py-2 align-top" />
         <td className="py-2 align-top line-through" colSpan={4}>
           {row.title} · {row.artist}
@@ -182,7 +240,18 @@ function SetlistEditTableRow({
   }
 
   return (
-    <tr>
+    <tr
+      onDragOver={onDragOver}
+      onDrop={onDrop}
+      className={isDragging ? 'opacity-40' : undefined}
+    >
+      <td className="py-2 align-top">
+        <DragHandle
+          rowKey={row.rowKey}
+          onDragStart={onDragStart}
+          onDragEnd={onDragEnd}
+        />
+      </td>
       <td className="py-2 align-top">{aliveIndex + 1}</td>
       <td className="py-2 align-top">
         <input
@@ -245,61 +314,45 @@ function SetlistEditTableRow({
         <RowBadges badges={badges} />
       </td>
       <td className="py-2 align-top">
-        <div className="flex flex-col gap-1">
-          <div className="flex gap-1">
-            <button
-              type="button"
-              onClick={() => onMoveUp(row.rowKey)}
-              disabled={aliveIndex === 0}
-              aria-label={`Move row ${aliveIndex + 1} up`}
-              className="rounded border border-rs-border px-1.5 py-0.5 text-xs disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              ↑
-            </button>
-            <button
-              type="button"
-              onClick={() => onMoveDown(row.rowKey)}
-              disabled={aliveIndex === aliveCount - 1}
-              aria-label={`Move row ${aliveIndex + 1} down`}
-              className="rounded border border-rs-border px-1.5 py-0.5 text-xs disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              ↓
-            </button>
-          </div>
-          <button
-            type="button"
-            onClick={() => onDelete(row.rowKey)}
-            className="text-xs text-rs-danger underline"
-          >
-            Delete
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={() => onDelete(row.rowKey)}
+          className="text-xs text-rs-danger underline"
+        >
+          Delete
+        </button>
       </td>
     </tr>
   )
 }
 
-/** The phone layout: an accordion card per row -- summary line, then every desktop field plus Move up/down and Delete/Undo (issue #335 user stories 18-19). */
+/** The phone layout: an accordion card per row -- summary line, then every desktop field plus a drag handle and Delete/Undo (issue #335 user stories 18-19; drag-and-drop reorder per UI overhaul round 2). */
 function SetlistEditCard({
   row,
   aliveIndex,
   aliveCount,
   errors,
+  isDragging,
   onUpdateField,
-  onMoveUp,
-  onMoveDown,
   onDelete,
   onUndoDelete,
+  onDragStart,
+  onDragEnd,
+  onDragOver,
+  onDrop,
 }: {
   row: EditRow
   aliveIndex: number
   aliveCount: number
   errors: Record<string, string[]>
+  isDragging: boolean
   onUpdateField: (rowKey: string, field: Field, value: string) => void
-  onMoveUp: (rowKey: string) => void
-  onMoveDown: (rowKey: string) => void
   onDelete: (rowKey: string) => void
   onUndoDelete: (rowKey: string) => void
+  onDragStart: (event: DragEvent) => void
+  onDragEnd: () => void
+  onDragOver: (event: DragEvent) => void
+  onDrop: (event: DragEvent) => void
 }) {
   const [open, setOpen] = useState(false)
   const badges = rowBadges(row, aliveIndex)
@@ -323,24 +376,35 @@ function SetlistEditCard({
   }
 
   return (
-    <li className="rounded border border-rs-border p-3">
-      <button
-        type="button"
-        onClick={() => setOpen((next) => !next)}
-        className="flex w-full items-start justify-between gap-2 text-left"
-      >
-        <span>
-          <span className="font-medium">
-            {aliveIndex + 1}. {row.title}
+    <li
+      onDragOver={onDragOver}
+      onDrop={onDrop}
+      className={`rounded border border-rs-border p-3 ${isDragging ? 'opacity-40' : ''}`}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <DragHandle
+          rowKey={row.rowKey}
+          onDragStart={onDragStart}
+          onDragEnd={onDragEnd}
+        />
+        <button
+          type="button"
+          onClick={() => setOpen((next) => !next)}
+          className="flex flex-1 items-start justify-between gap-2 text-left"
+        >
+          <span>
+            <span className="font-medium">
+              {aliveIndex + 1}. {row.title}
+            </span>
+            <span className="block text-rs-muted">
+              {row.artist} · {row.length}
+              {row.recordingCount > 0 ? ` · ${row.recordingCount} takes` : ''}
+            </span>
+            <RowBadges badges={badges} />
           </span>
-          <span className="block text-rs-muted">
-            {row.artist} · {row.length}
-            {row.recordingCount > 0 ? ` · ${row.recordingCount} takes` : ''}
-          </span>
-          <RowBadges badges={badges} />
-        </span>
-        <span aria-hidden="true">{open ? '▾' : '▸'}</span>
-      </button>
+          <span aria-hidden="true">{open ? '▾' : '▸'}</span>
+        </button>
+      </div>
 
       {open && (
         <div className="mt-2 flex flex-col gap-2 border-t border-rs-border pt-2">
@@ -405,25 +469,7 @@ function SetlistEditCard({
               className="mt-1 block w-full rounded border border-rs-border px-2 py-1 text-sm"
             />
           </div>
-          <div className="flex items-center justify-between pt-1">
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => onMoveUp(row.rowKey)}
-                disabled={aliveIndex === 0}
-                className="rounded border border-rs-border px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                ↑ Move up
-              </button>
-              <button
-                type="button"
-                onClick={() => onMoveDown(row.rowKey)}
-                disabled={aliveIndex === aliveCount - 1}
-                className="rounded border border-rs-border px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                ↓ Move down
-              </button>
-            </div>
+          <div className="flex items-center justify-end pt-1">
             <button
               type="button"
               onClick={() => onDelete(row.rowKey)}

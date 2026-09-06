@@ -621,11 +621,18 @@ def _serialize_matrix_cell(cell, *, is_admin, conflicted_person_ids) -> dict:
 
 
 def _serialize_matrix_row(row, *, is_admin, conflicted_person_ids) -> dict:
-    """Return one `AssignmentMatrixRow`: the Song, its slot start_time (null for the Dress Rehearsal), and its cells."""
+    """Return one `AssignmentMatrixRow`: the Song, its slot start_time (null for the Dress Rehearsal), its cells, and its RehearsalSong id.
+
+    `rehearsal_song_id` (null on the Dress Rehearsal, ADR-0003) is the
+    Running Order reorder surface's row identity — the "Edit Rehearsal"
+    drag-and-drop submits the reordered list of these ids, unchanged from
+    what this same read already carries, rather than a second fetch.
+    """
     return {
         'song_id': row.song.pk,
         'song_title': row.song.title,
         'start_time': row.start_time.isoformat() if row.start_time else None,
+        'rehearsal_song_id': row.rehearsal_song_id,
         'cells': [
             _serialize_matrix_cell(cell, is_admin=is_admin, conflicted_person_ids=conflicted_person_ids)
             for cell in row.cells
@@ -680,18 +687,30 @@ def _serialize_schedule_list_row(row, *, viewer, conflict_rows, is_admin, pendin
     `your_songs` reuses `slots_for_person()` — the same union of standing
     assignments and Backups that decides attendance (ADR 0007) — so this
     list can never disagree with why the viewer is or isn't needed there.
-    Conflict-declarability for this row is not a separate field: it's
-    exactly `not is_dress and not is_past`, already carried by
+    `songs` is the whole Rehearsal's Running Order (issue: All-rehearsals
+    pills/tables card overhaul) — every Song in `RehearsalSong.order`
+    sequence (the live setlist order for the Dress Rehearsal, ADR 0003),
+    reusing `assignment_matrix_for()`'s own row order so this card can
+    never disagree with the per-Rehearsal grid about what plays when.
+    `availability` reuses `serialize_availability()` — the viewer's own
+    Conflict only, never a teammate's (ADR 0005), same as the
+    per-Rehearsal detail's "Your availability" block — so the card's "+
+    Conflict" control can open the one Declare dialog in place with no
+    second fetch. Conflict-declarability for this row is not a separate
+    field: it's exactly `not is_dress and not is_past`, already carried by
     `_serialize_rehearsal_summary`, which is the same rule
     `future_rehearsals_for()`/`declare_conflict()` enforce (ADR 0006 — the
     Dress Rehearsal takes no Conflict; a past Rehearsal is not
     declarable).
     """
     rehearsal = row.rehearsal
+    matrix = services.assignment_matrix_for(rehearsal)
     data = {
         **_serialize_rehearsal_summary(rehearsal, today=today),
-        'song_count': len(services.assignment_matrix_for(rehearsal).rows),
+        'song_count': len(matrix.rows),
+        'songs': [{'id': matrix_row.song.pk, 'title': matrix_row.song.title} for matrix_row in matrix.rows],
         'your_state': _serialize_your_state(rehearsal, conflict_rows.get(rehearsal.pk), row.attendance_suggestion),
+        'availability': serialize_availability(rehearsal, conflict_rows.get(rehearsal.pk)),
         'your_songs': [
             _serialize_your_song_entry(rehearsal_song)
             for rehearsal_song in (
@@ -793,22 +812,39 @@ def _serialize_roster_entry(membership):
     }
 
 
-def serialize_band(memberships, semester) -> dict:
+def serialize_band(memberships, semester, *, unassigned_role_holders=None) -> dict:
     """Return the `/api/members/` `data` shape (issue #333): the viewing Semester's active Roster, or the empty/no-Semester shape.
 
-    Carries no admin-only field — `can_edit_roster` isn't needed on the
-    wire since the "Edit roster" button is unconditionally rendered for an
-    admin viewer by `context.viewer.is_admin`, matching how Setlist's "Edit
-    setlist" button reads that same flag rather than a per-payload one.
+    Carries one admin-only key, `unassigned_role_holders` — the count and
+    names of people with a `SongRoleAssignment` this Semester but no
+    `Membership` row (see `services.unassigned_role_holders_for`). Per the
+    "absent, not null" wire contract, it's included only when the caller
+    passes a queryset (an admin viewer); passing `None` (a member viewer,
+    or no Semester) omits the key entirely rather than sending an empty
+    list, since a member has no business seeing casting/roster gaps.
+    Names are shown, not just a count — these are roster facts about who's
+    cast, not the free-text Conflict data ADR 0005 restricts.
+
+    `can_edit_roster` isn't needed on the wire since the "Edit roster"
+    button is unconditionally rendered for an admin viewer by
+    `context.viewer.is_admin`, matching how Setlist's "Edit setlist" button
+    reads that same flag rather than a per-payload one.
     """
     if semester is None:
         return {'semester_name': None, 'member_count': 0, 'members': []}
     entries = list(memberships)
-    return {
+    data = {
         'semester_name': semester.name,
         'member_count': len(entries),
         'members': [_serialize_roster_entry(membership) for membership in entries],
     }
+    if unassigned_role_holders is not None:
+        holders = list(unassigned_role_holders)
+        data['unassigned_role_holders'] = {
+            'count': len(holders),
+            'names': [person.name for person in holders],
+        }
+    return data
 
 
 def _serialize_role(role) -> dict:
@@ -1365,6 +1401,28 @@ def serialize_rehearsal_deal(deal) -> dict:
 def serialize_shuffle_rows(rows) -> dict:
     """Return a shuffled `list[DealtRow]` as the per-Rehearsal shuffle endpoint's `data` value (issue #337, #223)."""
     return {'rows': [_serialize_dealt_row(row) for row in rows]}
+
+
+def _serialize_song_slot_total(entry) -> dict:
+    """Return one `SongSlotTotal` for the stats panel's busiest/quietest Song lists."""
+    return {'song_id': entry.song_id, 'song_title': entry.song_title, 'total_slot_count': entry.total_slot_count}
+
+
+def serialize_schedule_editor_live_stats(stats) -> dict:
+    """Return a `ScheduleEditorLiveStats` as `/api/schedule/editor/stats/`'s `data` value.
+
+    Named field-by-field, per this project's ban on `dataclasses.asdict()`
+    (ADR 0005) — `old_max_wait_minutes`/`new_max_wait_minutes` pass through
+    `None` untouched (JSON `null`) rather than being coerced to 0, so the
+    panel can tell "no gap measured" from "measured, zero minutes".
+    """
+    return {
+        'unresolved_conflict_count': stats.unresolved_conflict_count,
+        'old_max_wait_minutes': stats.old_max_wait_minutes,
+        'new_max_wait_minutes': stats.new_max_wait_minutes,
+        'highest_slot_songs': [_serialize_song_slot_total(entry) for entry in stats.highest_slot_songs],
+        'lowest_slot_songs': [_serialize_song_slot_total(entry) for entry in stats.lowest_slot_songs],
+    }
 
 
 def serialize_assignment_edit_fallout(fallout: AssignmentEditFallout) -> dict:

@@ -190,3 +190,19 @@ export interface RehearsalDealPayload {
 export interface ShuffleRowsPayload {
   rows: DealtRow[]
 }
+
+/** One Song's summed rehearsal `slot_count` across the Semester, for the Randomize panel's busiest/quietest lists. */
+export interface SongSlotTotal {
+  song_id: number
+  song_title: string
+  total_slot_count: number
+}
+
+/** `data` shape of `POST /api/schedule/editor/stats/`, the "Randomize Rehearsal Plan" live stats panel. */
+export interface ScheduleEditorLiveStatsPayload {
+  unresolved_conflict_count: number
+  old_max_wait_minutes: number | null
+  new_max_wait_minutes: number | null
+  highest_slot_songs: SongSlotTotal[]
+  lowest_slot_songs: SongSlotTotal[]
+}

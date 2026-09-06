@@ -25,8 +25,22 @@ function schedulePayload(
           is_dress: false,
           is_past: false,
           song_count: 2,
+          songs: [
+            { id: 1, title: 'First Song' },
+            { id: 2, title: 'Second Song' },
+          ],
           your_state: { kind: 'not_needed' },
           your_songs: [],
+          availability: {
+            declaration_type: null,
+            type_label: null,
+            declared_time: null,
+            reason: null,
+            status: null,
+            admin_note: null,
+            is_dress: false,
+            is_editable: true,
+          },
         },
       ],
     },
@@ -79,6 +93,7 @@ function schedulePayload(
           song_id: 1,
           song_title: 'First Song',
           start_time: '18:00:00',
+          rehearsal_song_id: 100,
           cells: [
             {
               role_id: 1,
@@ -142,7 +157,7 @@ describe('Schedule', () => {
 
     fireEvent.click(screen.getByRole('radio', { name: 'All rehearsals' }))
 
-    await screen.findByRole('columnheader', { name: 'Date' })
+    await screen.findByRole('link', { name: /10th March/ })
     expect(fetchSpy).toHaveBeenCalledTimes(1)
   })
 
@@ -415,7 +430,7 @@ describe('Schedule', () => {
     expect(screen.getByRole('columnheader', { name: '#' })).toBeInTheDocument()
   })
 
-  it('renders the All-rehearsals Dress row reading Mandatory with a Dress · required chip', async () => {
+  it('renders the All-rehearsals Dress row reading Mandatory with a Dress badge', async () => {
     const payload = schedulePayload()
     payload.schedule.future.push({
       id: 9,
@@ -425,8 +440,19 @@ describe('Schedule', () => {
       is_dress: true,
       is_past: false,
       song_count: 5,
+      songs: [],
       your_state: { kind: 'mandatory' },
       your_songs: [],
+      availability: {
+        declaration_type: null,
+        type_label: null,
+        declared_time: null,
+        reason: null,
+        status: null,
+        admin_note: null,
+        is_dress: true,
+        is_editable: false,
+      },
     })
     mockFetchOnce(200, { context: memberContext(), data: payload })
 
@@ -435,8 +461,31 @@ describe('Schedule', () => {
       await screen.findByRole('radio', { name: 'All rehearsals' }),
     )
 
-    expect(screen.getByText('Dress · required')).toBeInTheDocument()
+    expect(screen.getByText('Dress')).toBeInTheDocument()
     expect(screen.getByText('Mandatory')).toBeInTheDocument()
+  })
+
+  it('renders All-rehearsals as clickable cards that navigate on click, with a "+ Conflict" control that stops propagation', async () => {
+    mockFetchOnce(200, { context: memberContext(), data: schedulePayload() })
+
+    renderShell(<Schedule />, ['/schedule'])
+    fireEvent.click(
+      await screen.findByRole('radio', { name: 'All rehearsals' }),
+    )
+
+    const card = await screen.findByRole('link', {
+      name: /10th March/,
+    })
+    expect(
+      screen.queryByRole('button', { name: 'Open' }),
+    ).not.toBeInTheDocument()
+
+    const conflictButton = screen.getByRole('button', { name: '+ Conflict' })
+    fireEvent.click(conflictButton)
+
+    expect(await screen.findByText('Declare a conflict')).toBeInTheDocument()
+    // Clicking "+ Conflict" must not also trigger the card's own navigation.
+    expect(card).toBeInTheDocument()
   })
 
   it('a 401 from the mocked fetch layer triggers a full-page navigation, not an error banner', async () => {

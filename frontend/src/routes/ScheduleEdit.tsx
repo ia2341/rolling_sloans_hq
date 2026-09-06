@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 
 import { apiFetch, ApiError } from '../api/client'
 import { useAppContext } from '../api/ContextProvider'
@@ -9,12 +10,12 @@ import type {
   RehearsalEditRowInput,
   RehearsalEditFalloutPayload,
   RunningOrderRowInput,
+  ScheduleEditorLiveStatsPayload,
   ScheduleEditorPayload,
 } from '../api/scheduleEditorTypes'
 import type { PreviewResult } from '../api/previewTypes'
 import type { ReadEnvelope, WriteEnvelope } from '../api/types'
 import { AssignmentEditor } from '../components/assignments/AssignmentEditor'
-import { Accordion } from '../components/ui/Accordion'
 import { GenerateDatesModal } from '../components/ui/GenerateDatesModal'
 import { PageHead } from '../components/ui/PageHead'
 import {
@@ -23,7 +24,6 @@ import {
   type RehearsalContextMode,
 } from '../components/ui/RehearsalContextBar'
 import { SaveChangesDialog } from '../components/ui/SaveChangesDialog'
-import { useIsPhone } from '../hooks/useIsPhone'
 import { usePageTitle } from '../shell/PageTitleContext'
 import { useRegisterEditSession } from '../shell/EditSessionContext'
 
@@ -58,6 +58,69 @@ interface RehearsalSnapshot {
   startTime: string
   endTime: string | null
   runningOrder: { songId: number; slotCount: number }[]
+}
+
+/** Small inline icon set for this route's Rehearsal cards — no icon library is vendored (no-CDN, ADR-adjacent), so these are hand-drawn strokes rather than a new dependency. */
+function CalendarIcon() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width={14}
+      height={14}
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.3}
+    >
+      <rect x={1.5} y={2.5} width={13} height={12} rx={1.5} />
+      <line x1={1.5} y1={6} x2={14.5} y2={6} />
+      <line x1={4.5} y1={1} x2={4.5} y2={4} />
+      <line x1={11.5} y1={1} x2={11.5} y2={4} />
+    </svg>
+  )
+}
+
+function ClockIcon() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width={14}
+      height={14}
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.3}
+    >
+      <circle cx={8} cy={8} r={6.5} />
+      <polyline points="8,4.5 8,8 10.5,9.5" />
+    </svg>
+  )
+}
+
+function TrashIcon() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width={14}
+      height={14}
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.3}
+    >
+      <line x1={2.5} y1={4} x2={13.5} y2={4} />
+      <path d="M4.5 4V2.75A1 1 0 0 1 5.5 1.75h5a1 1 0 0 1 1 1V4" />
+      <path d="M4.5 4v9a1 1 0 0 0 1 1h5a1 1 0 0 0 1-1V4" />
+      <line x1={6.5} y1={7} x2={6.5} y2={11.5} />
+      <line x1={9.5} y1={7} x2={9.5} y2={11.5} />
+    </svg>
+  )
+}
+
+/** Formats a wait-time `minutes` value for the live stats panel, or an em dash when nothing has been measured yet. */
+function formatMinutes(minutes: number | null): string {
+  if (minutes === null) return '—'
+  return `${minutes} min`
 }
 
 let newRowCounter = 0
@@ -190,14 +253,18 @@ function toPreviewResult(
   }
 }
 
-/** Formats a Rehearsal's flags for the grid, per issue #337 user stories 6-9. */
+/** Formats a Rehearsal's New/Re-timed/Removing flags for its card badge, per issue #337 user stories 6-9.
+ *
+ * Dress is reported separately by the card itself as its own pill (issue:
+ * UI overhaul round 2) rather than folded into this list, matching the
+ * Dress pill Home's own Upcoming-rehearsals card already renders.
+ */
 function flagsFor(
   draft: DraftRehearsal,
   baseline: RehearsalSnapshot | undefined,
   isDeleted: boolean,
 ): string[] {
   const flags: string[] = []
-  if (draft.isFullSetlist) flags.push('Dress')
   if (isDeleted) {
     flags.push('Removing')
     return flags
@@ -227,7 +294,7 @@ function flagsFor(
 export function ScheduleEdit() {
   usePageTitle('Edit schedule')
   const appContext = useAppContext()
-  const isPhone = useIsPhone()
+  const navigate = useNavigate()
 
   const [payload, setPayload] = useState<ScheduleEditorPayload | null>(null)
   const [rows, setRows] = useState<DraftRehearsal[]>([])
@@ -241,6 +308,9 @@ export function ScheduleEdit() {
   const [generateOpen, setGenerateOpen] = useState(false)
   const [generateModalKey, setGenerateModalKey] = useState(0)
   const [dealError, setDealError] = useState<string | null>(null)
+  const [liveStats, setLiveStats] =
+    useState<ScheduleEditorLiveStatsPayload | null>(null)
+  const [liveStatsError, setLiveStatsError] = useState<string | null>(null)
 
   const load = useCallback(() => {
     void apiFetch<ReadEnvelope<ScheduleEditorPayload>>(
@@ -302,6 +372,47 @@ export function ScheduleEdit() {
       deleted_rehearsal_ids: [...deletedIds],
     }
   }, [appContext, rows, deletedIds])
+
+  // The "Randomize Rehearsal Plan" stats panel recomputes live off whatever
+  // is actually editable on this page: date/time/dress-flag/running-order
+  // edits and row add/delete, all captured by `buildBufferInput()` already
+  // (there is no drag-and-drop song-slot editor on this bulk page — that
+  // capability lives on the per-Rehearsal Assignments surface instead).
+  // Debounced 400ms after the last change to `rows`/`deletedIds` so a
+  // fast typist doesn't fire one `/api/schedule/editor/stats/` round trip
+  // per keystroke; `runDeal()`'s own `rows` update flows through this same
+  // effect, so clicking "Randomize Rehearsal Plan" recomputes the panel
+  // for free rather than needing its own separate call.
+  useEffect(() => {
+    if (payload === null) return undefined
+    const timeoutId = window.setTimeout(() => {
+      const body = buildBufferInput()
+      if (body === null) {
+        setLiveStats(null)
+        setLiveStatsError(null)
+        return
+      }
+      void apiFetch<WriteEnvelope<ScheduleEditorLiveStatsPayload>>(
+        '/api/schedule/editor/stats/',
+        { method: 'POST', body: JSON.stringify(body) },
+      )
+        .then((envelope) => {
+          if (envelope.ok && envelope.data !== null) {
+            setLiveStats(envelope.data)
+            setLiveStatsError(null)
+          } else {
+            setLiveStatsError(
+              envelope.non_field_errors[0] ??
+                'Could not compute live stats for this plan.',
+            )
+          }
+        })
+        .catch(() => {
+          setLiveStatsError('Could not compute live stats for this plan.')
+        })
+    }, 400)
+    return () => window.clearTimeout(timeoutId)
+  }, [payload, rows, deletedIds, buildBufferInput])
 
   const computeChanges = useCallback((): PreviewResult['changes'] => {
     const changes: PreviewResult['changes'] = []
@@ -560,18 +671,6 @@ export function ScheduleEdit() {
     }
   }, [applyDealtRows])
 
-  const runShuffle = useCallback(
-    async (rehearsalId: number, rowKey: string) => {
-      const envelope = await apiFetch<ReadEnvelope<{ rows: DealtRow[] }>>(
-        `/api/schedule/editor/rehearsal/${rehearsalId}/shuffle/`,
-        { method: 'POST' },
-      )
-      applyDealtRows(new Map([[rehearsalId, envelope.data.rows]]))
-      void rowKey
-    },
-    [applyDealtRows],
-  )
-
   if (payload === null) return null
 
   const activeRows = rows.filter(
@@ -610,180 +709,172 @@ export function ScheduleEdit() {
         }
       />
 
-      {isPhone ? (
-        <Accordion
-          openKey={openKey}
-          onOpenKeyChange={setOpenKey}
-          items={[...activeRows, ...removedRows].map((row) => {
-            const isDeleted =
-              row.rehearsalId !== null && deletedIds.has(row.rehearsalId)
-            const flags = flagsFor(row, baselines.get(row.rowKey), isDeleted)
-            return {
-              key: row.rowKey,
-              summary: (
-                <div>
-                  <p className="font-medium">
-                    {row.date} · {row.startTime}
-                    {row.endTime !== null ? `–${row.endTime}` : ''}
-                  </p>
-                  <p className="text-sm text-rs-muted">
-                    {row.runningOrder.length} song
-                    {row.runningOrder.length === 1 ? '' : 's'}
-                    {flags.length > 0 ? ` · ${flags.join(' · ')}` : ''}
-                  </p>
-                </div>
-              ),
-              content: (
-                <RehearsalRowEditor
-                  draft={row}
-                  mode={mode}
-                  onModeChange={setMode}
-                  onFieldChange={(patch) => updateRow(row.rowKey, patch)}
-                  onToggleDeleted={() => toggleDeleted(row)}
-                  isDeleted={isDeleted}
-                  setlistSongs={payload.setlist_songs}
-                  onMove={(index, direction) =>
-                    moveRunningOrderRow(row.rowKey, index, direction)
+      <div className="flex flex-col gap-2">
+        {[...activeRows, ...removedRows].map((row) => {
+          const isDeleted =
+            row.rehearsalId !== null && deletedIds.has(row.rehearsalId)
+          const flags = flagsFor(row, baselines.get(row.rowKey), isDeleted)
+          const isOpen = openKey === row.rowKey
+          const canNavigate = row.rehearsalId !== null
+          const stop = (event: { stopPropagation: () => void }) =>
+            event.stopPropagation()
+          return (
+            <Fragment key={row.rowKey}>
+              <div
+                role={canNavigate ? 'link' : undefined}
+                tabIndex={canNavigate ? 0 : undefined}
+                onClick={() => {
+                  if (canNavigate)
+                    navigate(`/schedule?rehearsal=${row.rehearsalId}`)
+                }}
+                onKeyDown={(event) => {
+                  if (
+                    canNavigate &&
+                    (event.key === 'Enter' || event.key === ' ')
+                  ) {
+                    event.preventDefault()
+                    navigate(`/schedule?rehearsal=${row.rehearsalId}`)
                   }
-                  onAddSong={(song) => addSongToRow(row.rowKey, song)}
-                  onRemoveSong={(key) => removeRunningOrderRow(row.rowKey, key)}
-                  onSlotCountChange={(key, slotCount) =>
-                    setSlotCount(row.rowKey, key, slotCount)
+                }}
+                className={`flex flex-wrap items-center gap-3 rounded border border-rs-border p-3 ${
+                  isDeleted ? 'opacity-60' : ''
+                } ${
+                  canNavigate
+                    ? 'cursor-pointer hover:bg-rs-border/20 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-rs-accent'
+                    : ''
+                }`}
+              >
+                <button
+                  type="button"
+                  aria-label={
+                    isOpen ? `Collapse ${row.date}` : `Expand ${row.date}`
                   }
-                  onShuffle={() =>
-                    row.rehearsalId !== null &&
-                    void runShuffle(row.rehearsalId, row.rowKey)
-                  }
-                  onStep={stepAssignmentRehearsal}
-                />
-              ),
-            }
-          })}
-        />
-      ) : (
-        <table className="w-full text-left text-sm">
-          <thead>
-            <tr>
-              <th className="pb-2" />
-              <th className="pb-2">Date</th>
-              <th className="pb-2">Start</th>
-              <th className="pb-2" />
-              <th className="pb-2">End</th>
-              <th className="pb-2">Flags</th>
-              <th className="pb-2">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {[...activeRows, ...removedRows].map((row) => {
-              const isDeleted =
-                row.rehearsalId !== null && deletedIds.has(row.rehearsalId)
-              const flags = flagsFor(row, baselines.get(row.rowKey), isDeleted)
-              const isOpen = openKey === row.rowKey
-              return (
-                <Fragment key={row.rowKey}>
-                  <tr
-                    className={
-                      isDeleted ? 'opacity-60 line-through' : undefined
+                  onClick={(event) => {
+                    stop(event)
+                    setOpenKey(isOpen ? '' : row.rowKey)
+                  }}
+                >
+                  {isOpen ? '▾' : '▸'}
+                </button>
+
+                <label
+                  className="flex items-center gap-1 text-sm"
+                  onClick={stop}
+                >
+                  <CalendarIcon />
+                  <input
+                    type="date"
+                    aria-label="Date"
+                    value={row.date}
+                    disabled={isDeleted}
+                    onChange={(event) =>
+                      updateRow(row.rowKey, { date: event.target.value })
                     }
+                  />
+                </label>
+
+                <label
+                  className="flex items-center gap-1 text-sm"
+                  onClick={stop}
+                >
+                  <ClockIcon />
+                  <input
+                    type="time"
+                    aria-label="Start time"
+                    value={row.startTime}
+                    disabled={isDeleted}
+                    onChange={(event) =>
+                      updateRow(row.rowKey, {
+                        startTime: event.target.value,
+                      })
+                    }
+                  />
+                </label>
+                <span>–</span>
+                <label
+                  className="flex items-center gap-1 text-sm"
+                  onClick={stop}
+                >
+                  <ClockIcon />
+                  <input
+                    type="time"
+                    aria-label="End time"
+                    value={row.endTime ?? ''}
+                    disabled={isDeleted}
+                    onChange={(event) =>
+                      updateRow(row.rowKey, {
+                        endTime:
+                          event.target.value === '' ? null : event.target.value,
+                      })
+                    }
+                  />
+                </label>
+
+                {row.isFullSetlist && (
+                  <span className="rounded-full bg-rs-accent px-2 py-0.5 text-xs font-medium text-rs-accent-fg">
+                    Dress
+                  </span>
+                )}
+                {flags.map((flag) => (
+                  <span
+                    key={flag}
+                    className="rounded bg-rs-border/60 px-1.5 py-0.5 text-xs"
                   >
-                    <td>
-                      <button
-                        type="button"
-                        aria-label={
-                          isOpen ? `Collapse ${row.date}` : `Expand ${row.date}`
-                        }
-                        onClick={() => setOpenKey(isOpen ? '' : row.rowKey)}
-                      >
-                        {isOpen ? '▾' : '▸'}
-                      </button>
-                    </td>
-                    <td>
-                      <input
-                        type="date"
-                        aria-label="Date"
-                        value={row.date}
-                        disabled={isDeleted}
-                        onChange={(event) =>
-                          updateRow(row.rowKey, { date: event.target.value })
-                        }
-                      />
-                    </td>
-                    <td>
-                      <input
-                        type="time"
-                        aria-label="Start time"
-                        value={row.startTime}
-                        disabled={isDeleted}
-                        onChange={(event) =>
-                          updateRow(row.rowKey, {
-                            startTime: event.target.value,
-                          })
-                        }
-                      />
-                    </td>
-                    <td>–</td>
-                    <td>
-                      <input
-                        type="time"
-                        aria-label="End time"
-                        value={row.endTime ?? ''}
-                        disabled={isDeleted}
-                        onChange={(event) =>
-                          updateRow(row.rowKey, {
-                            endTime:
-                              event.target.value === ''
-                                ? null
-                                : event.target.value,
-                          })
-                        }
-                      />
-                    </td>
-                    <td>{flags.join(' · ')}</td>
-                    <td>
-                      <button type="button" onClick={() => toggleDeleted(row)}>
-                        {isDeleted ? 'Restore' : 'Remove'}
-                      </button>
-                    </td>
-                  </tr>
-                  {isOpen && (
-                    <tr>
-                      <td colSpan={7}>
-                        <RehearsalRowEditor
-                          draft={row}
-                          mode={mode}
-                          onModeChange={setMode}
-                          onFieldChange={(patch) =>
-                            updateRow(row.rowKey, patch)
-                          }
-                          onToggleDeleted={() => toggleDeleted(row)}
-                          isDeleted={isDeleted}
-                          setlistSongs={payload.setlist_songs}
-                          onMove={(index, direction) =>
-                            moveRunningOrderRow(row.rowKey, index, direction)
-                          }
-                          onAddSong={(song) => addSongToRow(row.rowKey, song)}
-                          onRemoveSong={(key) =>
-                            removeRunningOrderRow(row.rowKey, key)
-                          }
-                          onSlotCountChange={(key, slotCount) =>
-                            setSlotCount(row.rowKey, key, slotCount)
-                          }
-                          onShuffle={() =>
-                            row.rehearsalId !== null &&
-                            void runShuffle(row.rehearsalId, row.rowKey)
-                          }
-                          onStep={stepAssignmentRehearsal}
-                          hideFields
-                        />
-                      </td>
-                    </tr>
-                  )}
-                </Fragment>
-              )
-            })}
-          </tbody>
-        </table>
-      )}
+                    {flag}
+                  </span>
+                ))}
+
+                <span className="text-sm text-rs-muted">
+                  {row.runningOrder.length} song
+                  {row.runningOrder.length === 1 ? '' : 's'}
+                </span>
+
+                <button
+                  type="button"
+                  aria-label={
+                    isDeleted
+                      ? `Restore rehearsal on ${row.date}`
+                      : `Delete rehearsal on ${row.date}`
+                  }
+                  onClick={(event) => {
+                    stop(event)
+                    toggleDeleted(row)
+                  }}
+                  className="ml-auto flex items-center gap-1 text-sm text-rs-muted hover:text-rs-danger"
+                >
+                  {isDeleted ? 'Restore' : <TrashIcon />}
+                </button>
+              </div>
+              {isOpen && (
+                <div
+                  className="rounded border border-rs-border p-3"
+                  onClick={stop}
+                >
+                  <RehearsalRowEditor
+                    draft={row}
+                    mode={mode}
+                    onModeChange={setMode}
+                    setlistSongs={payload.setlist_songs}
+                    onMove={(index, direction) =>
+                      moveRunningOrderRow(row.rowKey, index, direction)
+                    }
+                    onAddSong={(song) => addSongToRow(row.rowKey, song)}
+                    onRemoveSong={(key) =>
+                      removeRunningOrderRow(row.rowKey, key)
+                    }
+                    onSlotCountChange={(key, slotCount) =>
+                      setSlotCount(row.rowKey, key, slotCount)
+                    }
+                    onStep={stepAssignmentRehearsal}
+                  />
+                </div>
+              )}
+            </Fragment>
+          )
+        })}
+      </div>
+
+      <ScheduleEditorStatsPanel stats={liveStats} error={liveStatsError} />
 
       <div className="flex flex-wrap items-center gap-2 py-4">
         <button
@@ -809,9 +900,7 @@ export function ScheduleEdit() {
             onClick={() => void runDeal()}
             className="rounded border border-rs-border px-3 py-1.5 text-sm font-medium"
           >
-            {activeRows.some((row) => row.runningOrder.length > 0)
-              ? 'Re-roll'
-              : 'Generate schedule'}
+            Randomize Rehearsal Plan
           </button>
         </div>
       </div>
@@ -901,40 +990,97 @@ export function ScheduleEdit() {
   )
 }
 
+/** The "Randomize Rehearsal Plan" live stats panel: unresolved Conflicts, old-vs-new max wait, and busiest/quietest Songs.
+ *
+ * Recomputed by the debounced effect in `ScheduleEdit()` off whatever is
+ * actually editable on this page — reads `stats`/`error` rather than
+ * fetching anything itself, so it stays a plain render of whatever the
+ * parent's Buffer currently produces server-side (ADR 0008: the real
+ * `compute_schedule_editor_live_stats()`, rolled back).
+ */
+function ScheduleEditorStatsPanel({
+  stats,
+  error,
+}: {
+  stats: ScheduleEditorLiveStatsPayload | null
+  error: string | null
+}) {
+  if (error !== null) {
+    return (
+      <p role="alert" className="mb-4 text-sm text-rs-danger">
+        {error}
+      </p>
+    )
+  }
+  if (stats === null) return null
+
+  return (
+    <div className="mb-4 grid grid-cols-1 gap-3 rounded border border-rs-border p-3 text-sm sm:grid-cols-3">
+      <div>
+        <p className="font-medium">Unresolved conflicts</p>
+        <p className="text-rs-muted">
+          {stats.unresolved_conflict_count} assignment
+          {stats.unresolved_conflict_count === 1 ? '' : 's'} overlapping a
+          declared Conflict
+        </p>
+      </div>
+      <div>
+        <p className="font-medium">Longest wait at a Rehearsal</p>
+        <p className="text-rs-muted">
+          {formatMinutes(stats.old_max_wait_minutes)} →{' '}
+          {formatMinutes(stats.new_max_wait_minutes)}
+        </p>
+      </div>
+      <div>
+        <p className="font-medium">Busiest / quietest Songs</p>
+        <p className="text-rs-muted">
+          {stats.highest_slot_songs.length === 0
+            ? 'No Songs dealt yet'
+            : stats.highest_slot_songs
+                .map((song) => `${song.song_title} (${song.total_slot_count})`)
+                .join(', ')}
+        </p>
+        {stats.lowest_slot_songs.length > 0 && (
+          <p className="text-rs-muted">
+            {stats.lowest_slot_songs
+              .map((song) => `${song.song_title} (${song.total_slot_count})`)
+              .join(', ')}
+          </p>
+        )}
+      </div>
+    </div>
+  )
+}
+
 interface RehearsalRowEditorProps {
   draft: DraftRehearsal
   mode: RehearsalContextMode
   onModeChange: (mode: RehearsalContextMode) => void
-  onFieldChange: (patch: Partial<DraftRehearsal>) => void
-  onToggleDeleted: () => void
-  isDeleted: boolean
   setlistSongs: EditorSetlistSong[]
   onMove: (index: number, direction: -1 | 1) => void
   onAddSong: (song: EditorSetlistSong) => void
   onRemoveSong: (key: string) => void
   onSlotCountChange: (key: string, slotCount: number) => void
-  onShuffle: () => void
   onStep: (direction: -1 | 1) => void
-  /** Phone renders its own date/start/end fields in the accordion content; desktop already showed them in the row. */
-  hideFields?: boolean
 }
 
-/** The expanded content below a Rehearsal grid row: its Running Order sub-grid, or the Assignments surface (issue #337, #338). */
+/** The expanded content below a Rehearsal card: its Running Order sub-grid, or the Assignments surface (issue #337, #338).
+ *
+ * Date/Start/End are no longer rendered here (issue: UI overhaul round
+ * 2) — they moved onto the card header itself, as an actual date/time
+ * picker rather than plain text, so this content is Running-Order/
+ * Assignments only.
+ */
 function RehearsalRowEditor({
   draft,
   mode,
   onModeChange,
-  onFieldChange,
-  onToggleDeleted,
-  isDeleted,
   setlistSongs,
   onMove,
   onAddSong,
   onRemoveSong,
   onSlotCountChange,
-  onShuffle,
   onStep,
-  hideFields = false,
 }: RehearsalRowEditorProps) {
   const contextBarRehearsal = {
     id: draft.rehearsalId ?? 0,
@@ -951,52 +1097,6 @@ function RehearsalRowEditor({
 
   return (
     <div className="flex flex-col gap-3 py-2">
-      {hideFields && (
-        <div className="flex flex-wrap gap-3">
-          <label className="flex flex-col text-sm">
-            Date
-            <input
-              type="date"
-              value={draft.date}
-              disabled={isDeleted}
-              onChange={(event) => onFieldChange({ date: event.target.value })}
-            />
-          </label>
-          <label className="flex flex-col text-sm">
-            Start
-            <input
-              type="time"
-              value={draft.startTime}
-              disabled={isDeleted}
-              onChange={(event) =>
-                onFieldChange({ startTime: event.target.value })
-              }
-            />
-          </label>
-          <label className="flex flex-col text-sm">
-            End
-            <input
-              type="time"
-              value={draft.endTime ?? ''}
-              disabled={isDeleted}
-              onChange={(event) =>
-                onFieldChange({
-                  endTime:
-                    event.target.value === '' ? null : event.target.value,
-                })
-              }
-            />
-          </label>
-          <button
-            type="button"
-            onClick={onToggleDeleted}
-            className="self-end text-sm"
-          >
-            {isDeleted ? 'Restore' : 'Remove'}
-          </button>
-        </div>
-      )}
-
       {draft.isFullSetlist ? (
         <p className="text-sm text-rs-muted">
           The Dress Rehearsal's songs are derived live from the current setlist
@@ -1091,9 +1191,6 @@ function RehearsalRowEditor({
                     </option>
                   ))}
                 </select>
-                <button type="button" onClick={onShuffle} className="text-sm">
-                  Shuffle
-                </button>
               </div>
             </div>
           )}

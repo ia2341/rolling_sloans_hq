@@ -57,6 +57,19 @@ export function Band() {
           ) : undefined
         }
       />
+      {data.unassigned_role_holders !== undefined &&
+        data.unassigned_role_holders.count > 0 && (
+          <p
+            role="alert"
+            className="mb-3 rounded border border-rs-warning-border bg-rs-warning-bg px-3 py-2 text-sm text-rs-warning-fg"
+          >
+            {data.unassigned_role_holders.count} member
+            {data.unassigned_role_holders.count === 1 ? '' : 's'}{' '}
+            {data.unassigned_role_holders.count === 1 ? 'has' : 'have'} role
+            assignments this semester but no roster membership:{' '}
+            {data.unassigned_role_holders.names.join(', ')}
+          </p>
+        )}
       {data.semester_name === null ? (
         <p className="text-sm text-rs-muted">No Semester published yet.</p>
       ) : data.members.length === 0 ? (
