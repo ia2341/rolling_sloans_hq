@@ -1396,9 +1396,9 @@ class ConflictAdjudicationIndexApiView(AdminApiView, View):
     """`GET /api/conflicts/`: the admin adjudication index's whole read model, in one round trip (issue #191, #340).
 
     Lists the viewing Semester's future, non-Dress Rehearsals, each
-    carrying its pending/approved/rejected Conflict counts — the
-    `/api/` successor to `ConflictAdjudicationIndexView`, which stays in
-    place per issue #341 until that ticket removes it.
+    carrying its pending/approved/rejected Conflict counts — the sole
+    surviving surface for this read since issue #341 deleted the old
+    `ConflictAdjudicationIndexView` and its template.
     """
 
     def get(self, request):

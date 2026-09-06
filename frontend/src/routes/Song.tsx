@@ -53,7 +53,9 @@ export function Song() {
   const [state, setState] = useState<LoadState>({ status: 'loading' })
   const [isEditing, setIsEditing] = useState(false)
   const [rows, setRows] = useState<RequirementEditRow[]>([])
-  const [rowErrors, setRowErrors] = useState<Record<string, Record<string, string[]>>>({})
+  const [rowErrors, setRowErrors] = useState<
+    Record<string, Record<string, string[]>>
+  >({})
   const [addSheetOpen, setAddSheetOpen] = useState(false)
   const [saveDialogOpen, setSaveDialogOpen] = useState(false)
 
@@ -118,11 +120,18 @@ export function Song() {
         nonFieldErrors: ['No Semester is selected to save against.'],
       })
     }
-    const body = buildRequirementBufferWire(viewingSemester.id, viewingSemester.updated_at, rows)
-    return apiFetch<SongRoleRequirementWriteEnvelope>(`/api/songs/${song.id}/requirements/preview/`, {
-      method: 'POST',
-      body: JSON.stringify(body),
-    }).then((envelope) => {
+    const body = buildRequirementBufferWire(
+      viewingSemester.id,
+      viewingSemester.updated_at,
+      rows,
+    )
+    return apiFetch<SongRoleRequirementWriteEnvelope>(
+      `/api/songs/${song.id}/requirements/preview/`,
+      {
+        method: 'POST',
+        body: JSON.stringify(body),
+      },
+    ).then((envelope) => {
       setRowErrors(envelope.errors)
       return mapSongRoleRequirementPreviewToResult(envelope)
     })
@@ -130,11 +139,18 @@ export function Song() {
 
   const confirmSave = useCallback(() => {
     if (viewingSemester === null || song === null) return
-    const body = buildRequirementBufferWire(viewingSemester.id, viewingSemester.updated_at, rows)
-    void apiFetch<SongRoleRequirementWriteEnvelope>(`/api/songs/${song.id}/requirements/save/`, {
-      method: 'POST',
-      body: JSON.stringify(body),
-    }).then((envelope) => {
+    const body = buildRequirementBufferWire(
+      viewingSemester.id,
+      viewingSemester.updated_at,
+      rows,
+    )
+    void apiFetch<SongRoleRequirementWriteEnvelope>(
+      `/api/songs/${song.id}/requirements/save/`,
+      {
+        method: 'POST',
+        body: JSON.stringify(body),
+      },
+    ).then((envelope) => {
       if (!envelope.ok) return
       setSaveDialogOpen(false)
       setIsEditing(false)
@@ -145,9 +161,15 @@ export function Song() {
   }, [rows, viewingSemester, song, load])
 
   const changeCount = useMemo(() => computeChangeCount(rows), [rows])
-  const existingRoleIds = useMemo(() => new Set(rows.map((row) => row.roleId)), [rows])
+  const existingRoleIds = useMemo(
+    () => new Set(rows.map((row) => row.roleId)),
+    [rows],
+  )
   const availableRoles = useMemo(
-    () => (song?.available_roles ?? []).filter((role) => !existingRoleIds.has(role.id)),
+    () =>
+      (song?.available_roles ?? []).filter(
+        (role) => !existingRoleIds.has(role.id),
+      ),
     [song, existingRoleIds],
   )
 

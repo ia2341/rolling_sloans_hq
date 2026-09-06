@@ -11,11 +11,13 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-function renderOpen(overrides: {
-  availableRoles?: { id: number; name: string }[]
-  existingRoleIds?: Set<number>
-  onAddRole?: (role: { id: number; name: string }) => void
-} = {}) {
+function renderOpen(
+  overrides: {
+    availableRoles?: { id: number; name: string }[]
+    existingRoleIds?: Set<number>
+    onAddRole?: (role: { id: number; name: string }) => void
+  } = {},
+) {
   return render(
     <AddRoleRequirementSheet
       open
@@ -47,7 +49,11 @@ describe('AddRoleRequirementSheet', () => {
   it('declaring a brand-new Role posts to the roster roles endpoint and calls onAddRole', async () => {
     mockFetchOnce(200, {
       context: memberContext(),
-      data: { role: { id: 9, name: 'Tambourine' }, created: true, reactivated: false },
+      data: {
+        role: { id: 9, name: 'Tambourine' },
+        created: true,
+        reactivated: false,
+      },
     })
     const onAddRole = vi.fn()
     const user = userEvent.setup()
@@ -62,7 +68,11 @@ describe('AddRoleRequirementSheet', () => {
   it('a name resolving to an already-required Role is reported, not selected', async () => {
     mockFetchOnce(200, {
       context: memberContext(),
-      data: { role: { id: 2, name: 'Bass' }, created: false, reactivated: false },
+      data: {
+        role: { id: 2, name: 'Bass' },
+        created: false,
+        reactivated: false,
+      },
     })
     const onAddRole = vi.fn()
     const user = userEvent.setup()
@@ -71,7 +81,9 @@ describe('AddRoleRequirementSheet', () => {
     await user.type(screen.getByPlaceholderText('Role name'), 'Bass')
     await user.click(screen.getByRole('button', { name: 'Add' }))
 
-    expect(await screen.findByText(/Bass already has a Requirement/)).toBeInTheDocument()
+    expect(
+      await screen.findByText(/Bass already has a Requirement/),
+    ).toBeInTheDocument()
     expect(onAddRole).not.toHaveBeenCalled()
   })
 })

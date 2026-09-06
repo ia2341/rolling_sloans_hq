@@ -1,7 +1,10 @@
 """Login + sessions (issue #25): login/logout views and sliding session expiry."""
 
+import json
 import re
+import tempfile
 from datetime import timedelta
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from django.conf import settings
@@ -17,6 +20,18 @@ from identity.services import MAX_FAILED_LOGIN_ATTEMPTS, invite_person
 
 PASSWORD = 'a-strong-test-password-123'
 fake = Faker()
+
+# A minimal synthetic Vite manifest (mirrors config/tests/test_spa_index.py's
+# fixture), so a redirect landing on the SPA shell (`spa-index`) can resolve
+# without a real `npm run build` output on disk.
+_SYNTHETIC_MANIFEST = {
+    'index.html': {
+        'file': 'assets/index-deadbeef.js',
+        'name': 'index',
+        'src': 'index.html',
+        'isEntry': True,
+    },
+}
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)
@@ -179,19 +194,37 @@ class LogoutViewTests(TestCase):
 class LoginRedirectTests(TestCase):
     """A next-less login must land somewhere real, not Django's default /accounts/profile/ (issue #296)."""
 
+    def setUp(self):
+        """Point FRONTEND_MANIFEST_PATH at a synthetic Vite manifest, so a redirect to `spa-index` resolves."""
+        tmp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp_dir.cleanup)
+        manifest_path = Path(tmp_dir.name) / 'manifest.json'
+        manifest_path.write_text(json.dumps(_SYNTHETIC_MANIFEST))
+        override = override_settings(FRONTEND_MANIFEST_PATH=manifest_path)
+        override.enable()
+        self.addCleanup(override.disable)
+
     def test_bounce_then_login_still_honours_next(self):
-        """LoginRequiredMixin's bounce carries ?next=, and a login through it still lands there."""
-        person = PersonFactory(password=PASSWORD)
-        bounce = self.client.get(reverse('scheduling:schedule'), follow=True)
+        """LoginRequiredMixin's bounce carries ?next=, and a login through it still lands there.
+
+        `identity:people` (`/accounts/manage/people/`) is the one surviving
+        page-shaped route gated by `AdminRequiredMixin`/`BaseView` rather
+        than `ApiView` (issue #341: every other Django page moved under
+        `/api/`, which answers an anonymous request with a JSON 401, never
+        a redirect bounce) — so it's the only route left that can still
+        demonstrate this mechanism.
+        """
+        person = PersonFactory(password=PASSWORD, is_admin=True)
+        bounce = self.client.get(reverse('identity:people'), follow=True)
         login_path = bounce.redirect_chain[-1][0]
-        self.assertIn(f'next={reverse("scheduling:schedule")}', login_path)
+        self.assertIn(f'next={reverse("identity:people")}', login_path)
 
         response = self.client.post(
             login_path,
             {'username': person.email, 'password': PASSWORD},
         )
 
-        self.assertRedirects(response, reverse('scheduling:schedule'))
+        self.assertRedirects(response, reverse('identity:people'))
 
     def test_direct_login_visit_then_login_lands_on_a_real_page(self):
         """Visiting /accounts/login/ directly (no ?next=), then logging in, must not 404."""
@@ -202,7 +235,7 @@ class LoginRedirectTests(TestCase):
             {'username': person.email, 'password': PASSWORD},
         )
 
-        self.assertRedirects(response, reverse('scheduling:overview'))
+        self.assertRedirects(response, reverse('spa-index'))
 
     def test_logout_then_login_lands_on_a_real_page(self):
         """Logging out and logging back in (no ?next=) must not 404."""
@@ -215,7 +248,7 @@ class LoginRedirectTests(TestCase):
             {'username': person.email, 'password': PASSWORD},
         )
 
-        self.assertRedirects(response, reverse('scheduling:overview'))
+        self.assertRedirects(response, reverse('spa-index'))
 
     def test_invite_set_password_then_login_lands_on_a_real_page(self):
         """A brand-new invited member's very first login, right after setting their password, must not 404."""
@@ -236,7 +269,7 @@ class LoginRedirectTests(TestCase):
             {'username': person.email, 'password': PASSWORD},
         )
 
-        self.assertRedirects(response, reverse('scheduling:overview'))
+        self.assertRedirects(response, reverse('spa-index'))
 
 
 class LoginUrlSettingTests(TestCase):

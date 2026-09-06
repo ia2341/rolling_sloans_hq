@@ -9,7 +9,9 @@ import { mockMatchMedia } from '../test/mockMatchMedia'
 import { renderShell } from '../test/renderShell'
 import { ManageSemestersSheet } from './ManageSemestersSheet'
 
-function stubFetchSequence(responses: Array<{ status: number; body: unknown }>) {
+function stubFetchSequence(
+  responses: Array<{ status: number; body: unknown }>,
+) {
   const fetchSpy = vi.fn()
   for (const { status, body } of responses) {
     fetchSpy.mockResolvedValueOnce({

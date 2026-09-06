@@ -4,7 +4,7 @@ from django.conf import settings
 from django.core.checks import Error, register
 
 
-@register()
+@register(deploy=True)
 def spa_build_output_exists(app_configs, **kwargs):
     """Fail `manage.py check --deploy` when the Vite build is missing outside DEBUG.
 

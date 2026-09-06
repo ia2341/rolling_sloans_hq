@@ -11,6 +11,7 @@ import json
 import tempfile
 from pathlib import Path
 
+from django.conf import settings
 from django.contrib.staticfiles.finders import find
 from django.core.exceptions import ImproperlyConfigured
 from django.core.management import call_command
@@ -19,8 +20,10 @@ from django.urls import reverse
 
 from config import checks
 
-# The root path is already claimed by scheduling's Overview page, so tests
-# aimed at the catch-all use a path no existing app route defines.
+# Every page-shaped route reaches the SPA catch-all since issue #341's
+# cutover, but these tests still use a path distinct from admin/, /accounts/
+# and /api/, so they exercise the catch-all specifically rather than one of
+# those earlier-claimed namespaces.
 UNCLAIMED_PATH = '/an-unclaimed-spa-path/'
 
 FAKE_ENTRY_FILE = 'assets/index-deadbeef.js'
@@ -144,15 +147,28 @@ class RouteOrderingTests(TestCase):
         self.assertNotIn(b'<div id="root">', response.content)
 
     def test_static_asset_reaches_whitenoise_not_the_shell(self):
-        """A collected static asset is served by WhiteNoise, ahead of URL resolution reaching the catch-all."""
-        self.assertIsNotNone(find('vendor/pico-2.1.1.min.css'))
+        """A collected static asset is served by WhiteNoise, ahead of URL resolution reaching the catch-all.
 
-        with (
-            tempfile.TemporaryDirectory() as static_root,
-            override_settings(STATIC_ROOT=static_root),
-        ):
-            call_command('collectstatic', '--no-input', verbosity=0)
-            response = self.client.get('/static/vendor/pico-2.1.1.min.css')
+        Issue #341 deleted the vendored stack and its override sheet, so the
+        top-level `static/` STATICFILES_DIRS entry no longer has a committed
+        file to point at. A synthetic one, written under a temp dir added to
+        STATICFILES_DIRS for the duration of the test, stands in for it —
+        mirroring how the manifest tests above stand in for a real `npm run
+        build` rather than depending on one.
+        """
+        with tempfile.TemporaryDirectory() as extra_static_dir:
+            asset_path = Path(extra_static_dir) / 'probe.css'
+            asset_path.write_text('body { color: #111; }')
+
+            with override_settings(STATICFILES_DIRS=[*settings.STATICFILES_DIRS, extra_static_dir]):
+                self.assertIsNotNone(find('probe.css'))
+
+                with (
+                    tempfile.TemporaryDirectory() as static_root,
+                    override_settings(STATIC_ROOT=static_root),
+                ):
+                    call_command('collectstatic', '--no-input', verbosity=0)
+                    response = self.client.get('/static/probe.css')
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.get('Content-Type', '').startswith('text/css'))

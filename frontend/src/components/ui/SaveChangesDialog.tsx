@@ -64,8 +64,7 @@ export function SaveChangesDialog({
     >
       <p className="mb-3 text-sm text-rs-muted">
         Computed by running the real save and rolling it back (ADR 0008).
-        Nothing has been written, and no file has been deleted, by opening
-        this.
+        Nothing has been written, and no file has been deleted, by opening this.
       </p>
 
       {isLoading && (
@@ -80,8 +79,8 @@ export function SaveChangesDialog({
 
       {failedToLoad && (
         <p role="alert" className="text-sm text-rs-danger">
-          Something went wrong computing what this save would do. Your
-          Buffer is intact — nothing has been changed.
+          Something went wrong computing what this save would do. Your Buffer is
+          intact — nothing has been changed.
         </p>
       )}
 
@@ -98,7 +97,10 @@ export function SaveChangesDialog({
           {result.errors &&
             Object.entries(result.errors).map(([rowKey, fieldErrors]) =>
               Object.entries(fieldErrors).map(([field, messages]) => (
-                <p key={`${rowKey}-${field}`} className="text-sm text-rs-danger">
+                <p
+                  key={`${rowKey}-${field}`}
+                  className="text-sm text-rs-danger"
+                >
                   {field}: {messages.join(', ')}
                 </p>
               )),
@@ -112,7 +114,10 @@ export function SaveChangesDialog({
             <h3 className="mb-1 text-sm font-semibold">What changes</h3>
             <ul className="space-y-1">
               {result.changes.map((change, index) => (
-                <li key={`${change.op}-${change.object}-${index}`} className="text-sm">
+                <li
+                  key={`${change.op}-${change.object}-${index}`}
+                  className="text-sm"
+                >
                   <span className="mr-1 rounded bg-rs-border/60 px-1.5 py-0.5 text-xs font-medium uppercase">
                     {change.op}
                   </span>
@@ -169,8 +174,8 @@ export function SaveChangesDialog({
                 ))}
               </ul>
               <p className="text-sm font-medium text-rs-danger">
-                The files leave storage when this commits. There is no
-                undo and no export.
+                The files leave storage when this commits. There is no undo and
+                no export.
               </p>
             </section>
           )}

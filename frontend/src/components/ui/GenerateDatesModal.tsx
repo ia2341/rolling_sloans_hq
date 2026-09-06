@@ -11,7 +11,15 @@ import type {
 import type { ReadEnvelope, WriteEnvelope } from '../../api/types'
 import { ResponsiveDialog } from './ResponsiveDialog'
 
-const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+const DAY_NAMES = [
+  'Sunday',
+  'Monday',
+  'Tuesday',
+  'Wednesday',
+  'Thursday',
+  'Friday',
+  'Saturday',
+]
 
 export interface RetimeApplication {
   rehearsal_id: number
@@ -32,7 +40,12 @@ interface GenerateDatesModalProps {
 
 function blankPattern(): RehearsalPatternPayload {
   const today = new Date().toISOString().slice(0, 10)
-  return { start_date: today, end_date: today, rehearsal_times: [], skip_dates: [] }
+  return {
+    start_date: today,
+    end_date: today,
+    rehearsal_times: [],
+    skip_dates: [],
+  }
 }
 
 /**
@@ -48,8 +61,15 @@ function blankPattern(): RehearsalPatternPayload {
  * so its form/diff state resets by construction rather than by an effect
  * that would call `setState` synchronously on every render.
  */
-export function GenerateDatesModal({ open, onOpenChange, pattern, onApply }: GenerateDatesModalProps) {
-  const [form, setForm] = useState<RehearsalPatternPayload>(() => pattern ?? blankPattern())
+export function GenerateDatesModal({
+  open,
+  onOpenChange,
+  pattern,
+  onApply,
+}: GenerateDatesModalProps) {
+  const [form, setForm] = useState<RehearsalPatternPayload>(
+    () => pattern ?? blankPattern(),
+  )
   const [diff, setDiff] = useState<RehearsalGenerationDiff | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -60,14 +80,22 @@ export function GenerateDatesModal({ open, onOpenChange, pattern, onApply }: Gen
   const addRehearsalTime = () => {
     setForm((previous) => ({
       ...previous,
-      rehearsal_times: [...previous.rehearsal_times, { day_of_week: 1, start_time: '19:00', end_time: '21:00' }],
+      rehearsal_times: [
+        ...previous.rehearsal_times,
+        { day_of_week: 1, start_time: '19:00', end_time: '21:00' },
+      ],
     }))
   }
 
-  const updateRehearsalTime = (index: number, patch: Partial<RehearsalTimeRow>) => {
+  const updateRehearsalTime = (
+    index: number,
+    patch: Partial<RehearsalTimeRow>,
+  ) => {
     setForm((previous) => ({
       ...previous,
-      rehearsal_times: previous.rehearsal_times.map((row, i) => (i === index ? { ...row, ...patch } : row)),
+      rehearsal_times: previous.rehearsal_times.map((row, i) =>
+        i === index ? { ...row, ...patch } : row,
+      ),
     }))
   }
 
@@ -82,33 +110,49 @@ export function GenerateDatesModal({ open, onOpenChange, pattern, onApply }: Gen
     if (date === '') return
     setForm((previous) => ({
       ...previous,
-      skip_dates: [...previous.skip_dates, { start_date: date, end_date: null } satisfies SkipDateRow],
+      skip_dates: [
+        ...previous.skip_dates,
+        { start_date: date, end_date: null } satisfies SkipDateRow,
+      ],
     }))
   }
 
   const removeSkipDate = (index: number) => {
-    setForm((previous) => ({ ...previous, skip_dates: previous.skip_dates.filter((_, i) => i !== index) }))
+    setForm((previous) => ({
+      ...previous,
+      skip_dates: previous.skip_dates.filter((_, i) => i !== index),
+    }))
   }
 
   const runPreviewDiff = async () => {
     setLoading(true)
     setError(null)
     try {
-      const saveEnvelope = await apiFetch<WriteEnvelope>('/api/schedule/editor/pattern/save/', {
+      const saveEnvelope = await apiFetch<WriteEnvelope>(
+        '/api/schedule/editor/pattern/save/',
+        {
+          method: 'POST',
+          body: JSON.stringify(form),
+        },
+      )
+      if (!saveEnvelope.ok) {
+        setError(
+          saveEnvelope.non_field_errors.join(' ') ||
+            'Could not save the pattern.',
+        )
+        return
+      }
+      const diffEnvelope = await apiFetch<
+        ReadEnvelope<RehearsalGenerationDiff>
+      >('/api/schedule/editor/generate/diff/', {
         method: 'POST',
         body: JSON.stringify(form),
       })
-      if (!saveEnvelope.ok) {
-        setError(saveEnvelope.non_field_errors.join(' ') || 'Could not save the pattern.')
-        return
-      }
-      const diffEnvelope = await apiFetch<ReadEnvelope<RehearsalGenerationDiff>>(
-        '/api/schedule/editor/generate/diff/',
-        { method: 'POST', body: JSON.stringify(form) },
-      )
       setDiff(diffEnvelope.data)
       setTickedCreates(new Set(diffEnvelope.data.creates.map((_, i) => i)))
-      setTickedRetimes(new Set(diffEnvelope.data.retimes.map((r) => r.rehearsal_id)))
+      setTickedRetimes(
+        new Set(diffEnvelope.data.retimes.map((r) => r.rehearsal_id)),
+      )
       setTickedOrphans(
         new Set(
           diffEnvelope.data.orphans
@@ -117,7 +161,11 @@ export function GenerateDatesModal({ open, onOpenChange, pattern, onApply }: Gen
         ),
       )
     } catch (thrown) {
-      setError(thrown instanceof ApiError ? errorMessageFrom(thrown) : 'Something went wrong computing the diff.')
+      setError(
+        thrown instanceof ApiError
+          ? errorMessageFrom(thrown)
+          : 'Something went wrong computing the diff.',
+      )
     } finally {
       setLoading(false)
     }
@@ -129,7 +177,11 @@ export function GenerateDatesModal({ open, onOpenChange, pattern, onApply }: Gen
       creates: diff.creates.filter((_, i) => tickedCreates.has(i)),
       retimes: diff.retimes
         .filter((r) => tickedRetimes.has(r.rehearsal_id))
-        .map((r) => ({ rehearsal_id: r.rehearsal_id, new_start_time: r.new_start_time, new_end_time: r.new_end_time })),
+        .map((r) => ({
+          rehearsal_id: r.rehearsal_id,
+          new_start_time: r.new_start_time,
+          new_end_time: r.new_end_time,
+        })),
       orphanIds: [...tickedOrphans],
     })
   }
@@ -142,7 +194,11 @@ export function GenerateDatesModal({ open, onOpenChange, pattern, onApply }: Gen
       wide
       footer={
         <>
-          <button type="button" onClick={() => onOpenChange(false)} className="rounded border border-rs-border px-3 py-1.5 text-sm">
+          <button
+            type="button"
+            onClick={() => onOpenChange(false)}
+            className="rounded border border-rs-border px-3 py-1.5 text-sm"
+          >
             Cancel
           </button>
           <button
@@ -163,7 +219,12 @@ export function GenerateDatesModal({ open, onOpenChange, pattern, onApply }: Gen
             <input
               type="date"
               value={form.start_date}
-              onChange={(event) => setForm((previous) => ({ ...previous, start_date: event.target.value }))}
+              onChange={(event) =>
+                setForm((previous) => ({
+                  ...previous,
+                  start_date: event.target.value,
+                }))
+              }
             />
           </label>
           <label className="flex flex-col text-sm">
@@ -171,7 +232,12 @@ export function GenerateDatesModal({ open, onOpenChange, pattern, onApply }: Gen
             <input
               type="date"
               value={form.end_date}
-              onChange={(event) => setForm((previous) => ({ ...previous, end_date: event.target.value }))}
+              onChange={(event) =>
+                setForm((previous) => ({
+                  ...previous,
+                  end_date: event.target.value,
+                }))
+              }
             />
           </label>
         </div>
@@ -184,7 +250,11 @@ export function GenerateDatesModal({ open, onOpenChange, pattern, onApply }: Gen
                 <select
                   aria-label="Day of week"
                   value={row.day_of_week}
-                  onChange={(event) => updateRehearsalTime(index, { day_of_week: Number(event.target.value) })}
+                  onChange={(event) =>
+                    updateRehearsalTime(index, {
+                      day_of_week: Number(event.target.value),
+                    })
+                  }
                 >
                   {DAY_NAMES.map((name, day) => (
                     <option key={day} value={day}>
@@ -196,21 +266,35 @@ export function GenerateDatesModal({ open, onOpenChange, pattern, onApply }: Gen
                   type="time"
                   aria-label="Weekly time start"
                   value={row.start_time}
-                  onChange={(event) => updateRehearsalTime(index, { start_time: event.target.value })}
+                  onChange={(event) =>
+                    updateRehearsalTime(index, {
+                      start_time: event.target.value,
+                    })
+                  }
                 />
                 <input
                   type="time"
                   aria-label="Weekly time end"
                   value={row.end_time}
-                  onChange={(event) => updateRehearsalTime(index, { end_time: event.target.value })}
+                  onChange={(event) =>
+                    updateRehearsalTime(index, { end_time: event.target.value })
+                  }
                 />
-                <button type="button" aria-label="Remove weekly time" onClick={() => removeRehearsalTime(index)}>
+                <button
+                  type="button"
+                  aria-label="Remove weekly time"
+                  onClick={() => removeRehearsalTime(index)}
+                >
                   ×
                 </button>
               </li>
             ))}
           </ul>
-          <button type="button" onClick={addRehearsalTime} className="text-sm text-rs-accent">
+          <button
+            type="button"
+            onClick={addRehearsalTime}
+            className="text-sm text-rs-accent"
+          >
             + Add weekly time
           </button>
         </div>
@@ -219,9 +303,16 @@ export function GenerateDatesModal({ open, onOpenChange, pattern, onApply }: Gen
           <h3 className="text-sm font-semibold">Skip dates</h3>
           <ul className="flex flex-wrap gap-2 pb-1">
             {form.skip_dates.map((skip, index) => (
-              <li key={index} className="flex items-center gap-1 rounded bg-rs-border/60 px-2 py-0.5 text-sm">
+              <li
+                key={index}
+                className="flex items-center gap-1 rounded bg-rs-border/60 px-2 py-0.5 text-sm"
+              >
                 {skip.start_date}
-                <button type="button" aria-label={`Remove skip date ${skip.start_date}`} onClick={() => removeSkipDate(index)}>
+                <button
+                  type="button"
+                  aria-label={`Remove skip date ${skip.start_date}`}
+                  onClick={() => removeSkipDate(index)}
+                >
                   ×
                 </button>
               </li>
@@ -267,11 +358,14 @@ export function GenerateDatesModal({ open, onOpenChange, pattern, onApply }: Gen
               }))}
             />
             <div>
-              <h4 className="text-sm font-semibold text-rs-muted">Keep · {diff.keeps.length}</h4>
+              <h4 className="text-sm font-semibold text-rs-muted">
+                Keep · {diff.keeps.length}
+              </h4>
               <ul className="text-sm text-rs-muted">
                 {diff.keeps.map((item) => (
                   <li key={item.rehearsal_id}>
-                    {item.date} · {item.start_time.slice(0, 5)}–{item.end_time.slice(0, 5)}
+                    {item.date} · {item.start_time.slice(0, 5)}–
+                    {item.end_time.slice(0, 5)}
                   </li>
                 ))}
               </ul>
@@ -283,7 +377,10 @@ export function GenerateDatesModal({ open, onOpenChange, pattern, onApply }: Gen
                 label: `${item.date}: ${item.old_start_time.slice(0, 5)}–${item.old_end_time.slice(0, 5)} → ${item.new_start_time.slice(0, 5)}–${item.new_end_time.slice(0, 5)} — would lose ${item.song_count} song${item.song_count === 1 ? '' : 's'}, ${item.conflict_count} conflict${item.conflict_count === 1 ? '' : 's'}`,
                 checked: tickedRetimes.has(item.rehearsal_id),
                 disabled: false,
-                onToggle: () => setTickedRetimes((previous) => toggled(previous, item.rehearsal_id)),
+                onToggle: () =>
+                  setTickedRetimes((previous) =>
+                    toggled(previous, item.rehearsal_id),
+                  ),
               }))}
             />
             <BucketList
@@ -295,7 +392,10 @@ export function GenerateDatesModal({ open, onOpenChange, pattern, onApply }: Gen
                   : `${item.date} — would lose ${item.song_count} song${item.song_count === 1 ? '' : 's'}, ${item.conflict_count} conflict${item.conflict_count === 1 ? '' : 's'}, ${item.recording_count} recording${item.recording_count === 1 ? '' : 's'}`,
                 checked: tickedOrphans.has(item.rehearsal_id),
                 disabled: item.delete_disabled,
-                onToggle: () => setTickedOrphans((previous) => toggled(previous, item.rehearsal_id)),
+                onToggle: () =>
+                  setTickedOrphans((previous) =>
+                    toggled(previous, item.rehearsal_id),
+                  ),
               }))}
             />
           </div>
@@ -313,7 +413,11 @@ function toggled(set: Set<number>, key: number): Set<number> {
 }
 
 function errorMessageFrom(error: ApiError): string {
-  if (error.body !== null && typeof error.body === 'object' && 'error' in error.body) {
+  if (
+    error.body !== null &&
+    typeof error.body === 'object' &&
+    'error' in error.body
+  ) {
     return String((error.body as { error: string }).error)
   }
   return 'Something went wrong computing the diff.'
@@ -328,7 +432,13 @@ interface BucketItem {
 }
 
 /** One of the generation diff's four buckets: a heading and a checkbox per item (issue #337). */
-function BucketList({ heading, items }: { heading: string; items: BucketItem[] }) {
+function BucketList({
+  heading,
+  items,
+}: {
+  heading: string
+  items: BucketItem[]
+}) {
   return (
     <div>
       <h4 className="text-sm font-semibold">{heading}</h4>

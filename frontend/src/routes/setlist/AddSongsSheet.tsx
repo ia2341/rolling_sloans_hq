@@ -1,7 +1,10 @@
 import { useState } from 'react'
 
 import { apiFetch } from '../../api/client'
-import type { SpotifyImportCandidate, SpotifyImportPayload } from '../../api/setlistTypes'
+import type {
+  SpotifyImportCandidate,
+  SpotifyImportPayload,
+} from '../../api/setlistTypes'
 import type { ReadEnvelope } from '../../api/types'
 import { ResponsiveDialog } from '../../components/ui/ResponsiveDialog'
 import { SegmentedControl } from '../../components/ui/SegmentedControl'
@@ -27,7 +30,11 @@ interface AddSongsSheetProps {
  * `onAddRows`; the real write is still the toolbar's Save changes ->
  * the shared Save popup (#334).
  */
-export function AddSongsSheet({ open, onOpenChange, onAddRows }: AddSongsSheetProps) {
+export function AddSongsSheet({
+  open,
+  onOpenChange,
+  onAddRows,
+}: AddSongsSheetProps) {
   const [source, setSource] = useState<Source>('spotify')
 
   const [playlistUrl, setPlaylistUrl] = useState('')
@@ -71,7 +78,12 @@ export function AddSongsSheet({ open, onOpenChange, onAddRows }: AddSongsSheetPr
         }
         setCandidates(envelope.data.songs)
         setTicked(new Set())
-        setSkippedNote(describeSkipped(envelope.data.skipped_count, envelope.data.skipped_reasons))
+        setSkippedNote(
+          describeSkipped(
+            envelope.data.skipped_count,
+            envelope.data.skipped_reasons,
+          ),
+        )
       },
       () => {
         setFetching(false)
@@ -94,7 +106,14 @@ export function AddSongsSheet({ open, onOpenChange, onAddRows }: AddSongsSheetPr
     if (source === 'spotify') {
       candidates.forEach((candidate, index) => {
         if (!ticked.has(index)) return
-        rows.push(newRow(candidate.title, candidate.artist, candidate.length, 'spotify'))
+        rows.push(
+          newRow(
+            candidate.title,
+            candidate.artist,
+            candidate.length,
+            'spotify',
+          ),
+        )
       })
     } else if (handTitle.trim()) {
       rows.push(newRow(handTitle, handArtist, handLength, 'byhand'))
@@ -175,7 +194,9 @@ export function AddSongsSheet({ open, onOpenChange, onAddRows }: AddSongsSheetPr
             </p>
           )}
 
-          {skippedNote && <p className="pt-2 text-xs text-rs-muted">{skippedNote}</p>}
+          {skippedNote && (
+            <p className="pt-2 text-xs text-rs-muted">{skippedNote}</p>
+          )}
 
           {candidates.length > 0 && (
             <ul className="mt-3 max-h-64 space-y-1 overflow-y-auto">
@@ -194,9 +215,12 @@ export function AddSongsSheet({ open, onOpenChange, onAddRows }: AddSongsSheetPr
                       onChange={() => toggleTicked(index)}
                     />
                     <span className="flex-1">
-                      {candidate.title} · {candidate.artist} · {candidate.length}
+                      {candidate.title} · {candidate.artist} ·{' '}
+                      {candidate.length}
                       {candidate.already_in_setlist && (
-                        <span className="block text-xs italic">Already in this setlist</span>
+                        <span className="block text-xs italic">
+                          Already in this setlist
+                        </span>
                       )}
                     </span>
                   </label>
@@ -251,7 +275,12 @@ export function AddSongsSheet({ open, onOpenChange, onAddRows }: AddSongsSheetPr
 }
 
 /** Builds one brand-new `EditRow` for the sheet's "Add to the buffer" action. */
-function newRow(title: string, artist: string, length: string, origin: 'spotify' | 'byhand'): EditRow {
+function newRow(
+  title: string,
+  artist: string,
+  length: string,
+  origin: 'spotify' | 'byhand',
+): EditRow {
   return {
     rowKey: nextRowKey(origin),
     songId: null,
@@ -268,7 +297,10 @@ function newRow(title: string, artist: string, length: string, origin: 'spotify'
 }
 
 /** Builds the "Skipped N items (...)" note from a fetch's skip counts, or `''` when nothing was skipped. */
-function describeSkipped(skippedCount: number, skippedReasons: Record<string, number>): string {
+function describeSkipped(
+  skippedCount: number,
+  skippedReasons: Record<string, number>,
+): string {
   if (skippedCount === 0) return ''
   const parts = Object.entries(skippedReasons).map(
     ([reason, count]) => `${count} ${reason}${count === 1 ? '' : 's'}`,

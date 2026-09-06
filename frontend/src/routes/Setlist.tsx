@@ -42,14 +42,18 @@ export function Setlist() {
   const [data, setData] = useState<SetlistPayload | null>(null)
   const [isEditing, setIsEditing] = useState(false)
   const [rows, setRows] = useState<EditRow[]>([])
-  const [rowErrors, setRowErrors] = useState<Record<string, Record<string, string[]>>>({})
+  const [rowErrors, setRowErrors] = useState<
+    Record<string, Record<string, string[]>>
+  >({})
   const [addSheetOpen, setAddSheetOpen] = useState(false)
   const [saveDialogOpen, setSaveDialogOpen] = useState(false)
 
   const load = useCallback(() => {
-    void apiFetch<ReadEnvelope<SetlistPayload>>('/api/setlist/').then((envelope) => {
-      setData(envelope.data)
-    })
+    void apiFetch<ReadEnvelope<SetlistPayload>>('/api/setlist/').then(
+      (envelope) => {
+        setData(envelope.data)
+      },
+    )
   }, [])
 
   useEffect(() => {
@@ -73,11 +77,16 @@ export function Setlist() {
 
   const requestSave = useCallback(() => setSaveDialogOpen(true), [])
 
-  const updateField = useCallback((rowKey: string, field: EditField, value: string) => {
-    setRows((current) =>
-      current.map((row) => (row.rowKey === rowKey ? { ...row, [field]: value } : row)),
-    )
-  }, [])
+  const updateField = useCallback(
+    (rowKey: string, field: EditField, value: string) => {
+      setRows((current) =>
+        current.map((row) =>
+          row.rowKey === rowKey ? { ...row, [field]: value } : row,
+        ),
+      )
+    },
+    [],
+  )
 
   const moveUp = useCallback((rowKey: string) => {
     setRows((current) => moveAliveRow(current, rowKey, -1))
@@ -92,16 +101,21 @@ export function Setlist() {
       const row = current.find((candidate) => candidate.rowKey === rowKey)
       if (!row) return current
       // A never-saved row has nothing to undo to -- delete just removes it.
-      if (row.songId === null) return current.filter((candidate) => candidate.rowKey !== rowKey)
+      if (row.songId === null)
+        return current.filter((candidate) => candidate.rowKey !== rowKey)
       return current.map((candidate) =>
-        candidate.rowKey === rowKey ? { ...candidate, deleted: true } : candidate,
+        candidate.rowKey === rowKey
+          ? { ...candidate, deleted: true }
+          : candidate,
       )
     })
   }, [])
 
   const undoDelete = useCallback((rowKey: string) => {
     setRows((current) =>
-      current.map((row) => (row.rowKey === rowKey ? { ...row, deleted: false } : row)),
+      current.map((row) =>
+        row.rowKey === rowKey ? { ...row, deleted: false } : row,
+      ),
     )
   }, [])
 
@@ -118,7 +132,11 @@ export function Setlist() {
         nonFieldErrors: ['No Semester is selected to save against.'],
       })
     }
-    const body = buildBufferWire(viewingSemester.id, viewingSemester.updated_at, rows)
+    const body = buildBufferWire(
+      viewingSemester.id,
+      viewingSemester.updated_at,
+      rows,
+    )
     return apiFetch<SetlistWriteEnvelope>('/api/setlist/preview/', {
       method: 'POST',
       body: JSON.stringify(body),
@@ -130,7 +148,11 @@ export function Setlist() {
 
   const confirmSave = useCallback(() => {
     if (viewingSemester === null) return
-    const body = buildBufferWire(viewingSemester.id, viewingSemester.updated_at, rows)
+    const body = buildBufferWire(
+      viewingSemester.id,
+      viewingSemester.updated_at,
+      rows,
+    )
     void apiFetch<SetlistWriteEnvelope>('/api/setlist/save/', {
       method: 'POST',
       body: JSON.stringify(body),
@@ -215,7 +237,11 @@ export function Setlist() {
         <SetlistTable songs={data.songs} viewerId={appContext?.viewer.id} />
       )}
 
-      <AddSongsSheet open={addSheetOpen} onOpenChange={setAddSheetOpen} onAddRows={addRows} />
+      <AddSongsSheet
+        open={addSheetOpen}
+        onOpenChange={setAddSheetOpen}
+        onAddRows={addRows}
+      />
 
       {viewingSemester !== null && (
         <SaveChangesDialog

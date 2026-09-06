@@ -207,7 +207,11 @@ function EditSessionSpy() {
       <button type="button" onClick={session.discard}>
         toolbar discard
       </button>
-      <button type="button" onClick={session.requestSave} disabled={session.changeCount === 0}>
+      <button
+        type="button"
+        onClick={session.requestSave}
+        disabled={session.changeCount === 0}
+      >
         toolbar save
       </button>
       <p>{session.changeCount} unsaved</p>
@@ -220,7 +224,9 @@ describe('Setlist edit mode', () => {
     mockFetchOnce(200, { context: memberContext(), data: setlistPayload() })
     renderShell(<Setlist />, ['/setlist'])
     await screen.findByText('Test Song')
-    expect(screen.queryByRole('button', { name: 'Edit setlist' })).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Edit setlist' }),
+    ).not.toBeInTheDocument()
   })
 
   it('entering edit mode swaps the read views for the grid and shows "+ Add songs"', async () => {
@@ -228,9 +234,13 @@ describe('Setlist edit mode', () => {
     const user = userEvent.setup()
     renderShell(<Setlist />, ['/setlist'])
 
-    await user.click(await screen.findByRole('button', { name: 'Edit setlist' }))
+    await user.click(
+      await screen.findByRole('button', { name: 'Edit setlist' }),
+    )
 
-    expect(screen.getByRole('button', { name: '+ Add songs' })).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: '+ Add songs' }),
+    ).toBeInTheDocument()
     expect(screen.queryByRole('table', { name: '' })).toBeInTheDocument() // the edit grid is still a table on desktop
     expect(screen.getByLabelText('Title for row 1')).toHaveValue('Test Song')
   })
@@ -253,7 +263,9 @@ describe('Setlist edit mode', () => {
 
     await user.click(screen.getByRole('button', { name: 'toolbar discard' }))
     expect(screen.getByText('no edit session')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Edit setlist' })).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Edit setlist' }),
+    ).toBeInTheDocument()
   })
 
   it('editing a title field updates the buffer and reports one unsaved change', async () => {
@@ -266,7 +278,9 @@ describe('Setlist edit mode', () => {
       </>,
       ['/setlist'],
     )
-    await user.click(await screen.findByRole('button', { name: 'Edit setlist' }))
+    await user.click(
+      await screen.findByRole('button', { name: 'Edit setlist' }),
+    )
 
     const titleInput = screen.getByLabelText('Title for row 1')
     await user.clear(titleInput)
@@ -286,14 +300,18 @@ describe('Setlist edit mode', () => {
       </>,
       ['/setlist'],
     )
-    await user.click(await screen.findByRole('button', { name: 'Edit setlist' }))
+    await user.click(
+      await screen.findByRole('button', { name: 'Edit setlist' }),
+    )
 
     await user.click(screen.getByRole('button', { name: 'Delete' }))
     expect(screen.getByText('Test Song · Test Artist')).toBeInTheDocument()
     expect(screen.getByText('1 unsaved')).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: 'Undo' }))
-    expect(screen.queryByText('Test Song · Test Artist')).not.toBeInTheDocument()
+    expect(
+      screen.queryByText('Test Song · Test Artist'),
+    ).not.toBeInTheDocument()
     expect(screen.getByLabelText('Title for row 1')).toBeInTheDocument()
     expect(screen.getByText('0 unsaved')).toBeInTheDocument()
   })
@@ -302,14 +320,18 @@ describe('Setlist edit mode', () => {
     mockFetchOnce(200, { context: adminContext(), data: setlistPayload() })
     const user = userEvent.setup()
     renderShell(<Setlist />, ['/setlist'])
-    await user.click(await screen.findByRole('button', { name: 'Edit setlist' }))
+    await user.click(
+      await screen.findByRole('button', { name: 'Edit setlist' }),
+    )
 
     await user.click(screen.getByRole('button', { name: '+ Add songs' }))
     await user.click(screen.getByRole('radio', { name: 'By hand' }))
     await user.type(screen.getByLabelText('Title'), 'Hand-Added Song')
     await user.click(screen.getByRole('button', { name: 'Add to the buffer' }))
 
-    expect(screen.getByLabelText('Title for row 2')).toHaveValue('Hand-Added Song')
+    expect(screen.getByLabelText('Title for row 2')).toHaveValue(
+      'Hand-Added Song',
+    )
   })
 
   it('opening the Save popup calls preview exactly once and renders its changes', async () => {
@@ -318,7 +340,8 @@ describe('Setlist edit mode', () => {
       .mockResolvedValueOnce({
         status: 200,
         ok: true,
-        json: () => Promise.resolve({ context: adminContext(), data: setlistPayload() }),
+        json: () =>
+          Promise.resolve({ context: adminContext(), data: setlistPayload() }),
       })
       .mockResolvedValueOnce({
         status: 200,
@@ -354,14 +377,18 @@ describe('Setlist edit mode', () => {
       </>,
       ['/setlist'],
     )
-    await user.click(await screen.findByRole('button', { name: 'Edit setlist' }))
+    await user.click(
+      await screen.findByRole('button', { name: 'Edit setlist' }),
+    )
     const titleInput = screen.getByLabelText('Title for row 1')
     await user.clear(titleInput)
     await user.type(titleInput, 'Test Song 2')
 
     await user.click(screen.getByRole('button', { name: 'toolbar save' }))
 
-    await waitFor(() => expect(screen.getByText('What changes')).toBeInTheDocument())
+    await waitFor(() =>
+      expect(screen.getByText('What changes')).toBeInTheDocument(),
+    )
     expect(screen.getByText('Test Song: title changed')).toBeInTheDocument()
     expect(fetchSpy).toHaveBeenCalledTimes(2)
     expect(fetchSpy.mock.calls[1]?.[0]).toBe('/api/setlist/preview/')
@@ -373,7 +400,8 @@ describe('Setlist edit mode', () => {
       .mockResolvedValueOnce({
         status: 200,
         ok: true,
-        json: () => Promise.resolve({ context: adminContext(), data: setlistPayload() }),
+        json: () =>
+          Promise.resolve({ context: adminContext(), data: setlistPayload() }),
       })
       .mockResolvedValueOnce({
         status: 200,
@@ -416,7 +444,8 @@ describe('Setlist edit mode', () => {
       .mockResolvedValueOnce({
         status: 200,
         ok: true,
-        json: () => Promise.resolve({ context: adminContext(), data: setlistPayload() }),
+        json: () =>
+          Promise.resolve({ context: adminContext(), data: setlistPayload() }),
       })
     vi.stubGlobal('fetch', fetchSpy)
     const user = userEvent.setup()
@@ -428,17 +457,25 @@ describe('Setlist edit mode', () => {
       </>,
       ['/setlist'],
     )
-    await user.click(await screen.findByRole('button', { name: 'Edit setlist' }))
+    await user.click(
+      await screen.findByRole('button', { name: 'Edit setlist' }),
+    )
     const titleInput = screen.getByLabelText('Title for row 1')
     await user.clear(titleInput)
     await user.type(titleInput, 'Test Song 2')
 
     await user.click(screen.getByRole('button', { name: 'toolbar save' }))
-    await waitFor(() => expect(screen.getByText('What changes')).toBeInTheDocument())
+    await waitFor(() =>
+      expect(screen.getByText('What changes')).toBeInTheDocument(),
+    )
 
     await user.click(screen.getByRole('button', { name: 'Save changes' }))
 
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Edit setlist' })).toBeInTheDocument())
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'Edit setlist' }),
+      ).toBeInTheDocument(),
+    )
     expect(fetchSpy).toHaveBeenCalledTimes(4)
     expect(fetchSpy.mock.calls[2]?.[0]).toBe('/api/setlist/save/')
     expect(fetchSpy.mock.calls[3]?.[0]).toBe('/api/setlist/')

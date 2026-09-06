@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
@@ -6,7 +12,10 @@ import { describe, expect, it, vi } from 'vitest'
 import type { ScheduleEditorPayload } from '../api/scheduleEditorTypes'
 import { EditToolbar } from '../components/ui/EditToolbar'
 import { ContextProvider } from '../api/ContextProvider'
-import { EditSessionProvider, useEditSession } from '../shell/EditSessionContext'
+import {
+  EditSessionProvider,
+  useEditSession,
+} from '../shell/EditSessionContext'
 import { PageTitleProvider } from '../shell/PageTitleContext'
 import { adminContext } from '../test/fixtures'
 import { mockFetchOnce } from '../test/mockFetch'
@@ -43,7 +52,9 @@ function renderScheduleEdit() {
   )
 }
 
-function editorPayload(overrides: Partial<ScheduleEditorPayload> = {}): ScheduleEditorPayload {
+function editorPayload(
+  overrides: Partial<ScheduleEditorPayload> = {},
+): ScheduleEditorPayload {
   return {
     semester_name: 'Fall 2026',
     rehearsals: [
@@ -96,7 +107,12 @@ function editorPayload(overrides: Partial<ScheduleEditorPayload> = {}): Schedule
     past_rehearsals: [],
     setlist_songs: [
       { id: 1, title: 'First Song', artist: 'Placeholder Artist', position: 1 },
-      { id: 2, title: 'Second Song', artist: 'Placeholder Artist', position: 2 },
+      {
+        id: 2,
+        title: 'Second Song',
+        artist: 'Placeholder Artist',
+        position: 2,
+      },
       { id: 3, title: 'Third Song', artist: 'Placeholder Artist', position: 3 },
     ],
     semester_defaults: {
@@ -127,7 +143,9 @@ describe('ScheduleEdit', () => {
     expect(await screen.findByLabelText('First Song slot count')).toBeVisible()
 
     await user.click(screen.getByText('2026-03-17', { exact: false }))
-    expect(screen.queryByLabelText('First Song slot count')).not.toBeInTheDocument()
+    expect(
+      screen.queryByLabelText('First Song slot count'),
+    ).not.toBeInTheDocument()
   })
 
   it('reorders a Running Order with up/down buttons alone, with no drag library involved', async () => {
@@ -141,15 +159,22 @@ describe('ScheduleEdit', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Expand 2026-03-10' }))
     await screen.findByLabelText('First Song slot count')
 
-    const listBefore = screen.getAllByRole('listitem').map((item) => item.textContent ?? '')
+    const listBefore = screen
+      .getAllByRole('listitem')
+      .map((item) => item.textContent ?? '')
     expect(listBefore.some((text) => text.startsWith('First Song'))).toBe(true)
 
-    await user.click(screen.getByRole('button', { name: 'Move First Song down' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Move First Song down' }),
+    )
 
     const listAfter = screen
       .getAllByRole('listitem')
       .map((item) => item.textContent ?? '')
-      .filter((text) => text.startsWith('First Song') || text.startsWith('Second Song'))
+      .filter(
+        (text) =>
+          text.startsWith('First Song') || text.startsWith('Second Song'),
+      )
     expect(listAfter[0]).toMatch(/^Second Song/)
     expect(listAfter[1]).toMatch(/^First Song/)
   })
@@ -161,7 +186,8 @@ describe('ScheduleEdit', () => {
       .mockResolvedValueOnce({
         status: 200,
         ok: true,
-        json: () => Promise.resolve({ context: adminContext(), data: editorPayload() }),
+        json: () =>
+          Promise.resolve({ context: adminContext(), data: editorPayload() }),
       })
       .mockResolvedValue({
         status: 200,
@@ -181,13 +207,24 @@ describe('ScheduleEdit', () => {
                 is_past: false,
                 can_edit_assignments: true,
                 timeline: {
-                  slots: [], window_start: '19:00:00', window_end: '21:00:00',
-                  viewer_song_count: 0, total_song_count: 0, viewer_start_time: null, viewer_end_time: null,
+                  slots: [],
+                  window_start: '19:00:00',
+                  window_end: '21:00:00',
+                  viewer_song_count: 0,
+                  total_song_count: 0,
+                  viewer_start_time: null,
+                  viewer_end_time: null,
                   is_dress_rehearsal: false,
                 },
                 availability: {
-                  declaration_type: null, type_label: null, declared_time: null, reason: null,
-                  status: null, admin_note: null, is_dress: false, is_editable: true,
+                  declaration_type: null,
+                  type_label: null,
+                  declared_time: null,
+                  reason: null,
+                  status: null,
+                  admin_note: null,
+                  is_dress: false,
+                  is_editable: true,
                 },
                 roles: [],
                 rows: [],
@@ -206,10 +243,14 @@ describe('ScheduleEdit', () => {
     await screen.findByLabelText('First Song slot count')
 
     await user.click(screen.getByRole('radio', { name: 'Assignments' }))
-    expect(await screen.findByText('Editing standing assignments.')).toBeInTheDocument()
+    expect(
+      await screen.findByText('Editing standing assignments.'),
+    ).toBeInTheDocument()
 
     await user.click(screen.getByRole('radio', { name: 'Running order' }))
-    expect(await screen.findByLabelText('First Song slot count')).toBeInTheDocument()
+    expect(
+      await screen.findByLabelText('First Song slot count'),
+    ).toBeInTheDocument()
   })
 
   it('opens the Save popup on Save and fires the preview endpoint exactly once', async () => {
@@ -219,7 +260,8 @@ describe('ScheduleEdit', () => {
       .mockResolvedValueOnce({
         status: 200,
         ok: true,
-        json: () => Promise.resolve({ context: adminContext(), data: editorPayload() }),
+        json: () =>
+          Promise.resolve({ context: adminContext(), data: editorPayload() }),
       })
       .mockResolvedValueOnce({
         status: 200,
@@ -230,7 +272,14 @@ describe('ScheduleEdit', () => {
             ok: true,
             errors: {},
             non_field_errors: [],
-            fallout: { is_blocked: false, block_message: '', is_stale: false, loud: [], quiet: [], doomed_recording_groups: [] },
+            fallout: {
+              is_blocked: false,
+              block_message: '',
+              is_stale: false,
+              loud: [],
+              quiet: [],
+              doomed_recording_groups: [],
+            },
             values: null,
             data: null,
           }),
@@ -243,11 +292,15 @@ describe('ScheduleEdit', () => {
     await screen.findByRole('button', { name: 'Expand 2026-03-10' })
     fireEvent.click(screen.getByRole('button', { name: 'Expand 2026-03-10' }))
     await screen.findByRole('button', { name: 'Move First Song down' })
-    await user.click(screen.getByRole('button', { name: 'Move First Song down' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Move First Song down' }),
+    )
 
     await user.click(screen.getByRole('button', { name: 'Save changes' }))
 
-    await waitFor(() => expect(screen.getByText(/Save \d+ change/)).toBeInTheDocument())
+    await waitFor(() =>
+      expect(screen.getByText(/Save \d+ change/)).toBeInTheDocument(),
+    )
     await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2))
     expect(fetchSpy.mock.calls[1]?.[0]).toBe('/api/schedule/editor/preview/')
   })
@@ -268,7 +321,14 @@ describe('ScheduleEdit', () => {
       context: adminContext(),
       data: editorPayload({
         past_rehearsals: [
-          { id: 99, date: '2026-01-01', start_time: '19:00:00', end_time: '21:00:00', is_full_setlist: false, song_count: 3 },
+          {
+            id: 99,
+            date: '2026-01-01',
+            start_time: '19:00:00',
+            end_time: '21:00:00',
+            is_full_setlist: false,
+            song_count: 3,
+          },
         ],
       }),
     })
@@ -276,7 +336,11 @@ describe('ScheduleEdit', () => {
     renderScheduleEdit()
 
     await screen.findByRole('button', { name: 'Expand 2026-03-10' })
-    expect(screen.getByText('Past rehearsals — not editable')).toBeInTheDocument()
-    within(screen.getByText('Past rehearsals — not editable').closest('details')!).getByText(/2026-01-01/)
+    expect(
+      screen.getByText('Past rehearsals — not editable'),
+    ).toBeInTheDocument()
+    within(
+      screen.getByText('Past rehearsals — not editable').closest('details')!,
+    ).getByText(/2026-01-01/)
   })
 })

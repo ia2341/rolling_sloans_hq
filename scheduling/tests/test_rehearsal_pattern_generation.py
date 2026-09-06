@@ -17,11 +17,13 @@ from scheduling.factories import (
 )
 from scheduling.models import RehearsalPattern, RehearsalTime, SkipDate
 from scheduling.services import (
+    PriorRehearsalTimesProposal,
     RehearsalPatternCollisionError,
     RehearsalPatternInput,
     RehearsalTimeInput,
     SkipDateInput,
     preview_rehearsal_generation,
+    prior_rehearsal_times_for,
     save_rehearsal_pattern,
 )
 
@@ -280,3 +282,51 @@ class PreviewRehearsalGenerationTests(TestCase):
 
         with self.assertRaises(RehearsalPatternCollisionError):
             preview_rehearsal_generation(semester, pattern_input)
+
+
+class PriorRehearsalTimesForTests(TestCase):
+    """prior_rehearsal_times_for(): the retired Semester Setup wizard's opt-in prefill, at the service layer (issue #341).
+
+    Ported from `test_semester_setup_rehearsals_step.py`, deleted along
+    with the rest of the pre-SPA wizard: the underlying ADR-relevant
+    guarantee — a prior Semester's Rehearsal Times are offered only as an
+    opt-in proposal, never auto-copied, and its date range/Skip Dates are
+    never offered at all — outlives the view that used to expose it.
+    """
+
+    def test_offers_the_prior_semesters_rehearsal_times_as_an_opt_in_proposal(self):
+        """A prior Semester's saved Rehearsal Times come back as a proposal naming that Semester, not written anywhere."""
+        prior = SemesterFactory()
+        pattern = RehearsalPatternFactory(semester=prior, start_date=date(2026, 1, 1), end_date=date(2026, 4, 1))
+        RehearsalTimeFactory(pattern=pattern, day_of_week=RehearsalTime.WEDNESDAY, start_time=time(19, 0), end_time=time(23, 0))
+        semester = SemesterFactory()
+
+        proposal = prior_rehearsal_times_for(semester)
+
+        self.assertEqual(proposal.source_semester, prior)
+        self.assertEqual(len(proposal.rehearsal_times), 1)
+        self.assertEqual(proposal.rehearsal_times[0].day_of_week, RehearsalTime.WEDNESDAY)
+        self.assertEqual(RehearsalPattern.objects.filter(semester=semester).count(), 0)
+
+    def test_the_prior_semesters_range_and_skip_dates_are_never_offered(self):
+        """The proposal carries only Rehearsal Times — no start/end date and no Skip Date ever comes back."""
+        prior = SemesterFactory()
+        pattern = RehearsalPatternFactory(semester=prior, start_date=date(2026, 1, 1), end_date=date(2026, 4, 1))
+        RehearsalTimeFactory(pattern=pattern, day_of_week=RehearsalTime.WEDNESDAY, start_time=time(19, 0), end_time=time(23, 0))
+        SkipDateFactory(pattern=pattern, start_date=date(2026, 2, 1), end_date=date(2026, 2, 7))
+        semester = SemesterFactory()
+
+        proposal = prior_rehearsal_times_for(semester)
+
+        self.assertIsInstance(proposal, PriorRehearsalTimesProposal)
+        for rehearsal_time_input in proposal.rehearsal_times:
+            self.assertFalse(hasattr(rehearsal_time_input, 'start_date'))
+            self.assertFalse(hasattr(rehearsal_time_input, 'skip_dates'))
+
+    def test_with_no_prior_semester_the_proposal_is_empty(self):
+        """A Semester with nothing before it gets an empty proposal, not an error."""
+        semester = SemesterFactory()
+
+        proposal = prior_rehearsal_times_for(semester)
+
+        self.assertEqual(proposal, PriorRehearsalTimesProposal(source_semester=None, rehearsal_times=[]))

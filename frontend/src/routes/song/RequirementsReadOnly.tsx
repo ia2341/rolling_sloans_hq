@@ -7,7 +7,11 @@ import type { RoleRequirement } from '../../api/setlistTypes'
  * volunteered for. A Requirement naming a retired Role is shown, never
  * hidden (issue #207).
  */
-export function RequirementsReadOnly({ requirements }: { requirements: RoleRequirement[] }) {
+export function RequirementsReadOnly({
+  requirements,
+}: {
+  requirements: RoleRequirement[]
+}) {
   if (requirements.length === 0) return null
   return (
     <ul className="flex flex-wrap gap-2 pt-2">
@@ -15,7 +19,9 @@ export function RequirementsReadOnly({ requirements }: { requirements: RoleRequi
         <li
           key={status.role_id}
           className={`rounded-full border px-2 py-0.5 text-xs ${
-            status.is_understaffed ? 'border-rs-warning-border text-rs-warning-fg' : 'border-rs-border text-rs-muted'
+            status.is_understaffed
+              ? 'border-rs-warning-border text-rs-warning-fg'
+              : 'border-rs-border text-rs-muted'
           }`}
         >
           {status.role_name} {status.actual}/{status.target}

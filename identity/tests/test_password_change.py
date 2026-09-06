@@ -41,7 +41,7 @@ class PasswordChangeSessionContinuityTests(TestCase):
         # (still-authenticated) session.
         self.client.cookies[settings.SESSION_COOKIE_NAME] = session.session_key
 
-        response = self.client.get(reverse('scheduling:member-detail', args=[person.pk]))
+        response = self.client.get(reverse('api-member-detail', args=[person.pk]))
         self.assertTrue(response.wsgi_request.user.is_authenticated)
 
     def test_without_update_session_auth_hash_the_session_is_invalidated(self):
@@ -56,5 +56,5 @@ class PasswordChangeSessionContinuityTests(TestCase):
         person.set_password(NEW_PASSWORD)
         person.save()
 
-        response = self.client.get(reverse('scheduling:member-detail', args=[person.pk]))
+        response = self.client.get(reverse('api-member-detail', args=[person.pk]))
         self.assertFalse(response.wsgi_request.user.is_authenticated)

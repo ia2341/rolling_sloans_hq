@@ -18,7 +18,7 @@ from scheduling.api_builders import (
     build_rehearsal_buffer_from_request,
 )
 from scheduling.factories import RehearsalFactory, SemesterFactory
-from scheduling.tests.test_setlist_reorder_add_delete import admin_client, select
+from scheduling.tests.api_test_helpers import admin_client, select
 
 TOMORROW = timezone.localdate() + timedelta(days=1)
 

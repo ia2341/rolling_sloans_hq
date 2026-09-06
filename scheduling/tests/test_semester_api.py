@@ -12,7 +12,7 @@ import json
 from datetime import timedelta
 
 from django.test import TestCase, override_settings
-from django.urls import reverse
+from django.urls import NoReverseMatch, reverse
 from django.utils import timezone
 
 from identity.factories import PersonFactory
@@ -416,6 +416,16 @@ class PublishApiTests(TestCase):
         response = self.client.post(reverse('api-semesters-publish', args=[999999]))
 
         self.assertEqual(response.status_code, 404)
+
+    def test_no_unpublish_route_exists(self):
+        """No URL name for unpublishing a Semester is registered anywhere in the project (ADR 0010).
+
+        Ported from the retired `test_semester_manage_views.py` (issue
+        #341): rollback is re-publishing an older Semester through this
+        same endpoint, never an "unpublish" of its own.
+        """
+        with self.assertRaises(NoReverseMatch):
+            reverse('api-semesters-unpublish', args=[1])
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)

@@ -1,10 +1,6 @@
 import { useState } from 'react'
 
-import {
-  aliveRows,
-  rowBadges,
-  type EditRow,
-} from './setlistEditModel'
+import { aliveRows, rowBadges, type EditRow } from './setlistEditModel'
 
 type Field = 'title' | 'artist' | 'length' | 'notes'
 
@@ -41,7 +37,11 @@ export function SetlistEditGrid({
   const alive = aliveRows(rows)
 
   if (rows.length === 0) {
-    return <p className="text-sm text-rs-muted">No songs yet this Semester. Use + Add songs to start.</p>
+    return (
+      <p className="text-sm text-rs-muted">
+        No songs yet this Semester. Use + Add songs to start.
+      </p>
+    )
   }
 
   if (isPhone) {
@@ -189,7 +189,9 @@ function SetlistEditTableRow({
           aria-label={`Title for row ${aliveIndex + 1}`}
           type="text"
           value={row.title}
-          onChange={(event) => onUpdateField(row.rowKey, 'title', event.target.value)}
+          onChange={(event) =>
+            onUpdateField(row.rowKey, 'title', event.target.value)
+          }
           className="w-full rounded border border-rs-border px-2 py-1"
         />
         <FieldErrors messages={errors.title} />
@@ -204,7 +206,9 @@ function SetlistEditTableRow({
           <textarea
             aria-label={`Notes for row ${aliveIndex + 1}`}
             value={row.notes}
-            onChange={(event) => onUpdateField(row.rowKey, 'notes', event.target.value)}
+            onChange={(event) =>
+              onUpdateField(row.rowKey, 'notes', event.target.value)
+            }
             className="mt-1 block w-full rounded border border-rs-border px-2 py-1 text-xs"
           />
         )}
@@ -214,7 +218,9 @@ function SetlistEditTableRow({
           aria-label={`Artist for row ${aliveIndex + 1}`}
           type="text"
           value={row.artist}
-          onChange={(event) => onUpdateField(row.rowKey, 'artist', event.target.value)}
+          onChange={(event) =>
+            onUpdateField(row.rowKey, 'artist', event.target.value)
+          }
           className="w-full rounded border border-rs-border px-2 py-1"
         />
         <FieldErrors messages={errors.artist} />
@@ -224,7 +230,9 @@ function SetlistEditTableRow({
           aria-label={`Length for row ${aliveIndex + 1}`}
           type="text"
           value={row.length}
-          onChange={(event) => onUpdateField(row.rowKey, 'length', event.target.value)}
+          onChange={(event) =>
+            onUpdateField(row.rowKey, 'length', event.target.value)
+          }
           placeholder="3:45"
           className="w-20 rounded border border-rs-border px-2 py-1"
         />
@@ -303,7 +311,11 @@ function SetlistEditCard({
           {aliveIndex >= 0 ? `${aliveIndex + 1}. ` : ''}
           {row.title}
         </p>
-        <button type="button" onClick={() => onUndoDelete(row.rowKey)} className="text-sm underline">
+        <button
+          type="button"
+          onClick={() => onUndoDelete(row.rowKey)}
+          className="text-sm underline"
+        >
           Undo
         </button>
       </li>
@@ -340,7 +352,9 @@ function SetlistEditCard({
               id={`title-${row.rowKey}`}
               type="text"
               value={row.title}
-              onChange={(event) => onUpdateField(row.rowKey, 'title', event.target.value)}
+              onChange={(event) =>
+                onUpdateField(row.rowKey, 'title', event.target.value)
+              }
               className="mt-1 block w-full rounded border border-rs-border px-2 py-1 text-sm"
             />
             <FieldErrors messages={errors.title} />
@@ -353,7 +367,9 @@ function SetlistEditCard({
               id={`artist-${row.rowKey}`}
               type="text"
               value={row.artist}
-              onChange={(event) => onUpdateField(row.rowKey, 'artist', event.target.value)}
+              onChange={(event) =>
+                onUpdateField(row.rowKey, 'artist', event.target.value)
+              }
               className="mt-1 block w-full rounded border border-rs-border px-2 py-1 text-sm"
             />
             <FieldErrors messages={errors.artist} />
@@ -366,12 +382,16 @@ function SetlistEditCard({
               id={`length-${row.rowKey}`}
               type="text"
               value={row.length}
-              onChange={(event) => onUpdateField(row.rowKey, 'length', event.target.value)}
+              onChange={(event) =>
+                onUpdateField(row.rowKey, 'length', event.target.value)
+              }
               className="mt-1 block w-full rounded border border-rs-border px-2 py-1 text-sm"
             />
             <FieldErrors messages={errors.length} />
           </div>
-          <p className="text-xs text-rs-muted">Position {aliveIndex + 1} of {aliveCount}</p>
+          <p className="text-xs text-rs-muted">
+            Position {aliveIndex + 1} of {aliveCount}
+          </p>
           <div>
             <label className="text-xs" htmlFor={`notes-${row.rowKey}`}>
               Notes
@@ -379,7 +399,9 @@ function SetlistEditCard({
             <textarea
               id={`notes-${row.rowKey}`}
               value={row.notes}
-              onChange={(event) => onUpdateField(row.rowKey, 'notes', event.target.value)}
+              onChange={(event) =>
+                onUpdateField(row.rowKey, 'notes', event.target.value)
+              }
               className="mt-1 block w-full rounded border border-rs-border px-2 py-1 text-sm"
             />
           </div>

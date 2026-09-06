@@ -6,8 +6,22 @@ import type { RehearsalGenerationDiff } from '../../api/scheduleEditorTypes'
 import { GenerateDatesModal } from './GenerateDatesModal'
 
 const diff: RehearsalGenerationDiff = {
-  creates: [{ date: '2026-04-07', start_time: '19:00:00', end_time: '21:00:00', is_dress_rehearsal: false }],
-  keeps: [{ rehearsal_id: 1, date: '2026-03-10', start_time: '19:00:00', end_time: '21:00:00' }],
+  creates: [
+    {
+      date: '2026-04-07',
+      start_time: '19:00:00',
+      end_time: '21:00:00',
+      is_dress_rehearsal: false,
+    },
+  ],
+  keeps: [
+    {
+      rehearsal_id: 1,
+      date: '2026-03-10',
+      start_time: '19:00:00',
+      end_time: '21:00:00',
+    },
+  ],
   retimes: [],
   orphans: [
     {
@@ -23,7 +37,9 @@ const diff: RehearsalGenerationDiff = {
   ],
 }
 
-function stubFetchSequence(responses: Array<{ status: number; body: unknown }>) {
+function stubFetchSequence(
+  responses: Array<{ status: number; body: unknown }>,
+) {
   const fetchSpy = vi.fn()
   for (const { status, body } of responses) {
     fetchSpy.mockResolvedValueOnce({
@@ -39,12 +55,27 @@ function stubFetchSequence(responses: Array<{ status: number; body: unknown }>) 
 describe('GenerateDatesModal', () => {
   it("renders a locked orphan's checkbox disabled and unticked", async () => {
     stubFetchSequence([
-      { status: 200, body: { ok: true, errors: {}, non_field_errors: [], fallout: null, values: null, data: null } },
+      {
+        status: 200,
+        body: {
+          ok: true,
+          errors: {},
+          non_field_errors: [],
+          fallout: null,
+          values: null,
+          data: null,
+        },
+      },
       { status: 200, body: { data: diff } },
     ])
     const user = userEvent.setup()
     render(
-      <GenerateDatesModal open onOpenChange={() => {}} pattern={null} onApply={() => {}} />,
+      <GenerateDatesModal
+        open
+        onOpenChange={() => {}}
+        pattern={null}
+        onApply={() => {}}
+      />,
     )
 
     await user.click(screen.getByRole('button', { name: 'Preview' }))
@@ -60,29 +91,58 @@ describe('GenerateDatesModal', () => {
     const fetchSpy = stubFetchSequence([
       {
         status: 200,
-        body: { ok: false, errors: {}, non_field_errors: ['Weekly times collide on Monday.'], fallout: null, values: null, data: null },
+        body: {
+          ok: false,
+          errors: {},
+          non_field_errors: ['Weekly times collide on Monday.'],
+          fallout: null,
+          values: null,
+          data: null,
+        },
       },
     ])
     const user = userEvent.setup()
     render(
-      <GenerateDatesModal open onOpenChange={() => {}} pattern={null} onApply={() => {}} />,
+      <GenerateDatesModal
+        open
+        onOpenChange={() => {}}
+        pattern={null}
+        onApply={() => {}}
+      />,
     )
 
     await user.click(screen.getByRole('button', { name: 'Preview' }))
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('Weekly times collide on Monday.')
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Weekly times collide on Monday.',
+    )
     expect(fetchSpy).toHaveBeenCalledTimes(1)
   })
 
   it('adds a weekly time and a skip date, previews, and applies only the ticked items', async () => {
     stubFetchSequence([
-      { status: 200, body: { ok: true, errors: {}, non_field_errors: [], fallout: null, values: null, data: null } },
+      {
+        status: 200,
+        body: {
+          ok: true,
+          errors: {},
+          non_field_errors: [],
+          fallout: null,
+          values: null,
+          data: null,
+        },
+      },
       { status: 200, body: { data: diff } },
     ])
     const user = userEvent.setup()
     const onApply = vi.fn()
     render(
-      <GenerateDatesModal open onOpenChange={() => {}} pattern={null} onApply={onApply} />,
+      <GenerateDatesModal
+        open
+        onOpenChange={() => {}}
+        pattern={null}
+        onApply={onApply}
+      />,
     )
 
     await user.click(screen.getByText('+ Add weekly time'))
@@ -96,7 +156,9 @@ describe('GenerateDatesModal', () => {
     await screen.findByText('Create · 1')
 
     // The locked orphan defaults to unticked; everything else defaults ticked.
-    await user.click(screen.getByRole('button', { name: 'Apply ticked to the grid' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Apply ticked to the grid' }),
+    )
 
     expect(onApply).toHaveBeenCalledWith({
       creates: diff.creates,

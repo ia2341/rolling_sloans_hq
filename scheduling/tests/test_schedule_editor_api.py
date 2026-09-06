@@ -15,12 +15,12 @@ from scheduling.factories import (
     SongFactory,
 )
 from scheduling.models import Rehearsal, RehearsalSong
-from scheduling.tests.preview_helpers import assert_preview_writes_nothing
-from scheduling.tests.test_setlist_reorder_add_delete import (
+from scheduling.tests.api_test_helpers import (
     admin_client,
     member_client,
     select,
 )
+from scheduling.tests.preview_helpers import assert_preview_writes_nothing
 
 TOMORROW = timezone.localdate() + timedelta(days=1)
 NEXT_WEEK = timezone.localdate() + timedelta(days=7)

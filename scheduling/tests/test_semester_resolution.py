@@ -8,12 +8,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from identity.factories import PersonFactory
-from scheduling.factories import (
-    MembershipFactory,
-    RehearsalFactory,
-    SemesterFactory,
-    SongFactory,
-)
+from scheduling.factories import SemesterFactory
 from scheduling.services import (
     VIEWING_SEMESTER_SESSION_KEY,
     get_live_semester,
@@ -202,135 +197,13 @@ class SelectionDiesAtLogoutTests(TestCase):
         self.assertNotIn(VIEWING_SEMESTER_SESSION_KEY, self.client.session)
 
 
-@override_settings(SECURE_SSL_REDIRECT=False)
-class MemberRouteScopingTests(TestCase):
-    """Every band-wide route renders the Live Semester's data for a member, and no draft's."""
-
-    @classmethod
-    def setUpTestData(cls):
-        """Build a synthetic non-admin Person, with one live Semester and one newer draft."""
-        cls.person = PersonFactory(password=PASSWORD)
-        cls.live = SemesterFactory(published_at=timezone.now())
-        cls.draft = SemesterFactory(draft=True)
-
-    def setUp(self):
-        """Log in as the synthetic Person before each test."""
-        self.client.login(username=self.person.email, password=PASSWORD)
-
-    def _band_wide_urls(self):
-        """Return every band-wide route a member reads the viewing Semester through."""
-        return [
-            reverse('scheduling:overview'),
-            reverse('scheduling:schedule'),
-            reverse('scheduling:setlist'),
-            reverse('scheduling:members'),
-            reverse('scheduling:member-detail', args=[self.person.pk]),
-        ]
-
-    def test_every_band_wide_route_names_the_live_semester_and_not_the_draft(self):
-        """A member's pages carry the Live Semester in context, never the newer draft."""
-        for url in self._band_wide_urls():
-            with self.subTest(url=url):
-                response = self.client.get(url)
-
-                self.assertEqual(response.status_code, 200)
-                self.assertEqual(response.context['semester'], self.live)
-
-    def test_a_drafts_songs_are_invisible_on_the_setlist(self):
-        """A Song belonging to a draft never appears on a member's Songs page."""
-        SongFactory(semester=self.draft, position=1)
-        live_song = SongFactory(semester=self.live, position=1)
-
-        response = self.client.get(reverse('scheduling:setlist'))
-
-        self.assertEqual([song.pk for song in response.context['songs']], [live_song.pk])
-
-    def test_a_drafts_roster_is_invisible_on_band_members(self):
-        """A Membership belonging to a draft never appears on a member's Band Members page."""
-        MembershipFactory(semester=self.draft)
-        live_membership = MembershipFactory(semester=self.live)
-
-        response = self.client.get(reverse('scheduling:members'))
-
-        self.assertEqual([row.pk for row in response.context['members']], [live_membership.pk])
-
-    def test_a_drafts_song_detail_page_404s_for_a_member(self):
-        """A draft's Song is out of a member's reach entirely, not merely absent from the list."""
-        draft_song = SongFactory(semester=self.draft, position=1)
-
-        response = self.client.get(reverse('scheduling:song-detail', args=[draft_song.pk]))
-
-        self.assertEqual(response.status_code, 404)
-
-
-@override_settings(SECURE_SSL_REDIRECT=False)
-class UnpublishedSiteTests(TestCase):
-    """With nothing published, a member's routes render empty rather than erroring."""
-
-    @classmethod
-    def setUpTestData(cls):
-        """Build a synthetic non-admin Person against a database holding only a populated draft."""
-        cls.person = PersonFactory(password=PASSWORD)
-        cls.draft = SemesterFactory(draft=True)
-        RehearsalFactory(semester=cls.draft)
-        SongFactory(semester=cls.draft, position=1)
-        MembershipFactory(semester=cls.draft, person=cls.person)
-
-    def setUp(self):
-        """Log in as the synthetic Person before each test."""
-        self.client.login(username=self.person.email, password=PASSWORD)
-
-    def test_every_band_wide_route_renders_empty_for_a_member(self):
-        """Each band-wide route returns 200 with no Semester in context when nothing is published."""
-        urls = [
-            reverse('scheduling:overview'),
-            reverse('scheduling:schedule'),
-            reverse('scheduling:setlist'),
-            reverse('scheduling:members'),
-            reverse('scheduling:member-detail', args=[self.person.pk]),
-        ]
-        for url in urls:
-            with self.subTest(url=url):
-                response = self.client.get(url)
-
-                self.assertEqual(response.status_code, 200)
-                self.assertIsNone(response.context['semester'])
-
-    def test_the_recordings_route_renders_an_empty_picker(self):
-        """/me/recordings/ renders its empty state rather than offering the draft's slots."""
-        response = self.client.get(reverse('scheduling:recordings'))
-
-        self.assertEqual(response.status_code, 200)
-        self.assertFalse(response.context['has_rehearsal_song_options'])
-
-    def test_the_setlist_and_roster_are_empty(self):
-        """The draft's Songs and Memberships render as zero rows rather than leaking through."""
-        setlist = self.client.get(reverse('scheduling:setlist'))
-        members = self.client.get(reverse('scheduling:members'))
-
-        self.assertEqual(list(setlist.context['songs']), [])
-        self.assertEqual(list(members.context['members']), [])
-
-
-@override_settings(SECURE_SSL_REDIRECT=False)
-class PublishVisibilityTests(TestCase):
-    """Publishing changes what a member's next request renders, with no re-login."""
-
-    @classmethod
-    def setUpTestData(cls):
-        """Build a synthetic non-admin Person, before anything is published."""
-        cls.person = PersonFactory(password=PASSWORD)
-        cls.draft = SemesterFactory(draft=True)
-
-    def setUp(self):
-        """Log in as the synthetic Person before each test."""
-        self.client.login(username=self.person.email, password=PASSWORD)
-
-    def test_a_session_predating_the_publish_sees_the_new_live_semester(self):
-        """A member logged in before the publish sees the newly-live Semester on their next request."""
-        self.assertIsNone(self.client.get(reverse('scheduling:overview')).context['semester'])
-
-        self.draft.published_at = timezone.now()
-        self.draft.save()
-
-        self.assertEqual(self.client.get(reverse('scheduling:overview')).context['semester'], self.draft)
+# MemberRouteScopingTests, UnpublishedSiteTests and PublishVisibilityTests
+# (view-level checks that a draft Semester's data never leaks to a member's
+# rendered page) were deleted with the rest of the pre-SPA Django views
+# (issue #341, ADR 0010 unchanged): the same guarantee is now proven
+# per-surface by each `/api/` test module — `test_setlist_song_api.py`,
+# `test_members_api.py` and `test_schedule_api.py`'s
+# `test_no_published_semester_returns_the_empty_shape`/
+# `..._404s`/`test_no_semester_yields_the_empty_shape` cases — which all
+# still call the same `get_viewing_semester()`/`get_live_semester()` this
+# module tests directly, above.
