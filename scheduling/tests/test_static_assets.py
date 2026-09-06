@@ -71,8 +71,16 @@ def _write_build(directory: Path, *, css_body: str) -> Path:
     return manifest_path
 
 
+@override_settings(SECURE_SSL_REDIRECT=False)
 class BuildOutputResolutionTests(TestCase):
-    """The manifest-named entry resolves through staticfiles, and the shell emits exactly what the manifest names."""
+    """The manifest-named entry resolves through staticfiles, and the shell emits exactly what the manifest names.
+
+    SECURE_SSL_REDIRECT is off here for the same reason
+    config/tests/test_spa_index.py turns it off: under a production-like
+    settings module (DEBUG=False, as CI's Unit tests job runs), the plain
+    `self.client.get()` below is insecure and SecurityMiddleware would
+    301-redirect it before SpaIndexView ever runs.
+    """
 
     def test_the_manifest_named_entry_resolves_through_staticfiles_finders(self):
         """Each file the manifest names (entry JS, its CSS, its imported chunk) is findable by the staticfiles finders."""
@@ -99,8 +107,15 @@ class BuildOutputResolutionTests(TestCase):
         self.assertIn(f'/static/{CHUNK_JS}', content)
 
 
+@override_settings(SECURE_SSL_REDIRECT=False)
 class NoThirdPartyOriginTests(TestCase):
-    """No rendered page, and no built asset, ever references a third-party host — the load-bearing privacy assertion."""
+    """No rendered page, and no built asset, ever references a third-party host — the load-bearing privacy assertion.
+
+    SECURE_SSL_REDIRECT is off for the same reason as BuildOutputResolutionTests
+    above: without it, `test_the_rendered_shell_carries_no_external_src_or_href`
+    would scan a 301 redirect's body under a production-like settings module,
+    passing for the wrong reason instead of actually exercising SpaIndexView.
+    """
 
     def test_the_rendered_shell_carries_no_external_src_or_href(self):
         """The SPA shell's document has no off-origin src/href, so no CDN ever sees a member's IP or referer."""

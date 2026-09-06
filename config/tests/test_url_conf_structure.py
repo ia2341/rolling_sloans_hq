@@ -13,7 +13,7 @@ that must never regress.
 """
 
 from django.contrib import admin
-from django.test import Client, SimpleTestCase
+from django.test import Client, SimpleTestCase, override_settings
 from django.urls import URLResolver, get_resolver, reverse
 
 from config.views import AdminApiView, AdminPreviewApiView, ApiView, BaseView
@@ -128,8 +128,16 @@ def _iter_api_leaf_path_view_pairs(url_patterns, prefix=''):
                 yield prefix + str(entry.pattern), view_class
 
 
+@override_settings(SECURE_SSL_REDIRECT=False)
 class ApiViewCoverageTests(SimpleTestCase):
-    """Every `/api/` view must inherit `ApiView`, and every zero-argument `/api/` route must 401, never 302 (issue #326)."""
+    """Every `/api/` view must inherit `ApiView`, and every zero-argument `/api/` route must 401, never 302 (issue #326).
+
+    SECURE_SSL_REDIRECT is off here because CI's Unit tests job runs under
+    a production-like settings module (DEBUG=False); without this, the
+    plain (insecure) `Client()` requests below would 301 before ever
+    reaching the view, and this module's whole point is asserting the
+    view's own status code.
+    """
 
     def test_every_api_view_inherits_api_view(self):
         """Walk the `/api/` URLConf and assert each view class is an `ApiView` subclass."""
@@ -214,6 +222,7 @@ def _import_view_class(dotted_path):
     return getattr(module, class_name)
 
 
+@override_settings(SECURE_SSL_REDIRECT=False)
 class BandPersonApiRouteCoverageTests(SimpleTestCase):
     """Issue #333's Band/Person/Recordings/password-change routes: `ApiView`, never `AdminApiView`, and a bare 401 anonymously.
 
@@ -258,6 +267,7 @@ class BandPersonApiRouteCoverageTests(SimpleTestCase):
 # the generic `AdminApiView`-coverage tests; the per-Rehearsal shuffle
 # route is parameterised, so it needs its own explicit 401 coverage, named
 # here so this module documents the whole surface in one place.
+@override_settings(SECURE_SSL_REDIRECT=False)
 class ScheduleEditorApiRouteCoverageTests(SimpleTestCase):
     """Issue #337's schedule-editor routes: every view is `AdminApiView`/`AdminPreviewApiView`, and a bare 401 anonymously."""
 
@@ -295,6 +305,7 @@ class ScheduleEditorApiRouteCoverageTests(SimpleTestCase):
 # skips every parameterised route here (the picker, the per-Rehearsal
 # preview/save pair), so they need their own explicit 401 coverage, named
 # here so this module documents the whole surface in one place.
+@override_settings(SECURE_SSL_REDIRECT=False)
 class AssignmentEditorApiRouteCoverageTests(SimpleTestCase):
     """Issue #338's assignment-editor routes: every view is `AdminApiView`/`AdminPreviewApiView`, and a bare 401 anonymously."""
 
@@ -335,6 +346,7 @@ class AssignmentEditorApiRouteCoverageTests(SimpleTestCase):
 # (publish-impact, deletion-summary, publish, delete) are parameterised, so
 # they need their own explicit 401 coverage, named here so this module
 # documents the whole surface in one place.
+@override_settings(SECURE_SSL_REDIRECT=False)
 class SemesterControlApiRouteCoverageTests(SimpleTestCase):
     """Issue #329's Semester-control routes: every view is `AdminApiView`/`AdminPreviewApiView`, and a bare 401 anonymously."""
 
