@@ -1,7 +1,6 @@
 from django.contrib import messages
 from django.contrib.auth import views as auth_views
 from django.shortcuts import get_object_or_404, redirect, render
-from django.urls import reverse_lazy
 from django.views import View
 
 from config.views import AdminRequiredMixin
@@ -10,6 +9,7 @@ from .forms import PersonInviteForm
 from .models import Person
 from .services import (
     AlreadyHasPasswordError,
+    client_ip,
     invite_person,
     is_auth_email_rate_limited,
     is_login_rate_limited,
@@ -18,16 +18,6 @@ from .services import (
     record_login_attempt,
     resend_invite,
 )
-
-
-def _client_ip(request):
-    """Return the requesting client's IP address, for the rate-limit keys.
-
-    No reverse proxy is configured in front of this project, so
-    `REMOTE_ADDR` is the real client address; there is no `X-Forwarded-For`
-    to trust.
-    """
-    return request.META.get('REMOTE_ADDR', '0.0.0.0')
 
 
 class LoginView(auth_views.LoginView):
@@ -46,7 +36,7 @@ class LoginView(auth_views.LoginView):
     def post(self, request, *args, **kwargs):
         """Refuse a rate-limited (email, IP) pair before touching credentials at all; otherwise defer to Django's flow."""
         email = request.POST.get('username', '')
-        ip_address = _client_ip(request)
+        ip_address = client_ip(request)
         if is_login_rate_limited(email=email, ip_address=ip_address):
             return self.render_to_response(self.get_context_data(form=self.get_form(), throttled=True))
         return super().post(request, *args, **kwargs)
@@ -55,7 +45,7 @@ class LoginView(auth_views.LoginView):
         """Record the successful attempt, then defer to Django's own login + session-cycle handling."""
         record_login_attempt(
             email=form.cleaned_data.get('username', ''),
-            ip_address=_client_ip(self.request),
+            ip_address=client_ip(self.request),
             was_successful=True,
         )
         return super().form_valid(form)
@@ -64,16 +54,23 @@ class LoginView(auth_views.LoginView):
         """Record the failed attempt, then defer to Django's own generic-error rendering."""
         record_login_attempt(
             email=self.request.POST.get('username', ''),
-            ip_address=_client_ip(self.request),
+            ip_address=client_ip(self.request),
             was_successful=False,
         )
         return super().form_invalid(form)
 
 
 class LogoutView(auth_views.LogoutView):
-    """Clears the session and redirects to the login page."""
+    """Clears the session and redirects to the SPA's login page (issue #362).
 
-    next_page = reverse_lazy('identity:login')
+    A literal path, not `reverse_lazy('identity:login')`: `/login` is an
+    SPA client route (`frontend/src/routes.tsx`), not a Django URL name, so
+    there is nothing to reverse. The server-rendered `identity:login`
+    template still exists and still works if visited directly, but it's no
+    longer where a signed-out session should land.
+    """
+
+    next_page = '/login'
 
 
 class SetPasswordConfirmView(auth_views.PasswordResetConfirmView):
@@ -124,7 +121,7 @@ class PasswordResetRequestView(auth_views.PasswordResetView):
     def form_valid(self, form):
         """Send the reset email (unless rate-limited) and re-render this same page with `sent=True`."""
         email = form.cleaned_data['email']
-        ip_address = _client_ip(self.request)
+        ip_address = client_ip(self.request)
         if is_auth_email_rate_limited(email=email, ip_address=ip_address):
             return self.render_to_response(self.get_context_data(form=form, throttled=True))
         record_auth_email_request(email=email, ip_address=ip_address)

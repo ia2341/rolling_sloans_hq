@@ -4,6 +4,7 @@ import { Band } from './routes/Band'
 import { ConflictAdjudicationDetail } from './routes/ConflictAdjudicationDetail'
 import { ConflictAdjudicationIndex } from './routes/ConflictAdjudicationIndex'
 import { Home } from './routes/Home'
+import { Login } from './routes/Login'
 import { NotFound } from './routes/NotFound'
 import { Person } from './routes/Person'
 import { ProfileRedirect } from './routes/ProfileRedirect'
@@ -24,8 +25,14 @@ import { AppShell } from './shell/AppShell'
  * member-facing `/conflicts` route, and no redirect from one. `/conflicts`
  * below is a different, admin-only surface (#340): the adjudication index
  * and detail, unrelated to that member-facing absorption.
+ *
+ * `/login` (issue #362) is the one route deliberately **not** nested under
+ * `AppShell`: it renders before there is a session, so there is no
+ * `context` for the sidebar/nav chrome `AppShell` wraps every other route
+ * with to read.
  */
 export const routes: RouteObject[] = [
+  { path: '/login', element: <Login /> },
   {
     element: <AppShell />,
     children: [

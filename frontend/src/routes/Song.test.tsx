@@ -192,9 +192,7 @@ describe('Song', () => {
 
     renderShell(<Song />, ['/songs/1'])
 
-    await waitFor(() =>
-      expect(assignSpy).toHaveBeenCalledWith('/accounts/login/'),
-    )
+    await waitFor(() => expect(assignSpy).toHaveBeenCalledWith('/login'))
     expect(screen.queryByText(/error/i)).not.toBeInTheDocument()
 
     Object.defineProperty(window, 'location', {
