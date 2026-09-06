@@ -202,15 +202,14 @@ class SongRoleAssignment(models.Model):
         ]
 
     def _compute_is_role_mismatch(self):
-        """True when the Person has no matching MembershipRole for the Song's Semester."""
-        return not MembershipRole.objects.filter(
-            membership__person=self.person,
-            membership__semester=self.song.semester,
+        """True when the Person has no matching PersonRole (ADR-0014, issue #377 -- no longer semester-scoped)."""
+        return not PersonRole.objects.filter(
+            person=self.person,
             role=self.role,
         ).exists()
 
     def save(self, *args, **kwargs):
-        """Recompute is_role_mismatch from the Person's current Membership before saving."""
+        """Recompute is_role_mismatch from the Person's currently declared Roles before saving."""
         self.is_role_mismatch = self._compute_is_role_mismatch()
         super().save(*args, **kwargs)
 
@@ -219,46 +218,45 @@ class SongRoleAssignment(models.Model):
         return f'{self.person} as {self.role} on {self.song}'
 
 
-def _reevaluate_role_mismatches_for(membership, role):
-    """Recompute is_role_mismatch on every SongRoleAssignment and Backup this MembershipRole change could affect.
+def _reevaluate_role_mismatches_for(person_id, role_id):
+    """Recompute is_role_mismatch on every SongRoleAssignment and Backup this PersonRole change could affect.
 
     Generalised (issue #174, ADR-0007) to sweep both models in one pass
     rather than adding a second pair of post_save/post_delete receivers.
+    Keyed on person + role only (issue #377, ADR-0014): PersonRole carries
+    no Semester dimension, so a declaration change can affect assignments
+    and backups across every Semester, not just one.
     """
     affected_assignments = SongRoleAssignment.objects.filter(
-        person=membership.person,
-        role=role,
-        song__semester=membership.semester,
+        person_id=person_id,
+        role_id=role_id,
     )
     for assignment in affected_assignments:
         assignment.save()
     affected_backups = Backup.objects.filter(
-        person=membership.person,
-        role=role,
-        rehearsal_song__rehearsal__semester=membership.semester,
+        person_id=person_id,
+        role_id=role_id,
     )
     for backup in affected_backups:
         backup.save()
 
 
-@receiver(post_save, sender=MembershipRole)
-def _membership_role_saved(sender, instance, **kwargs):
+@receiver(post_save, sender=PersonRole)
+def _person_role_saved(sender, instance, **kwargs):
     """Re-evaluate is_role_mismatch on affected SongRoleAssignments/Backups when a Role is declared."""
-    _reevaluate_role_mismatches_for(instance.membership, instance.role)
+    _reevaluate_role_mismatches_for(instance.person_id, instance.role_id)
 
 
-@receiver(post_delete, sender=MembershipRole)
-def _membership_role_deleted(sender, instance, **kwargs):
+@receiver(post_delete, sender=PersonRole)
+def _person_role_deleted(sender, instance, **kwargs):
     """Re-evaluate is_role_mismatch on affected SongRoleAssignments/Backups when a declared Role is removed.
 
-    Skips re-evaluation if the parent Membership was itself cascade-deleted
-    alongside this row (it's no longer fetchable) rather than raising.
+    Uses the FK ids straight off the deleted instance rather than
+    dereferencing `.person`/`.role` -- both can be gone by the time this
+    fires (e.g. the Person or Role itself was cascade-deleted alongside
+    this row), and the ids are all `_reevaluate_role_mismatches_for` needs.
     """
-    try:
-        membership = instance.membership
-    except Membership.DoesNotExist:
-        return
-    _reevaluate_role_mismatches_for(membership, instance.role)
+    _reevaluate_role_mismatches_for(instance.person_id, instance.role_id)
 
 
 class RehearsalAttendance(NamedTuple):
@@ -945,15 +943,14 @@ class Backup(models.Model):
         ]
 
     def _compute_is_role_mismatch(self):
-        """True when the Person has no matching MembershipRole for the Rehearsal's Semester."""
-        return not MembershipRole.objects.filter(
-            membership__person=self.person,
-            membership__semester=self.rehearsal_song.rehearsal.semester,
+        """True when the Person has no matching PersonRole (ADR-0014, issue #377 -- no longer semester-scoped)."""
+        return not PersonRole.objects.filter(
+            person=self.person,
             role=self.role,
         ).exists()
 
     def save(self, *args, **kwargs):
-        """Recompute is_role_mismatch from the Person's current Membership before saving."""
+        """Recompute is_role_mismatch from the Person's currently declared Roles before saving."""
         self.is_role_mismatch = self._compute_is_role_mismatch()
         super().save(*args, **kwargs)
 

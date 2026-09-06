@@ -1,4 +1,4 @@
-"""SongRoleAssignment + role-mismatch flag (issue #35)."""
+"""SongRoleAssignment + role-mismatch flag (issue #35, repointed to PersonRole by issue #377)."""
 
 from django.db import IntegrityError, transaction
 from django.test import TestCase
@@ -6,11 +6,12 @@ from django.test import TestCase
 from identity.factories import PersonFactory
 from scheduling.factories import (
     MembershipFactory,
+    PersonRoleFactory,
     RoleFactory,
     SongFactory,
     SongRoleAssignmentFactory,
 )
-from scheduling.models import MembershipRole, SongRoleAssignment
+from scheduling.models import SongRoleAssignment
 
 
 class SongRoleAssignmentMismatchTests(TestCase):
@@ -19,68 +20,81 @@ class SongRoleAssignmentMismatchTests(TestCase):
         role = RoleFactory()
         song = SongFactory()
         person = PersonFactory()
-        MembershipFactory(person=person, semester=song.semester)  # no MembershipRole declared
+        MembershipFactory(person=person, semester=song.semester)  # no PersonRole declared
 
         assignment = SongRoleAssignmentFactory(song=song, role=role, person=person)
 
         self.assertTrue(assignment.is_role_mismatch)
 
     def test_assignment_with_declared_role_is_not_flagged(self):
-        """Assigning a Person to a Role they've declared on their current Membership is not flagged."""
+        """Assigning a Person to a Role they've declared (person-level, per ADR-0014) is not flagged."""
         role = RoleFactory()
         song = SongFactory()
         person = PersonFactory()
-        membership = MembershipFactory(person=person, semester=song.semester)
-        MembershipRole.objects.create(membership=membership, role=role)
+        MembershipFactory(person=person, semester=song.semester)
+        PersonRoleFactory(person=person, role=role)
 
         assignment = SongRoleAssignmentFactory(song=song, role=role, person=person)
 
         self.assertFalse(assignment.is_role_mismatch)
 
     def test_mismatch_clears_when_matching_role_is_later_declared(self):
-        """Declaring the matching MembershipRole after the fact clears an existing mismatch flag."""
+        """Declaring the matching PersonRole after the fact clears an existing mismatch flag."""
         role = RoleFactory()
         song = SongFactory()
         person = PersonFactory()
-        membership = MembershipFactory(person=person, semester=song.semester)
+        MembershipFactory(person=person, semester=song.semester)
         assignment = SongRoleAssignmentFactory(song=song, role=role, person=person)
         self.assertTrue(assignment.is_role_mismatch)
 
-        MembershipRole.objects.create(membership=membership, role=role)
+        PersonRoleFactory(person=person, role=role)
 
         reloaded = SongRoleAssignment.objects.get(pk=assignment.pk)
         self.assertFalse(reloaded.is_role_mismatch)
 
     def test_mismatch_reappears_when_declared_role_is_removed(self):
-        """Removing the matching MembershipRole re-flags an existing assignment as mismatched."""
+        """Removing the matching PersonRole re-flags an existing assignment as mismatched."""
         role = RoleFactory()
         song = SongFactory()
         person = PersonFactory()
-        membership = MembershipFactory(person=person, semester=song.semester)
-        membership_role = MembershipRole.objects.create(membership=membership, role=role)
+        MembershipFactory(person=person, semester=song.semester)
+        person_role = PersonRoleFactory(person=person, role=role)
         assignment = SongRoleAssignmentFactory(song=song, role=role, person=person)
         self.assertFalse(assignment.is_role_mismatch)
 
-        membership_role.delete()
+        person_role.delete()
 
         reloaded = SongRoleAssignment.objects.get(pk=assignment.pk)
         self.assertTrue(reloaded.is_role_mismatch)
 
-    def test_unrelated_membership_role_change_does_not_affect_other_assignments(self):
-        """A MembershipRole change for one Person/Role doesn't touch another Person's assignment."""
+    def test_unrelated_person_role_change_does_not_affect_other_assignments(self):
+        """A PersonRole change for one Person/Role doesn't touch another Person's assignment."""
         role = RoleFactory()
         song = SongFactory()
         watched_person = PersonFactory()
         other_person = PersonFactory()
         MembershipFactory(person=watched_person, semester=song.semester)
-        other_membership = MembershipFactory(person=other_person, semester=song.semester)
+        MembershipFactory(person=other_person, semester=song.semester)
         assignment = SongRoleAssignmentFactory(song=song, role=role, person=watched_person)
         self.assertTrue(assignment.is_role_mismatch)
 
-        MembershipRole.objects.create(membership=other_membership, role=role)
+        PersonRoleFactory(person=other_person, role=role)
 
         reloaded = SongRoleAssignment.objects.get(pk=assignment.pk)
         self.assertTrue(reloaded.is_role_mismatch)
+
+    def test_person_role_declared_with_no_membership_at_all_still_clears_mismatch(self):
+        """PersonRole carries no Semester dimension (ADR-0014), so declaring it needs no Membership to clear a mismatch."""
+        role = RoleFactory()
+        song = SongFactory()
+        person = PersonFactory()  # no Membership at all
+        assignment = SongRoleAssignmentFactory(song=song, role=role, person=person)
+        self.assertTrue(assignment.is_role_mismatch)
+
+        PersonRoleFactory(person=person, role=role)
+
+        reloaded = SongRoleAssignment.objects.get(pk=assignment.pk)
+        self.assertFalse(reloaded.is_role_mismatch)
 
 
 class SongRoleAssignmentUniquenessTests(TestCase):
