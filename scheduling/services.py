@@ -1050,17 +1050,20 @@ def song_rehearsal_progress(song) -> SongRehearsalProgress:
 def songs_with_progress_for(semester, person) -> list[Song]:
     """Return `semester`'s Songs in position order, each annotated with `.progress`, `.has_assignment` and `.next_rehearsal_date` for `person` (issue #93).
 
-    `.progress` is that Song's `song_rehearsal_progress` (X of Y);
-    `.has_assignment` is True whenever `person` has any SongRoleAssignment
-    on the Song, regardless of is_role_mismatch — the Overview page's "my
-    songs only" filter is intentionally coarser than My Schedule's
-    per-role assignment matrix. `.next_rehearsal_date` is the earliest
-    future Rehearsal whose running order includes this Song (`None` if
-    none is scheduled) — a member-facing "when do I next perform this"
-    date, computed in one batched query rather than once per Song; this
-    is distinct from `_serialize_next_rehearsal`'s admin-only "cast on…"
-    pointer (ADR 0009), which answers a different question (where casting
-    happens next) and stays admin-only.
+    `.progress` is that Song's `song_rehearsal_progress` (X of Y), computed
+    for every Song in the Semester in one grouped aggregate query rather
+    than calling `song_rehearsal_progress()` once per Song (issue #394) —
+    that per-Song query made Home's song-progress table scale with the
+    Semester's Song count. `.has_assignment` is True whenever `person` has
+    any SongRoleAssignment on the Song, regardless of is_role_mismatch —
+    the Overview page's "my songs only" filter is intentionally coarser
+    than My Schedule's per-role assignment matrix. `.next_rehearsal_date`
+    is the earliest future Rehearsal whose running order includes this
+    Song (`None` if none is scheduled) — a member-facing "when do I next
+    perform this" date, computed in one batched query rather than once per
+    Song; this is distinct from `_serialize_next_rehearsal`'s admin-only
+    "cast on…" pointer (ADR 0009), which answers a different question
+    (where casting happens next) and stays admin-only.
     """
     assigned_song_ids = set(
         SongRoleAssignment.objects.filter(
@@ -1075,9 +1078,21 @@ def songs_with_progress_for(semester, person) -> list[Song]:
         .values_list('song_id', 'rehearsal__date')
     ):
         next_rehearsal_date_by_song_id.setdefault(song_id, rehearsal_date)
+    progress_by_song_id: dict[int, SongRehearsalProgress] = {
+        row['song_id']: SongRehearsalProgress(
+            completed=row['completed'], remaining=row['remaining'], total=row['completed'] + row['remaining'],
+        )
+        for row in RehearsalSong.objects.filter(song__semester=semester)
+        .values('song_id')
+        .annotate(
+            completed=Count('pk', filter=Q(rehearsal__date__lt=today)),
+            remaining=Count('pk', filter=Q(rehearsal__date__gte=today)),
+        )
+    }
+    empty_progress = SongRehearsalProgress(completed=0, remaining=0, total=0)
     songs = list(Song.objects.filter(semester=semester).order_by('position'))
     for song in songs:
-        song.progress = song_rehearsal_progress(song)
+        song.progress = progress_by_song_id.get(song.pk, empty_progress)
         song.has_assignment = song.pk in assigned_song_ids
         song.next_rehearsal_date = next_rehearsal_date_by_song_id.get(song.pk)
     return songs
@@ -1273,6 +1288,55 @@ def cast_line_for(song, roles: list[Role], codes: dict[int, str]) -> list[CastRo
         CastRoleEntry(role=role, code=codes[role.id], performers=performers_by_role_id.get(role.id, []))
         for role in roles
     ]
+
+
+def cast_lines_for_semester(semester, roles: list[Role], codes: dict[int, str]) -> dict[int, list[CastRoleEntry]]:
+    """Return every Song in `semester`'s cast line, keyed by Song id — the same result `cast_line_for()` would give per Song, computed in bulk (issue #394).
+
+    Backs `serialize_setlist()`'s All-songs list: calling `cast_line_for()`
+    (which calls `performers_for()`, its own `SongRoleAssignment` query)
+    once per Song made the Setlist's cost scale with the Semester's Song
+    count. This does the whole Semester's worth of Assignments in one
+    query instead, then reshapes them per Song exactly as `cast_line_for()`
+    reshapes one Song's — `is_role_mismatch` is read straight off each
+    Assignment (a stored field, ADR-0002) rather than a second lookup.
+    """
+    assignments = SongRoleAssignment.objects.filter(
+        song__semester=semester,
+    ).select_related('person', 'role').order_by('song_id', 'person__name', 'role__name')
+    performers_by_song_and_role: dict[tuple[int, int], list[CastPerformer]] = defaultdict(list)
+    for assignment in assignments:
+        performers_by_song_and_role[(assignment.song_id, assignment.role_id)].append(
+            CastPerformer(person=assignment.person, is_role_mismatch=assignment.is_role_mismatch),
+        )
+    song_ids = Song.objects.filter(semester=semester).values_list('id', flat=True)
+    return {
+        song_id: [
+            CastRoleEntry(
+                role=role,
+                code=codes[role.id],
+                performers=performers_by_song_and_role.get((song_id, role.id), []),
+            )
+            for role in roles
+        ]
+        for song_id in song_ids
+    }
+
+
+def recording_counts_for_semester(semester) -> dict[int, int]:
+    """Return every Song in `semester`'s all-time Recording count, keyed by Song id, in one query (issue #394).
+
+    The bulk counterpart of `recording_count_for()`: a Song absent from
+    the result has zero Recordings, matching `recording_count_for()`'s own
+    "0 is a normal, valid count" contract for a caller that does
+    `.get(song_id, 0)`.
+    """
+    counts = (
+        Recording.objects.filter(rehearsal_song__song__semester=semester)
+        .values('rehearsal_song__song_id')
+        .annotate(count=Count('id'))
+    )
+    return {row['rehearsal_song__song_id']: row['count'] for row in counts}
 
 
 def setlist_total_running_time(semester) -> str:
