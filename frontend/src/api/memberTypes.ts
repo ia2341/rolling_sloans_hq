@@ -84,10 +84,12 @@ export interface PersonRecordingsBlock {
 /**
  * `data` shape of `GET /api/members/<pk>/`, computed for exactly one of
  * the three viewer states. `email` and `recordings` are present only in
- * the self payload; `available_roles` only when `can_edit_roles`;
- * `roles`/`songs` only when `has_membership` is true (the not-yet-rostered
- * self case omits both sections entirely rather than rendering them
- * empty).
+ * the self payload; `available_roles` only when `can_edit_roles`; `songs`
+ * only when `has_membership` is true (the not-yet-rostered self case omits
+ * that section rather than rendering it empty). `roles` (issue #378,
+ * ADR-0014) is unconditional — a standing `PersonRole` declaration needs no
+ * Membership to exist, so it's never gated by `has_membership` the way
+ * `songs` is.
  */
 export interface PersonPayload {
   id: number
@@ -96,11 +98,111 @@ export interface PersonPayload {
   can_edit_roles: boolean
   has_membership: boolean
   semester_name: string | null
+  roles: MemberRole[]
   email?: string
   available_roles?: MemberRole[]
-  roles?: MemberRole[]
   songs?: PersonSong[]
   recordings?: PersonRecordingsBlock
+}
+
+/**
+ * Wire types for the Roster editor (issue #336's backend, #374's
+ * frontend), mirroring `scheduling/serializers.py`'s
+ * `serialize_roster_edit()`/`serialize_roster_edit_fallout()`/
+ * `serialize_roster_candidates()`/`serialize_role_declaration()` exactly.
+ */
+
+/**
+ * One row of `GET /api/members/roster/`'s `members` list — every Membership
+ * in the viewing Semester, invited-but-inactive included. No Role data
+ * (issue #379): the Roster editor is add/remove-only now, and a Person's
+ * declared Roles are set only on their Person page (#378).
+ */
+export interface RosterEditMember {
+  id: number
+  name: string
+  song_count: number
+  is_role_mismatch: boolean
+  is_pending_invite: boolean
+}
+
+/** `data` shape of `GET /api/members/roster/`. No `available_roles` (issue #379): the editor offers no Role-editing control. */
+export interface RosterEditPayload {
+  semester_id: number | null
+  semester_updated_at: string | null
+  active_count: number
+  invited_count: number
+  members: RosterEditMember[]
+}
+
+/** One row of `GET /api/members/roster/candidates/`'s `import_candidates` list — a prior Semester's Roster, proposed fresh (ADR 0001). */
+export interface RosterImportCandidate {
+  id: number
+  name: string
+  roles: MemberRole[]
+}
+
+/** One row of `GET /api/members/roster/candidates/`'s `unrostered_people` list — an active Person with no Membership this Semester. */
+export interface UnrosteredPerson {
+  id: number
+  name: string
+}
+
+/** `data` shape of `GET /api/members/roster/candidates/`. */
+export interface RosterCandidatesPayload {
+  import_source_semester_name: string | null
+  import_candidates: RosterImportCandidate[]
+  unrostered_people: UnrosteredPerson[]
+}
+
+/** One `/api/members/roster/{preview,save}/` request body `entries` row (mirrors `scheduling/services.py`'s `RosterEditEntry`). No `role_ids` (issue #379) -- this Buffer carries no Role data. */
+export interface RosterEditEntryWire {
+  row_key: string
+  person_id: number
+  name: string
+}
+
+/** One `/api/members/roster/{preview,save}/` request body `invites` row (mirrors `scheduling/services.py`'s `RosterInvite`). */
+export interface RosterInviteWire {
+  row_key: string
+  name: string
+  email: string
+}
+
+/** `/api/members/roster/{preview,save}/` request body (mirrors `scheduling/services.py`'s `RosterEditBuffer`). */
+export interface RosterEditBufferWire {
+  semester_id: number
+  semester_updated_at: string
+  entries: RosterEditEntryWire[]
+  removed_person_ids: number[]
+  invites: RosterInviteWire[]
+}
+
+/** One `RosterRemoval`, as `serialize_roster_edit_fallout()` emits it — the one place a Roster surface shows an email (ADR 0005, issue #228). */
+export interface RosterRemovalWire {
+  person_id: number
+  name: string
+  email: string
+}
+
+/** `RosterEditFallout`, as `serialize_roster_edit_fallout()` emits it -- the `/api/members/roster/preview/` response's `fallout` value. No `pending_role_changes` (issue #379) -- this Buffer never touches Role data. */
+export interface RosterEditFalloutWire {
+  is_blocked: boolean
+  block_message: string
+  is_stale: boolean
+  pending_adds: string[]
+  pending_invites: string[]
+  pending_removals: RosterRemovalWire[]
+  pending_name_edits: string[]
+  loud: string[]
+  quiet: string[]
+}
+
+/** `data` shape of `POST /api/members/roster/roles/` — the Role that resulted, plus whether it was created, matched or reactivated. */
+export interface RoleDeclaration {
+  role: MemberRole
+  created: boolean
+  reactivated: boolean
 }
 
 /** Success body of `POST /api/members/recordings/presign/` (`data` of the read envelope it wears — see #307's envelope boundary rule). */

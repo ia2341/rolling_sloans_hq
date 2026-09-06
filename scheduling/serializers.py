@@ -1061,14 +1061,15 @@ def serialize_person(person, *, semester, is_self: bool, can_edit_roles: bool, m
     Follows `docs/person-page-visibility.md`'s "absent, not null" contract
     strictly: `email` and the whole `recordings` block are present only in
     the self payload, `available_roles` only when `can_edit_roles`, and
-    `roles`/`songs` only when `person` holds a saved `Membership` in
-    `semester` — the not-yet-rostered self case renders name, email and an
-    editable (empty) Roles card with no declared-Roles list and no Songs
-    section at all, never a zero (issue #333 user stories 23-24). Carries
-    no `Conflict`, `Backup`, `is_role_mismatch` or attendance-inference
-    field anywhere, for any viewer, including an admin (ADR 0005, ADR
-    0007, ADR 0002) — the boundary is drawn around this surface, not the
-    viewer.
+    `songs` only when `person` holds a saved `Membership` in `semester` —
+    the not-yet-rostered self case renders name, email and an editable
+    Roles card (with no Songs section at all, never a zero — issue #333
+    user stories 23-24). `roles` (issue #378, ADR-0014) is unconditional:
+    a standing `PersonRole` declaration doesn't need a Membership to exist,
+    so it renders even for a not-yet-rostered Person. Carries no
+    `Conflict`, `Backup`, `is_role_mismatch` or attendance-inference field
+    anywhere, for any viewer, including an admin (ADR 0005, ADR 0007, ADR
+    0002) — the boundary is drawn around this surface, not the viewer.
     """
     has_membership = membership is not None and membership.pk is not None
     data = {
@@ -1078,13 +1079,13 @@ def serialize_person(person, *, semester, is_self: bool, can_edit_roles: bool, m
         'can_edit_roles': can_edit_roles,
         'has_membership': has_membership,
         'semester_name': semester.name if semester is not None else None,
+        'roles': [_serialize_role(role) for role in services.declared_roles_for_person(person)],
     }
     if is_self:
         data['email'] = person.email
     if can_edit_roles:
-        data['available_roles'] = [_serialize_role(role) for role in services.active_roles_for(semester)] if semester is not None else []
+        data['available_roles'] = [_serialize_role(role) for role in services.active_roles_for(semester)]
     if has_membership:
-        data['roles'] = [_serialize_role(role) for role in services.declared_roles_for(membership)]
         data['songs'] = [_serialize_person_song(assignment) for assignment in services.assigned_songs_for(person, semester)]
     if is_self and has_membership:
         data['recordings'] = serialize_person_recordings(person, semester)

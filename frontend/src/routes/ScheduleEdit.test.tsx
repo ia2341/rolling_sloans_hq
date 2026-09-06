@@ -37,9 +37,9 @@ function ActiveEditToolbar() {
   )
 }
 
-function renderScheduleEdit() {
+function renderScheduleEdit(initialEntries: string[] = ['/schedule/edit']) {
   return render(
-    <MemoryRouter initialEntries={['/schedule/edit']}>
+    <MemoryRouter initialEntries={initialEntries}>
       <ContextProvider>
         <EditSessionProvider>
           <PageTitleProvider>
@@ -451,5 +451,32 @@ describe('ScheduleEdit', () => {
     expect(screen.getByText(/15 min/)).toBeInTheDocument()
     expect(screen.getByText(/First Song \(4\)/)).toBeInTheDocument()
     expect(screen.getByText(/Second Song \(1\)/)).toBeInTheDocument()
+  })
+
+  it('opens the Generate rehearsal dates modal for ?intent=generate-dates, then strips the param (issue #374)', async () => {
+    mockFetchOnce(200, {
+      context: adminContext(),
+      data: editorPayload(),
+    })
+
+    renderScheduleEdit(['/schedule/edit?intent=generate-dates'])
+
+    expect(
+      await screen.findByRole('heading', { name: 'Generate rehearsal dates' }),
+    ).toBeInTheDocument()
+  })
+
+  it('does nothing for a plain load with no ?intent (issue #374)', async () => {
+    mockFetchOnce(200, {
+      context: adminContext(),
+      data: editorPayload(),
+    })
+
+    renderScheduleEdit()
+
+    await screen.findByRole('button', { name: 'Generate rehearsal dates…' })
+    expect(
+      screen.queryByRole('heading', { name: 'Generate rehearsal dates' }),
+    ).not.toBeInTheDocument()
   })
 })
