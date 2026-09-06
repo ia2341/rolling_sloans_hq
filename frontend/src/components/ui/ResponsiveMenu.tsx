@@ -79,7 +79,7 @@ export function ResponsiveMenu({
           sideOffset={4}
           className="z-50 min-w-56 rounded-md border border-rs-border bg-rs-surface py-1 shadow-lg"
         >
-          <DropdownMenu.Label className="px-3 py-1.5 text-xs font-medium uppercase tracking-wide text-rs-muted">
+          <DropdownMenu.Label className="px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-rs-muted">
             {caption}
           </DropdownMenu.Label>
           {items.map((item) => (

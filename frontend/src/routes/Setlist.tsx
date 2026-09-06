@@ -298,7 +298,7 @@ function SetlistCards({
           <ul className="flex flex-col gap-2 pt-2">
             {song.cast.map((entry) => (
               <li key={entry.role_id} className="text-sm">
-                <p className="text-xs font-medium uppercase text-rs-muted">
+                <p className="text-xs font-semibold uppercase text-rs-muted">
                   {entry.role_name}
                 </p>
                 <CastCell entry={entry} viewerId={viewerId} />
