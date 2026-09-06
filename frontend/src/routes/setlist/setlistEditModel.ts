@@ -1,7 +1,4 @@
-import type {
-  PreviewChange,
-  PreviewResult,
-} from '../../api/previewTypes'
+import type { PreviewChange, PreviewResult } from '../../api/previewTypes'
 import type {
   SetlistEditBufferWire,
   SetlistEditFalloutWire,
@@ -49,7 +46,12 @@ export interface EditRow {
   /** `SetlistSong.recording_count` for an existing row; 0 for a row that was never saved. */
   recordingCount: number
   /** The saved values at load time, for an existing row -- `null` for a brand-new one, which has nothing to diff against. */
-  original: { title: string; artist: string; length: string; notes: string } | null
+  original: {
+    title: string
+    artist: string
+    length: string
+    notes: string
+  } | null
   /** This row's 1-based concert position at load time -- `null` for a brand-new row. */
   originalPosition: number | null
 }
@@ -96,7 +98,11 @@ export function aliveRows(rows: EditRow[]): EditRow[] {
  * struck-through row never moves just because a neighbour reordered
  * around it. Returns `rows` unchanged if there's nowhere to move.
  */
-export function moveAliveRow(rows: EditRow[], rowKey: string, direction: -1 | 1): EditRow[] {
+export function moveAliveRow(
+  rows: EditRow[],
+  rowKey: string,
+  direction: -1 | 1,
+): EditRow[] {
   const aliveIndices = rows.reduce<number[]>((indices, row, index) => {
     if (!row.deleted) indices.push(index)
     return indices
@@ -104,7 +110,12 @@ export function moveAliveRow(rows: EditRow[], rowKey: string, direction: -1 | 1)
   const fromFullIndex = rows.findIndex((row) => row.rowKey === rowKey)
   const fromAliveIndex = aliveIndices.indexOf(fromFullIndex)
   const toAliveIndex = fromAliveIndex + direction
-  if (fromAliveIndex === -1 || toAliveIndex < 0 || toAliveIndex >= aliveIndices.length) return rows
+  if (
+    fromAliveIndex === -1 ||
+    toAliveIndex < 0 ||
+    toAliveIndex >= aliveIndices.length
+  )
+    return rows
 
   const toFullIndex = aliveIndices[toAliveIndex] as number
   const next = [...rows]
@@ -128,7 +139,9 @@ export function isEdited(row: EditRow): boolean {
 
 /** True if `row`'s position among the surviving rows differs from where it was saved. */
 export function isMoved(row: EditRow, aliveIndex: number): boolean {
-  return row.originalPosition !== null && row.originalPosition !== aliveIndex + 1
+  return (
+    row.originalPosition !== null && row.originalPosition !== aliveIndex + 1
+  )
 }
 
 /** Returns the badges a grid row should render, in display order (issue #335 user stories 14, 31). */
@@ -138,7 +151,8 @@ export function rowBadges(row: EditRow, aliveIndex: number): string[] {
     return [row.origin === 'spotify' ? 'New · from Spotify' : 'New']
   }
   const badges: string[] = []
-  if (isMoved(row, aliveIndex)) badges.push(`Moved ${row.originalPosition}→${aliveIndex + 1}`)
+  if (isMoved(row, aliveIndex))
+    badges.push(`Moved ${row.originalPosition}→${aliveIndex + 1}`)
   if (isEdited(row)) badges.push('Edited')
   return badges
 }
@@ -192,7 +206,8 @@ export function buildBufferWire(
   }
 }
 
-const STALE_MESSAGE = 'The setlist changed while you were editing — reload and reapply.'
+const STALE_MESSAGE =
+  'The setlist changed while you were editing — reload and reapply.'
 
 /**
  * Maps `/api/setlist/preview/`'s write envelope onto `SaveChangesDialog`'s
@@ -228,9 +243,18 @@ export function mapSetlistPreviewToResult(
   }
 
   const changes: PreviewChange[] = [
-    ...fallout.pending_adds.map((title): PreviewChange => ({ op: 'Add', object: title })),
-    ...fallout.pending_edits.map((description): PreviewChange => ({ op: 'Edit', object: description })),
-    ...fallout.pending_deletions.map((deletion): PreviewChange => ({ op: 'Delete', object: deletion.title })),
+    ...fallout.pending_adds.map((title): PreviewChange => ({
+      op: 'Add',
+      object: title,
+    })),
+    ...fallout.pending_edits.map((description): PreviewChange => ({
+      op: 'Edit',
+      object: description,
+    })),
+    ...fallout.pending_deletions.map((deletion): PreviewChange => ({
+      op: 'Delete',
+      object: deletion.title,
+    })),
   ]
   if (fallout.reordered) {
     changes.push({
@@ -240,8 +264,13 @@ export function mapSetlistPreviewToResult(
     })
   }
 
-  const destructive = fallout.pending_deletions.filter((deletion) => deletion.recording_count > 0)
-  const totalRecordings = destructive.reduce((sum, deletion) => sum + deletion.recording_count, 0)
+  const destructive = fallout.pending_deletions.filter(
+    (deletion) => deletion.recording_count > 0,
+  )
+  const totalRecordings = destructive.reduce(
+    (sum, deletion) => sum + deletion.recording_count,
+    0,
+  )
   const doomed =
     destructive.length > 0
       ? {

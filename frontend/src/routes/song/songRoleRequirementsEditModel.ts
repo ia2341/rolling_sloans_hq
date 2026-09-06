@@ -40,7 +40,9 @@ export interface RequirementEditRow {
 }
 
 /** Builds the editor's initial Buffer rows from a freshly-loaded `/api/songs/<pk>/` payload's `role_requirements`. */
-export function rowsFromPayload(roleRequirements: RoleRequirement[]): RequirementEditRow[] {
+export function rowsFromPayload(
+  roleRequirements: RoleRequirement[],
+): RequirementEditRow[] {
   return roleRequirements.map((status) => ({
     roleId: status.role_id,
     roleName: status.role_name,
@@ -59,7 +61,14 @@ export function addRequirementRow(
   if (rows.some((row) => row.roleId === role.id)) return rows
   return [
     ...rows,
-    { roleId: role.id, roleName: role.name, count: 1, originalCount: null, isRetiredRole: false, removed: false },
+    {
+      roleId: role.id,
+      roleName: role.name,
+      count: 1,
+      originalCount: null,
+      isRetiredRole: false,
+      removed: false,
+    },
   ]
 }
 
@@ -73,16 +82,27 @@ export function updateRequirementCount(
 }
 
 /** Marks `roleId`'s row removed (struck through, kept for Undo) -- a never-saved row is dropped outright instead. */
-export function removeRequirementRow(rows: RequirementEditRow[], roleId: number): RequirementEditRow[] {
+export function removeRequirementRow(
+  rows: RequirementEditRow[],
+  roleId: number,
+): RequirementEditRow[] {
   const row = rows.find((candidate) => candidate.roleId === roleId)
   if (!row) return rows
-  if (row.originalCount === null) return rows.filter((candidate) => candidate.roleId !== roleId)
-  return rows.map((candidate) => (candidate.roleId === roleId ? { ...candidate, removed: true } : candidate))
+  if (row.originalCount === null)
+    return rows.filter((candidate) => candidate.roleId !== roleId)
+  return rows.map((candidate) =>
+    candidate.roleId === roleId ? { ...candidate, removed: true } : candidate,
+  )
 }
 
 /** Un-marks `roleId`'s row for removal. */
-export function undoRemoveRequirementRow(rows: RequirementEditRow[], roleId: number): RequirementEditRow[] {
-  return rows.map((row) => (row.roleId === roleId ? { ...row, removed: false } : row))
+export function undoRemoveRequirementRow(
+  rows: RequirementEditRow[],
+  roleId: number,
+): RequirementEditRow[] {
+  return rows.map((row) =>
+    row.roleId === roleId ? { ...row, removed: false } : row,
+  )
 }
 
 /** True if `row`'s count differs from its saved target; always `false` for a brand-new or removed row. */
@@ -121,7 +141,8 @@ export function buildRequirementBufferWire(
   }
 }
 
-const STALE_MESSAGE = 'The Requirements changed while you were editing — reload and reapply.'
+const STALE_MESSAGE =
+  'The Requirements changed while you were editing — reload and reapply.'
 
 /**
  * Maps the Requirements Preview write envelope onto `SaveChangesDialog`'s

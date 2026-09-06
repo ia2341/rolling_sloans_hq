@@ -39,10 +39,14 @@ export function RequirementsEditor({
                 key={row.roleId}
                 className={`flex items-center gap-2 rounded border border-rs-border p-2 ${row.removed ? 'opacity-50' : ''}`}
               >
-                <span className={`flex-1 text-sm ${row.removed ? 'line-through' : ''}`}>
+                <span
+                  className={`flex-1 text-sm ${row.removed ? 'line-through' : ''}`}
+                >
                   {row.roleName}
                   {row.isRetiredRole && (
-                    <span className="ml-1 text-xs text-rs-muted">(retired Role)</span>
+                    <span className="ml-1 text-xs text-rs-muted">
+                      (retired Role)
+                    </span>
                   )}
                   {row.originalCount === null && !row.removed && (
                     <span className="ml-1 text-xs text-rs-muted">(new)</span>
@@ -53,7 +57,9 @@ export function RequirementsEditor({
                     type="number"
                     min={1}
                     value={row.count}
-                    onChange={(event) => onUpdateCount(row.roleId, Number(event.target.value))}
+                    onChange={(event) =>
+                      onUpdateCount(row.roleId, Number(event.target.value))
+                    }
                     aria-label={`${row.roleName} target count`}
                     className="w-16 rounded border border-rs-border px-2 py-1 text-sm"
                   />

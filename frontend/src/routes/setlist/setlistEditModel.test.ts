@@ -37,7 +37,12 @@ function existingRow(overrides: Partial<EditRow> = {}): EditRow {
     deleted: false,
     origin: 'existing',
     recordingCount: 0,
-    original: { title: 'Song A', artist: 'Artist A', length: '3:00', notes: '' },
+    original: {
+      title: 'Song A',
+      artist: 'Artist A',
+      length: '3:00',
+      notes: '',
+    },
     originalPosition: 1,
     ...overrides,
   }
@@ -205,7 +210,9 @@ describe('buildBufferWire', () => {
   })
 })
 
-function baseEnvelope(overrides: Partial<SetlistWriteEnvelope> = {}): SetlistWriteEnvelope {
+function baseEnvelope(
+  overrides: Partial<SetlistWriteEnvelope> = {},
+): SetlistWriteEnvelope {
   return {
     context: {} as SetlistWriteEnvelope['context'],
     ok: true,
@@ -273,7 +280,12 @@ describe('mapSetlistPreviewToResult', () => {
         pending_edits: ['Old Song: title changed'],
         reordered: true,
         pending_deletions: [
-          { title: 'Gone Song', recording_count: 0, uploader_count: 0, running_order_count: 0 },
+          {
+            title: 'Gone Song',
+            recording_count: 0,
+            uploader_count: 0,
+            running_order_count: 0,
+          },
         ],
         loud: ['loud message'],
         quiet: ['quiet message'],
@@ -287,7 +299,10 @@ describe('mapSetlistPreviewToResult', () => {
       { op: 'Delete', object: 'Gone Song' },
       { op: 'Move', object: 'Setlist order', why: 'concert position only' },
     ])
-    expect(result.fallout).toEqual({ loud: ['loud message'], quiet: ['quiet message'] })
+    expect(result.fallout).toEqual({
+      loud: ['loud message'],
+      quiet: ['quiet message'],
+    })
   })
 
   it('builds a doomed block only when a deletion carries recordings', () => {
@@ -300,7 +315,12 @@ describe('mapSetlistPreviewToResult', () => {
         pending_edits: [],
         reordered: false,
         pending_deletions: [
-          { title: 'Recorded Song', recording_count: 3, uploader_count: 2, running_order_count: 0 },
+          {
+            title: 'Recorded Song',
+            recording_count: 3,
+            uploader_count: 2,
+            running_order_count: 0,
+          },
         ],
         loud: [],
         quiet: [],
@@ -323,7 +343,12 @@ describe('mapSetlistPreviewToResult', () => {
         pending_edits: [],
         reordered: false,
         pending_deletions: [
-          { title: 'Clean Song', recording_count: 0, uploader_count: 0, running_order_count: 0 },
+          {
+            title: 'Clean Song',
+            recording_count: 0,
+            uploader_count: 0,
+            running_order_count: 0,
+          },
         ],
         loud: [],
         quiet: [],

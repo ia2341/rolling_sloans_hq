@@ -213,7 +213,11 @@ function EditSessionSpy() {
       <button type="button" onClick={session.discard}>
         toolbar discard
       </button>
-      <button type="button" onClick={session.requestSave} disabled={session.changeCount === 0}>
+      <button
+        type="button"
+        onClick={session.requestSave}
+        disabled={session.changeCount === 0}
+      >
         toolbar save
       </button>
       <p>{session.changeCount} unsaved</p>
@@ -228,8 +232,12 @@ describe('Song requirements editor', () => {
     renderShell(<Song />, ['/songs/1'])
 
     await screen.findByRole('heading', { name: 'Test Song' })
-    expect(screen.queryByRole('button', { name: 'Edit song' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: '+ Add role requirement' })).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Edit song' }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: '+ Add role requirement' }),
+    ).not.toBeInTheDocument()
   })
 
   it('renders the read-only fill status for every viewer, including a member', async () => {
@@ -237,7 +245,14 @@ describe('Song requirements editor', () => {
       context: memberContext(),
       data: songPayload({
         role_requirements: [
-          { role_id: 1, role_name: 'Singer', target: 2, actual: 1, is_understaffed: true, is_retired_role: false },
+          {
+            role_id: 1,
+            role_name: 'Singer',
+            target: 2,
+            actual: 1,
+            is_understaffed: true,
+            is_retired_role: false,
+          },
         ],
       }),
     })
@@ -252,7 +267,14 @@ describe('Song requirements editor', () => {
       context: adminContext(),
       data: songPayload({
         role_requirements: [
-          { role_id: 1, role_name: 'Singer', target: 2, actual: 1, is_understaffed: true, is_retired_role: false },
+          {
+            role_id: 1,
+            role_name: 'Singer',
+            target: 2,
+            actual: 1,
+            is_understaffed: true,
+            is_retired_role: false,
+          },
         ],
       }),
     })
@@ -278,7 +300,14 @@ describe('Song requirements editor', () => {
       context: adminContext(),
       data: songPayload({
         role_requirements: [
-          { role_id: 1, role_name: 'Singer', target: 2, actual: 1, is_understaffed: true, is_retired_role: false },
+          {
+            role_id: 1,
+            role_name: 'Singer',
+            target: 2,
+            actual: 1,
+            is_understaffed: true,
+            is_retired_role: false,
+          },
         ],
       }),
     })
@@ -298,7 +327,9 @@ describe('Song requirements editor', () => {
 
     expect(countInput).toHaveValue(3)
     expect(screen.getByText('1 unsaved')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'toolbar save' })).not.toBeDisabled()
+    expect(
+      screen.getByRole('button', { name: 'toolbar save' }),
+    ).not.toBeDisabled()
   })
 
   it('removing a row strikes it through, and Undo restores it with no changes left', async () => {
@@ -306,7 +337,14 @@ describe('Song requirements editor', () => {
       context: adminContext(),
       data: songPayload({
         role_requirements: [
-          { role_id: 1, role_name: 'Singer', target: 2, actual: 1, is_understaffed: true, is_retired_role: false },
+          {
+            role_id: 1,
+            role_name: 'Singer',
+            target: 2,
+            actual: 1,
+            is_understaffed: true,
+            is_retired_role: false,
+          },
         ],
       }),
     })
@@ -320,7 +358,9 @@ describe('Song requirements editor', () => {
     )
     await user.click(await screen.findByRole('button', { name: 'Edit song' }))
 
-    await user.click(screen.getByRole('button', { name: 'Remove Singer requirement' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Remove Singer requirement' }),
+    )
     expect(screen.getByText('1 unsaved')).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: 'Undo' }))
@@ -339,7 +379,14 @@ describe('Song requirements editor', () => {
             context: adminContext(),
             data: songPayload({
               role_requirements: [
-                { role_id: 1, role_name: 'Singer', target: 2, actual: 1, is_understaffed: true, is_retired_role: false },
+                {
+                  role_id: 1,
+                  role_name: 'Singer',
+                  target: 2,
+                  actual: 1,
+                  is_understaffed: true,
+                  is_retired_role: false,
+                },
               ],
             }),
           }),
@@ -384,10 +431,14 @@ describe('Song requirements editor', () => {
 
     await user.click(screen.getByRole('button', { name: 'toolbar save' }))
 
-    await waitFor(() => expect(screen.getByText('What changes')).toBeInTheDocument())
+    await waitFor(() =>
+      expect(screen.getByText('What changes')).toBeInTheDocument(),
+    )
     expect(screen.getByText('Singer, 2 → 3')).toBeInTheDocument()
     expect(fetchSpy).toHaveBeenCalledTimes(2)
-    expect(fetchSpy.mock.calls[1]?.[0]).toBe('/api/songs/1/requirements/preview/')
+    expect(fetchSpy.mock.calls[1]?.[0]).toBe(
+      '/api/songs/1/requirements/preview/',
+    )
   })
 
   it('confirming a save posts to the save endpoint and returns to read mode on success', async () => {
@@ -401,7 +452,14 @@ describe('Song requirements editor', () => {
             context: adminContext(),
             data: songPayload({
               role_requirements: [
-                { role_id: 1, role_name: 'Singer', target: 2, actual: 1, is_understaffed: true, is_retired_role: false },
+                {
+                  role_id: 1,
+                  role_name: 'Singer',
+                  target: 2,
+                  actual: 1,
+                  is_understaffed: true,
+                  is_retired_role: false,
+                },
               ],
             }),
           }),
@@ -451,7 +509,14 @@ describe('Song requirements editor', () => {
             context: adminContext(),
             data: songPayload({
               role_requirements: [
-                { role_id: 1, role_name: 'Singer', target: 3, actual: 1, is_understaffed: true, is_retired_role: false },
+                {
+                  role_id: 1,
+                  role_name: 'Singer',
+                  target: 3,
+                  actual: 1,
+                  is_understaffed: true,
+                  is_retired_role: false,
+                },
               ],
             }),
           }),
@@ -471,11 +536,15 @@ describe('Song requirements editor', () => {
     await user.clear(countInput)
     await user.type(countInput, '3')
     await user.click(screen.getByRole('button', { name: 'toolbar save' }))
-    await waitFor(() => expect(screen.getByText('What changes')).toBeInTheDocument())
+    await waitFor(() =>
+      expect(screen.getByText('What changes')).toBeInTheDocument(),
+    )
 
     await user.click(screen.getByRole('button', { name: 'Save changes' }))
 
-    await waitFor(() => expect(screen.getByText('no edit session')).toBeInTheDocument())
+    await waitFor(() =>
+      expect(screen.getByText('no edit session')).toBeInTheDocument(),
+    )
     expect(fetchSpy.mock.calls[2]?.[0]).toBe('/api/songs/1/requirements/save/')
     expect(screen.getByText('Singer 1/3')).toBeInTheDocument()
   })

@@ -47,7 +47,7 @@ describe('RehearsalContextBar', () => {
     expect(screen.getByText('18:00–21:00 · Dress')).toBeInTheDocument()
   })
 
-  it("disables the Assignments half on the Dress Rehearsal with the ADR 0003 reason", () => {
+  it('disables the Assignments half on the Dress Rehearsal with the ADR 0003 reason', () => {
     render(
       <RehearsalContextBar
         rehearsal={DRESS_REHEARSAL}

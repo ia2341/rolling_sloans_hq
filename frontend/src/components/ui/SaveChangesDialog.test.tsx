@@ -16,7 +16,10 @@ const okResult: PreviewResult = {
     { op: 'Edit', object: 'Blackbird', why: 'title changed' },
     { op: 'Add', object: 'New Song' },
   ],
-  fallout: { loud: ['Deleting X destroys 2 recordings.'], quiet: ['Reordering changes concert position only.'] },
+  fallout: {
+    loud: ['Deleting X destroys 2 recordings.'],
+    quiet: ['Reordering changes concert position only.'],
+  },
 }
 
 const doomedResult: PreviewResult = {
@@ -58,7 +61,9 @@ describe('SaveChangesDialog', () => {
         onConfirm={() => {}}
       />,
     )
-    await waitFor(() => expect(screen.getByText('What changes')).toBeInTheDocument())
+    await waitFor(() =>
+      expect(screen.getByText('What changes')).toBeInTheDocument(),
+    )
     expect(preview).toHaveBeenCalledTimes(1)
 
     // Re-render while still open must not re-call preview.
@@ -107,7 +112,9 @@ describe('SaveChangesDialog', () => {
       />,
     )
 
-    await waitFor(() => expect(screen.getByText('Blackbird')).toBeInTheDocument())
+    await waitFor(() =>
+      expect(screen.getByText('Blackbird')).toBeInTheDocument(),
+    )
     expect(screen.getByText('Edit')).toBeInTheDocument()
     expect(screen.getByText(/title changed/)).toBeInTheDocument()
     expect(screen.getByText('New Song')).toBeInTheDocument()
@@ -126,7 +133,9 @@ describe('SaveChangesDialog', () => {
       />,
     )
 
-    await waitFor(() => expect(screen.getByText(/Needs your attention/)).toBeInTheDocument())
+    await waitFor(() =>
+      expect(screen.getByText(/Needs your attention/)).toBeInTheDocument(),
+    )
     expect(screen.getByText('Needs your attention · 1')).toBeInTheDocument()
     expect(screen.getByText('Also true · 1')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled()
@@ -149,7 +158,9 @@ describe('SaveChangesDialog', () => {
         screen.getByText('2 Recordings will be permanently deleted'),
       ).toBeInTheDocument(),
     )
-    expect(screen.getByText(/leave storage when this commits/)).toBeInTheDocument()
+    expect(
+      screen.getByText(/leave storage when this commits/),
+    ).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Save anyway' })).toBeEnabled()
   })
 
@@ -165,9 +176,15 @@ describe('SaveChangesDialog', () => {
       />,
     )
 
-    await waitFor(() => expect(screen.getByText('What changes')).toBeInTheDocument())
-    expect(screen.queryByRole('button', { name: 'Save anyway' })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Save changes' })).toBeInTheDocument()
+    await waitFor(() =>
+      expect(screen.getByText('What changes')).toBeInTheDocument(),
+    )
+    expect(
+      screen.queryByRole('button', { name: 'Save anyway' }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Save changes' }),
+    ).toBeInTheDocument()
   })
 
   it('renders errors with no confirm affordance and no What-changes/Fallout sections on ok: false', async () => {
@@ -182,9 +199,13 @@ describe('SaveChangesDialog', () => {
       />,
     )
 
-    await waitFor(() => expect(screen.getByText('Validation errors')).toBeInTheDocument())
+    await waitFor(() =>
+      expect(screen.getByText('Validation errors')).toBeInTheDocument(),
+    )
     expect(screen.getByText('semester_id is required.')).toBeInTheDocument()
-    expect(screen.getByText(/length: Enter a length as M:SS\./)).toBeInTheDocument()
+    expect(
+      screen.getByText(/length: Enter a length as M:SS\./),
+    ).toBeInTheDocument()
     expect(screen.queryByText('What changes')).not.toBeInTheDocument()
     expect(screen.queryByText(/Needs your attention/)).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled()
@@ -204,7 +225,9 @@ describe('SaveChangesDialog', () => {
         onConfirm={onConfirm}
       />,
     )
-    await waitFor(() => expect(screen.getByText('What changes')).toBeInTheDocument())
+    await waitFor(() =>
+      expect(screen.getByText('What changes')).toBeInTheDocument(),
+    )
 
     await user.click(screen.getByRole('button', { name: 'Keep editing' }))
 
@@ -234,7 +257,9 @@ describe('SaveChangesDialog', () => {
 
     resolvePreview(okResult)
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled(),
+      expect(
+        screen.getByRole('button', { name: 'Save changes' }),
+      ).toBeEnabled(),
     )
   })
 
@@ -268,6 +293,8 @@ describe('SaveChangesDialog', () => {
       />,
     )
 
-    await waitFor(() => expect(screen.getByRole('dialog')).toHaveClass('bottom-0'))
+    await waitFor(() =>
+      expect(screen.getByRole('dialog')).toHaveClass('bottom-0'),
+    )
   })
 })

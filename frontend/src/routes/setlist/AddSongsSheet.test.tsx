@@ -23,10 +23,9 @@ describe('AddSongsSheet', () => {
   it('defaults to the Spotify section with the Fetch button disabled until a link is typed', () => {
     renderOpen()
 
-    expect(screen.getByRole('radio', { name: 'From a Spotify playlist' })).toHaveAttribute(
-      'aria-checked',
-      'true',
-    )
+    expect(
+      screen.getByRole('radio', { name: 'From a Spotify playlist' }),
+    ).toHaveAttribute('aria-checked', 'true')
     expect(screen.getByRole('button', { name: 'Fetch' })).toBeDisabled()
   })
 
@@ -35,8 +34,18 @@ describe('AddSongsSheet', () => {
       context: memberContext(),
       data: {
         songs: [
-          { title: 'Song One', artist: 'Artist One', length: '3:00', already_in_setlist: false },
-          { title: 'Song Two', artist: 'Artist Two', length: '2:30', already_in_setlist: true },
+          {
+            title: 'Song One',
+            artist: 'Artist One',
+            length: '3:00',
+            already_in_setlist: false,
+          },
+          {
+            title: 'Song Two',
+            artist: 'Artist Two',
+            length: '2:30',
+            already_in_setlist: true,
+          },
         ],
         skipped_count: 0,
         skipped_reasons: {},
@@ -46,7 +55,10 @@ describe('AddSongsSheet', () => {
     const user = userEvent.setup()
     renderOpen()
 
-    await user.type(screen.getByLabelText('Playlist link'), 'https://open.spotify.com/playlist/abc')
+    await user.type(
+      screen.getByLabelText('Playlist link'),
+      'https://open.spotify.com/playlist/abc',
+    )
     await user.click(screen.getByRole('button', { name: 'Fetch' }))
 
     await screen.findByText(/Song One/)
@@ -58,7 +70,14 @@ describe('AddSongsSheet', () => {
     mockFetchOnce(200, {
       context: memberContext(),
       data: {
-        songs: [{ title: 'Song One', artist: 'Artist One', length: '3:00', already_in_setlist: false }],
+        songs: [
+          {
+            title: 'Song One',
+            artist: 'Artist One',
+            length: '3:00',
+            already_in_setlist: false,
+          },
+        ],
         skipped_count: 2,
         skipped_reasons: { 'local file': 2 },
         message: '',
@@ -67,16 +86,26 @@ describe('AddSongsSheet', () => {
     const user = userEvent.setup()
     renderOpen()
 
-    await user.type(screen.getByLabelText('Playlist link'), 'https://open.spotify.com/playlist/abc')
+    await user.type(
+      screen.getByLabelText('Playlist link'),
+      'https://open.spotify.com/playlist/abc',
+    )
     await user.click(screen.getByRole('button', { name: 'Fetch' }))
 
-    expect(await screen.findByText('Skipped 2 items (2 local files)')).toBeInTheDocument()
+    expect(
+      await screen.findByText('Skipped 2 items (2 local files)'),
+    ).toBeInTheDocument()
   })
 
   it('shows a readable message and no candidates when the fetch fails', async () => {
     mockFetchOnce(200, {
       context: memberContext(),
-      data: { songs: [], skipped_count: 0, skipped_reasons: {}, message: "That doesn't look like a Spotify playlist link." },
+      data: {
+        songs: [],
+        skipped_count: 0,
+        skipped_reasons: {},
+        message: "That doesn't look like a Spotify playlist link.",
+      },
     })
     const user = userEvent.setup()
     renderOpen()
@@ -89,12 +118,15 @@ describe('AddSongsSheet', () => {
     )
   })
 
-  it("shows a network-failure message when the fetch itself rejects", async () => {
+  it('shows a network-failure message when the fetch itself rejects', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network down')))
     const user = userEvent.setup()
     renderOpen()
 
-    await user.type(screen.getByLabelText('Playlist link'), 'https://open.spotify.com/playlist/abc')
+    await user.type(
+      screen.getByLabelText('Playlist link'),
+      'https://open.spotify.com/playlist/abc',
+    )
     await user.click(screen.getByRole('button', { name: 'Fetch' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
@@ -107,8 +139,18 @@ describe('AddSongsSheet', () => {
       context: memberContext(),
       data: {
         songs: [
-          { title: 'Song One', artist: 'Artist One', length: '3:00', already_in_setlist: false },
-          { title: 'Song Two', artist: 'Artist Two', length: '2:30', already_in_setlist: false },
+          {
+            title: 'Song One',
+            artist: 'Artist One',
+            length: '3:00',
+            already_in_setlist: false,
+          },
+          {
+            title: 'Song Two',
+            artist: 'Artist Two',
+            length: '2:30',
+            already_in_setlist: false,
+          },
         ],
         skipped_count: 0,
         skipped_reasons: {},
@@ -119,14 +161,21 @@ describe('AddSongsSheet', () => {
     const user = userEvent.setup()
     renderOpen(onAddRows)
 
-    await user.type(screen.getByLabelText('Playlist link'), 'https://open.spotify.com/playlist/abc')
+    await user.type(
+      screen.getByLabelText('Playlist link'),
+      'https://open.spotify.com/playlist/abc',
+    )
     await user.click(screen.getByRole('button', { name: 'Fetch' }))
     await screen.findByText(/Song One/)
 
-    expect(screen.getByRole('button', { name: 'Add to the buffer' })).toBeDisabled()
+    expect(
+      screen.getByRole('button', { name: 'Add to the buffer' }),
+    ).toBeDisabled()
 
     await user.click(screen.getByRole('checkbox', { name: /Song One/ }))
-    expect(screen.getByRole('button', { name: 'Add to the buffer' })).toBeEnabled()
+    expect(
+      screen.getByRole('button', { name: 'Add to the buffer' }),
+    ).toBeEnabled()
 
     await user.click(screen.getByRole('button', { name: 'Add to the buffer' }))
 
@@ -172,14 +221,18 @@ describe('AddSongsSheet', () => {
 
     await user.click(screen.getByRole('radio', { name: 'By hand' }))
 
-    expect(screen.getByRole('button', { name: 'Add to the buffer' })).toBeDisabled()
+    expect(
+      screen.getByRole('button', { name: 'Add to the buffer' }),
+    ).toBeDisabled()
   })
 
   it('Cancel resets the form without calling onAddRows', async () => {
     const onOpenChange = vi.fn()
     const onAddRows = vi.fn()
     const user = userEvent.setup()
-    render(<AddSongsSheet open onOpenChange={onOpenChange} onAddRows={onAddRows} />)
+    render(
+      <AddSongsSheet open onOpenChange={onOpenChange} onAddRows={onAddRows} />,
+    )
 
     await user.click(screen.getByRole('radio', { name: 'By hand' }))
     await user.type(screen.getByLabelText('Title'), 'Hand Song')

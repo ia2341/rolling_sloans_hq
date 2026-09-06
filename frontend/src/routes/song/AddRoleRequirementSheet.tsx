@@ -61,10 +61,13 @@ export function AddRoleRequirementSheet({
     if (!trimmed) return
     setDeclaring(true)
     setMessage(null)
-    void apiFetch<ReadEnvelope<RoleDeclarationPayload>>('/api/members/roster/roles/', {
-      method: 'POST',
-      body: JSON.stringify({ name: trimmed }),
-    }).then((envelope) => {
+    void apiFetch<ReadEnvelope<RoleDeclarationPayload>>(
+      '/api/members/roster/roles/',
+      {
+        method: 'POST',
+        body: JSON.stringify({ name: trimmed }),
+      },
+    ).then((envelope) => {
       setDeclaring(false)
       const { role, created, reactivated } = envelope.data
       if (existingRoleIds.has(role.id)) {

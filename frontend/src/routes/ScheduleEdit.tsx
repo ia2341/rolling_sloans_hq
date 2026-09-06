@@ -68,13 +68,16 @@ function nextRowKey(prefix: string): string {
 }
 
 /** Converts an `EditableRehearsal` read-model row into this route's editable draft shape. */
-function toDraftRehearsal(rehearsal: ScheduleEditorPayload['rehearsals'][number]): DraftRehearsal {
+function toDraftRehearsal(
+  rehearsal: ScheduleEditorPayload['rehearsals'][number],
+): DraftRehearsal {
   return {
     rowKey: `rehearsal-${rehearsal.id}`,
     rehearsalId: rehearsal.id,
     date: rehearsal.date,
     startTime: rehearsal.start_time.slice(0, 5),
-    endTime: rehearsal.end_time !== null ? rehearsal.end_time.slice(0, 5) : null,
+    endTime:
+      rehearsal.end_time !== null ? rehearsal.end_time.slice(0, 5) : null,
     isFullSetlist: rehearsal.is_full_setlist,
     setupGraceMinutes: rehearsal.setup_grace_minutes,
     teardownGraceMinutes: rehearsal.teardown_grace_minutes,
@@ -113,7 +116,10 @@ function snapshotOf(draft: DraftRehearsal): RehearsalSnapshot {
     date: draft.date,
     startTime: draft.startTime,
     endTime: draft.endTime,
-    runningOrder: draft.runningOrder.map((row) => ({ songId: row.songId, slotCount: row.slotCount })),
+    runningOrder: draft.runningOrder.map((row) => ({
+      songId: row.songId,
+      slotCount: row.slotCount,
+    })),
   }
 }
 
@@ -198,8 +204,14 @@ function flagsFor(
   }
   if (draft.rehearsalId === null) {
     flags.push('New')
-  } else if (baseline !== undefined && (baseline.startTime !== draft.startTime || baseline.endTime !== draft.endTime)) {
-    flags.push(`Re-timed [from ${baseline.startTime}–${baseline.endTime ?? '?'}]`)
+  } else if (
+    baseline !== undefined &&
+    (baseline.startTime !== draft.startTime ||
+      baseline.endTime !== draft.endTime)
+  ) {
+    flags.push(
+      `Re-timed [from ${baseline.startTime}–${baseline.endTime ?? '?'}]`,
+    )
   }
   return flags
 }
@@ -219,7 +231,9 @@ export function ScheduleEdit() {
 
   const [payload, setPayload] = useState<ScheduleEditorPayload | null>(null)
   const [rows, setRows] = useState<DraftRehearsal[]>([])
-  const [baselines, setBaselines] = useState<Map<string, RehearsalSnapshot>>(new Map())
+  const [baselines, setBaselines] = useState<Map<string, RehearsalSnapshot>>(
+    new Map(),
+  )
   const [deletedIds, setDeletedIds] = useState<Set<number>>(new Set())
   const [openKey, setOpenKey] = useState('')
   const [mode, setMode] = useState<RehearsalContextMode>('running-order')
@@ -229,11 +243,15 @@ export function ScheduleEdit() {
   const [dealError, setDealError] = useState<string | null>(null)
 
   const load = useCallback(() => {
-    void apiFetch<ReadEnvelope<ScheduleEditorPayload>>('/api/schedule/editor/').then((envelope) => {
+    void apiFetch<ReadEnvelope<ScheduleEditorPayload>>(
+      '/api/schedule/editor/',
+    ).then((envelope) => {
       setPayload(envelope.data)
       const draftRows = envelope.data.rehearsals.map(toDraftRehearsal)
       setRows(draftRows)
-      setBaselines(new Map(draftRows.map((row) => [row.rowKey, snapshotOf(row)])))
+      setBaselines(
+        new Map(draftRows.map((row) => [row.rowKey, snapshotOf(row)])),
+      )
       setDeletedIds(new Set())
     })
   }, [])
@@ -246,14 +264,18 @@ export function ScheduleEdit() {
     (draft: DraftRehearsal): boolean => {
       if (draft.rehearsalId === null) return true
       const baseline = baselines.get(draft.rowKey)
-      return baseline === undefined || !snapshotsEqual(baseline, snapshotOf(draft))
+      return (
+        baseline === undefined || !snapshotsEqual(baseline, snapshotOf(draft))
+      )
     },
     [baselines],
   )
 
   const changeCount = useMemo(() => {
     const dirtyRows = rows.filter(
-      (row) => (row.rehearsalId === null || !deletedIds.has(row.rehearsalId)) && isDirty(row),
+      (row) =>
+        (row.rehearsalId === null || !deletedIds.has(row.rehearsalId)) &&
+        isDirty(row),
     ).length
     return dirtyRows + deletedIds.size
   }, [rows, deletedIds, isDirty])
@@ -265,7 +287,11 @@ export function ScheduleEdit() {
   const blockedReason: string | null = null
 
   const buildBufferInput = useCallback((): RehearsalEditBufferInput | null => {
-    if (appContext?.viewing_semester === null || appContext?.viewing_semester === undefined) return null
+    if (
+      appContext?.viewing_semester === null ||
+      appContext?.viewing_semester === undefined
+    )
+      return null
     const survivingRows = rows.filter(
       (row) => row.rehearsalId === null || !deletedIds.has(row.rehearsalId),
     )
@@ -280,7 +306,8 @@ export function ScheduleEdit() {
   const computeChanges = useCallback((): PreviewResult['changes'] => {
     const changes: PreviewResult['changes'] = []
     for (const row of rows) {
-      const isDeleted = row.rehearsalId !== null && deletedIds.has(row.rehearsalId)
+      const isDeleted =
+        row.rehearsalId !== null && deletedIds.has(row.rehearsalId)
       if (isDeleted) {
         changes.push({ op: 'Delete', object: `Rehearsal on ${row.date}` })
         continue
@@ -302,12 +329,19 @@ export function ScheduleEdit() {
   const runPreview = useCallback(async (): Promise<PreviewResult> => {
     const body = buildBufferInput()
     if (body === null) {
-      return { ok: false, changes: [], fallout: { loud: [], quiet: [] }, nonFieldErrors: ['No Semester is being edited.'] }
+      return {
+        ok: false,
+        changes: [],
+        fallout: { loud: [], quiet: [] },
+        nonFieldErrors: ['No Semester is being edited.'],
+      }
     }
-    const envelope = await apiFetch<WriteEnvelope<null, unknown, RehearsalEditFalloutPayload>>(
-      '/api/schedule/editor/preview/',
-      { method: 'POST', body: JSON.stringify(body) },
-    )
+    const envelope = await apiFetch<
+      WriteEnvelope<null, unknown, RehearsalEditFalloutPayload>
+    >('/api/schedule/editor/preview/', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
     if (!envelope.ok || envelope.fallout === null) {
       return {
         ok: false,
@@ -342,8 +376,20 @@ export function ScheduleEdit() {
   // what the toolbar shows until `mode` flips back.
   useRegisterEditSession(
     mode === 'assignments'
-      ? { what: 'the rehearsal schedule', changeCount: 0, blockedReason: null, discard: () => {}, requestSave: () => {} }
-      : { what: 'the rehearsal schedule', changeCount, blockedReason, discard, requestSave: () => setSaveOpen(true) },
+      ? {
+          what: 'the rehearsal schedule',
+          changeCount: 0,
+          blockedReason: null,
+          discard: () => {},
+          requestSave: () => {},
+        }
+      : {
+          what: 'the rehearsal schedule',
+          changeCount,
+          blockedReason,
+          discard,
+          requestSave: () => setSaveOpen(true),
+        },
   )
 
   const addRehearsal = useCallback(() => {
@@ -352,7 +398,9 @@ export function ScheduleEdit() {
 
   const toggleDeleted = useCallback((draft: DraftRehearsal) => {
     if (draft.rehearsalId === null) {
-      setRows((previous) => previous.filter((row) => row.rowKey !== draft.rowKey))
+      setRows((previous) =>
+        previous.filter((row) => row.rowKey !== draft.rowKey),
+      )
       return
     }
     setDeletedIds((previous) => {
@@ -364,11 +412,16 @@ export function ScheduleEdit() {
     })
   }, [])
 
-  const updateRow = useCallback((rowKey: string, patch: Partial<DraftRehearsal>) => {
-    setRows((previous) =>
-      previous.map((row) => (row.rowKey === rowKey ? { ...row, ...patch } : row)),
-    )
-  }, [])
+  const updateRow = useCallback(
+    (rowKey: string, patch: Partial<DraftRehearsal>) => {
+      setRows((previous) =>
+        previous.map((row) =>
+          row.rowKey === rowKey ? { ...row, ...patch } : row,
+        ),
+      )
+    },
+    [],
+  )
 
   const moveRunningOrderRow = useCallback(
     (rowKey: string, index: number, direction: -1 | 1) => {
@@ -390,90 +443,116 @@ export function ScheduleEdit() {
     [],
   )
 
-  const addSongToRow = useCallback((rowKey: string, song: EditorSetlistSong) => {
-    setRows((previous) =>
-      previous.map((row) =>
-        row.rowKey === rowKey
-          ? {
-              ...row,
-              runningOrder: [
-                ...row.runningOrder,
-                {
-                  key: nextRowKey('new-running-order'),
-                  rehearsalSongId: null,
-                  songId: song.id,
-                  songTitle: song.title,
-                  slotCount: 1,
-                  isPinned: false,
-                },
-              ],
-            }
-          : row,
-      ),
-    )
-  }, [])
+  const addSongToRow = useCallback(
+    (rowKey: string, song: EditorSetlistSong) => {
+      setRows((previous) =>
+        previous.map((row) =>
+          row.rowKey === rowKey
+            ? {
+                ...row,
+                runningOrder: [
+                  ...row.runningOrder,
+                  {
+                    key: nextRowKey('new-running-order'),
+                    rehearsalSongId: null,
+                    songId: song.id,
+                    songTitle: song.title,
+                    slotCount: 1,
+                    isPinned: false,
+                  },
+                ],
+              }
+            : row,
+        ),
+      )
+    },
+    [],
+  )
 
   const removeRunningOrderRow = useCallback((rowKey: string, key: string) => {
     setRows((previous) =>
       previous.map((row) =>
         row.rowKey === rowKey
-          ? { ...row, runningOrder: row.runningOrder.filter((r) => r.key !== key) }
-          : row,
-      ),
-    )
-  }, [])
-
-  const setSlotCount = useCallback((rowKey: string, key: string, slotCount: number) => {
-    setRows((previous) =>
-      previous.map((row) =>
-        row.rowKey === rowKey
           ? {
               ...row,
-              runningOrder: row.runningOrder.map((r) => (r.key === key ? { ...r, slotCount } : r)),
+              runningOrder: row.runningOrder.filter((r) => r.key !== key),
             }
           : row,
       ),
     )
   }, [])
 
-  const applyDealtRows = useCallback((dealtByRehearsalId: Map<number, DealtRow[]>) => {
-    setRows((previous) =>
-      previous.map((row) => {
-        if (row.rehearsalId === null) return row
-        const dealt = dealtByRehearsalId.get(row.rehearsalId)
-        if (dealt === undefined) return row
-        return {
-          ...row,
-          runningOrder: dealt.map((dealtRow) => {
-            const existing = row.runningOrder.find(
-              (r) => r.rehearsalSongId !== null && r.rehearsalSongId === dealtRow.rehearsal_song_id,
-            )
-            const song = payload?.setlist_songs.find((s) => s.id === dealtRow.song_id)
-            return {
-              key: existing?.key ?? nextRowKey('dealt-running-order'),
-              rehearsalSongId: dealtRow.rehearsal_song_id,
-              songId: dealtRow.song_id,
-              songTitle: existing?.songTitle ?? song?.title ?? '',
-              slotCount: dealtRow.slot_count,
-              isPinned: existing?.isPinned ?? false,
-            }
-          }),
-        }
-      }),
-    )
-  }, [payload])
+  const setSlotCount = useCallback(
+    (rowKey: string, key: string, slotCount: number) => {
+      setRows((previous) =>
+        previous.map((row) =>
+          row.rowKey === rowKey
+            ? {
+                ...row,
+                runningOrder: row.runningOrder.map((r) =>
+                  r.key === key ? { ...r, slotCount } : r,
+                ),
+              }
+            : row,
+        ),
+      )
+    },
+    [],
+  )
+
+  const applyDealtRows = useCallback(
+    (dealtByRehearsalId: Map<number, DealtRow[]>) => {
+      setRows((previous) =>
+        previous.map((row) => {
+          if (row.rehearsalId === null) return row
+          const dealt = dealtByRehearsalId.get(row.rehearsalId)
+          if (dealt === undefined) return row
+          return {
+            ...row,
+            runningOrder: dealt.map((dealtRow) => {
+              const existing = row.runningOrder.find(
+                (r) =>
+                  r.rehearsalSongId !== null &&
+                  r.rehearsalSongId === dealtRow.rehearsal_song_id,
+              )
+              const song = payload?.setlist_songs.find(
+                (s) => s.id === dealtRow.song_id,
+              )
+              return {
+                key: existing?.key ?? nextRowKey('dealt-running-order'),
+                rehearsalSongId: dealtRow.rehearsal_song_id,
+                songId: dealtRow.song_id,
+                songTitle: existing?.songTitle ?? song?.title ?? '',
+                slotCount: dealtRow.slot_count,
+                isPinned: existing?.isPinned ?? false,
+              }
+            }),
+          }
+        }),
+      )
+    },
+    [payload],
+  )
 
   const runDeal = useCallback(async () => {
     setDealError(null)
     try {
-      const envelope = await apiFetch<ReadEnvelope<{ rehearsals: { rehearsal_id: number; rows: DealtRow[] }[] }>>(
-        '/api/schedule/editor/deal/',
-        { method: 'POST' },
+      const envelope = await apiFetch<
+        ReadEnvelope<{
+          rehearsals: { rehearsal_id: number; rows: DealtRow[] }[]
+        }>
+      >('/api/schedule/editor/deal/', { method: 'POST' })
+      const byId = new Map(
+        envelope.data.rehearsals.map((r) => [r.rehearsal_id, r.rows]),
       )
-      const byId = new Map(envelope.data.rehearsals.map((r) => [r.rehearsal_id, r.rows]))
       applyDealtRows(byId)
     } catch (error) {
-      if (error instanceof ApiError && error.body && typeof error.body === 'object' && 'error' in error.body) {
+      if (
+        error instanceof ApiError &&
+        error.body &&
+        typeof error.body === 'object' &&
+        'error' in error.body
+      ) {
         setDealError(String((error.body as { error: string }).error))
       } else {
         setDealError('Something went wrong dealing the schedule.')
@@ -481,19 +560,26 @@ export function ScheduleEdit() {
     }
   }, [applyDealtRows])
 
-  const runShuffle = useCallback(async (rehearsalId: number, rowKey: string) => {
-    const envelope = await apiFetch<ReadEnvelope<{ rows: DealtRow[] }>>(
-      `/api/schedule/editor/rehearsal/${rehearsalId}/shuffle/`,
-      { method: 'POST' },
-    )
-    applyDealtRows(new Map([[rehearsalId, envelope.data.rows]]))
-    void rowKey
-  }, [applyDealtRows])
+  const runShuffle = useCallback(
+    async (rehearsalId: number, rowKey: string) => {
+      const envelope = await apiFetch<ReadEnvelope<{ rows: DealtRow[] }>>(
+        `/api/schedule/editor/rehearsal/${rehearsalId}/shuffle/`,
+        { method: 'POST' },
+      )
+      applyDealtRows(new Map([[rehearsalId, envelope.data.rows]]))
+      void rowKey
+    },
+    [applyDealtRows],
+  )
 
   if (payload === null) return null
 
-  const activeRows = rows.filter((row) => row.rehearsalId === null || !deletedIds.has(row.rehearsalId))
-  const removedRows = rows.filter((row) => row.rehearsalId !== null && deletedIds.has(row.rehearsalId))
+  const activeRows = rows.filter(
+    (row) => row.rehearsalId === null || !deletedIds.has(row.rehearsalId),
+  )
+  const removedRows = rows.filter(
+    (row) => row.rehearsalId !== null && deletedIds.has(row.rehearsalId),
+  )
 
   // The Assignments stepper (issue #338 user stories 27-28) walks only
   // persisted Rehearsals, skipping the Dress Rehearsal and wrapping,
@@ -502,7 +588,9 @@ export function ScheduleEdit() {
   // appears in this list at all.
   const steppableRows = activeRows.filter((row) => row.rehearsalId !== null)
   const stepAssignmentRehearsal = (direction: -1 | 1) => {
-    const currentIndex = steppableRows.findIndex((row) => row.rowKey === openKey)
+    const currentIndex = steppableRows.findIndex(
+      (row) => row.rowKey === openKey,
+    )
     if (currentIndex === -1) return
     const nextIndex = stepRehearsalIndex(
       steppableRows.map((row) => ({ isDressRehearsal: row.isFullSetlist })),
@@ -517,7 +605,9 @@ export function ScheduleEdit() {
     <div>
       <PageHead
         title="Edit schedule"
-        subline={payload.semester_name !== null ? payload.semester_name : undefined}
+        subline={
+          payload.semester_name !== null ? payload.semester_name : undefined
+        }
       />
 
       {isPhone ? (
@@ -525,7 +615,8 @@ export function ScheduleEdit() {
           openKey={openKey}
           onOpenKeyChange={setOpenKey}
           items={[...activeRows, ...removedRows].map((row) => {
-            const isDeleted = row.rehearsalId !== null && deletedIds.has(row.rehearsalId)
+            const isDeleted =
+              row.rehearsalId !== null && deletedIds.has(row.rehearsalId)
             const flags = flagsFor(row, baselines.get(row.rowKey), isDeleted)
             return {
               key: row.rowKey,
@@ -536,7 +627,8 @@ export function ScheduleEdit() {
                     {row.endTime !== null ? `–${row.endTime}` : ''}
                   </p>
                   <p className="text-sm text-rs-muted">
-                    {row.runningOrder.length} song{row.runningOrder.length === 1 ? '' : 's'}
+                    {row.runningOrder.length} song
+                    {row.runningOrder.length === 1 ? '' : 's'}
                     {flags.length > 0 ? ` · ${flags.join(' · ')}` : ''}
                   </p>
                 </div>
@@ -550,11 +642,18 @@ export function ScheduleEdit() {
                   onToggleDeleted={() => toggleDeleted(row)}
                   isDeleted={isDeleted}
                   setlistSongs={payload.setlist_songs}
-                  onMove={(index, direction) => moveRunningOrderRow(row.rowKey, index, direction)}
+                  onMove={(index, direction) =>
+                    moveRunningOrderRow(row.rowKey, index, direction)
+                  }
                   onAddSong={(song) => addSongToRow(row.rowKey, song)}
                   onRemoveSong={(key) => removeRunningOrderRow(row.rowKey, key)}
-                  onSlotCountChange={(key, slotCount) => setSlotCount(row.rowKey, key, slotCount)}
-                  onShuffle={() => row.rehearsalId !== null && void runShuffle(row.rehearsalId, row.rowKey)}
+                  onSlotCountChange={(key, slotCount) =>
+                    setSlotCount(row.rowKey, key, slotCount)
+                  }
+                  onShuffle={() =>
+                    row.rehearsalId !== null &&
+                    void runShuffle(row.rehearsalId, row.rowKey)
+                  }
                   onStep={stepAssignmentRehearsal}
                 />
               ),
@@ -576,16 +675,23 @@ export function ScheduleEdit() {
           </thead>
           <tbody>
             {[...activeRows, ...removedRows].map((row) => {
-              const isDeleted = row.rehearsalId !== null && deletedIds.has(row.rehearsalId)
+              const isDeleted =
+                row.rehearsalId !== null && deletedIds.has(row.rehearsalId)
               const flags = flagsFor(row, baselines.get(row.rowKey), isDeleted)
               const isOpen = openKey === row.rowKey
               return (
                 <Fragment key={row.rowKey}>
-                  <tr className={isDeleted ? 'opacity-60 line-through' : undefined}>
+                  <tr
+                    className={
+                      isDeleted ? 'opacity-60 line-through' : undefined
+                    }
+                  >
                     <td>
                       <button
                         type="button"
-                        aria-label={isOpen ? `Collapse ${row.date}` : `Expand ${row.date}`}
+                        aria-label={
+                          isOpen ? `Collapse ${row.date}` : `Expand ${row.date}`
+                        }
                         onClick={() => setOpenKey(isOpen ? '' : row.rowKey)}
                       >
                         {isOpen ? '▾' : '▸'}
@@ -597,7 +703,9 @@ export function ScheduleEdit() {
                         aria-label="Date"
                         value={row.date}
                         disabled={isDeleted}
-                        onChange={(event) => updateRow(row.rowKey, { date: event.target.value })}
+                        onChange={(event) =>
+                          updateRow(row.rowKey, { date: event.target.value })
+                        }
                       />
                     </td>
                     <td>
@@ -606,7 +714,11 @@ export function ScheduleEdit() {
                         aria-label="Start time"
                         value={row.startTime}
                         disabled={isDeleted}
-                        onChange={(event) => updateRow(row.rowKey, { startTime: event.target.value })}
+                        onChange={(event) =>
+                          updateRow(row.rowKey, {
+                            startTime: event.target.value,
+                          })
+                        }
                       />
                     </td>
                     <td>–</td>
@@ -616,7 +728,14 @@ export function ScheduleEdit() {
                         aria-label="End time"
                         value={row.endTime ?? ''}
                         disabled={isDeleted}
-                        onChange={(event) => updateRow(row.rowKey, { endTime: event.target.value === '' ? null : event.target.value })}
+                        onChange={(event) =>
+                          updateRow(row.rowKey, {
+                            endTime:
+                              event.target.value === ''
+                                ? null
+                                : event.target.value,
+                          })
+                        }
                       />
                     </td>
                     <td>{flags.join(' · ')}</td>
@@ -633,16 +752,27 @@ export function ScheduleEdit() {
                           draft={row}
                           mode={mode}
                           onModeChange={setMode}
-                          onFieldChange={(patch) => updateRow(row.rowKey, patch)}
+                          onFieldChange={(patch) =>
+                            updateRow(row.rowKey, patch)
+                          }
                           onToggleDeleted={() => toggleDeleted(row)}
                           isDeleted={isDeleted}
                           setlistSongs={payload.setlist_songs}
-                          onMove={(index, direction) => moveRunningOrderRow(row.rowKey, index, direction)}
+                          onMove={(index, direction) =>
+                            moveRunningOrderRow(row.rowKey, index, direction)
+                          }
                           onAddSong={(song) => addSongToRow(row.rowKey, song)}
-                          onRemoveSong={(key) => removeRunningOrderRow(row.rowKey, key)}
-                          onSlotCountChange={(key, slotCount) => setSlotCount(row.rowKey, key, slotCount)}
-                          onShuffle={() => row.rehearsalId !== null && void runShuffle(row.rehearsalId, row.rowKey)}
-                  onStep={stepAssignmentRehearsal}
+                          onRemoveSong={(key) =>
+                            removeRunningOrderRow(row.rowKey, key)
+                          }
+                          onSlotCountChange={(key, slotCount) =>
+                            setSlotCount(row.rowKey, key, slotCount)
+                          }
+                          onShuffle={() =>
+                            row.rehearsalId !== null &&
+                            void runShuffle(row.rehearsalId, row.rowKey)
+                          }
+                          onStep={stepAssignmentRehearsal}
                           hideFields
                         />
                       </td>
@@ -656,7 +786,11 @@ export function ScheduleEdit() {
       )}
 
       <div className="flex flex-wrap items-center gap-2 py-4">
-        <button type="button" onClick={addRehearsal} className="rounded border border-rs-border px-3 py-1.5 text-sm font-medium">
+        <button
+          type="button"
+          onClick={addRehearsal}
+          className="rounded border border-rs-border px-3 py-1.5 text-sm font-medium"
+        >
           + Add rehearsal
         </button>
         <button
@@ -675,7 +809,9 @@ export function ScheduleEdit() {
             onClick={() => void runDeal()}
             className="rounded border border-rs-border px-3 py-1.5 text-sm font-medium"
           >
-            {activeRows.some((row) => row.runningOrder.length > 0) ? 'Re-roll' : 'Generate schedule'}
+            {activeRows.some((row) => row.runningOrder.length > 0)
+              ? 'Re-roll'
+              : 'Generate schedule'}
           </button>
         </div>
       </div>
@@ -691,13 +827,17 @@ export function ScheduleEdit() {
             Past rehearsals — not editable
           </summary>
           <p className="pt-2 text-sm text-rs-muted">
-            Generation never rewrites history, and the dealer never re-deals a past Rehearsal.
+            Generation never rewrites history, and the dealer never re-deals a
+            past Rehearsal.
           </p>
           <ul className="pt-2">
             {payload.past_rehearsals.map((past) => (
               <li key={past.id} className="text-sm text-rs-muted">
                 {past.date} · {past.start_time.slice(0, 5)}
-                {past.end_time !== null ? `–${past.end_time.slice(0, 5)}` : ''} · {past.song_count} song
+                {past.end_time !== null
+                  ? `–${past.end_time.slice(0, 5)}`
+                  : ''}{' '}
+                · {past.song_count} song
                 {past.song_count === 1 ? '' : 's'}
               </li>
             ))}
@@ -722,10 +862,15 @@ export function ScheduleEdit() {
           setRows((previous) => {
             const retimesById = new Map(retimes.map((r) => [r.rehearsal_id, r]))
             const withoutOrphans = previous.filter(
-              (row) => row.rehearsalId === null || !orphanIds.includes(row.rehearsalId),
+              (row) =>
+                row.rehearsalId === null ||
+                !orphanIds.includes(row.rehearsalId),
             )
             const retimed = withoutOrphans.map((row) => {
-              const retime = row.rehearsalId !== null ? retimesById.get(row.rehearsalId) : undefined
+              const retime =
+                row.rehearsalId !== null
+                  ? retimesById.get(row.rehearsalId)
+                  : undefined
               if (retime === undefined) return row
               return {
                 ...row,
@@ -823,7 +968,9 @@ function RehearsalRowEditor({
               type="time"
               value={draft.startTime}
               disabled={isDeleted}
-              onChange={(event) => onFieldChange({ startTime: event.target.value })}
+              onChange={(event) =>
+                onFieldChange({ startTime: event.target.value })
+              }
             />
           </label>
           <label className="flex flex-col text-sm">
@@ -833,11 +980,18 @@ function RehearsalRowEditor({
               value={draft.endTime ?? ''}
               disabled={isDeleted}
               onChange={(event) =>
-                onFieldChange({ endTime: event.target.value === '' ? null : event.target.value })
+                onFieldChange({
+                  endTime:
+                    event.target.value === '' ? null : event.target.value,
+                })
               }
             />
           </label>
-          <button type="button" onClick={onToggleDeleted} className="self-end text-sm">
+          <button
+            type="button"
+            onClick={onToggleDeleted}
+            className="self-end text-sm"
+          >
             {isDeleted ? 'Restore' : 'Remove'}
           </button>
         </div>
@@ -845,8 +999,8 @@ function RehearsalRowEditor({
 
       {draft.isFullSetlist ? (
         <p className="text-sm text-rs-muted">
-          The Dress Rehearsal's songs are derived live from the current setlist (ADR 0003) — it has no
-          Running Order of its own.
+          The Dress Rehearsal's songs are derived live from the current setlist
+          (ADR 0003) — it has no Running Order of its own.
         </p>
       ) : (
         <>
@@ -859,7 +1013,8 @@ function RehearsalRowEditor({
           {mode === 'assignments' ? (
             draft.rehearsalId === null ? (
               <p className="text-sm text-rs-muted">
-                Save this new Rehearsal before casting it — there's nothing to assign against yet.
+                Save this new Rehearsal before casting it — there's nothing to
+                assign against yet.
               </p>
             ) : (
               <AssignmentEditor rehearsalId={draft.rehearsalId} />
@@ -876,11 +1031,18 @@ function RehearsalRowEditor({
                       aria-label={`${row.songTitle} slot count`}
                       min={1}
                       value={row.slotCount}
-                      onChange={(event) => onSlotCountChange(row.key, Number(event.target.value) || 1)}
+                      onChange={(event) =>
+                        onSlotCountChange(
+                          row.key,
+                          Number(event.target.value) || 1,
+                        )
+                      }
                       className="w-12"
                     />
                     {row.isPinned && (
-                      <span className="rounded bg-rs-border/60 px-1.5 py-0.5 text-xs">Pinned</span>
+                      <span className="rounded bg-rs-border/60 px-1.5 py-0.5 text-xs">
+                        Pinned
+                      </span>
                     )}
                     <button
                       type="button"
@@ -898,7 +1060,11 @@ function RehearsalRowEditor({
                     >
                       ↓
                     </button>
-                    <button type="button" aria-label={`Remove ${row.songTitle}`} onClick={() => onRemoveSong(row.key)}>
+                    <button
+                      type="button"
+                      aria-label={`Remove ${row.songTitle}`}
+                      onClick={() => onRemoveSong(row.key)}
+                    >
                       ×
                     </button>
                   </li>
@@ -909,7 +1075,9 @@ function RehearsalRowEditor({
                   aria-label="Add a song"
                   defaultValue=""
                   onChange={(event) => {
-                    const song = availableSongs.find((s) => String(s.id) === event.target.value)
+                    const song = availableSongs.find(
+                      (s) => String(s.id) === event.target.value,
+                    )
                     if (song !== undefined) onAddSong(song)
                     event.target.value = ''
                   }}
