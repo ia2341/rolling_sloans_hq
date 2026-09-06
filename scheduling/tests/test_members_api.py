@@ -444,6 +444,7 @@ class PersonApiViewTests(TestCase):
         self.assertEqual(response.status_code, 404)
 
 
+@override_settings(SECURE_SSL_REDIRECT=False)
 class PersonApiViewOlderSemesterRecordingsTests(TestCase):
     """Issue #364: does an admin viewing an older, non-live Semester still get an Add-a-recording affordance?
 
