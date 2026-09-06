@@ -26,6 +26,7 @@ from scheduling.models import (
     RehearsalPattern,
     RehearsalSong,
     Song,
+    slots_for_person,
 )
 from scheduling.services import (
     AssignmentEditBuffer,
@@ -668,13 +669,35 @@ def _serialize_your_state(rehearsal, conflict_row, attendance_suggestion) -> dic
     return {'kind': 'not_needed'}
 
 
-def _serialize_schedule_list_row(row, *, conflict_rows, is_admin, pending_counts, today) -> dict:
-    """Return one `RehearsalListRow` for the All-rehearsals sub-view: identity, song count, the viewer's state, and (admin) a pending count."""
+def _serialize_your_song_entry(rehearsal_song) -> dict:
+    """Return one `your_songs` entry: the Song's id and title only (issue: All-rehearsals per-date song list)."""
+    return {'id': rehearsal_song.song.pk, 'title': rehearsal_song.song.title}
+
+
+def _serialize_schedule_list_row(row, *, viewer, conflict_rows, is_admin, pending_counts, today) -> dict:
+    """Return one `RehearsalListRow` for the All-rehearsals sub-view: identity, song count, the viewer's state, their songs, and (admin) a pending count.
+
+    `your_songs` reuses `slots_for_person()` — the same union of standing
+    assignments and Backups that decides attendance (ADR 0007) — so this
+    list can never disagree with why the viewer is or isn't needed there.
+    Conflict-declarability for this row is not a separate field: it's
+    exactly `not is_dress and not is_past`, already carried by
+    `_serialize_rehearsal_summary`, which is the same rule
+    `future_rehearsals_for()`/`declare_conflict()` enforce (ADR 0006 — the
+    Dress Rehearsal takes no Conflict; a past Rehearsal is not
+    declarable).
+    """
     rehearsal = row.rehearsal
     data = {
         **_serialize_rehearsal_summary(rehearsal, today=today),
         'song_count': len(services.assignment_matrix_for(rehearsal).rows),
         'your_state': _serialize_your_state(rehearsal, conflict_rows.get(rehearsal.pk), row.attendance_suggestion),
+        'your_songs': [
+            _serialize_your_song_entry(rehearsal_song)
+            for rehearsal_song in (
+                slots_for_person(rehearsal, viewer).select_related('song').order_by('song__position')
+            )
+        ],
     }
     if is_admin and rehearsal.pk in pending_counts:
         data['pending_count'] = pending_counts[rehearsal.pk]
@@ -746,7 +769,7 @@ def serialize_schedule(request, semester, *, rehearsal_id=None) -> dict:
         'schedule': {
             section: [
                 _serialize_schedule_list_row(
-                    row, conflict_rows=conflict_rows, is_admin=is_admin, pending_counts=pending_counts, today=today,
+                    row, viewer=viewer, conflict_rows=conflict_rows, is_admin=is_admin, pending_counts=pending_counts, today=today,
                 )
                 for row in rows
             ]
@@ -1636,7 +1659,7 @@ def _serialize_upcoming_row(rehearsal, attendance_suggestion, *, today) -> dict:
 
 
 def _serialize_song_progress_row(song) -> dict:
-    """Return one Song-progress row: identity, formatted length, and the `song_rehearsal_progress` counts (issue #332)."""
+    """Return one Song-progress row: identity, formatted length, the `song_rehearsal_progress` counts, notes and next rehearsal date."""
     return {
         'id': song.pk,
         'title': song.title,
@@ -1646,6 +1669,10 @@ def _serialize_song_progress_row(song) -> dict:
         'completed': song.progress.completed,
         'total': song.progress.total,
         'has_assignment': song.has_assignment,
+        'notes': song.notes,
+        'next_rehearsal': (
+            song.next_rehearsal_date.isoformat() if song.next_rehearsal_date is not None else None
+        ),
     }
 
 

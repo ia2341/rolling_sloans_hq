@@ -68,7 +68,7 @@ describe('Song', () => {
       await screen.findByText(/Casting happens on a rehearsal, not here/),
     ).toBeInTheDocument()
     expect(
-      screen.getByRole('link', { name: /Cast on 2026-03-01/ }),
+      screen.getByRole('link', { name: /Cast on 1st March, Sunday/ }),
     ).toHaveAttribute('href', '/schedule?rehearsal=5')
   })
 
@@ -136,7 +136,7 @@ describe('Song', () => {
     renderShell(<Song />, ['/songs/1'])
 
     expect(
-      await screen.findByText(/2026-02-10.*18:00–18:15.*2 takes/),
+      await screen.findByText(/10th February, Tuesday.*18:00–18:15.*2 takes/),
     ).toBeInTheDocument()
     expect(screen.getByText('Sam Rivera')).toBeInTheDocument()
     expect(screen.getByText(/Alex Kim — Good take/)).toBeInTheDocument()
@@ -169,7 +169,7 @@ describe('Song', () => {
     renderShell(<Song />, ['/songs/1'])
 
     expect(
-      await screen.findByText(/2026-04-01 — whole setlist/),
+      await screen.findByText(/1st April, Wednesday — whole setlist/),
     ).toBeInTheDocument()
   })
 

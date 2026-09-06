@@ -2,7 +2,6 @@ import {
   CalendarDays,
   Home,
   Music,
-  TriangleAlert,
   User,
   Users,
   type LucideIcon,
@@ -16,24 +15,20 @@ export interface NavItem {
 }
 
 /**
- * The sidebar's fixed nav order (issue #328): Home, Conflicts, Schedule,
- * Songs/Setlist, Band, Profile. Conflicts is deliberately top-level,
- * directly under Home, and carries no count (ADR 0005 — see
- * `Sidebar.tsx`). There is no Semesters item and no Recordings item.
+ * The sidebar's fixed nav order (issue #328, Conflicts removed by the
+ * pills/tables UI overhaul): Home, Schedule, Songs/Setlist, Band, Profile.
+ * There is no Semesters item and no Recordings item.
  *
- * Conflicts' `path` deep-links into `/schedule`'s All-rehearsals sub-view
- * (issue #331) rather than a route of its own — `/schedule/` absorbed
- * `/me/conflicts/` outright (issue #190), with no separate route and no
- * redirect.
+ * There is no standalone Conflicts nav item — it used to deep-link into
+ * `/schedule`'s All-rehearsals sub-view, which duplicated the Schedule
+ * item itself (both pointed at the same page). Schedule's own
+ * "All rehearsals" sub-view is reached from within `/schedule`. The
+ * separate admin-only `/conflicts` adjudication surface is unaffected —
+ * it's reached via the "Adjudicate conflicts" button on Schedule, not
+ * from the sidebar.
  */
 export const SIDEBAR_NAV_ITEMS: NavItem[] = [
   { key: 'home', label: 'Home', path: '/', icon: Home },
-  {
-    key: 'conflicts',
-    label: 'Conflicts',
-    path: '/schedule?view=all',
-    icon: TriangleAlert,
-  },
   { key: 'schedule', label: 'Schedule', path: '/schedule', icon: CalendarDays },
   { key: 'songs', label: 'Songs/Setlist', path: '/setlist', icon: Music },
   { key: 'band', label: 'Band', path: '/members', icon: Users },
@@ -41,45 +36,32 @@ export const SIDEBAR_NAV_ITEMS: NavItem[] = [
 ]
 
 /**
- * The phone tab bar's five items (issue #328): Home, Schedule, Songs and
- * Conflicts, plus More (rendered separately by `TabBar.tsx`, not from this
- * list — it opens a sheet rather than navigating).
+ * The phone tab bar's items (issue #328, Conflicts removed — see
+ * `SIDEBAR_NAV_ITEMS`): Home, Schedule, Songs, plus More (rendered
+ * separately by `TabBar.tsx`, not from this list — it opens a sheet
+ * rather than navigating).
  */
 export const TAB_BAR_NAV_ITEMS: NavItem[] = [
   { key: 'home', label: 'Home', path: '/', icon: Home },
   { key: 'schedule', label: 'Schedule', path: '/schedule', icon: CalendarDays },
   { key: 'songs', label: 'Songs', path: '/setlist', icon: Music },
-  {
-    key: 'conflicts',
-    label: 'Conflicts',
-    path: '/schedule?view=all',
-    icon: TriangleAlert,
-  },
 ]
 
 /**
  * Whether a nav item should render as active for the current location.
  *
- * `NavLink`'s own `isActive` compares only `location.pathname`, so
- * Conflicts (`/schedule?view=all`) and Schedule (`/schedule`) — which
- * share a pathname and differ only by the `view` query param — would
- * both light up together on every `/schedule` sub-view. This compares
- * the `view` param too, so exactly one of the two is active at a time.
+ * Compares only `location.pathname` against the item's path — now that
+ * no two nav items share a pathname (Conflicts, which used to share
+ * `/schedule` with a `view` query param, is gone), a simple prefix match
+ * is enough.
  */
 export function isNavItemActive(
   item: NavItem,
   location: { pathname: string; search: string },
 ): boolean {
-  const [itemPath, itemQuery] = item.path.split('?')
-  const pathMatches =
-    itemPath === '/'
-      ? location.pathname === '/'
-      : location.pathname === itemPath ||
+  const itemPath = item.path.split('?')[0]
+  return itemPath === '/'
+    ? location.pathname === '/'
+    : location.pathname === itemPath ||
         location.pathname.startsWith(`${itemPath}/`)
-  if (!pathMatches) {
-    return false
-  }
-  const itemView = new URLSearchParams(itemQuery ?? '').get('view')
-  const currentView = new URLSearchParams(location.search).get('view')
-  return itemView === currentView
 }

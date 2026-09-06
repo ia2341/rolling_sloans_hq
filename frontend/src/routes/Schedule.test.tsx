@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { SchedulePayload } from '../api/scheduleTypes'
@@ -26,6 +26,7 @@ function schedulePayload(
           is_past: false,
           song_count: 2,
           your_state: { kind: 'not_needed' },
+          your_songs: [],
         },
       ],
     },
@@ -110,7 +111,7 @@ afterEach(() => {
 })
 
 describe('Schedule', () => {
-  it('renders one table with start times and assignment pills, with no Running order | Assignments mode switch', async () => {
+  it('renders one table with start times and linked assignment names, with no Running order | Assignments mode switch', async () => {
     mockFetchOnce(200, { context: memberContext(), data: schedulePayload() })
 
     renderShell(<Schedule />, ['/schedule'])
@@ -361,16 +362,12 @@ describe('Schedule', () => {
 
     renderShell(<Schedule />, ['/schedule'])
 
-    const teammatePill = await screen.findByText('Teammate Placeholder')
-    expect(
-      within(teammatePill.closest('span')!).getByTitle(
-        'Unavailable for part of this',
-      ),
-    ).toBeInTheDocument()
+    const teammateLink = await screen.findByText('Teammate Placeholder')
+    expect(teammateLink.closest('div')).toHaveTextContent('⚠ conflict')
     expect(screen.queryByText(/reason/i)).not.toBeInTheDocument()
   })
 
-  it('renders a Backup as "name (backup)" with no "covering for" text for a member', async () => {
+  it('renders a Backup as "name" plus a "(backup)" marker with no "covering for" text for a member', async () => {
     const payload = schedulePayload()
     payload.selected!.rows[0]!.cells[0]!.entries = [
       {
@@ -386,9 +383,8 @@ describe('Schedule', () => {
 
     renderShell(<Schedule />, ['/schedule'])
 
-    expect(await screen.findByText(/Backup Placeholder/)).toHaveTextContent(
-      'Backup Placeholder (backup)',
-    )
+    const backupLink = await screen.findByText('Backup Placeholder')
+    expect(backupLink.closest('div')).toHaveTextContent('(backup)')
     expect(screen.queryByText(/covering for/i)).not.toBeInTheDocument()
   })
 
@@ -430,6 +426,7 @@ describe('Schedule', () => {
       is_past: false,
       song_count: 5,
       your_state: { kind: 'mandatory' },
+      your_songs: [],
     })
     mockFetchOnce(200, { context: memberContext(), data: payload })
 

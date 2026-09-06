@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 
 import { apiFetch } from '../api/client'
@@ -15,16 +15,11 @@ import type {
 import type { ReadEnvelope, WriteEnvelope } from '../api/types'
 import { AssignmentEditor } from '../components/assignments/AssignmentEditor'
 import { PageHead } from '../components/ui/PageHead'
-import { roleHueVar } from '../components/ui/RoleLegend'
 import { ResponsiveDialog } from '../components/ui/ResponsiveDialog'
 import { SegmentedControl } from '../components/ui/SegmentedControl'
 import { useIsPhone } from '../hooks/useIsPhone'
+import { formatClockTime, formatRehearsalDate } from '../lib/formatDate'
 import { usePageTitle } from '../shell/PageTitleContext'
-
-/** Trims a wire `HH:MM:SS` time string down to `HH:MM` for display. */
-function formatClockTime(isoTime: string): string {
-  return isoTime.slice(0, 5)
-}
 
 type SubView = 'next' | 'all'
 
@@ -88,6 +83,35 @@ export function Schedule() {
     [setSearchParams],
   )
 
+  /** All Rehearsals' "Add conflict" column: opens that date's page and asks `AvailabilityBlock` to auto-open its Declare dialog. */
+  const openConflictDialog = useCallback(
+    (id: number) => {
+      setEditingAssignments(false)
+      setSearchParams(
+        (previous) => {
+          const params = new URLSearchParams(previous)
+          params.set('rehearsal', String(id))
+          params.set('conflict', '1')
+          params.delete('view')
+          return params
+        },
+        { replace: true },
+      )
+    },
+    [setSearchParams],
+  )
+
+  const clearConflictParam = useCallback(() => {
+    setSearchParams(
+      (previous) => {
+        const params = new URLSearchParams(previous)
+        params.delete('conflict')
+        return params
+      },
+      { replace: true },
+    )
+  }, [setSearchParams])
+
   if (data === null) return null
 
   if (
@@ -124,7 +148,11 @@ export function Schedule() {
   return (
     <div>
       <PageHead
-        title={selected !== null ? selected.date : 'Schedule'}
+        title={
+          selected !== null
+            ? `Schedule: ${formatRehearsalDate(selected.date)}`
+            : 'Schedule'
+        }
         subline={
           selected !== null
             ? `${formatClockTime(selected.start_time)}–${formatClockTime(selected.end_time)}${
@@ -162,7 +190,13 @@ export function Schedule() {
         <SegmentedControl
           ariaLabel="Schedule view"
           options={[
-            { value: 'next', label: 'This rehearsal' },
+            {
+              value: 'next',
+              label:
+                selected !== null
+                  ? formatRehearsalDate(selected.date)
+                  : 'This rehearsal',
+            },
             { value: 'all', label: 'All rehearsals' },
           ]}
           value={subView}
@@ -182,6 +216,8 @@ export function Schedule() {
             onSelectRehearsal={selectRehearsal}
             onDataChanged={load}
             editingAssignments={editingAssignments}
+            autoOpenDeclare={searchParams.get('conflict') === '1'}
+            onAutoOpenConsumed={clearConflictParam}
           />
         )
       ) : (
@@ -189,13 +225,15 @@ export function Schedule() {
           rows={allRows}
           isAdmin={appContext?.viewer.is_admin ?? false}
           onOpen={selectRehearsal}
+          onAddConflict={openConflictDialog}
         />
       )}
     </div>
   )
 }
 
-function QuickJumpRow({
+/** Jump to a different Rehearsal's date without leaving `/schedule` — a dropdown, not a row of pills (issue: pills/tables UI overhaul). */
+function RehearsalDateDropdown({
   rows,
   selectedId,
   onSelect,
@@ -205,27 +243,22 @@ function QuickJumpRow({
   onSelect: (id: number) => void
 }) {
   return (
-    <div
-      className="flex gap-2 overflow-x-auto pb-4"
-      role="tablist"
-      aria-label="Jump to rehearsal"
-    >
-      {rows.map((row) => (
-        <button
-          key={row.id}
-          type="button"
-          onClick={() => onSelect(row.id)}
-          aria-current={row.id === selectedId}
-          className={`shrink-0 rounded px-3 py-1.5 text-sm ${
-            row.id === selectedId
-              ? 'bg-rs-accent text-rs-accent-fg'
-              : 'border border-rs-border text-rs-fg'
-          }`}
-        >
-          {row.date}
-        </button>
-      ))}
-    </div>
+    <label className="mb-4 block text-sm">
+      <span className="mr-2 text-rs-muted">Jump to</span>
+      <select
+        aria-label="Jump to rehearsal"
+        value={selectedId}
+        onChange={(event) => onSelect(Number(event.target.value))}
+        className="rounded border border-rs-border px-2 py-1.5 text-sm"
+      >
+        {rows.map((row) => (
+          <option key={row.id} value={row.id}>
+            {formatRehearsalDate(row.date)}
+            {row.is_dress ? ' · Dress' : ''}
+          </option>
+        ))}
+      </select>
+    </label>
   )
 }
 
@@ -235,16 +268,20 @@ function ThisRehearsal({
   onSelectRehearsal,
   onDataChanged,
   editingAssignments,
+  autoOpenDeclare,
+  onAutoOpenConsumed,
 }: {
   detail: RehearsalDetail
   allRows: ScheduleListRow[]
   onSelectRehearsal: (id: number) => void
   onDataChanged: () => void
   editingAssignments: boolean
+  autoOpenDeclare: boolean
+  onAutoOpenConsumed: () => void
 }) {
   return (
     <div>
-      <QuickJumpRow
+      <RehearsalDateDropdown
         rows={allRows}
         selectedId={detail.id}
         onSelect={onSelectRehearsal}
@@ -256,6 +293,8 @@ function ThisRehearsal({
         rehearsalEnd={detail.end_time}
         availability={detail.availability}
         onChanged={onDataChanged}
+        autoOpenDeclare={autoOpenDeclare}
+        onAutoOpenConsumed={onAutoOpenConsumed}
       />
       {editingAssignments ? (
         <AssignmentEditor rehearsalId={detail.id} />
@@ -358,14 +397,41 @@ function AvailabilityBlock({
   rehearsalEnd,
   availability,
   onChanged,
+  autoOpenDeclare,
+  onAutoOpenConsumed,
 }: {
   rehearsalId: number
   rehearsalStart: string
   rehearsalEnd: string
   availability: Availability
   onChanged: () => void
+  /** True once, right after arriving here via All rehearsals' "Add conflict" column — opens the Declare dialog immediately. */
+  autoOpenDeclare: boolean
+  onAutoOpenConsumed: () => void
 }) {
   const [dialogOpen, setDialogOpen] = useState(false)
+  // Adjusting state directly during render (React's documented pattern for
+  // syncing local state to a prop change) rather than in an effect, so
+  // opening the dialog isn't a cascading second render behind the query
+  // param's own effect-driven clear below.
+  const [autoOpenedForRehearsal, setAutoOpenedForRehearsal] = useState<
+    number | null
+  >(null)
+  if (
+    autoOpenDeclare &&
+    availability.is_editable &&
+    !availability.is_dress &&
+    autoOpenedForRehearsal !== rehearsalId
+  ) {
+    setAutoOpenedForRehearsal(rehearsalId)
+    setDialogOpen(true)
+  }
+
+  useEffect(() => {
+    if (autoOpenDeclare) {
+      onAutoOpenConsumed()
+    }
+  }, [autoOpenDeclare, onAutoOpenConsumed])
 
   if (availability.is_dress) {
     return (
@@ -643,11 +709,6 @@ function AssignmentGrid({
   isDress: boolean
 }) {
   const isPhone = useIsPhone()
-  const roleIndexById = useMemo(() => {
-    const map = new Map<number, number>()
-    roles.forEach((role, index) => map.set(role.id, index))
-    return map
-  }, [roles])
 
   return (
     <section className="pb-4">
@@ -668,66 +729,69 @@ function AssignmentGrid({
         </p>
       )}
       {isPhone ? (
-        <AssignmentCards
-          rows={rows}
-          roleIndexById={roleIndexById}
-          isDress={isDress}
-        />
+        <AssignmentCards rows={rows} isDress={isDress} />
       ) : (
-        <AssignmentTable
-          roles={roles}
-          rows={rows}
-          roleIndexById={roleIndexById}
-          isDress={isDress}
-        />
+        <AssignmentTable roles={roles} rows={rows} isDress={isDress} />
       )}
     </section>
   )
 }
 
-function AssignmentPill({
-  entry,
-  hue,
+/** One cell's occupants: primary name (linking to their person page), each marker on its own line rather than a separate pill. */
+function AssignmentCellEntries({
+  entries,
 }: {
-  entry: MatrixRow['cells'][number]['entries'][number]
-  hue: string
+  entries: MatrixRow['cells'][number]['entries']
 }) {
+  if (entries.length === 0) {
+    return <span className="text-xs text-rs-muted">unfilled</span>
+  }
   return (
-    <span
-      style={{ backgroundColor: hue }}
-      className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium text-white"
-    >
-      {entry.person_name}
-      {entry.kind === 'backup' && ' (backup)'}
-      {entry.has_conflict && (
-        <span title="Unavailable for part of this">⚠</span>
-      )}
-      {entry.is_role_mismatch && (
-        <span title="Role not on their membership (ADR 0002)">◦</span>
-      )}
-    </span>
+    <div className="flex flex-col gap-1.5">
+      {entries.map((entry) => (
+        <div key={`${entry.kind}-${entry.id}`} className="text-sm">
+          <Link
+            to={`/members/${entry.person_id}`}
+            className="font-medium text-rs-accent"
+          >
+            {entry.person_name}
+          </Link>
+          {entry.kind === 'backup' && (
+            <div className="text-xs text-rs-muted">(backup)</div>
+          )}
+          {entry.has_conflict && (
+            <div className="text-xs text-rs-muted">⚠ conflict</div>
+          )}
+          {entry.is_role_mismatch && (
+            <div className="text-xs text-rs-muted">
+              ◦ role not on membership
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
   )
 }
 
 function AssignmentTable({
   roles,
   rows,
-  roleIndexById,
   isDress,
 }: {
   roles: { id: number; name: string; code: string }[]
   rows: MatrixRow[]
-  roleIndexById: Map<number, number>
   isDress: boolean
 }) {
   return (
-    <table className="w-full text-left text-sm">
+    <table className="w-full border-collapse text-left text-sm">
       <thead>
         <tr>
-          <th className="pb-2">{isDress ? '#' : 'Start'}</th>
-          <th className="pb-2">Song</th>
+          <th className="border border-rs-border px-2 py-2">
+            {isDress ? '#' : 'Start'}
+          </th>
+          <th className="border border-rs-border px-2 py-2">Song</th>
           {roles.map((role) => (
-            <th key={role.id} className="pb-2">
+            <th key={role.id} className="border border-rs-border px-2 py-2">
               {role.name}
             </th>
           ))}
@@ -736,29 +800,22 @@ function AssignmentTable({
       <tbody>
         {rows.map((row, index) => (
           <tr key={row.song_id}>
-            <td className="py-2 align-top">
+            <td className="border border-rs-border px-2 py-2 align-top">
               {isDress
                 ? index + 1
                 : row.start_time !== null
                   ? formatClockTime(row.start_time)
                   : ''}
             </td>
-            <td className="py-2 align-top">{row.song_title}</td>
+            <td className="border border-rs-border px-2 py-2 align-top">
+              {row.song_title}
+            </td>
             {row.cells.map((cell) => (
-              <td key={cell.role_id} className="py-2 align-top">
-                <div className="flex flex-wrap gap-1">
-                  {cell.entries.length === 0 ? (
-                    <span className="text-xs text-rs-muted">unfilled</span>
-                  ) : (
-                    cell.entries.map((entry) => (
-                      <AssignmentPill
-                        key={`${entry.kind}-${entry.id}`}
-                        entry={entry}
-                        hue={roleHueVar(roleIndexById.get(cell.role_id) ?? 0)}
-                      />
-                    ))
-                  )}
-                </div>
+              <td
+                key={cell.role_id}
+                className="border border-rs-border px-2 py-2 align-top"
+              >
+                <AssignmentCellEntries entries={cell.entries} />
               </td>
             ))}
           </tr>
@@ -770,11 +827,9 @@ function AssignmentTable({
 
 function AssignmentCards({
   rows,
-  roleIndexById,
   isDress,
 }: {
   rows: MatrixRow[]
-  roleIndexById: Map<number, number>
   isDress: boolean
 }) {
   return (
@@ -789,23 +844,10 @@ function AssignmentCards({
                 : ''}
             {row.song_title}
           </p>
-          <ul className="mt-2 flex flex-col gap-1">
+          <ul className="mt-2 flex flex-col gap-2">
             {row.cells.map((cell) => (
-              <li
-                key={cell.role_id}
-                className="flex flex-wrap items-center gap-1 text-sm"
-              >
-                {cell.entries.length === 0 ? (
-                  <span className="text-xs text-rs-muted">unfilled</span>
-                ) : (
-                  cell.entries.map((entry) => (
-                    <AssignmentPill
-                      key={`${entry.kind}-${entry.id}`}
-                      entry={entry}
-                      hue={roleHueVar(roleIndexById.get(cell.role_id) ?? 0)}
-                    />
-                  ))
-                )}
+              <li key={cell.role_id} className="text-sm">
+                <AssignmentCellEntries entries={cell.entries} />
               </li>
             ))}
           </ul>
@@ -837,14 +879,37 @@ function YourStateChip({ state }: { state: ScheduleListRow['your_state'] }) {
   return <span className="text-rs-muted">Not needed</span>
 }
 
+/** A row's Songs, each linking to its Song page — no pills, just text (issue: pills/tables UI overhaul). */
+function YourSongsList({ songs }: { songs: ScheduleListRow['your_songs'] }) {
+  if (songs.length === 0) {
+    return <span className="text-xs text-rs-muted">—</span>
+  }
+  return (
+    <div className="flex flex-col gap-0.5">
+      {songs.map((song) => (
+        <Link key={song.id} to={`/songs/${song.id}`} className="text-rs-accent">
+          {song.title}
+        </Link>
+      ))}
+    </div>
+  )
+}
+
+/** Whether `declare_conflict()`/`future_rehearsals_for()` would accept a new Conflict against this row's Rehearsal (ADR 0006). */
+function isConflictDeclarable(row: ScheduleListRow): boolean {
+  return !row.is_dress && !row.is_past
+}
+
 function AllRehearsals({
   rows,
   isAdmin,
   onOpen,
+  onAddConflict,
 }: {
   rows: ScheduleListRow[]
   isAdmin: boolean
   onOpen: (id: number) => void
+  onAddConflict: (id: number) => void
 }) {
   const isPhone = useIsPhone()
 
@@ -862,7 +927,7 @@ function AllRehearsals({
               className="w-full text-left"
             >
               <div className="flex items-center justify-between">
-                <p className="font-medium">{row.date}</p>
+                <p className="font-medium">{formatRehearsalDate(row.date)}</p>
                 {row.is_dress && (
                   <span className="text-xs">Dress · required</span>
                 )}
@@ -881,6 +946,18 @@ function AllRehearsals({
                 </p>
               )}
             </button>
+            <div className="pt-2">
+              <YourSongsList songs={row.your_songs} />
+            </div>
+            {isConflictDeclarable(row) && (
+              <button
+                type="button"
+                onClick={() => onAddConflict(row.id)}
+                className="mt-2 text-sm text-rs-accent"
+              >
+                Add conflict
+              </button>
+            )}
           </li>
         ))}
       </ul>
@@ -888,41 +965,63 @@ function AllRehearsals({
   }
 
   return (
-    <table className="w-full text-left text-sm">
+    <table className="w-full border-collapse text-left text-sm">
       <thead>
         <tr>
-          <th className="pb-2">Date</th>
-          <th className="pb-2">Time</th>
-          <th className="pb-2">You</th>
-          <th className="pb-2">Songs</th>
-          {isAdmin && <th className="pb-2">Conflicts</th>}
-          <th className="pb-2" />
+          <th className="border border-rs-border px-2 py-2">Date</th>
+          <th className="border border-rs-border px-2 py-2">Time</th>
+          <th className="border border-rs-border px-2 py-2">You</th>
+          <th className="border border-rs-border px-2 py-2">Songs</th>
+          <th className="border border-rs-border px-2 py-2">Your songs</th>
+          {isAdmin && (
+            <th className="border border-rs-border px-2 py-2">Conflicts</th>
+          )}
+          <th className="border border-rs-border px-2 py-2">Add conflict</th>
+          <th className="border border-rs-border px-2 py-2" />
         </tr>
       </thead>
       <tbody>
         {rows.map((row) => (
           <tr key={row.id} className={row.is_past ? 'opacity-60' : ''}>
-            <td className="py-2">
-              {row.date}
+            <td className="border border-rs-border px-2 py-2 align-top">
+              {formatRehearsalDate(row.date)}
               {row.is_dress && (
                 <span className="ml-2 text-xs">Dress · required</span>
               )}
             </td>
-            <td className="py-2">
+            <td className="border border-rs-border px-2 py-2 align-top">
               {formatClockTime(row.start_time)}–{formatClockTime(row.end_time)}
             </td>
-            <td className="py-2">
+            <td className="border border-rs-border px-2 py-2 align-top">
               <YourStateChip state={row.your_state} />
             </td>
-            <td className="py-2">{row.song_count}</td>
+            <td className="border border-rs-border px-2 py-2 align-top">
+              {row.song_count}
+            </td>
+            <td className="border border-rs-border px-2 py-2 align-top">
+              <YourSongsList songs={row.your_songs} />
+            </td>
             {isAdmin && (
-              <td className="py-2">
+              <td className="border border-rs-border px-2 py-2 align-top">
                 {row.pending_count !== undefined
                   ? `${row.pending_count} pending`
                   : ''}
               </td>
             )}
-            <td className="py-2">
+            <td className="border border-rs-border px-2 py-2 align-top">
+              {isConflictDeclarable(row) ? (
+                <button
+                  type="button"
+                  onClick={() => onAddConflict(row.id)}
+                  className="text-rs-accent"
+                >
+                  Add conflict
+                </button>
+              ) : (
+                <span className="text-xs text-rs-muted">—</span>
+              )}
+            </td>
+            <td className="border border-rs-border px-2 py-2 align-top">
               <button
                 type="button"
                 onClick={() => onOpen(row.id)}

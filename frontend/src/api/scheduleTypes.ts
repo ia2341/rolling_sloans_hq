@@ -86,6 +86,11 @@ export type YourState =
   | { kind: 'window'; arrival_time: string; departure_time: string }
   | { kind: 'not_needed' }
 
+export interface YourSongEntry {
+  id: number
+  title: string
+}
+
 export interface ScheduleListRow {
   id: number
   date: string
@@ -95,6 +100,8 @@ export interface ScheduleListRow {
   is_past: boolean
   song_count: number
   your_state: YourState
+  /** Songs in this Rehearsal's running order the viewer is on (standing assignment or Backup — same rule as attendance, ADR 0007). */
+  your_songs: YourSongEntry[]
   /** Admin-only: absent for a member, and absent for a past/Dress Rehearsal even for an admin. */
   pending_count?: number
 }

@@ -74,6 +74,8 @@ function homePayload(overrides: Partial<HomePayload> = {}): HomePayload {
         completed: 2,
         total: 5,
         has_assignment: true,
+        notes: '',
+        next_rehearsal: null,
       },
       {
         id: 2,
@@ -84,6 +86,8 @@ function homePayload(overrides: Partial<HomePayload> = {}): HomePayload {
         completed: 0,
         total: 5,
         has_assignment: false,
+        notes: '',
+        next_rehearsal: null,
       },
     ],
     setup_checklist: null,
@@ -185,15 +189,15 @@ describe('Home', () => {
     expect(screen.getAllByText('First Song').length).toBeGreaterThan(0)
   })
 
-  it('renders Song progress as a table on desktop and a two-line list on phone', async () => {
+  it('renders Song progress (and Upcoming rehearsals) as tables on desktop, and lists on phone', async () => {
     mockFetchOnce(200, { context: memberContext(), data: homePayload() })
     renderShell(<Home />, ['/'])
-    await screen.findByRole('table')
+    await waitFor(() => expect(screen.getAllByRole('table')).toHaveLength(2))
 
     mockMatchMedia(true)
     mockFetchOnce(200, { context: memberContext(), data: homePayload() })
     renderShell(<Home />, ['/'])
-    await waitFor(() => expect(screen.queryAllByRole('table')).toHaveLength(1))
+    await waitFor(() => expect(screen.queryAllByRole('table')).toHaveLength(0))
   })
 
   it('shows the setup checklist for an admin viewing an empty draft Semester, with numbered items and Open/Review buttons', async () => {
