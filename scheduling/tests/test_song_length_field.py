@@ -1,14 +1,31 @@
 """The M:SS Song-length form field: parsing, rendering, round-tripping and rejection (issue #177)."""
 
 from datetime import timedelta
+from typing import ClassVar
 
+from django import forms
 from django.core.exceptions import ValidationError
 from django.test import TestCase
 
 from scheduling.factories import SemesterFactory, SongFactory
 from scheduling.fields import SongLengthField, format_song_length
-from scheduling.forms import SongEditForm
 from scheduling.models import Song
+
+
+class _SongLengthTestForm(forms.ModelForm):
+    """A minimal ModelForm binding `SongLengthField` to `Song.length`, standing in for the retired `SongEditForm` (issue #341).
+
+    `SongEditForm` was the setlist edit grid's row form, deleted along
+    with the rest of `scheduling/views.py`; this class exists only so the
+    `SongLengthField`'s bound-form behaviour (still real production code,
+    shared by the Spotify import per `CLAUDE.md`) keeps a form-level test.
+    """
+
+    length = SongLengthField(label='Length')
+
+    class Meta:
+        model = Song
+        fields: ClassVar[list[str]] = ['title', 'artist', 'length', 'notes']
 
 
 class FormatSongLengthTests(TestCase):
@@ -164,8 +181,8 @@ class SongLengthFieldRejectionTests(TestCase):
             self.field.clean('0:00')
 
 
-class SongEditFormLengthTests(TestCase):
-    """The setlist edit grid's row form uses the M:SS field, so the admin's editing surface gets this behaviour."""
+class SongLengthFieldBoundFormTests(TestCase):
+    """`SongLengthField` bound inside a real ModelForm: parses, validates and renders back as M:SS."""
 
     @classmethod
     def setUpTestData(cls):
@@ -173,12 +190,12 @@ class SongEditFormLengthTests(TestCase):
         cls.semester = SemesterFactory()
 
     def test_form_uses_the_song_length_field(self):
-        """SongEditForm's `length` is the M:SS field, not Django's default DurationField."""
-        self.assertIsInstance(SongEditForm().fields['length'], SongLengthField)
+        """_SongLengthTestForm's `length` is the M:SS field, not Django's default DurationField."""
+        self.assertIsInstance(_SongLengthTestForm().fields['length'], SongLengthField)
 
     def test_m_ss_input_saves_minutes_and_seconds(self):
         """An admin typing `3:45` into the Song form stores three minutes forty-five seconds."""
-        form = SongEditForm(
+        form = _SongLengthTestForm(
             {'title': 'Some Song', 'artist': 'Some Artist', 'length': '3:45', 'notes': ''},
             instance=Song(semester=self.semester, position=1),
         )
@@ -189,7 +206,7 @@ class SongEditFormLengthTests(TestCase):
 
     def test_unparseable_input_is_a_length_field_error(self):
         """A bad length is a per-field error on `length`, leaving the rest of the submission intact."""
-        form = SongEditForm(
+        form = _SongLengthTestForm(
             {'title': 'Some Song', 'artist': 'Some Artist', 'length': 'about four minutes', 'notes': ''},
             instance=Song(semester=self.semester, position=1),
         )
@@ -200,4 +217,4 @@ class SongEditFormLengthTests(TestCase):
     def test_existing_length_renders_back_as_m_ss(self):
         """Editing a saved Song shows its length as M:SS, so an admin sees what they typed."""
         song = SongFactory(semester=self.semester, length=timedelta(minutes=12, seconds=5))
-        self.assertIn('value="12:05"', SongEditForm(instance=song).as_p())
+        self.assertIn('value="12:05"', _SongLengthTestForm(instance=song).as_p())

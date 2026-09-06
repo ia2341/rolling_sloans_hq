@@ -15,7 +15,7 @@ from scheduling.factories import (
     SongFactory,
 )
 from scheduling.models import RehearsalPattern, RehearsalTime
-from scheduling.tests.test_setlist_reorder_add_delete import (
+from scheduling.tests.api_test_helpers import (
     admin_client,
     member_client,
     select,

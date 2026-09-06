@@ -37,14 +37,14 @@ def assert_preview_writes_nothing(
 
     Two request-body modes (issue #334): the original form-encoded
     `post_data` (a dict `test_case.client.post()` sends as
-    `multipart/form-data`, the pre-SPA Preview views' own wire format), or
-    `json_body` (a dict this helper itself `json.dumps()`s and posts with
-    `content_type='application/json'`, the `/api/.../preview/` wire format
-    a JSON-body `AdminPreviewApiView` subclass expects). Exactly one of
-    `post_data`/`json_body` should be given; existing form-encoded callers
-    (`test_setlist_preview_view.py`, `test_roster_preview_view.py`,
-    `test_adjudication_preview_view.py`) are untouched by this addition —
-    they keep passing `post_data` positionally, as before.
+    `multipart/form-data`, the pre-SPA Preview views' own wire format —
+    every caller of that form was deleted along with those views by issue
+    #341, but the mode itself is left in place rather than narrowed, since
+    nothing about `/api/` requires it to go), or `json_body` (a dict this
+    helper itself `json.dumps()`s and posts with `content_type=
+    'application/json'`, the `/api/.../preview/` wire format a JSON-body
+    `AdminPreviewApiView` subclass expects). Exactly one of
+    `post_data`/`json_body` should be given.
 
     Returns the `HttpResponse` from the POST, so a caller can additionally
     assert on rendered content without a second request.

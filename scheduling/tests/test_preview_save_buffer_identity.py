@@ -20,7 +20,7 @@ from scheduling.api_builders import (
     build_setlist_buffer_from_request,
 )
 from scheduling.factories import SemesterFactory, SongFactory
-from scheduling.tests.test_setlist_reorder_add_delete import admin_client, select
+from scheduling.tests.api_test_helpers import admin_client, select
 
 PASSWORD = 'a-strong-test-password-123'
 

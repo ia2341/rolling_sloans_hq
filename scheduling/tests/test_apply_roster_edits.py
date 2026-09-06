@@ -162,6 +162,34 @@ class ApplyRosterEditsTests(TestCase):
         self.assertTrue(SongRoleAssignment.objects.filter(pk=prior_assignment.pk).exists())
         self.assertTrue(Conflict.objects.filter(pk=prior_conflict.pk).exists())
 
+    def test_importing_a_prior_semesters_person_creates_a_fresh_membership(self):
+        """Applying a Buffer entry built from `import_roster_from_semester()`'s proposal creates a new Membership row on the target Semester (ADR 0001), never touching or referencing the prior Semester's row.
+
+        Ported from the retired Semester Setup wizard's roster step view
+        test (issue #341): the wizard's "roster import" is just
+        `apply_roster_edits()` fed entries built from the prior Semester's
+        proposal, so this pins the same guarantee at the service layer the
+        view test used to pin through an HTTP round trip.
+        """
+        prior = SemesterFactory()
+        prior_membership = MembershipFactory(person=PersonFactory(), semester=prior)
+        MembershipRoleFactory(membership=prior_membership, role=self.role)
+        person = prior_membership.person
+        buffer = self._buffer(entries=[RosterEditEntry(person=person, name=person.name, role_ids=frozenset({self.role.pk}))])
+
+        apply_roster_edits(buffer, viewing_semester=self.semester, requesting_admin=self.admin)
+
+        new_membership = Membership.objects.get(person=person, semester=self.semester)
+        self.assertNotEqual(new_membership.pk, prior_membership.pk)
+        self.assertEqual(
+            set(MembershipRole.objects.filter(membership=new_membership).values_list('role_id', flat=True)),
+            {self.role.pk},
+        )
+        # The prior Semester's own Membership/MembershipRole rows are untouched.
+        self.assertTrue(Membership.objects.filter(pk=prior_membership.pk).exists())
+        self.assertEqual(Membership.objects.filter(semester=prior).count(), 1)
+        self.assertEqual(MembershipRole.objects.filter(membership__semester=prior).count(), 1)
+
     def test_a_failure_mid_batch_applies_nothing(self):
         """A stale stamp fails the whole Buffer: no add, removal, Role change or name edit lands, even ones ordered before it in the diff."""
         added_person = PersonFactory()

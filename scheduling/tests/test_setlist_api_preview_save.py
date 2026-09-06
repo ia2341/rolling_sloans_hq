@@ -7,12 +7,12 @@ from django.urls import reverse
 
 from scheduling.factories import SemesterFactory, SongFactory
 from scheduling.models import Song
-from scheduling.tests.preview_helpers import assert_preview_writes_nothing
-from scheduling.tests.test_setlist_reorder_add_delete import (
+from scheduling.tests.api_test_helpers import (
     admin_client,
     member_client,
     select,
 )
+from scheduling.tests.preview_helpers import assert_preview_writes_nothing
 
 PASSWORD = 'a-strong-test-password-123'
 

@@ -15,7 +15,7 @@ from scheduling.spotify import (
     SpotifyImportError,
     SpotifyImportUnavailable,
 )
-from scheduling.tests.test_setlist_reorder_add_delete import (
+from scheduling.tests.api_test_helpers import (
     admin_client,
     member_client,
     select,
