@@ -30,6 +30,7 @@ from scheduling.serializers import (
     serialize_person_recordings,
 )
 from scheduling.services import active_roster_for, unassigned_role_holders_for
+from scheduling.tests.api_test_helpers import admin_client, select
 
 PASSWORD = 'a-strong-test-password-123'
 
@@ -441,6 +442,42 @@ class PersonApiViewTests(TestCase):
         response = self.client.get(reverse('api-member-detail', args=[999999]))
 
         self.assertEqual(response.status_code, 404)
+
+
+class PersonApiViewOlderSemesterRecordingsTests(TestCase):
+    """Issue #364: does an admin viewing an older, non-live Semester still get an Add-a-recording affordance?
+
+    `get_viewing_semester()` honours an admin's session selection
+    regardless of liveness (ADR 0010), and neither
+    `serialize_person_recordings()` nor `recording_slot_options_for()`
+    filter by `published_at` or by Rehearsal date — see
+    `scheduling/services.py`'s `person_recordings_for()`/
+    `recording_slot_options_for()` docstrings. This test recreates the
+    reported scenario end-to-end (an admin, a real Membership, and a real
+    eligible `RehearsalSong` in an older, non-live Semester) to confirm the
+    read model already exposes the affordance there, pinning that as a
+    regression test rather than shipping a fix for a bug that isn't there.
+    """
+
+    def test_upload_slots_and_recordings_block_present_for_a_selected_older_semester(self):
+        """Selecting an older, non-live Semester still returns a non-empty `upload_slots` and the `recordings` block."""
+        older_semester = SemesterFactory()
+        SemesterFactory()  # a strictly-later-published Semester, so `older_semester` is not the Live Semester.
+        admin = admin_client(self)
+        MembershipFactory(person=admin, semester=older_semester)
+        rehearsal_song = RehearsalSongFactory(
+            song=SongFactory(semester=older_semester), rehearsal=RehearsalFactory(semester=older_semester),
+        )
+        select(self, older_semester)
+
+        response = self.client.get(person_api_url(admin))
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()['data']
+        self.assertIn('recordings', data)
+        self.assertEqual(
+            [slot['id'] for slot in data['recordings']['upload_slots']], [rehearsal_song.pk],
+        )
 
 
 def recording_slots_api_url():
