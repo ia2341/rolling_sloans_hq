@@ -104,3 +104,82 @@ export function buildCastGridColumns(
 
   return [...fixedColumns, ...others]
 }
+
+/**
+ * Bucket key for the Roster's filter checkboxes (issue #366): one of the
+ * fixed instrument-family columns `classifyRole` recognizes, or a
+ * `role:`-prefixed key holding a custom Role's lowercased name. `/api/members/`'s
+ * `RosterEntry.roles` is `string[]` with no Role id, so — unlike
+ * `CastGridColumn.roleIds` — this buckets by name rather than id.
+ */
+export type RosterFilterKey = FixedColumnKey | `role:${string}`
+
+/** One filter checkbox: its bucket key and the label to render beside it. */
+export interface RosterFilterBucket {
+  key: RosterFilterKey
+  label: string
+}
+
+/**
+ * Classifies one Role name (by string) into its Roster filter bucket key —
+ * a fixed column key via `classifyRole`, or `role:<lowercased name>` for
+ * anything that matches none of the fixed families, so a custom Role name
+ * always resolves to *some* bucket rather than being dropped.
+ */
+export function classifyRosterRoleName(roleName: string): RosterFilterKey {
+  const { column } = classifyRole(roleName)
+  return column ?? (`role:${roleName.toLowerCase()}` as RosterFilterKey)
+}
+
+/**
+ * Builds the Roster's filter-checkbox buckets from every member's role
+ * names: the fixed instrument-family columns with at least one match (in
+ * `FIXED_COLUMNS` order), followed by every custom Role name that matched
+ * none of them, alphabetically by name. Mirrors `buildCastGridColumns`'s
+ * "no Role name is ever silently dropped" guarantee, just keyed by name
+ * instead of Role id since a Roster entry carries no id.
+ */
+export function buildRosterFilterBuckets(
+  members: { roles: string[] }[],
+): RosterFilterBucket[] {
+  const fixedSeen = new Set<FixedColumnKey>()
+  const customLabels = new Map<string, string>()
+
+  for (const member of members) {
+    for (const roleName of member.roles) {
+      const key = classifyRosterRoleName(roleName)
+      if (key.startsWith('role:')) {
+        const lower = roleName.toLowerCase()
+        if (!customLabels.has(lower)) customLabels.set(lower, roleName)
+      } else {
+        fixedSeen.add(key as FixedColumnKey)
+      }
+    }
+  }
+
+  const fixedBuckets = FIXED_COLUMNS.filter(({ key }) =>
+    fixedSeen.has(key),
+  ).map(({ key, label }) => ({ key, label }))
+
+  const customBuckets = [...customLabels.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([lower, label]) => ({
+      key: `role:${lower}` as RosterFilterKey,
+      label,
+    }))
+
+  return [...fixedBuckets, ...customBuckets]
+}
+
+/**
+ * Whether a member's role names match any of the checked filter buckets,
+ * OR'd together. An empty `checked` set means "no filter" — everyone
+ * matches.
+ */
+export function memberMatchesRosterFilter(
+  roles: string[],
+  checked: ReadonlySet<RosterFilterKey>,
+): boolean {
+  if (checked.size === 0) return true
+  return roles.some((roleName) => checked.has(classifyRosterRoleName(roleName)))
+}

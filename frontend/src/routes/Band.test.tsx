@@ -1,5 +1,7 @@
 import { screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { useLocation } from 'react-router-dom'
 
 import { adminContext, memberContext } from '../test/fixtures'
 import { mockFetchOnce } from '../test/mockFetch'
@@ -7,17 +9,23 @@ import { mockMatchMedia } from '../test/mockMatchMedia'
 import { renderShell } from '../test/renderShell'
 import { Band } from './Band'
 
+/** Renders the current route's pathname as text, standing in for a router outlet so a test can assert a card's click navigated. */
+function LocationSpy() {
+  const location = useLocation()
+  return <p data-testid="location">{location.pathname}</p>
+}
+
 /** A minimal `/api/members/` `data` payload: two members, one of them the viewer. */
 function bandPayload(overrides: Record<string, unknown> = {}) {
   return {
     semester_name: 'Spring 2026',
     member_count: 2,
     members: [
-      { id: 1, name: 'Sam Rivera', roles: ['Singer'], song_count: 3 },
+      { id: 1, name: 'Sam Rivera', roles: ['Lead Vocals'], song_count: 3 },
       {
         id: 2,
         name: 'Alex Kim',
-        roles: ['Drummer', 'Guitarist'],
+        roles: ['Drums', 'Rhythm Guitar'],
         song_count: 1,
       },
     ],
@@ -45,25 +53,38 @@ describe('Band', () => {
     ).toBeInTheDocument()
   })
 
-  it('renders the table on desktop, not cards', async () => {
-    mockFetchOnce(200, { context: memberContext(), data: bandPayload() })
-
-    renderShell(<Band />, ['/members'])
-
-    expect(await screen.findByRole('table')).toBeInTheDocument()
-  })
-
-  it('renders phone cards, not a table, at the phone breakpoint', async () => {
-    mockMatchMedia(true)
+  it('renders every member as a card with their roles listed, and no song count or Open link', async () => {
     mockFetchOnce(200, { context: memberContext(), data: bandPayload() })
 
     renderShell(<Band />, ['/members'])
 
     await screen.findByText('Sam Rivera', { exact: false })
-    expect(screen.queryByRole('table')).not.toBeInTheDocument()
+    expect(screen.getByText('Lead Vocals')).toBeInTheDocument()
+    expect(screen.getByText('Drums, Rhythm Guitar')).toBeInTheDocument()
+    expect(screen.queryByText(/song/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Open' })).not.toBeInTheDocument()
   })
 
-  it('marks only the viewer’s own row with a you chip', async () => {
+  it('renders the same card grid at both phone and desktop widths, never a table', async () => {
+    mockFetchOnce(200, { context: memberContext(), data: bandPayload() })
+    const { unmount } = renderShell(<Band />, ['/members'])
+    await screen.findByText('Sam Rivera', { exact: false })
+    expect(screen.queryByRole('table')).not.toBeInTheDocument()
+    const desktopCard = screen.getByText('Sam Rivera').closest('li')
+    unmount()
+
+    mockMatchMedia(true)
+    mockFetchOnce(200, { context: memberContext(), data: bandPayload() })
+    renderShell(<Band />, ['/members'])
+    await screen.findByText('Sam Rivera', { exact: false })
+    expect(screen.queryByRole('table')).not.toBeInTheDocument()
+    const phoneCard = screen.getByText('Sam Rivera').closest('li')
+
+    // Same markup shape at both widths — no isPhone branch for the base layout.
+    expect(phoneCard?.outerHTML).toBe(desktopCard?.outerHTML)
+  })
+
+  it('marks only the viewer’s own card with a you chip', async () => {
     mockFetchOnce(200, { context: memberContext(), data: bandPayload() })
 
     renderShell(<Band />, ['/members'])
@@ -71,23 +92,79 @@ describe('Band', () => {
     await screen.findByText('Sam Rivera', { exact: false })
     const youChips = screen.getAllByText('you')
     expect(youChips).toHaveLength(1)
-    // memberContext()'s viewer is id 1, "Sam Rivera" — confirm the chip sits inside that row.
-    const samRow = screen.getByText('Sam Rivera').closest('tr')
-    expect(samRow).toHaveTextContent('you')
-    const alexRow = screen.getByText('Alex Kim').closest('tr')
-    expect(alexRow).not.toHaveTextContent('you')
+    // memberContext()'s viewer is id 1, "Sam Rivera" — confirm the chip sits inside that card.
+    const samCard = screen.getByText('Sam Rivera').closest('li')
+    expect(samCard).toHaveTextContent('you')
+    const alexCard = screen.getByText('Alex Kim').closest('li')
+    expect(alexCard).not.toHaveTextContent('you')
   })
 
-  it('links every row to that member’s Person page', async () => {
+  it('links every card to that member’s Person page', async () => {
     mockFetchOnce(200, { context: memberContext(), data: bandPayload() })
 
     renderShell(<Band />, ['/members'])
 
     await screen.findByText('Sam Rivera', { exact: false })
-    expect(screen.getAllByRole('link', { name: 'Open' })[0]).toHaveAttribute(
-      'href',
-      '/members/1',
+    const samLink = screen.getByText('Sam Rivera').closest('a')
+    expect(samLink).toHaveAttribute('href', '/members/1')
+  })
+
+  it('clicking a card navigates to that member’s Person page', async () => {
+    mockFetchOnce(200, { context: memberContext(), data: bandPayload() })
+    const user = userEvent.setup()
+
+    renderShell(
+      <>
+        <Band />
+        <LocationSpy />
+      </>,
+      ['/members'],
     )
+
+    await user.click(await screen.findByText('Sam Rivera'))
+    expect(screen.getByTestId('location')).toHaveTextContent('/members/1')
+  })
+
+  it('filters the grid to members with any checked role, OR’d together', async () => {
+    mockFetchOnce(200, { context: memberContext(), data: bandPayload() })
+    const user = userEvent.setup()
+
+    renderShell(<Band />, ['/members'])
+
+    await screen.findByText('Sam Rivera', { exact: false })
+    await user.click(screen.getByRole('checkbox', { name: 'Vocals' }))
+    expect(screen.getByText('Sam Rivera')).toBeInTheDocument()
+    expect(screen.queryByText('Alex Kim')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('checkbox', { name: 'Drums' }))
+    expect(screen.getByText('Sam Rivera')).toBeInTheDocument()
+    expect(screen.getByText('Alex Kim')).toBeInTheDocument()
+  })
+
+  it('shows every member when no filter checkbox is checked', async () => {
+    mockFetchOnce(200, { context: memberContext(), data: bandPayload() })
+
+    renderShell(<Band />, ['/members'])
+
+    await screen.findByText('Sam Rivera', { exact: false })
+    expect(screen.getByText('Alex Kim')).toBeInTheDocument()
+  })
+
+  it('gives a custom Role name matching no fixed family its own filter checkbox', async () => {
+    mockFetchOnce(200, {
+      context: memberContext(),
+      data: bandPayload({
+        members: [
+          { id: 1, name: 'Sam Rivera', roles: ['Kazoo'], song_count: 0 },
+        ],
+      }),
+    })
+
+    renderShell(<Band />, ['/members'])
+
+    expect(
+      await screen.findByRole('checkbox', { name: 'Kazoo' }),
+    ).toBeInTheDocument()
   })
 
   it('renders an admin-only Edit roster action', async () => {
