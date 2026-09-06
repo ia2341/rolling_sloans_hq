@@ -51,7 +51,11 @@ export function Sidebar() {
 
       <ul className="flex flex-1 flex-col gap-0.5 overflow-y-auto px-2 py-3">
         {SIDEBAR_NAV_ITEMS.map((item) => {
-          const isActive = isNavItemActive(item, location)
+          const isActive = isNavItemActive(
+            item,
+            location,
+            appContext?.viewer.id,
+          )
           return (
             <li key={item.key}>
               <NavLink
