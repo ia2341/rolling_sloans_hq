@@ -6,14 +6,13 @@ from django.utils import timezone
 
 from scheduling.factories import (
     MembershipFactory,
-    MembershipRoleFactory,
     RoleFactory,
     SemesterFactory,
     SongFactory,
     SongRoleAssignmentFactory,
     SongRoleRequirementFactory,
 )
-from scheduling.models import SongRoleRequirement
+from scheduling.models import MembershipRole, SongRoleRequirement
 from scheduling.services import (
     SongRoleRequirementBuffer,
     SongRoleRequirementEntry,
@@ -124,7 +123,7 @@ class PreviewSongRoleRequirementsTests(TestCase):
     def test_an_added_requirement_for_a_declared_role_gets_no_undeclared_note(self):
         """A Role at least one Membership has declared gets no "nobody has declared" quiet note."""
         membership = MembershipFactory(semester=self.semester)
-        MembershipRoleFactory(membership=membership, role=self.role)
+        MembershipRole.objects.create(membership=membership, role=self.role)
         buffer = self._buffer(entries=[SongRoleRequirementEntry(role_id=self.role.pk, count=1)])
 
         fallout = self._preview(buffer)

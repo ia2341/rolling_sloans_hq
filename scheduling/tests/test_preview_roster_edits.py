@@ -11,7 +11,6 @@ from identity.models import Person
 from scheduling.factories import (
     ConflictFactory,
     MembershipFactory,
-    MembershipRoleFactory,
     RehearsalFactory,
     RoleFactory,
     SemesterFactory,
@@ -107,7 +106,7 @@ class PreviewRosterEditsTests(TestCase):
         person = PersonFactory(name='Old Name')
         membership = MembershipFactory(person=person, semester=self.semester)
         other_role = RoleFactory()
-        MembershipRoleFactory(membership=membership, role=other_role)
+        MembershipRole.objects.create(membership=membership, role=other_role)
         buffer = self._buffer(entries=[
             RosterEditEntry(person=person, name='New Name', role_ids=frozenset({self.role.pk})),
         ])
@@ -165,7 +164,7 @@ class PreviewRosterEditsTests(TestCase):
         """A Role change leaving a Person's Membership with zero declared Roles reports quiet Fallout."""
         person = PersonFactory(name='No Roles Left')
         membership = MembershipFactory(person=person, semester=self.semester)
-        MembershipRoleFactory(membership=membership, role=self.role)
+        MembershipRole.objects.create(membership=membership, role=self.role)
         buffer = self._buffer(entries=[RosterEditEntry(person=person, name=person.name, role_ids=frozenset())])
 
         fallout = self._preview(buffer)
@@ -176,7 +175,7 @@ class PreviewRosterEditsTests(TestCase):
         """Dropping a declared Role that an existing SongRoleAssignment relies on reports quiet Fallout."""
         person = PersonFactory(name='Mismatch Person')
         membership = MembershipFactory(person=person, semester=self.semester)
-        MembershipRoleFactory(membership=membership, role=self.role)
+        MembershipRole.objects.create(membership=membership, role=self.role)
         song = SongFactory(semester=self.semester, title='Mismatch Song')
         assignment = SongRoleAssignmentFactory(song=song, role=self.role, person=person)
         self.assertFalse(assignment.is_role_mismatch)

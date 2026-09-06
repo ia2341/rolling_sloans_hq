@@ -99,6 +99,30 @@ class MembershipRole(models.Model):
         return f'{self.membership} — {self.role}'
 
 
+class PersonRole(models.Model):
+    """A Role a Person can play, as a durable person-level fact (ADR-0014).
+
+    Deliberately carries no Semester dimension: unlike the retired
+    MembershipRole, "what roles can this person play" doesn't reset each
+    term. Removing one is a hard delete — a person↔role declaration has no
+    independent historical value beyond what's already snapshotted on
+    is_role_mismatch at assignment time — so, unlike Role's own is_active,
+    there is no soft-delete flag here.
+    """
+
+    person = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    role = models.ForeignKey(Role, on_delete=models.CASCADE)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(fields=['person', 'role'], name='unique_role_per_person'),
+        ]
+
+    def __str__(self):
+        """Return "<person> — <role>" for admin/debug display."""
+        return f'{self.person} — {self.role}'
+
+
 class Song(models.Model):
     """A song on one Semester's setlist, placed at a concert-order position.
 

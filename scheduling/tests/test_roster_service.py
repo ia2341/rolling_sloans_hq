@@ -6,7 +6,6 @@ from django.test import TestCase, TransactionTestCase
 from identity.factories import PersonFactory
 from scheduling.factories import (
     MembershipFactory,
-    MembershipRoleFactory,
     RoleFactory,
     SemesterFactory,
 )
@@ -94,7 +93,7 @@ class ImportRosterFromSemesterTests(TestCase):
         target = SemesterFactory()
         membership = MembershipFactory(semester=prior)
         role = RoleFactory(name='Singer')
-        MembershipRoleFactory(membership=membership, role=role)
+        MembershipRole.objects.create(membership=membership, role=role)
 
         proposal = import_roster_from_semester(target)
 
@@ -109,7 +108,7 @@ class ImportRosterFromSemesterTests(TestCase):
         prior = SemesterFactory()
         target = SemesterFactory()
         membership = MembershipFactory(semester=prior)
-        MembershipRoleFactory(membership=membership)
+        MembershipRole.objects.create(membership=membership, role=RoleFactory())
         membership_role_count_before = MembershipRole.objects.count()
 
         import_roster_from_semester(target)
@@ -134,13 +133,13 @@ class ImportRosterFromSemesterTests(TestCase):
         target = SemesterFactory()
         membership = MembershipFactory(semester=prior)
         role = RoleFactory()
-        prior_membership_role = MembershipRoleFactory(membership=membership, role=role)
+        prior_membership_role = MembershipRole.objects.create(membership=membership, role=role)
 
         proposal = import_roster_from_semester(target)
         [imported] = proposal.people
         new_membership = MembershipFactory(semester=target, person=imported.person)
         for imported_role in imported.roles:
-            MembershipRoleFactory(membership=new_membership, role=imported_role)
+            MembershipRole.objects.create(membership=new_membership, role=imported_role)
 
         self.assertTrue(MembershipRole.objects.filter(pk=prior_membership_role.pk).exists())
         self.assertEqual(

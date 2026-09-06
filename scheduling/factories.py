@@ -11,7 +11,7 @@ from scheduling.models import (
     Conflict,
     ConflictWindow,
     Membership,
-    MembershipRole,
+    PersonRole,
     Recording,
     Rehearsal,
     RehearsalPattern,
@@ -83,13 +83,13 @@ class MembershipFactory(factory.django.DjangoModelFactory):
     semester = factory.SubFactory(SemesterFactory)
 
 
-class MembershipRoleFactory(factory.django.DjangoModelFactory):
-    """Builds a Role a Membership has declared for its Semester, with a fresh Membership/Role by default."""
+class PersonRoleFactory(factory.django.DjangoModelFactory):
+    """Builds a Role a Person can play, with a fresh Person/Role by default (ADR-0014, no semester dimension)."""
 
     class Meta:
-        model = MembershipRole
+        model = PersonRole
 
-    membership = factory.SubFactory(MembershipFactory)
+    person = factory.SubFactory(PersonFactory)
     role = factory.SubFactory(RoleFactory)
 
 

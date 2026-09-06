@@ -11,7 +11,6 @@ from scheduling.factories import (
     ConflictFactory,
     ConflictWindowFactory,
     MembershipFactory,
-    MembershipRoleFactory,
     RecordingFactory,
     RehearsalFactory,
     RehearsalSongFactory,
@@ -21,7 +20,7 @@ from scheduling.factories import (
     SongRoleAssignmentFactory,
     SongRoleRequirementFactory,
 )
-from scheduling.models import Conflict, ConflictWindow
+from scheduling.models import Conflict, ConflictWindow, MembershipRole
 from scheduling.services import (
     AssignmentMatrixEntryKind,
     active_roles_for,
@@ -561,7 +560,7 @@ class AssignmentMatrixForTests(TestCase):
         SongRoleRequirementFactory(song=song, role=role, count=1)
         person = PersonFactory()
         membership = MembershipFactory(person=person, semester=rehearsal.semester)
-        MembershipRoleFactory(membership=membership, role=role)
+        MembershipRole.objects.create(membership=membership, role=role)
         matched = SongRoleAssignmentFactory(song=song, role=role, person=person)
         mismatched_person = PersonFactory()
         MembershipFactory(person=mismatched_person, semester=rehearsal.semester)
@@ -693,7 +692,7 @@ class AssignmentPickerForTests(TestCase):
         role = RoleFactory()
         declarer = PersonFactory(name='Ada')
         declarer_membership = MembershipFactory(person=declarer, semester=semester)
-        MembershipRoleFactory(membership=declarer_membership, role=role)
+        MembershipRole.objects.create(membership=declarer_membership, role=role)
         non_declarer = PersonFactory(name='Bea')
         MembershipFactory(person=non_declarer, semester=semester)
 

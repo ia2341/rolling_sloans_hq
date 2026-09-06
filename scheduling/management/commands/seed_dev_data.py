@@ -21,7 +21,6 @@ from identity.factories import PersonFactory
 from scheduling import services
 from scheduling.factories import (
     MembershipFactory,
-    MembershipRoleFactory,
     RehearsalFactory,
     RehearsalPatternFactory,
     RehearsalSongFactory,
@@ -32,7 +31,7 @@ from scheduling.factories import (
     SongRoleAssignmentFactory,
     SongRoleRequirementFactory,
 )
-from scheduling.models import Rehearsal, RehearsalTime, Role, Song
+from scheduling.models import MembershipRole, Rehearsal, RehearsalTime, Role, Song
 
 fake = Faker()
 
@@ -133,11 +132,11 @@ def _build_memberships(semester, people, roles):
     for i, person in enumerate(people):
         membership = MembershipFactory(person=person, semester=semester)
         primary_role = roles[i % len(roles)]
-        MembershipRoleFactory(membership=membership, role=primary_role)
+        MembershipRole.objects.create(membership=membership, role=primary_role)
         if fake.boolean(chance_of_getting_true=35):
             secondary_role = roles[(i + 1) % len(roles)]
             if secondary_role != primary_role:
-                MembershipRoleFactory(membership=membership, role=secondary_role)
+                MembershipRole.objects.create(membership=membership, role=secondary_role)
         memberships[person.pk] = membership
     return memberships
 
