@@ -35,6 +35,9 @@ export interface SongProgressRow {
   completed: number
   total: number
   has_assignment: boolean
+  notes: string
+  /** ISO date of the next future Rehearsal whose running order includes this Song, or `null` if none is scheduled. */
+  next_rehearsal: string | null
 }
 
 export interface SetupChecklistItem {

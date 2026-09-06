@@ -6,9 +6,10 @@ import { useAppContext } from '../api/ContextProvider'
 import type { PreviewResult } from '../api/previewTypes'
 import type { SongPayload } from '../api/setlistTypes'
 import type { ReadEnvelope } from '../api/types'
-import { CastLine } from '../components/ui/CastLine'
+import { CastTable } from '../components/ui/CastLine'
 import { PageHead } from '../components/ui/PageHead'
 import { SaveChangesDialog } from '../components/ui/SaveChangesDialog'
+import { formatClockTime, formatRehearsalDate } from '../lib/formatDate'
 import { useRegisterEditSession } from '../shell/EditSessionContext'
 import { usePageTitle } from '../shell/PageTitleContext'
 import { AddRoleRequirementSheet } from './song/AddRoleRequirementSheet'
@@ -31,11 +32,6 @@ type LoadState =
   | { status: 'loading' }
   | { status: 'not_found' }
   | { status: 'loaded'; data: SongPayload }
-
-/** Trims a wire `HH:MM:SS` time string down to `HH:MM` for display (issue #330's "date + HH:MM–HH:MM" group header). */
-function formatClockTime(isoTime: string): string {
-  return isoTime.slice(0, 5)
-}
 
 /**
  * `/songs/<pk>/` (issue #330, #339): one Song's read model, fed by one
@@ -216,7 +212,7 @@ export function Song() {
           <span className="text-xs text-rs-muted">Read-only here</span>
         </div>
         <div className="pt-2">
-          <CastLine cast={song.cast} viewerId={appContext?.viewer.id} />
+          <CastTable cast={song.cast} viewerId={appContext?.viewer.id} />
         </div>
         {isEditing ? (
           <RequirementsEditor
@@ -243,7 +239,7 @@ export function Song() {
                 to={`/schedule?rehearsal=${song.next_rehearsal.id}`}
                 className="mt-2 inline-block font-medium text-rs-accent"
               >
-                Cast on {song.next_rehearsal.date} →
+                Cast on {formatRehearsalDate(song.next_rehearsal.date)} →
               </Link>
             )}
           </div>
@@ -281,7 +277,7 @@ export function Song() {
                 className="rounded border border-rs-border p-3"
               >
                 <p className="text-sm font-medium">
-                  {group.date}
+                  {formatRehearsalDate(group.date)}
                   {group.start_time !== null && group.end_time !== null
                     ? ` · ${formatClockTime(group.start_time)}–${formatClockTime(group.end_time)}`
                     : ''}{' '}
@@ -320,7 +316,7 @@ export function Song() {
           <ul className="pt-2 text-sm">
             {song.rehearsed_at.map((row) => (
               <li key={row.rehearsal_id}>
-                {row.date}
+                {formatRehearsalDate(row.date)}
                 {' — '}
                 {row.is_dress_rehearsal
                   ? 'whole setlist'

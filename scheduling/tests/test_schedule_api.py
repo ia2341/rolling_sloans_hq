@@ -73,7 +73,7 @@ class SerializeScheduleExactKeySetTests(TestCase):
         row = data['schedule']['future'][0]
         self.assertEqual(
             set(row.keys()),
-            {'id', 'date', 'start_time', 'end_time', 'is_dress', 'is_past', 'song_count', 'your_state'},
+            {'id', 'date', 'start_time', 'end_time', 'is_dress', 'is_past', 'song_count', 'your_state', 'your_songs'},
         )
 
     def test_schedule_list_row_keys_for_an_admin_add_pending_count(self):
@@ -86,8 +86,26 @@ class SerializeScheduleExactKeySetTests(TestCase):
         row = data['schedule']['future'][0]
         self.assertEqual(
             set(row.keys()),
-            {'id', 'date', 'start_time', 'end_time', 'is_dress', 'is_past', 'song_count', 'your_state', 'pending_count'},
+            {
+                'id', 'date', 'start_time', 'end_time', 'is_dress', 'is_past',
+                'song_count', 'your_state', 'your_songs', 'pending_count',
+            },
         )
+
+    def test_schedule_list_row_your_songs_reuses_slots_for_person(self):
+        """`your_songs` lists exactly the Songs `slots_for_person()` returns for this Rehearsal — a standing assignment and a Backup both count, each Song once."""
+        person = PersonFactory()
+        rehearsal = RehearsalFactory(date=timezone.localdate() + timedelta(days=1))
+        assigned_song = SongFactory(semester=rehearsal.semester, title='Assigned Song')
+        RehearsalSongFactory(rehearsal=rehearsal, song=assigned_song, order=1)
+        SongRoleAssignmentFactory(person=person, song=assigned_song)
+        other_song = SongFactory(semester=rehearsal.semester, title='Someone Else')
+        RehearsalSongFactory(rehearsal=rehearsal, song=other_song, order=2)
+
+        data = serialize_schedule(_RequestStub(person), rehearsal.semester)
+
+        row = data['schedule']['future'][0]
+        self.assertEqual(row['your_songs'], [{'id': assigned_song.pk, 'title': 'Assigned Song'}])
 
     def test_selected_rehearsal_detail_keys_for_a_member(self):
         """A member's selected-Rehearsal detail carries exactly the documented keys, with no admin-only key."""

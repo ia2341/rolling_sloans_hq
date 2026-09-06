@@ -1,58 +1,79 @@
-import type { CastEntry } from '../../api/setlistTypes'
-import { roleHueVar } from './RoleLegend'
+import { Link } from 'react-router-dom'
 
-interface CastLineProps {
-  cast: CastEntry[]
+import type { CastEntry } from '../../api/setlistTypes'
+
+/**
+ * One Role's performers as plain, linked text — no pills (UI overhaul: the
+ * app no longer color-codes performers as pills). An unfilled Role shows
+ * its short code plus "unfilled"; a filled one stacks each performer's
+ * name, linking to their person page, with the viewer's own name marked
+ * "(you)" and a role-mismatch marker (ADR 0002) on its own line. Shared by
+ * the Setlist table (one `CastCell` per role column) and the Song page's
+ * `CastTable` (one `CastCell` per row).
+ */
+export function CastCell({
+  entry,
+  viewerId,
+}: {
+  entry: CastEntry
   viewerId?: number
+}) {
+  if (entry.performers.length === 0) {
+    return <span className="text-xs text-rs-muted">{entry.code} unfilled</span>
+  }
+  return (
+    <div className="flex flex-col gap-1">
+      {entry.performers.map((performer) => (
+        <div key={performer.id} className="text-sm">
+          <Link to={`/members/${performer.id}`} className="text-rs-accent">
+            {performer.name}
+          </Link>
+          {performer.id === viewerId && (
+            <span className="text-xs text-rs-muted"> (you)</span>
+          )}
+          {performer.is_role_mismatch && (
+            <div className="text-xs text-rs-muted">
+              ◦ role not on membership
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  )
 }
 
 /**
- * The role-by-role cast line (issue #330): the same Roles in the same
- * order every time, hue plus position identifying the Role so a filled
- * pill needs no label. An unfilled Role renders its short code plus
- * "unfilled" rather than blank space; a filled one's `title` always names
- * the Role in full, so hue is an accelerator and never the only channel
- * carrying the meaning. The viewer's own name is marked distinctly, and a
- * mismatched assignment (ADR 0002) carries a quiet `◦` marker.
+ * A Song's full cast as a Role | Performer(s) table (issue: pills/tables
+ * UI overhaul) — the Song page's read-only cast section. Rows are Roles,
+ * in the same fixed order the Setlist uses for its columns.
  */
-export function CastLine({ cast, viewerId }: CastLineProps) {
+export function CastTable({
+  cast,
+  viewerId,
+}: {
+  cast: CastEntry[]
+  viewerId?: number
+}) {
   return (
-    <ul className="flex flex-wrap gap-1.5">
-      {cast.map((entry, index) => (
-        <li key={entry.role_id}>
-          {entry.performers.length === 0 ? (
-            <span
-              title={entry.role_name}
-              className="inline-flex items-center gap-1 rounded-full border border-dashed px-2 py-0.5 text-xs text-rs-muted"
-              style={{ borderColor: roleHueVar(index) }}
-            >
-              {entry.code} unfilled
-            </span>
-          ) : (
-            <span className="inline-flex flex-wrap gap-1">
-              {entry.performers.map((performer) => (
-                <span
-                  key={performer.id}
-                  title={entry.role_name}
-                  className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium text-white ${
-                    performer.id === viewerId
-                      ? 'ring-2 ring-rs-accent ring-offset-1'
-                      : ''
-                  }`}
-                  style={{ backgroundColor: roleHueVar(index) }}
-                >
-                  {performer.name}
-                  {performer.is_role_mismatch && (
-                    <span title="Role not on their membership (ADR 0002)">
-                      ◦
-                    </span>
-                  )}
-                </span>
-              ))}
-            </span>
-          )}
-        </li>
-      ))}
-    </ul>
+    <table className="w-full border-collapse text-left text-sm">
+      <thead>
+        <tr>
+          <th className="border border-rs-border px-2 py-2">Role</th>
+          <th className="border border-rs-border px-2 py-2">Performer(s)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {cast.map((entry) => (
+          <tr key={entry.role_id}>
+            <td className="border border-rs-border px-2 py-2 align-top">
+              {entry.role_name}
+            </td>
+            <td className="border border-rs-border px-2 py-2 align-top">
+              <CastCell entry={entry} viewerId={viewerId} />
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   )
 }

@@ -15,13 +15,9 @@ import type { ReadEnvelope } from '../api/types'
 import { PageHead } from '../components/ui/PageHead'
 import { Toggle } from '../components/ui/Toggle'
 import { useIsPhone } from '../hooks/useIsPhone'
+import { formatClockTime, formatRehearsalDate } from '../lib/formatDate'
 import { PublishSemesterDialog } from '../shell/PublishSemesterDialog'
 import { usePageTitle } from '../shell/PageTitleContext'
-
-/** Trims a wire `HH:MM:SS` time string down to `HH:MM` for display. */
-function formatClockTime(isoTime: string): string {
-  return isoTime.slice(0, 5)
-}
 
 /** `localStorage` key for one Semester's dismissed setup-checklist panel (per-viewer, per-device — issue #332). */
 function dismissedChecklistKey(semesterId: number): string {
@@ -150,7 +146,7 @@ function NextRehearsalSection({
         <div className="pt-1">
           <div className="flex items-center justify-between">
             <p className="text-sm">
-              <strong>{card.date}</strong>
+              <strong>{formatRehearsalDate(card.date)}</strong>
               {card.is_dress && ' · dress rehearsal'}
             </p>
             <Link
@@ -193,8 +189,9 @@ function NextRehearsalTimeline({ card }: { card: NextRehearsalCardData }) {
         aria-label="Timeline of the next rehearsal's slots"
       >
         {timeline.slots.map((slot) => (
-          <div
+          <Link
             key={slot.song_id}
+            to={`/songs/${slot.song_id}`}
             title={`${slot.song_title} (${formatClockTime(slot.start_time)}–${formatClockTime(slot.end_time)})`}
             className={`h-6 flex-1 border-r border-rs-border last:border-r-0 ${
               slot.is_viewer ? 'bg-rs-accent' : 'bg-rs-border/30'
@@ -213,6 +210,7 @@ function NextRehearsalTimeline({ card }: { card: NextRehearsalCardData }) {
 
 /** The next four Rehearsals, each naming the viewer's own window (or "not needed"/"Whole window" for the Dress Rehearsal). */
 function UpcomingRehearsalsSection({ rows }: { rows: UpcomingRehearsalRow[] }) {
+  const isPhone = useIsPhone()
   return (
     <section className="pb-6">
       <div className="flex items-center justify-between">
@@ -227,37 +225,87 @@ function UpcomingRehearsalsSection({ rows }: { rows: UpcomingRehearsalRow[] }) {
         <p className="pt-1 text-sm text-rs-muted">
           No rehearsals scheduled yet this Semester.
         </p>
+      ) : isPhone ? (
+        <UpcomingRehearsalsCards rows={rows} />
       ) : (
-        <ul className="pt-1">
-          {rows.map((row) => (
-            <li
-              key={row.id}
-              className="flex items-center justify-between border-b border-rs-border py-2 text-sm last:border-b-0"
-            >
+        <UpcomingRehearsalsTable rows={rows} />
+      )}
+    </section>
+  )
+}
+
+function UpcomingRehearsalsTable({ rows }: { rows: UpcomingRehearsalRow[] }) {
+  return (
+    <table className="w-full pt-1 text-left text-sm">
+      <thead>
+        <tr className="text-xs font-semibold uppercase text-rs-muted">
+          <th className="pb-2 font-semibold">Date</th>
+          <th className="pb-2 font-semibold">Time</th>
+          <th className="pb-2 font-semibold">Your window</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row) => (
+          <tr
+            key={row.id}
+            className="border-b border-rs-border text-sm last:border-b-0"
+          >
+            <td className="py-2 align-top">
               <div className="flex items-center gap-2">
-                <span>{row.date}</span>
+                <span>{formatRehearsalDate(row.date)}</span>
                 {row.is_dress && (
                   <span className="rounded-full bg-rs-accent px-2 py-0.5 text-xs font-medium text-rs-accent-fg">
                     Dress
                   </span>
                 )}
               </div>
-              <span className="text-rs-muted">
-                {formatClockTime(row.start_time)}–
-                {formatClockTime(row.end_time)}
+            </td>
+            <td className="py-2 align-top text-rs-muted">
+              {formatClockTime(row.start_time)}–{formatClockTime(row.end_time)}
+            </td>
+            <td className="py-2 align-top">
+              {row.is_dress
+                ? 'Whole window'
+                : row.your_window !== null
+                  ? `${formatClockTime(row.your_window.arrival_time)}–${formatClockTime(row.your_window.departure_time)}`
+                  : 'Not needed'}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+function UpcomingRehearsalsCards({ rows }: { rows: UpcomingRehearsalRow[] }) {
+  return (
+    <ul className="pt-1">
+      {rows.map((row) => (
+        <li
+          key={row.id}
+          className="flex items-center justify-between border-b border-rs-border py-2 text-sm last:border-b-0"
+        >
+          <div className="flex items-center gap-2">
+            <span>{formatRehearsalDate(row.date)}</span>
+            {row.is_dress && (
+              <span className="rounded-full bg-rs-accent px-2 py-0.5 text-xs font-medium text-rs-accent-fg">
+                Dress
               </span>
-              <span>
-                {row.is_dress
-                  ? 'Whole window'
-                  : row.your_window !== null
-                    ? `${formatClockTime(row.your_window.arrival_time)}–${formatClockTime(row.your_window.departure_time)}`
-                    : 'Not needed'}
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
+            )}
+          </div>
+          <span className="text-rs-muted">
+            {formatClockTime(row.start_time)}–{formatClockTime(row.end_time)}
+          </span>
+          <span>
+            {row.is_dress
+              ? 'Whole window'
+              : row.your_window !== null
+                ? `${formatClockTime(row.your_window.arrival_time)}–${formatClockTime(row.your_window.departure_time)}`
+                : 'Not needed'}
+          </span>
+        </li>
+      ))}
+    </ul>
   )
 }
 
@@ -342,7 +390,9 @@ function SongProgressCards({ songs }: { songs: SongProgressRow[] }) {
           className="border-b border-rs-border py-2 text-sm last:border-b-0"
         >
           <div className="flex items-center justify-between">
-            <span className="font-medium">{song.title}</span>
+            <Link to={`/songs/${song.id}`} className="font-medium">
+              {song.title}
+            </Link>
             <span className="text-rs-muted">
               {song.completed}/{song.total}
             </span>
@@ -351,13 +401,21 @@ function SongProgressCards({ songs }: { songs: SongProgressRow[] }) {
             <span className="text-rs-muted">#{song.position}</span>
             <ProgressBar completed={song.completed} total={song.total} />
           </div>
+          {song.notes !== '' && (
+            <p className="pt-1 text-xs text-rs-muted">{song.notes}</p>
+          )}
+          {song.next_rehearsal !== null && (
+            <p className="pt-1 text-xs text-rs-muted">
+              Next: {formatRehearsalDate(song.next_rehearsal)}
+            </p>
+          )}
         </li>
       ))}
     </ul>
   )
 }
 
-/** The desktop layout: one table row per Song, with position, title, artist, length and progress. */
+/** The desktop layout: one table row per Song, with position, title, artist, length, progress, notes and next rehearsal. */
 function SongProgressTable({ songs }: { songs: SongProgressRow[] }) {
   return (
     <table className="w-full text-left text-sm">
@@ -368,17 +426,29 @@ function SongProgressTable({ songs }: { songs: SongProgressRow[] }) {
           <th className="pb-2">Artist</th>
           <th className="pb-2">Length</th>
           <th className="pb-2">Progress</th>
+          <th className="pb-2">Notes</th>
+          <th className="pb-2">Next rehearsal</th>
         </tr>
       </thead>
       <tbody>
         {songs.map((song) => (
           <tr key={song.id}>
             <td className="py-2 align-top">{song.position}</td>
-            <td className="py-2 align-top font-medium">{song.title}</td>
+            <td className="py-2 align-top font-medium">
+              <Link to={`/songs/${song.id}`}>{song.title}</Link>
+            </td>
             <td className="py-2 align-top text-rs-muted">{song.artist}</td>
             <td className="py-2 align-top">{song.length}</td>
             <td className="py-2 align-top">
               <ProgressBar completed={song.completed} total={song.total} />
+            </td>
+            <td className="py-2 align-top text-rs-muted">
+              {song.notes !== '' ? song.notes : '—'}
+            </td>
+            <td className="py-2 align-top text-rs-muted">
+              {song.next_rehearsal !== null
+                ? formatRehearsalDate(song.next_rehearsal)
+                : '—'}
             </td>
           </tr>
         ))}

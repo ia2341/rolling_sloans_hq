@@ -992,23 +992,38 @@ def song_rehearsal_progress(song) -> SongRehearsalProgress:
 
 
 def songs_with_progress_for(semester, person) -> list[Song]:
-    """Return `semester`'s Songs in position order, each annotated with `.progress` and `.has_assignment` for `person` (issue #93).
+    """Return `semester`'s Songs in position order, each annotated with `.progress`, `.has_assignment` and `.next_rehearsal_date` for `person` (issue #93).
 
     `.progress` is that Song's `song_rehearsal_progress` (X of Y);
     `.has_assignment` is True whenever `person` has any SongRoleAssignment
     on the Song, regardless of is_role_mismatch — the Overview page's "my
     songs only" filter is intentionally coarser than My Schedule's
-    per-role assignment matrix.
+    per-role assignment matrix. `.next_rehearsal_date` is the earliest
+    future Rehearsal whose running order includes this Song (`None` if
+    none is scheduled) — a member-facing "when do I next perform this"
+    date, computed in one batched query rather than once per Song; this
+    is distinct from `_serialize_next_rehearsal`'s admin-only "cast on…"
+    pointer (ADR 0009), which answers a different question (where casting
+    happens next) and stays admin-only.
     """
     assigned_song_ids = set(
         SongRoleAssignment.objects.filter(
             person=person, song__semester=semester,
         ).values_list('song_id', flat=True),
     )
+    today = timezone.localdate()
+    next_rehearsal_date_by_song_id: dict[int, object] = {}
+    for song_id, rehearsal_date in (
+        RehearsalSong.objects.filter(song__semester=semester, rehearsal__date__gte=today)
+        .order_by('song_id', 'rehearsal__date')
+        .values_list('song_id', 'rehearsal__date')
+    ):
+        next_rehearsal_date_by_song_id.setdefault(song_id, rehearsal_date)
     songs = list(Song.objects.filter(semester=semester).order_by('position'))
     for song in songs:
         song.progress = song_rehearsal_progress(song)
         song.has_assignment = song.pk in assigned_song_ids
+        song.next_rehearsal_date = next_rehearsal_date_by_song_id.get(song.pk)
     return songs
 
 

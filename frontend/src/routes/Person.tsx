@@ -12,17 +12,13 @@ import type {
 import type { ReadEnvelope, WriteEnvelope } from '../api/types'
 import { PageHead } from '../components/ui/PageHead'
 import { useIsPhone } from '../hooks/useIsPhone'
+import { formatClockTime } from '../lib/formatDate'
 import { usePageTitle } from '../shell/PageTitleContext'
 
 type LoadState =
   | { status: 'loading' }
   | { status: 'not_found' }
   | { status: 'loaded'; data: PersonPayload }
-
-/** Formats a wire `HH:MM:SS` time string down to `HH:MM`, or `''` for `null`. */
-function formatClockTime(isoTime: string | null): string {
-  return isoTime === null ? '' : isoTime.slice(0, 5)
-}
 
 /**
  * `/members/<pk>/` (issue #333): one Person's page, in one round trip, in
@@ -430,22 +426,32 @@ function SongsCard({
       {songs === undefined || songs.length === 0 ? (
         <p className="mt-2 text-sm text-rs-muted">Not on any song yet.</p>
       ) : (
-        <ul className="mt-2 flex flex-col gap-2">
-          {songs.map((song) => (
-            <li
-              key={song.song_id}
-              className="flex items-center justify-between gap-2 text-sm"
-            >
-              <Link to={`/songs/${song.song_id}`} className="font-medium">
-                {song.song_title}
-              </Link>
-              <span className="text-rs-muted">{song.artist}</span>
-              <span className="rounded-full bg-rs-accent px-2 py-0.5 text-xs font-medium text-rs-accent-fg">
-                {song.role_name}
-              </span>
-            </li>
-          ))}
-        </ul>
+        <table className="mt-2 w-full border-collapse text-left text-sm">
+          <thead>
+            <tr>
+              <th className="border border-rs-border px-2 py-2">Song</th>
+              <th className="border border-rs-border px-2 py-2">Artist</th>
+              <th className="border border-rs-border px-2 py-2">Role</th>
+            </tr>
+          </thead>
+          <tbody>
+            {songs.map((song) => (
+              <tr key={song.song_id}>
+                <td className="border border-rs-border px-2 py-2 align-top">
+                  <Link to={`/songs/${song.song_id}`} className="font-medium">
+                    {song.song_title}
+                  </Link>
+                </td>
+                <td className="border border-rs-border px-2 py-2 align-top text-rs-muted">
+                  {song.artist}
+                </td>
+                <td className="border border-rs-border px-2 py-2 align-top">
+                  {song.role_name}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       )}
     </section>
   )

@@ -115,7 +115,10 @@ class SerializeHomeExactKeySetTests(TestCase):
         row = data['song_progress'][0]
         self.assertEqual(
             set(row.keys()),
-            {'id', 'title', 'artist', 'length', 'position', 'completed', 'total', 'has_assignment'},
+            {
+                'id', 'title', 'artist', 'length', 'position', 'completed', 'total',
+                'has_assignment', 'notes', 'next_rehearsal',
+            },
         )
 
     def test_setup_checklist_item_keys(self):
@@ -318,6 +321,42 @@ class HomeApiViewTests(TestCase):
 
         row = next(row for row in response.json()['data']['song_progress'] if row['id'] == song.pk)
         self.assertTrue(row['has_assignment'])
+
+    def test_song_progress_row_carries_notes(self):
+        """A Song's freeform `notes` (already exposed on Setlist/Song) also reaches Home's song-progress row."""
+        semester = SemesterFactory()
+        song = SongFactory(semester=semester, notes='Cut the bridge repeat')
+
+        response = self.client.get('/api/')
+
+        row = next(row for row in response.json()['data']['song_progress'] if row['id'] == song.pk)
+        self.assertEqual(row['notes'], 'Cut the bridge repeat')
+
+    def test_song_progress_row_reports_earliest_future_rehearsal(self):
+        """`next_rehearsal` is the earliest future Rehearsal whose running order includes this Song, not just any RehearsalSong row."""
+        semester = SemesterFactory()
+        song = SongFactory(semester=semester)
+        past_rehearsal = RehearsalFactory(semester=semester, date=timezone.localdate() - timedelta(days=1))
+        RehearsalSongFactory(rehearsal=past_rehearsal, song=song, order=1)
+        later_rehearsal = RehearsalFactory(semester=semester, date=timezone.localdate() + timedelta(days=14))
+        RehearsalSongFactory(rehearsal=later_rehearsal, song=song, order=1)
+        sooner_rehearsal = RehearsalFactory(semester=semester, date=timezone.localdate() + timedelta(days=7))
+        RehearsalSongFactory(rehearsal=sooner_rehearsal, song=song, order=1)
+
+        response = self.client.get('/api/')
+
+        row = next(row for row in response.json()['data']['song_progress'] if row['id'] == song.pk)
+        self.assertEqual(row['next_rehearsal'], sooner_rehearsal.date.isoformat())
+
+    def test_song_progress_row_next_rehearsal_null_when_nothing_scheduled(self):
+        """A Song with no future RehearsalSong row reports `next_rehearsal: null`."""
+        semester = SemesterFactory()
+        song = SongFactory(semester=semester)
+
+        response = self.client.get('/api/')
+
+        row = next(row for row in response.json()['data']['song_progress'] if row['id'] == song.pk)
+        self.assertIsNone(row['next_rehearsal'])
 
     def test_no_songs_yet_is_an_explicit_empty_list(self):
         """A Semester with no Songs returns an explicit empty `song_progress` list."""

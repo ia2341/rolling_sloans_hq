@@ -6,9 +6,8 @@ import { useAppContext } from '../api/ContextProvider'
 import type { PreviewResult } from '../api/previewTypes'
 import type { SetlistPayload } from '../api/setlistTypes'
 import type { ReadEnvelope } from '../api/types'
-import { CastLine } from '../components/ui/CastLine'
+import { CastCell } from '../components/ui/CastLine'
 import { PageHead } from '../components/ui/PageHead'
-import { RoleLegend } from '../components/ui/RoleLegend'
 import { SaveChangesDialog } from '../components/ui/SaveChangesDialog'
 import { useIsPhone } from '../hooks/useIsPhone'
 import { useRegisterEditSession } from '../shell/EditSessionContext'
@@ -208,16 +207,6 @@ export function Setlist() {
           )
         }
       />
-      {data.roles.length > 0 && !isEditing && (
-        <div className="flex flex-wrap pb-4">
-          <RoleLegend
-            roles={data.roles.map((role, index) => ({
-              index,
-              name: role.name,
-            }))}
-          />
-        </div>
-      )}
       {isEditing ? (
         <SetlistEditGrid
           rows={rows}
@@ -234,7 +223,11 @@ export function Setlist() {
       ) : isPhone ? (
         <SetlistCards songs={data.songs} viewerId={appContext?.viewer.id} />
       ) : (
-        <SetlistTable songs={data.songs} viewerId={appContext?.viewer.id} />
+        <SetlistTable
+          roles={data.roles}
+          songs={data.songs}
+          viewerId={appContext?.viewer.id}
+        />
       )}
 
       <AddSongsSheet
@@ -302,9 +295,16 @@ function SetlistCards({
             <span className="text-sm text-rs-muted">{song.length}</span>
           </div>
           <p className="text-sm text-rs-muted">{song.artist}</p>
-          <div className="pt-2">
-            <CastLine cast={song.cast} viewerId={viewerId} />
-          </div>
+          <ul className="flex flex-col gap-2 pt-2">
+            {song.cast.map((entry) => (
+              <li key={entry.role_id} className="text-sm">
+                <p className="text-xs font-medium uppercase text-rs-muted">
+                  {entry.role_name}
+                </p>
+                <CastCell entry={entry} viewerId={viewerId} />
+              </li>
+            ))}
+          </ul>
           {song.notes !== '' && (
             <p className="pt-2 text-sm text-rs-muted">{song.notes}</p>
           )}
@@ -315,49 +315,68 @@ function SetlistCards({
   )
 }
 
-/** The desktop layout: one table row per Song, plus a second full-width row for its notes when it has any (issue #330). */
+/** The desktop layout: one table row per Song, one column per Role (issue: pills/tables UI overhaul), plus a second full-width row for notes when it has any (issue #330). */
 function SetlistTable({
+  roles,
   songs,
   viewerId,
 }: {
+  roles: SetlistPayload['roles']
   songs: SetlistPayload['songs']
   viewerId?: number
 }) {
+  const columnCount = 4 + roles.length
   return (
-    <table className="w-full text-left text-sm">
+    <table className="w-full border-collapse text-left text-sm">
       <thead>
         <tr>
-          <th className="pb-2">#</th>
-          <th className="pb-2">Song</th>
-          <th className="pb-2">Cast</th>
-          <th className="pb-2">Length</th>
-          <th className="pb-2">Recordings</th>
-          <th className="pb-2" />
+          <th className="border border-rs-border px-2 py-2">#</th>
+          <th className="border border-rs-border px-2 py-2">Song</th>
+          {roles.map((role) => (
+            <th key={role.id} className="border border-rs-border px-2 py-2">
+              {role.name}
+            </th>
+          ))}
+          <th className="border border-rs-border px-2 py-2">Length</th>
+          <th className="border border-rs-border px-2 py-2">Recordings</th>
+          <th className="border border-rs-border px-2 py-2" />
         </tr>
       </thead>
       <tbody>
         {songs.map((song) => (
           <Fragment key={song.id}>
             <tr>
-              <td className="py-2 align-top">{song.position}</td>
-              <td className="py-2 align-top">
+              <td className="border border-rs-border px-2 py-2 align-top">
+                {song.position}
+              </td>
+              <td className="border border-rs-border px-2 py-2 align-top">
                 <p className="font-medium">{song.title}</p>
                 <p className="text-rs-muted">{song.artist}</p>
               </td>
-              <td className="py-2 align-top">
-                <CastLine cast={song.cast} viewerId={viewerId} />
+              {song.cast.map((entry) => (
+                <td
+                  key={entry.role_id}
+                  className="border border-rs-border px-2 py-2 align-top"
+                >
+                  <CastCell entry={entry} viewerId={viewerId} />
+                </td>
+              ))}
+              <td className="border border-rs-border px-2 py-2 align-top">
+                {song.length}
               </td>
-              <td className="py-2 align-top">{song.length}</td>
-              <td className="py-2 align-top">
+              <td className="border border-rs-border px-2 py-2 align-top">
                 <RecordingEntryPoints song={song} label="—" />
               </td>
-              <td className="py-2 align-top">
+              <td className="border border-rs-border px-2 py-2 align-top">
                 <Link to={`/songs/${song.id}`}>Open</Link>
               </td>
             </tr>
             {song.notes !== '' && (
               <tr>
-                <td colSpan={6} className="pb-2 text-rs-muted">
+                <td
+                  colSpan={columnCount}
+                  className="border border-rs-border px-2 pb-2 text-rs-muted"
+                >
                   {song.notes}
                 </td>
               </tr>

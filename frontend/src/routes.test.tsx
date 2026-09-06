@@ -28,27 +28,21 @@ afterEach(() => {
 })
 
 describe('the route table', () => {
-  it('renders the six sidebar destinations in the decided order, with no count on Conflicts', () => {
+  it('renders the five sidebar destinations in the decided order, with no Conflicts item', () => {
     mockFetchOnce(200, { context: memberContext(), data: emptyHomePayload() })
     setContext(memberContext())
     const router = createMemoryRouter(routes, { initialEntries: ['/'] })
     render(<RouterProvider router={router} />)
 
     const nav = screen.getByRole('navigation', { name: 'Primary' })
-    const labels = [
-      'Home',
-      'Conflicts',
-      'Schedule',
-      'Songs/Setlist',
-      'Band',
-      'Profile',
-    ]
+    const labels = ['Home', 'Schedule', 'Songs/Setlist', 'Band', 'Profile']
     for (const label of labels) {
       expect(nav).toHaveTextContent(label)
     }
 
-    const conflictsLink = screen.getByRole('link', { name: /^Conflicts$/ })
-    expect(conflictsLink).not.toHaveTextContent(/\d/)
+    expect(
+      screen.queryByRole('link', { name: /^Conflicts$/ }),
+    ).not.toBeInTheDocument()
   })
 
   it('renders no Semesters destination and no Recordings destination', () => {
@@ -122,7 +116,7 @@ describe('the route table', () => {
 })
 
 describe('the phone layout', () => {
-  it('replaces the sidebar with exactly five tabs and a title bar', () => {
+  it('replaces the sidebar with exactly three tabs, a More button, and a title bar', () => {
     mockFetchOnce(200, { context: memberContext(), data: emptyHomePayload() })
     mockMatchMedia(true)
     setContext(memberContext())
@@ -130,9 +124,9 @@ describe('the phone layout', () => {
     render(<RouterProvider router={router} />)
 
     const tabs = screen.getAllByRole('link', {
-      name: /^(Home|Schedule|Songs|Conflicts)$/,
+      name: /^(Home|Schedule|Songs)$/,
     })
-    expect(tabs).toHaveLength(4)
+    expect(tabs).toHaveLength(3)
     expect(screen.getByRole('button', { name: 'More' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Home' })).toBeInTheDocument()
   })
