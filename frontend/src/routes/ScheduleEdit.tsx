@@ -13,11 +13,13 @@ import type {
 } from '../api/scheduleEditorTypes'
 import type { PreviewResult } from '../api/previewTypes'
 import type { ReadEnvelope, WriteEnvelope } from '../api/types'
+import { AssignmentEditor } from '../components/assignments/AssignmentEditor'
 import { Accordion } from '../components/ui/Accordion'
 import { GenerateDatesModal } from '../components/ui/GenerateDatesModal'
 import { PageHead } from '../components/ui/PageHead'
 import {
   RehearsalContextBar,
+  stepRehearsalIndex,
   type RehearsalContextMode,
 } from '../components/ui/RehearsalContextBar'
 import { SaveChangesDialog } from '../components/ui/SaveChangesDialog'
@@ -331,13 +333,18 @@ export function ScheduleEdit() {
     })
   }, [buildBufferInput, load])
 
-  useRegisterEditSession({
-    what: 'the rehearsal schedule',
-    changeCount,
-    blockedReason,
-    discard,
-    requestSave: () => setSaveOpen(true),
-  })
+  // The two edit modes are exclusive (issue #338, ADR 0009): while a row
+  // is parked in 'assignments' mode, this page's own Running Order
+  // Buffer session yields the shared toolbar to `AssignmentEditor`'s own
+  // `useRegisterEditSession` call rather than fighting it for the one
+  // slot `EditSessionContext` holds. Nothing in the Running Order Buffer
+  // itself is lost — `rows`/`deletedIds` still carry it — it just isn't
+  // what the toolbar shows until `mode` flips back.
+  useRegisterEditSession(
+    mode === 'assignments'
+      ? { what: 'the rehearsal schedule', changeCount: 0, blockedReason: null, discard: () => {}, requestSave: () => {} }
+      : { what: 'the rehearsal schedule', changeCount, blockedReason, discard, requestSave: () => setSaveOpen(true) },
+  )
 
   const addRehearsal = useCallback(() => {
     setRows((previous) => [...previous, newDraftRehearsal()])
@@ -488,6 +495,24 @@ export function ScheduleEdit() {
   const activeRows = rows.filter((row) => row.rehearsalId === null || !deletedIds.has(row.rehearsalId))
   const removedRows = rows.filter((row) => row.rehearsalId !== null && deletedIds.has(row.rehearsalId))
 
+  // The Assignments stepper (issue #338 user stories 27-28) walks only
+  // persisted Rehearsals, skipping the Dress Rehearsal and wrapping,
+  // mirroring `stepRehearsalIndex()`'s contract. A brand-new, unsaved row
+  // has no id to fetch an Assignments surface against, so it never
+  // appears in this list at all.
+  const steppableRows = activeRows.filter((row) => row.rehearsalId !== null)
+  const stepAssignmentRehearsal = (direction: -1 | 1) => {
+    const currentIndex = steppableRows.findIndex((row) => row.rowKey === openKey)
+    if (currentIndex === -1) return
+    const nextIndex = stepRehearsalIndex(
+      steppableRows.map((row) => ({ isDressRehearsal: row.isFullSetlist })),
+      currentIndex,
+      direction,
+    )
+    const nextRow = steppableRows[nextIndex]
+    if (nextRow !== undefined) setOpenKey(nextRow.rowKey)
+  }
+
   return (
     <div>
       <PageHead
@@ -530,6 +555,7 @@ export function ScheduleEdit() {
                   onRemoveSong={(key) => removeRunningOrderRow(row.rowKey, key)}
                   onSlotCountChange={(key, slotCount) => setSlotCount(row.rowKey, key, slotCount)}
                   onShuffle={() => row.rehearsalId !== null && void runShuffle(row.rehearsalId, row.rowKey)}
+                  onStep={stepAssignmentRehearsal}
                 />
               ),
             }
@@ -616,6 +642,7 @@ export function ScheduleEdit() {
                           onRemoveSong={(key) => removeRunningOrderRow(row.rowKey, key)}
                           onSlotCountChange={(key, slotCount) => setSlotCount(row.rowKey, key, slotCount)}
                           onShuffle={() => row.rehearsalId !== null && void runShuffle(row.rehearsalId, row.rowKey)}
+                  onStep={stepAssignmentRehearsal}
                           hideFields
                         />
                       </td>
@@ -742,11 +769,12 @@ interface RehearsalRowEditorProps {
   onRemoveSong: (key: string) => void
   onSlotCountChange: (key: string, slotCount: number) => void
   onShuffle: () => void
+  onStep: (direction: -1 | 1) => void
   /** Phone renders its own date/start/end fields in the accordion content; desktop already showed them in the row. */
   hideFields?: boolean
 }
 
-/** The expanded content below a Rehearsal grid row: its Running Order sub-grid, or the Assignments placeholder (issue #337, #338). */
+/** The expanded content below a Rehearsal grid row: its Running Order sub-grid, or the Assignments surface (issue #337, #338). */
 function RehearsalRowEditor({
   draft,
   mode,
@@ -760,6 +788,7 @@ function RehearsalRowEditor({
   onRemoveSong,
   onSlotCountChange,
   onShuffle,
+  onStep,
   hideFields = false,
 }: RehearsalRowEditorProps) {
   const contextBarRehearsal = {
@@ -821,9 +850,20 @@ function RehearsalRowEditor({
         </p>
       ) : (
         <>
-          <RehearsalContextBar rehearsal={contextBarRehearsal} mode={mode} onModeChange={onModeChange} />
+          <RehearsalContextBar
+            rehearsal={contextBarRehearsal}
+            mode={mode}
+            onModeChange={onModeChange}
+            onStep={onStep}
+          />
           {mode === 'assignments' ? (
-            <p className="text-sm text-rs-muted">Assignment editing ships in issue #338.</p>
+            draft.rehearsalId === null ? (
+              <p className="text-sm text-rs-muted">
+                Save this new Rehearsal before casting it — there's nothing to assign against yet.
+              </p>
+            ) : (
+              <AssignmentEditor rehearsalId={draft.rehearsalId} />
+            )
           ) : (
             <div className="flex flex-col gap-2">
               <ul className="flex flex-col gap-1">

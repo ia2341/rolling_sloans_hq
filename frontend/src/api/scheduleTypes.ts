@@ -76,6 +76,8 @@ export interface RehearsalDetail {
   availability: Availability
   roles: RoleLegendEntry[]
   rows: MatrixRow[]
+  /** Admin-only (issue #338): Roles not already a matrix column, for the "+ Add role" affordance. Absent for a member. */
+  addable_roles?: { id: number; name: string }[]
 }
 
 export type YourState =

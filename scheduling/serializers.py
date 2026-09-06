@@ -28,10 +28,17 @@ from scheduling.models import (
     Song,
 )
 from scheduling.services import (
+    AssignmentEditBuffer,
+    AssignmentEditFallout,
+    AssignmentPickerResult,
     RoleCreationResult,
     RosterEditBuffer,
     RosterEditFallout,
     RosterImportProposal,
+    SemesterDefaultsFallout,
+    SemesterDeletionSummary,
+    SemesterManagementRow,
+    SemesterPublishImpact,
     SetlistEditBuffer,
     SetlistEditFallout,
     SetlistSongDeletion,
@@ -118,6 +125,89 @@ def serialize_context(request) -> dict:
         'semester_warning': services.semester_banner_for(request) is not None,
         'semester_options': [_serialize_semester_option(option) for option in options],
         'pending_conflict_count': services.pending_conflict_count_for(viewing) if is_admin and viewing is not None else None,
+    }
+
+
+def _serialize_semester_management_row(row: SemesterManagementRow) -> dict:
+    """Return one `SemesterManagementRow` as a Manage-semesters sheet row: label, viewing flag, and four counts (issue #329).
+
+    Counts only, per ADR 0005 — no Conflict text, reason, note or person
+    identity ever reaches this payload, only aggregate row counts.
+    `updated_at` is a staleness token, not member data, so it carries no
+    such restriction: it lets the sheet build a Reapply-defaults request
+    for a row other than the one currently being viewed.
+    """
+    return {
+        'id': row.semester.pk,
+        'name': row.semester.name,
+        'status': _STATUS_WIRE_VALUES[row.status],
+        'is_viewing': row.is_viewing,
+        'member_count': row.member_count,
+        'song_count': row.song_count,
+        'rehearsal_count': row.rehearsal_count,
+        'recording_count': row.recording_count,
+        'updated_at': row.updated_at.isoformat(),
+    }
+
+
+def serialize_semester_management_rows(rows: list[SemesterManagementRow]) -> list[dict]:
+    """Return every `SemesterManagementRow` as the management-rows endpoint's `data` value (issue #329)."""
+    return [_serialize_semester_management_row(row) for row in rows]
+
+
+def serialize_semester_publish_impact(impact: SemesterPublishImpact) -> dict:
+    """Return a `SemesterPublishImpact` as the Publish popup's `data` value (issue #329).
+
+    `incumbent` is `None` (rather than an object with zeroed fields) when
+    nothing is published or the target is already live — the popup's own
+    job to render "nothing to supersede" from a null. Counts only, per
+    ADR 0005: no Conflict text, reason, note or person identity here.
+    """
+    return {
+        'target_semester_id': impact.target_semester.pk,
+        'target_semester_name': impact.target_semester.name,
+        'is_already_live': impact.is_already_live,
+        'incumbent': (
+            {'id': impact.incumbent.pk, 'name': impact.incumbent.name} if impact.incumbent is not None else None
+        ),
+        'incumbent_rehearsal_count': impact.incumbent_rehearsal_count,
+        'incumbent_song_count': impact.incumbent_song_count,
+        'has_no_setlist': impact.has_no_setlist,
+        'has_no_rehearsals': impact.has_no_rehearsals,
+    }
+
+
+def serialize_semester_deletion_summary(summary: SemesterDeletionSummary) -> dict:
+    """Return a `SemesterDeletionSummary` as the Delete popup's `data` value (issue #329).
+
+    Reuses `semester_deletion_summary()`'s already-computed counts
+    unchanged — the four counts must not be recomputed anywhere else, per
+    the issue. Counts only, per ADR 0005.
+    """
+    return {
+        'member_count': summary.member_count,
+        'song_count': summary.song_count,
+        'rehearsal_count': summary.rehearsal_count,
+        'recording_count': summary.recording_count,
+    }
+
+
+def serialize_semester_defaults_fallout(fallout: SemesterDefaultsFallout) -> dict:
+    """Return a `SemesterDefaultsFallout` as the Reapply-defaults preview's `fallout` value (issue #329, ADR 0008).
+
+    Named field-by-field, matching `serialize_setlist_edit_fallout()`/
+    `serialize_rehearsal_edit_fallout()`. `loud`/`quiet` are already plain
+    strings (`preview_semester_defaults_reapply()` composes them, unlike
+    the row-shaped surfaces' structured deletions), so no per-entry
+    sub-serializer is needed here.
+    """
+    return {
+        'is_blocked': fallout.is_blocked,
+        'block_message': fallout.block_message,
+        'is_stale': fallout.is_stale,
+        'changed_rehearsal_count': fallout.changed_rehearsal_count,
+        'loud': list(fallout.loud),
+        'quiet': list(fallout.quiet),
     }
 
 
@@ -592,11 +682,14 @@ def _serialize_schedule_list_row(row, *, conflict_rows, is_admin, pending_counts
 
 
 def _serialize_rehearsal_detail(rehearsal, *, viewer, is_admin, today) -> dict:
-    """Return `/api/schedule/`'s "This rehearsal" sub-view detail for `rehearsal` (issue #331).
+    """Return `/api/schedule/`'s "This rehearsal" sub-view detail for `rehearsal` (issue #331, #338).
 
     `can_edit_assignments` is the ADR-0009 gate: true only for an admin on
     an editable grid (`services.assignment_grid_is_editable()`), never
-    re-derived by the client.
+    re-derived by the client. `addable_roles` (admin-only) is #338's "+ Add
+    role" column source — Roles not already a matrix column, so an admin
+    can cast a Role nobody wrote a Requirement for without this ticket
+    adding a second read of the grid.
     """
     matrix = services.assignment_matrix_for(rehearsal)
     roles = matrix.roles
@@ -605,7 +698,7 @@ def _serialize_rehearsal_detail(rehearsal, *, viewer, is_admin, today) -> dict:
         Conflict.objects.filter(rehearsal=rehearsal).values_list('person_id', flat=True),
     )
     conflict_row = services.conflict_rows_by_rehearsal(rehearsal.semester, viewer).get(rehearsal.pk)
-    return {
+    data = {
         **_serialize_rehearsal_summary(rehearsal, today=today),
         'can_edit_assignments': is_admin and services.assignment_grid_is_editable(rehearsal),
         'timeline': _serialize_timeline(services.timeline_for(rehearsal, viewer)),
@@ -616,6 +709,9 @@ def _serialize_rehearsal_detail(rehearsal, *, viewer, is_admin, today) -> dict:
             for row in matrix.rows
         ],
     }
+    if is_admin:
+        data['addable_roles'] = [_serialize_role(role) for role in services.addable_roles_for(matrix)]
+    return data
 
 
 def serialize_schedule(request, semester, *, rehearsal_id=None) -> dict:
@@ -1246,6 +1342,131 @@ def serialize_rehearsal_deal(deal) -> dict:
 def serialize_shuffle_rows(rows) -> dict:
     """Return a shuffled `list[DealtRow]` as the per-Rehearsal shuffle endpoint's `data` value (issue #337, #223)."""
     return {'rows': [_serialize_dealt_row(row) for row in rows]}
+
+
+def serialize_assignment_edit_fallout(fallout: AssignmentEditFallout) -> dict:
+    """Return an `AssignmentEditFallout` as the assignment editor's `preview`/`save` response's `fallout` value (issue #338).
+
+    Named field-by-field like `serialize_roster_edit_fallout()` — `loud`
+    and `quiet` are already plain strings (`_assignment_fallout_lines()`
+    never emits a `Conflict.reason` or an adjudication verdict, ADR 0005),
+    so this is a straight pass-through rather than a per-line shape.
+    """
+    return {
+        'is_blocked': fallout.is_blocked,
+        'block_message': fallout.block_message,
+        'is_stale': fallout.is_stale,
+        'loud': list(fallout.loud),
+        'quiet': list(fallout.quiet),
+    }
+
+
+def _serialize_assignment_edit_buffer_entry(entry) -> dict:
+    """Return one `(song_id, role_id, person_id)` added-entry tuple as a named object."""
+    song_id, role_id, person_id = entry
+    return {'song_id': song_id, 'role_id': role_id, 'person_id': person_id}
+
+
+def _serialize_assignment_edit_buffer_backup_entry(entry) -> dict:
+    """Return one `(rehearsal_song_id, role_id, person_id, covering_for_id)` added-Backup-entry tuple as a named object."""
+    rehearsal_song_id, role_id, person_id, covering_for_id = entry
+    return {
+        'rehearsal_song_id': rehearsal_song_id, 'role_id': role_id,
+        'person_id': person_id, 'covering_for_id': covering_for_id,
+    }
+
+
+def _serialize_assignment_edit_buffer_covering_for_update(entry) -> dict:
+    """Return one `(backup_id, covering_for_id)` pair as a named object."""
+    backup_id, covering_for_id = entry
+    return {'backup_id': backup_id, 'covering_for_id': covering_for_id}
+
+
+def serialize_assignment_edit_buffer(buffer: AssignmentEditBuffer) -> dict:
+    """Return an `AssignmentEditBuffer` echoed back in `build_assignment_buffer_from_request()`'s wire shape (issue #338).
+
+    Used only by `/api/schedule/<id>/assignments/preview/`'s `values`
+    field on a successful build (#308's amendment) — never by `.../save/`,
+    which drops `values` per #326's rule that a write response echoes
+    nothing back. Ordering within every list is stable but otherwise
+    arbitrary — a `frozenset` carries no order of its own, and nothing
+    downstream depends on one.
+    """
+    return {
+        'semester_id': buffer.semester_id,
+        'semester_updated_at': buffer.semester_updated_at.isoformat() if buffer.semester_updated_at else None,
+        'removed_assignment_ids': sorted(buffer.removed_assignment_ids),
+        'added_entries': [
+            _serialize_assignment_edit_buffer_entry(entry) for entry in sorted(buffer.added_entries)
+        ],
+        'removed_backup_ids': sorted(buffer.removed_backup_ids),
+        'added_backup_entries': [
+            _serialize_assignment_edit_buffer_backup_entry(entry)
+            for entry in sorted(buffer.added_backup_entries, key=lambda entry: entry[:3])
+        ],
+        'backup_covering_for_updates': [
+            _serialize_assignment_edit_buffer_covering_for_update(entry)
+            for entry in sorted(buffer.backup_covering_for_updates, key=lambda entry: entry[0])
+        ],
+    }
+
+
+def _picker_conflicted_person_ids_for(rehearsal) -> set:
+    """Return the set of Person ids with any Conflict against `rehearsal` (issue #338, user story 15).
+
+    A marker only, never a reason, a declaration type or a time (ADR
+    0005 / `_serialize_matrix_entry`'s `has_conflict`). Always empty for
+    the Dress Rehearsal, which no Conflict may point at (ADR-0006), so
+    this never runs a query that could only return nothing.
+    """
+    if rehearsal.is_full_setlist:
+        return set()
+    return set(Conflict.objects.filter(rehearsal=rehearsal).values_list('person_id', flat=True))
+
+
+def _serialize_picker_option(option, *, conflicted_person_ids) -> dict:
+    """Return one `AssignmentPickerOption`: the Person by name, whether they declared the cell's Role, and a bare conflict marker (issue #338, ADR 0005)."""
+    return {
+        'person_id': option.person.pk,
+        'person_name': option.person.name,
+        'has_declared_role': option.has_declared_role,
+        'has_conflict': option.person.pk in conflicted_person_ids,
+    }
+
+
+def serialize_assignment_picker(picker: AssignmentPickerResult, rehearsal) -> dict:
+    """Return an `AssignmentPickerResult` as `/api/schedule/<id>/assignments/picker/<song_id>/<role_id>/`'s `data` value (issue #338).
+
+    Its own shape, not the write envelope: per #307's envelope boundary
+    rule, the picker answers a question rather than taking a Pending
+    Buffer, so it carries no `errors`/`values`/`fallout` fields that could
+    never be populated. `backup_declared`/`backup_others` come back empty
+    (with `rehearsal_song_id: None`) for the Dress Rehearsal — the client
+    renders that as the structural "no per-song slots to assign against"
+    explanation (ADR-0006), never as an empty list with no reason given.
+    """
+    conflicted_person_ids = _picker_conflicted_person_ids_for(rehearsal)
+    return {
+        'song_id': picker.song.pk,
+        'song_title': picker.song.title,
+        'role_id': picker.role.pk,
+        'role_name': picker.role.name,
+        'rehearsal_song_id': picker.rehearsal_song_id,
+        'declared': [
+            _serialize_picker_option(option, conflicted_person_ids=conflicted_person_ids) for option in picker.declared
+        ],
+        'others': [
+            _serialize_picker_option(option, conflicted_person_ids=conflicted_person_ids) for option in picker.others
+        ],
+        'backup_declared': [
+            _serialize_picker_option(option, conflicted_person_ids=conflicted_person_ids)
+            for option in picker.backup_declared
+        ],
+        'backup_others': [
+            _serialize_picker_option(option, conflicted_person_ids=conflicted_person_ids)
+            for option in picker.backup_others
+        ],
+    }
 
 
 def _serialize_adjudication_rehearsal_window(rehearsal) -> dict:

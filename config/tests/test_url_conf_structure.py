@@ -289,3 +289,91 @@ class ScheduleEditorApiRouteCoverageTests(SimpleTestCase):
         ):
             with self.subTest(view=view_class.__name__):
                 self.assertTrue(issubclass(view_class, AdminApiView), f'{view_class.__name__} must inherit AdminApiView')
+
+
+# The assignment editor's routes (issue #338). `_iter_api_leaf_paths` above
+# skips every parameterised route here (the picker, the per-Rehearsal
+# preview/save pair), so they need their own explicit 401 coverage, named
+# here so this module documents the whole surface in one place.
+class AssignmentEditorApiRouteCoverageTests(SimpleTestCase):
+    """Issue #338's assignment-editor routes: every view is `AdminApiView`/`AdminPreviewApiView`, and a bare 401 anonymously."""
+
+    def test_routes_401_anonymously_and_never_302(self):
+        """An anonymous GET/POST to every parameterised #338 route answers 401, never a redirect."""
+        client = Client()
+        routes = [
+            reverse('api-schedule-assignments-picker', args=[1, 1, 1]),
+            reverse('api-schedule-assignments-preview', args=[1]),
+            reverse('api-schedule-assignments-save', args=[1]),
+        ]
+        offenders = []
+        for path in routes:
+            response = client.get(path)
+            if response.status_code != 401 or 'Location' in response:
+                offenders.append((path, response.status_code))
+
+        self.assertEqual(offenders, [], f'The following routes did not answer anonymously with a bare 401: {offenders}')
+
+    def test_every_assignment_editor_view_is_admin_gated(self):
+        """Every assignment-editor view (picker, Preview, Save) is an `AdminApiView`, and Preview is an `AdminPreviewApiView`."""
+        from scheduling.api_views import (
+            AssignmentPickerApiView,
+            AssignmentPreviewApiView,
+            AssignmentSaveApiView,
+        )
+
+        for view_class in (AssignmentPickerApiView, AssignmentPreviewApiView, AssignmentSaveApiView):
+            with self.subTest(view=view_class.__name__):
+                self.assertTrue(issubclass(view_class, AdminApiView), f'{view_class.__name__} must inherit AdminApiView')
+        self.assertTrue(issubclass(AssignmentPreviewApiView, AdminPreviewApiView))
+
+
+# The Semester-control surface's routes (issue #329). `_iter_api_leaf_paths`
+# above already sweeps every zero-argument route here (management-rows,
+# select, create, and the Reapply-defaults preview/save pair) via the
+# generic `ApiViewCoverageTests` checks; the three per-Semester routes
+# (publish-impact, deletion-summary, publish, delete) are parameterised, so
+# they need their own explicit 401 coverage, named here so this module
+# documents the whole surface in one place.
+class SemesterControlApiRouteCoverageTests(SimpleTestCase):
+    """Issue #329's Semester-control routes: every view is `AdminApiView`/`AdminPreviewApiView`, and a bare 401 anonymously."""
+
+    def test_every_parameterised_route_401s_anonymously_and_never_302s(self):
+        """An anonymous GET/POST to each parameterised per-Semester route answers 401, never a redirect."""
+        client = Client()
+        routes = [
+            ('get', reverse('api-semesters-publish-impact', args=[1])),
+            ('get', reverse('api-semesters-deletion-summary', args=[1])),
+            ('post', reverse('api-semesters-publish', args=[1])),
+            ('post', reverse('api-semesters-delete', args=[1])),
+        ]
+
+        for method, path in routes:
+            with self.subTest(path=path):
+                response = getattr(client, method)(path)
+                self.assertEqual(response.status_code, 401)
+                self.assertNotIn('Location', response)
+
+    def test_every_semester_control_view_is_admin_gated(self):
+        """Every Semester-control view is an `AdminApiView` (the Reapply-defaults Preview is additionally `AdminPreviewApiView`)."""
+        from scheduling.api_views import (
+            SemesterCreateApiView,
+            SemesterDefaultsReapplyPreviewApiView,
+            SemesterDefaultsReapplySaveApiView,
+            SemesterDeleteApiView,
+            SemesterDeletionSummaryApiView,
+            SemesterManagementRowsApiView,
+            SemesterPublishApiView,
+            SemesterPublishImpactApiView,
+            SemesterSelectApiView,
+        )
+
+        for view_class in (
+            SemesterManagementRowsApiView, SemesterPublishImpactApiView, SemesterDeletionSummaryApiView,
+            SemesterSelectApiView, SemesterCreateApiView, SemesterPublishApiView, SemesterDeleteApiView,
+            SemesterDefaultsReapplyPreviewApiView, SemesterDefaultsReapplySaveApiView,
+        ):
+            with self.subTest(view=view_class.__name__):
+                self.assertTrue(issubclass(view_class, AdminApiView), f'{view_class.__name__} must inherit AdminApiView')
+
+        self.assertTrue(issubclass(SemesterDefaultsReapplyPreviewApiView, AdminPreviewApiView))
