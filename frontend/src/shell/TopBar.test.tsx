@@ -68,4 +68,21 @@ describe('TopBar', () => {
 
     expect(screen.getByRole('button', { name: 'Publish' })).toBeEnabled()
   })
+
+  it('shows the semester strip naming the viewing (non-live) Semester with a Switch button', () => {
+    setContext(adminContext())
+    renderShell(<TopBar />)
+
+    expect(
+      screen.getByText('Viewing Fall 2026 (draft) — not what members see'),
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Switch' })).toBeInTheDocument()
+  })
+
+  it('hides the semester strip once the viewing Semester is live', () => {
+    setContext(memberContext())
+    renderShell(<TopBar />)
+
+    expect(screen.queryByText(/not what members see/)).not.toBeInTheDocument()
+  })
 })

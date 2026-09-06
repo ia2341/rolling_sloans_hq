@@ -59,6 +59,7 @@ from scheduling.services import (
     RosterEditEntry,
     RosterInvite,
     RunningOrderRow,
+    SemesterDefaultsReapplyBuffer,
     SetlistEditBuffer,
     SetlistEditRow,
     SkipDateInput,
@@ -943,6 +944,80 @@ def build_roster_buffer_from_request(request, *, viewing_semester) -> RosterEdit
         removed_person_ids=frozenset(removed_person_ids),
         pending_invites=invites,
     )
+
+
+class SemesterDefaultsReapplyBufferValidationError(ValidationError):
+    """Raised by `build_semester_defaults_reapply_buffer_from_request()` for a JSON body that can't become a `SemesterDefaultsReapplyBuffer` (issue #329).
+
+    This surface has no per-row shape (`SemesterDefaultsReapplyBuffer`
+    carries only a Semester identity, per its own docstring), so unlike
+    `SetlistBufferValidationError`/`RosterBufferValidationError` there is
+    no `row_errors` here — only `non_field_errors`, echoed by the Preview
+    endpoint the same way the row-shaped surfaces echo theirs.
+    """
+
+    def __init__(self, *, non_field_errors):
+        """Store the flat list of validation messages."""
+        super().__init__('The submitted reapply-defaults request could not be validated.')
+        self.non_field_errors = non_field_errors
+
+
+def build_semester_defaults_reapply_buffer_from_request(request, *, viewing_semester) -> SemesterDefaultsReapplyBuffer:
+    """Parse `request`'s JSON body into a `SemesterDefaultsReapplyBuffer` (issue #329).
+
+    The simplest Buffer builder in the module: `SemesterDefaultsReapplyBuffer`
+    carries only `semester_id`/`semester_updated_at` (issue #291's bulk
+    action reads everything else straight off the Semester's already-
+    persisted `default_*` fields and its existing Rehearsals), so there is
+    no row-level parsing to do. `viewing_semester` is accepted, not read
+    internally, for the same reason every other builder here takes it —
+    to stay a pure translation of one request body into one Buffer — but
+    is otherwise unused: this action is addressed by `semester_id` alone,
+    the way `SemesterPublishView`/`SemesterDeleteView` are, with no
+    session-scoped Viewing Semester ambiguity to check here (that stays
+    `WrongViewingSemesterError`-shaped territory this surface doesn't
+    have, since its target is always the `semester_id` in the body).
+
+    Wire shape::
+
+        {
+            "semester_id": 1,
+            "semester_updated_at": "2026-01-01T00:00:00.000000+00:00"
+        }
+
+    Raises `SemesterDefaultsReapplyBufferValidationError` for a missing or
+    non-integer `semester_id`, or a missing/unparseable
+    `semester_updated_at` — mirroring the other builders'
+    `semester_updated_at` parsing exactly.
+    """
+    from config.views import ApiView
+
+    body = ApiView().parse_json_body(request)
+
+    non_field_errors = []
+    if not isinstance(body, dict):
+        raise SemesterDefaultsReapplyBufferValidationError(non_field_errors=['Expected a JSON object.'])
+
+    semester_id = _expect_int(body.get('semester_id'))
+    if semester_id is None:
+        non_field_errors.append('semester_id is required and must be an integer.')
+
+    semester_updated_at = None
+    raw_stamp = body.get('semester_updated_at')
+    if not isinstance(raw_stamp, str) or not raw_stamp:
+        non_field_errors.append('semester_updated_at is required and must be an ISO datetime string.')
+    else:
+        try:
+            semester_updated_at = parse_datetime(raw_stamp)
+        except ValueError:
+            semester_updated_at = None
+        if semester_updated_at is None:
+            non_field_errors.append('semester_updated_at could not be parsed as an ISO datetime.')
+
+    if non_field_errors:
+        raise SemesterDefaultsReapplyBufferValidationError(non_field_errors=non_field_errors)
+
+    return SemesterDefaultsReapplyBuffer(semester_id=semester_id, semester_updated_at=semester_updated_at)
 
 
 class AdjudicationBufferValidationError(ValidationError):

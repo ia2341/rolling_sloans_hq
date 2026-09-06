@@ -5,6 +5,7 @@ import {
   isValidElement,
   useState,
   type ReactElement,
+  type ReactNode,
 } from 'react'
 
 import { useIsPhone } from '../../hooks/useIsPhone'
@@ -12,8 +13,9 @@ import { ResponsiveDialog } from './ResponsiveDialog'
 
 export interface ResponsiveMenuItem {
   key: string
-  label: string
-  secondaryText?: string
+  /** A plain string for a simple item, or a richer node (e.g. a status chip) for one that needs it — the Viewing dropdown's first consumer (issue #329). */
+  label: ReactNode
+  secondaryText?: ReactNode
   selected?: boolean
   onSelect: () => void
 }

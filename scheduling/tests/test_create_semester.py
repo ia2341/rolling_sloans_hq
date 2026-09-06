@@ -52,3 +52,11 @@ class CreateSemesterTests(TestCase):
             create_semester(name='fall 2026', **TIMING_DEFAULTS)
 
         self.assertEqual(Semester.objects.count(), 1)
+
+    def test_rejects_a_name_over_the_field_max_length(self):
+        """A name longer than `Semester.name`'s `max_length` raises before reaching the DB."""
+        max_length = Semester._meta.get_field('name').max_length
+        with self.assertRaises(InvalidSemesterNameError):
+            create_semester(name='x' * (max_length + 1), **TIMING_DEFAULTS)
+
+        self.assertEqual(Semester.objects.count(), 0)
