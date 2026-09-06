@@ -21,7 +21,7 @@ The act of making a Semester the Live Semester. Operates only on a whole Semeste
 _Avoid_: Go live, Release, Activate
 
 **Membership**:
-A Person's participation in one Semester. Carries the roles that person has declared they can play *that* semester — declarations can change semester to semester as people pick up or drop instruments.
+A Person's participation in one Semester — the roster/attendance-eligibility gate. Carries no Roles of its own (ADR-0014); what a Person can play is a durable, person-level fact that doesn't reset with a new Membership (see Role mismatch, below).
 _Avoid_: Roster entry, Profile *(as an entity — "Profile" is fine as the name of the page that presents a Membership)*
 
 **Roster**:
@@ -52,10 +52,10 @@ A Role Assignment, named this way when contrasting it with a Backup: it holds fo
 _Avoid_: Permanent assignment, Default assignment
 
 **Role mismatch**:
-The condition where a Role Assignment's Role isn't among the Roles the assigned Person declared on their Membership for that semester. Surfaced as a flag for an admin to resolve — either by changing the assignment or updating the person's declared roles — never a hard block.
+The condition where a Role Assignment's Role isn't among the Roles the assigned Person has declared, person-level, as ones they can play (ADR-0014). Surfaced as a flag for an admin to resolve — either by changing the assignment or updating the person's declared roles — never a hard block.
 
 **Backup**:
-A Person covering a Role on a Song at one specific Rehearsal — usually because the Role's usual holder has a Conflict, sometimes because nobody holds it at all. Scoped to that Rehearsal alone — it never changes the Song's Role Assignment or the Person's declared roles on their Membership. Who is being covered for is recorded where there is someone, but it is context rather than part of the fact: the Backup stands even after that person's Conflict is withdrawn. A valid, expected state, not an error.
+A Person covering a Role on a Song at one specific Rehearsal — usually because the Role's usual holder has a Conflict, sometimes because nobody holds it at all. Scoped to that Rehearsal alone — it never changes the Song's Role Assignment or the Person's declared roles. Who is being covered for is recorded where there is someone, but it is context rather than part of the fact: the Backup stands even after that person's Conflict is withdrawn. A valid, expected state, not an error.
 _Avoid_: Substitute, Fill-in, Understudy
 
 **Rehearsal**:
@@ -110,7 +110,7 @@ The server's answer to "what would saving this Pending Buffer do?", computed by 
 _Avoid_: Dry run, Simulation *(both suggest an approximation of the save; a Preview is the save itself, thrown away)*
 
 **Fallout**:
-What saving a Pending Buffer would *do to existing data* — consequences of a save that is perfectly valid. **Loud** Fallout destroys or breaks something (a removal wiping a Person's Role Assignments, a Role Requirement left unfillable); **quiet** Fallout is worth noticing but benign (a newly-flagged Role mismatch, a Membership left with no declared Roles). Fallout never blocks a save, in either tier (ADR-0002).
+What saving a Pending Buffer would *do to existing data* — consequences of a save that is perfectly valid. **Loud** Fallout destroys or breaks something (a removal wiping a Person's Role Assignments, a Role Requirement left unfillable); **quiet** Fallout is worth noticing but benign (a newly-flagged Role mismatch, a Person with no declared Roles). Fallout never blocks a save, in either tier (ADR-0002).
 
 Distinct from a **Validation Error**, which means the Buffer cannot be saved at all (a slot overrun, a duplicate Running Order position, an unparseable length) and always blocks. The two are never presented as one list: an admin who learns that loud Fallout is sometimes ignorable will start ignoring Validation Errors too.
 _Avoid_: Warning, Side effect *("warning" blurs the blocking/non-blocking line the two terms exist to draw)*
