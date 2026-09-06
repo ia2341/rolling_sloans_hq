@@ -38,11 +38,22 @@ ALLOWLISTED_VIEW_NAMES = {
     # full-page navigation to login, which requires the shell to still be
     # servable to a browser whose session has just expired.
     'SpaIndexView',
+    # The SPA's own sign-in endpoint (issue #362): establishes the session
+    # `BaseView`'s `LoginRequiredMixin` would otherwise demand already
+    # exist, so it can't inherit `BaseView` any more than `LoginView` can.
+    'LoginApiView',
 }
 
 # The Django admin mount is a resolver, not a view, so it's allowlisted by
 # URL prefix rather than by trying to walk into it.
 ALLOWLISTED_RESOLVER_NAMESPACES = {admin.site.name}
+
+# The one `/api/` view that cannot inherit `ApiView` (issue #362): `ApiView`
+# 401s an unauthenticated request via `BaseView`'s `LoginRequiredMixin`,
+# which would refuse the very request meant to establish a session in the
+# first place. `LoginApiView` builds its own minimal JSON responses instead
+# — see its docstring.
+ALLOWLISTED_API_VIEW_NAMES = {'LoginApiView'}
 
 
 def _iter_view_classes(url_patterns):
@@ -140,14 +151,17 @@ class ApiViewCoverageTests(SimpleTestCase):
     """
 
     def test_every_api_view_inherits_api_view(self):
-        """Walk the `/api/` URLConf and assert each view class is an `ApiView` subclass."""
+        """Walk the `/api/` URLConf and assert each view class is an `ApiView` subclass, unless allowlisted."""
         api_resolver = _find_api_resolver(get_resolver().url_patterns)
         self.assertIsNotNone(api_resolver, 'No api/ route found in the project URLConf.')
         offenders = []
 
         for view_class in _iter_view_classes(api_resolver.url_patterns):
-            if not issubclass(view_class, ApiView):
-                offenders.append(f'{view_class.__module__}.{view_class.__qualname__}')
+            if issubclass(view_class, ApiView):
+                continue
+            if view_class.__name__ in ALLOWLISTED_API_VIEW_NAMES:
+                continue
+            offenders.append(f'{view_class.__module__}.{view_class.__qualname__}')
 
         self.assertEqual(
             offenders,
@@ -157,13 +171,15 @@ class ApiViewCoverageTests(SimpleTestCase):
 
     @override_settings(SECURE_SSL_REDIRECT=False)
     def test_every_zero_argument_api_route_401s_anonymously_and_never_302s(self):
-        """An anonymous request to every parameter-free `/api/` route returns 401 with no `Location` header."""
+        """An anonymous request to every parameter-free `/api/` route returns 401 with no `Location` header, unless allowlisted."""
         api_resolver = _find_api_resolver(get_resolver().url_patterns)
         self.assertIsNotNone(api_resolver, 'No api/ route found in the project URLConf.')
         client = Client()
         offenders = []
 
-        for path in _iter_api_leaf_paths(api_resolver.url_patterns, prefix='/api/'):
+        for path, view_class in _iter_api_leaf_path_view_pairs(api_resolver.url_patterns, prefix='/api/'):
+            if view_class.__name__ in ALLOWLISTED_API_VIEW_NAMES:
+                continue
             response = client.get(path)
             if response.status_code != 401 or 'Location' in response:
                 offenders.append((path, response.status_code))
