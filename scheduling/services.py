@@ -257,6 +257,32 @@ def get_live_semester() -> Semester | None:
     return Semester.objects.exclude(published_at=None).order_by('-published_at', '-id').first()
 
 
+_JUST_CREATED_SEMESTER_SESSION_KEY = 'just_created_semester_id'
+
+
+def mark_semester_just_created(request, semester: Semester) -> None:
+    """Record in `request.session` that `semester` was just created this session, for Home's one-off status card (issue #332).
+
+    Called once, by the same request that calls `create_semester()`
+    (`SemesterCreateApiView.post()`) — never re-derived from `created_at`
+    versus `updated_at`, which would also fire for an untouched Semester
+    revisited long after creation.
+    """
+    request.session[_JUST_CREATED_SEMESTER_SESSION_KEY] = semester.pk
+
+
+def consume_just_created_semester(request, semester: Semester | None) -> bool:
+    """Return whether `semester` is the one just created this session, popping the marker so it fires exactly once (issue #332).
+
+    A pop, not a peek: the first Home read after creation shows the "just
+    created" status card, and every read after that — including a reload
+    of the same page — does not, with no stored flag on the Semester
+    itself to leave behind.
+    """
+    just_created_id = request.session.pop(_JUST_CREATED_SEMESTER_SESSION_KEY, None)
+    return semester is not None and just_created_id == semester.pk
+
+
 class InvalidSemesterNameError(ValueError):
     """Raised by `create_semester()` for a blank name, or one matching an existing Semester (issue #200)."""
 
@@ -2118,6 +2144,140 @@ def timeline_for(rehearsal, person) -> Timeline:
         viewer_end_time=viewer_slots[-1].end_time if viewer_slots else None,
         is_dress_rehearsal=False,
     )
+
+
+@dataclass(frozen=True)
+class NextRehearsalCard:
+    """Home's Next-rehearsal card: `person`'s next attended Rehearsal, arrival/departure suggestion, and slot Timeline (issue #332)."""
+
+    rehearsal: Rehearsal
+    attendance_suggestion: AttendanceSuggestion
+    timeline: Timeline
+
+
+def next_rehearsal_card_for(person, semester) -> NextRehearsalCard | None:
+    """Return Home's Next-rehearsal card for `person` in `semester`, or None when nothing qualifies (issue #332).
+
+    Composes three existing derivations rather than reimplementing any of
+    them: `next_attended_rehearsal_for()` answers "which Rehearsal" (never
+    necessarily the band's literal next one — the Dress Rehearsal always
+    qualifies, ADR-0006), `attendance_suggestion_for()` is guaranteed
+    non-None on the Rehearsal it returns, and `timeline_for()` (built for
+    #331's Schedule surface) is the same slot picture the Schedule page's
+    "This rehearsal" sub-view renders, so the two surfaces can never
+    disagree about what a Person's next Rehearsal looks like.
+    """
+    rehearsal = next_attended_rehearsal_for(person, semester)
+    if rehearsal is None:
+        return None
+    return NextRehearsalCard(
+        rehearsal=rehearsal,
+        attendance_suggestion=attendance_suggestion_for(rehearsal, person),
+        timeline=timeline_for(rehearsal, person),
+    )
+
+
+@dataclass(frozen=True)
+class SetupChecklistItem:
+    """One row of Home's derived setup checklist for a draft Semester (issue #332), computed fresh on every visit rather than stored."""
+
+    key: str
+    label: str
+    is_done: bool
+    status: str
+    destination: str
+    waiting_on: str | None
+
+
+def setup_checklist_for(semester) -> list[SetupChecklistItem]:
+    """Return the five setup-checklist items for `semester`, each derived live from what's still empty (issue #332).
+
+    Always returns all five items regardless of `semester`'s published
+    status or the viewer's role — deciding whether to show the panel at
+    all (admin, draft Semester, at least one item not done) is the
+    caller's job (`serializers.serialize_home()`), so this stays a pure
+    read about one Semester's data.
+
+    Three of the five reuse `semester_deletion_summary()`'s counts
+    (member/song/rehearsal). Pattern-set and casting are new derivations:
+    a `RehearsalPattern` can legitimately exist with zero `RehearsalTime`
+    rows (the pattern formset can be submitted empty), so "pattern set" is
+    the stronger test `prior_rehearsal_times_for()` already uses — a
+    Pattern **and** at least one Rehearsal Time — not mere existence of
+    the Pattern row. A Rehearsal can exist with no Pattern at all (a
+    hand-added Rehearsal), so "dates set" is tested independently of
+    "pattern set", never derived from it.
+    """
+    summary = semester_deletion_summary(semester)
+    live = get_live_semester()
+    live_name = live.name if live is not None else 'the Live Semester'
+
+    rehearsal_time_count = RehearsalTime.objects.filter(pattern__semester=semester).count()
+    pattern_set = rehearsal_time_count > 0
+    casting_count = SongRoleAssignment.objects.filter(song__semester=semester).count()
+
+    return [
+        SetupChecklistItem(
+            key='roster',
+            label='Roster',
+            is_done=summary.member_count > 0,
+            status=(
+                f'{summary.member_count} on the roster'
+                if summary.member_count > 0
+                else f"Empty — import {live_name}'s roster, or invite people"
+            ),
+            destination='/members',
+            waiting_on=None,
+        ),
+        SetupChecklistItem(
+            key='setlist',
+            label='Setlist',
+            is_done=summary.song_count > 0,
+            status=(
+                f"{summary.song_count} song{'s' if summary.song_count != 1 else ''} in the setlist"
+                if summary.song_count > 0
+                else 'Empty — paste a Spotify playlist, or add songs by hand'
+            ),
+            destination='/setlist',
+            waiting_on=None,
+        ),
+        SetupChecklistItem(
+            key='rehearsal_pattern',
+            label='Rehearsal pattern',
+            is_done=pattern_set,
+            status=(
+                f"{rehearsal_time_count} rehearsal time{'s' if rehearsal_time_count != 1 else ''} set"
+                if pattern_set
+                else 'Not set — the days and times rehearsals happen'
+            ),
+            destination='/schedule/edit',
+            waiting_on=None,
+        ),
+        SetupChecklistItem(
+            key='rehearsal_dates',
+            label='Rehearsal dates',
+            is_done=summary.rehearsal_count > 0,
+            status=(
+                f"{summary.rehearsal_count} rehearsal{'s' if summary.rehearsal_count != 1 else ''} scheduled"
+                if summary.rehearsal_count > 0
+                else 'Nothing scheduled — generated from the pattern'
+            ),
+            destination='/schedule/edit',
+            waiting_on='Needs the pattern first',
+        ),
+        SetupChecklistItem(
+            key='casting',
+            label='Casting',
+            is_done=casting_count > 0,
+            status=(
+                f"{casting_count} assignment{'s' if casting_count != 1 else ''} made"
+                if casting_count > 0
+                else 'Nobody assigned to a song yet'
+            ),
+            destination='/schedule/edit',
+            waiting_on='Needs the roster and the setlist',
+        ),
+    ]
 
 
 CONFLICT_FULL_ABSENCE = 'full_absence'

@@ -1606,3 +1606,108 @@ def serialize_adjudication_fallout(fallout, *, song_titles_by_id, role_names_by_
             fallout.feasibility_by_conflict_id, song_titles_by_id=song_titles_by_id, role_names_by_id=role_names_by_id,
         ),
     }
+
+
+def _serialize_next_rehearsal_card(card) -> dict:
+    """Return a `NextRehearsalCard`: the Rehearsal's identity, the arrival/departure line, and the shared Timeline (issue #332)."""
+    return {
+        'rehearsal_id': card.rehearsal.pk,
+        'date': card.rehearsal.date.isoformat(),
+        'is_dress': card.rehearsal.is_full_setlist,
+        'arrival_time': card.attendance_suggestion.arrival_time.isoformat(),
+        'departure_time': card.attendance_suggestion.departure_time.isoformat(),
+        'timeline': _serialize_timeline(card.timeline),
+    }
+
+
+def _serialize_upcoming_row(rehearsal, attendance_suggestion, *, today) -> dict:
+    """Return one Upcoming-rehearsals row: identity plus `your_window`, null when `attendance_suggestion_for` is None (issue #332)."""
+    return {
+        **_serialize_rehearsal_summary(rehearsal, today=today),
+        'your_window': (
+            {
+                'arrival_time': attendance_suggestion.arrival_time.isoformat(),
+                'departure_time': attendance_suggestion.departure_time.isoformat(),
+            }
+            if attendance_suggestion is not None
+            else None
+        ),
+    }
+
+
+def _serialize_song_progress_row(song) -> dict:
+    """Return one Song-progress row: identity, formatted length, and the `song_rehearsal_progress` counts (issue #332)."""
+    return {
+        'id': song.pk,
+        'title': song.title,
+        'artist': song.artist,
+        'length': format_song_length(song.length),
+        'position': song.position,
+        'completed': song.progress.completed,
+        'total': song.progress.total,
+        'has_assignment': song.has_assignment,
+    }
+
+
+def _serialize_setup_checklist_item(item) -> dict:
+    """Return one `SetupChecklistItem`, field-by-field (issue #332)."""
+    return {
+        'key': item.key,
+        'label': item.label,
+        'is_done': item.is_done,
+        'status': item.status,
+        'destination': item.destination,
+        'waiting_on': item.waiting_on,
+    }
+
+
+def serialize_home(request, semester) -> dict:
+    """Return the `/api/` `data` shape (issue #332): Home's three member regions plus (admin, draft) the setup checklist.
+
+    The setup-checklist block is included only for an admin viewing a
+    draft Semester (null `published_at`, ADR 0010) with at least one item
+    still not done — the panel disappears the moment nothing is empty,
+    and a member payload never carries it at all. Reuses
+    `next_rehearsal_card_for()`, `upcoming_rehearsals_for()`,
+    `attendance_suggestion_for()` and `songs_with_progress_for()`
+    unchanged; nothing here re-derives them. `just_created` fires the
+    one-off "created / Draft" status card exactly once per Semester
+    creation (`consume_just_created_semester()` pops the session marker
+    unconditionally, so a member's read can never leave it dangling for a
+    later admin read to wrongly consume).
+    """
+    viewer = request.user
+    is_admin = bool(getattr(viewer, 'is_admin', False))
+    if semester is None:
+        services.consume_just_created_semester(request, None)
+        return {
+            'semester_name': None,
+            'next_rehearsal': None,
+            'upcoming_rehearsals': [],
+            'song_progress': [],
+            'setup_checklist': None,
+            'just_created': False,
+        }
+    today = timezone.localdate()
+    card = services.next_rehearsal_card_for(viewer, semester)
+    upcoming = services.upcoming_rehearsals_for(semester, count=4)
+    songs = services.songs_with_progress_for(semester, viewer)
+    data = {
+        'semester_name': semester.name,
+        'next_rehearsal': _serialize_next_rehearsal_card(card) if card is not None else None,
+        'upcoming_rehearsals': [
+            _serialize_upcoming_row(rehearsal, services.attendance_suggestion_for(rehearsal, viewer), today=today)
+            for rehearsal in upcoming
+        ],
+        'song_progress': [_serialize_song_progress_row(song) for song in songs],
+        'setup_checklist': None,
+        'just_created': services.consume_just_created_semester(request, semester) and is_admin,
+    }
+    if is_admin and semester.published_at is None:
+        items = services.setup_checklist_for(semester)
+        if any(not item.is_done for item in items):
+            data['setup_checklist'] = {
+                'semester_name': semester.name,
+                'items': [_serialize_setup_checklist_item(item) for item in items],
+            }
+    return data
