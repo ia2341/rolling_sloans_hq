@@ -235,7 +235,7 @@ def _serialize_cast_entry(entry):
     }
 
 
-def _serialize_setlist_song(song, roles, codes):
+def _serialize_setlist_song(song, cast, recording_count):
     """Return one Setlist row: the Song's own fields, its role-by-role cast line, and its take count."""
     return {
         'id': song.pk,
@@ -244,8 +244,8 @@ def _serialize_setlist_song(song, roles, codes):
         'length': format_song_length(song.length),
         'position': song.position,
         'notes': song.notes,
-        'cast': [_serialize_cast_entry(entry) for entry in services.cast_line_for(song, roles, codes)],
-        'recording_count': services.recording_count_for(song),
+        'cast': [_serialize_cast_entry(entry) for entry in cast],
+        'recording_count': recording_count,
     }
 
 
@@ -257,18 +257,29 @@ def serialize_setlist(semester) -> dict:
     in scope. `is_role_mismatch` is the deliberate exception (ADR 0002):
     `docs/person-page-visibility.md`'s `never` verdict for it is scoped to
     `/members/` and `/members/<pk>/`, not to this surface.
+
+    Cast lines and recording counts come from `services.cast_lines_for_semester()`/
+    `recording_counts_for_semester()` — computed once for every Song in
+    `semester` (issue #394), rather than `cast_line_for()`/
+    `recording_count_for()` once per Song, which made this list's cost
+    scale with the Semester's Song count.
     """
     if semester is None:
         return {'semester_name': None, 'song_count': 0, 'total_running_time': '0:00', 'roles': [], 'songs': []}
     songs = list(Song.objects.filter(semester=semester).order_by('position'))
     roles = services.active_roles_for(semester)
     codes = services.role_codes_for(roles)
+    cast_lines = services.cast_lines_for_semester(semester, roles, codes)
+    recording_counts = services.recording_counts_for_semester(semester)
     return {
         'semester_name': semester.name,
         'song_count': len(songs),
         'total_running_time': services.setlist_total_running_time(semester),
         'roles': [_serialize_role_legend_entry(role, codes) for role in roles],
-        'songs': [_serialize_setlist_song(song, roles, codes) for song in songs],
+        'songs': [
+            _serialize_setlist_song(song, cast_lines.get(song.id, []), recording_counts.get(song.id, 0))
+            for song in songs
+        ],
     }
 
 
