@@ -232,7 +232,7 @@ function NextRehearsalTimeline({ card }: { card: NextRehearsalCardData }) {
               key={slot.song_id}
               to={`/songs/${slot.song_id}`}
               onClick={(event) => event.stopPropagation()}
-              className={`flex h-10 min-w-0 flex-1 items-center justify-center border-r border-rs-border px-1 text-center text-[11px] leading-tight last:border-r-0 ${
+              className={`flex h-10 min-w-0 flex-1 items-center justify-center border-r border-rs-border px-1 text-center text-xs leading-tight last:border-r-0 ${
                 slot.is_viewer
                   ? 'bg-rs-accent text-rs-accent-fg'
                   : 'bg-rs-border/30 text-rs-fg'
