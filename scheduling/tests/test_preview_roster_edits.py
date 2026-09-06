@@ -11,6 +11,7 @@ from identity.models import Person
 from scheduling.factories import (
     ConflictFactory,
     MembershipFactory,
+    PersonRoleFactory,
     RehearsalFactory,
     RoleFactory,
     SemesterFactory,
@@ -171,11 +172,17 @@ class PreviewRosterEditsTests(TestCase):
 
         self.assertTrue(any('No Roles Left' in line for line in fallout.quiet))
 
-    def test_quiet_fallout_flags_a_newly_mismatched_assignment(self):
-        """Dropping a declared Role that an existing SongRoleAssignment relies on reports quiet Fallout."""
+    def test_role_removal_no_longer_produces_quiet_mismatch_fallout(self):
+        """Dropping a declared MembershipRole here reports no mismatch Fallout (ADR-0014, issue #377): only PersonRole drives is_role_mismatch now.
+
+        Superseded `test_quiet_fallout_flags_a_newly_mismatched_assignment`,
+        which pinned the retired behavior from before issue #377 repointed
+        the resweep at `PersonRole` exclusively.
+        """
         person = PersonFactory(name='Mismatch Person')
         membership = MembershipFactory(person=person, semester=self.semester)
         MembershipRole.objects.create(membership=membership, role=self.role)
+        PersonRoleFactory(person=person, role=self.role)
         song = SongFactory(semester=self.semester, title='Mismatch Song')
         assignment = SongRoleAssignmentFactory(song=song, role=self.role, person=person)
         self.assertFalse(assignment.is_role_mismatch)
@@ -183,7 +190,7 @@ class PreviewRosterEditsTests(TestCase):
 
         fallout = self._preview(buffer)
 
-        self.assertTrue(any('Mismatch Person' in line and 'Mismatch Song' in line for line in fallout.quiet))
+        self.assertFalse(any('Mismatch Person' in line and 'Mismatch Song' in line for line in fallout.quiet))
         assignment.refresh_from_db()
         self.assertFalse(assignment.is_role_mismatch)
 

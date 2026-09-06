@@ -26,6 +26,7 @@ from scheduling.factories import (
     ConflictFactory,
     ConflictWindowFactory,
     MembershipFactory,
+    PersonRoleFactory,
     RecordingFactory,
     RehearsalFactory,
     RehearsalSongFactory,
@@ -34,7 +35,7 @@ from scheduling.factories import (
     SongFactory,
     SongRoleAssignmentFactory,
 )
-from scheduling.models import Conflict, MembershipRole
+from scheduling.models import Conflict
 
 PASSWORD = 'a-strong-test-password-123'
 
@@ -360,8 +361,14 @@ class PersonApiNotOnRosterTests(TestCase):
         """Log in as the not-yet-rostered self viewer before each test."""
         self.client.login(username=self.self_person.email, password=PASSWORD)
 
-    def test_own_pk_with_no_membership_omits_roles_songs_and_recordings_entirely(self):
-        """The unsaved-Membership self case renders name/email/can_edit_roles but no roles/songs/recordings keys."""
+    def test_own_pk_with_no_membership_omits_songs_and_recordings_but_still_carries_roles(self):
+        """The unsaved-Membership self case renders name/email/can_edit_roles/roles but no songs/recordings keys.
+
+        `roles` (issue #378, ADR-0014) is unconditional: a standing
+        `PersonRole` declaration doesn't need a Membership to exist, so a
+        newly-invited, not-yet-rostered Person can still declare Roles
+        here before an admin rosters them.
+        """
         response = self.client.get(person_api_url(self.self_person))
 
         self.assertEqual(response.status_code, 200)
@@ -369,7 +376,7 @@ class PersonApiNotOnRosterTests(TestCase):
         self.assertEqual(data['name'], 'Fresh Invite Placeholder')
         self.assertEqual(data['email'], self.self_person.email)
         self.assertFalse(data['has_membership'])
-        self.assertNotIn('roles', data)
+        self.assertEqual(data['roles'], [])
         self.assertNotIn('songs', data)
         self.assertNotIn('recordings', data)
 
@@ -383,8 +390,8 @@ class PersonApiNotOnRosterTests(TestCase):
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)
-class MembershipRolesFormEditRightsTests(TestCase):
-    """`Role`-editing rights on `/api/members/<pk>/roles/` (issues #232, #333): self or an admin, never a plain teammate."""
+class PersonRolesApiEditRightsTests(TestCase):
+    """`PersonRole`-editing rights on `/api/members/<pk>/roles/` (issues #232, #333, #378): self or an admin, never a plain teammate."""
 
     @classmethod
     def setUpTestData(cls):
@@ -402,7 +409,7 @@ class MembershipRolesFormEditRightsTests(TestCase):
         return reverse('api-member-roles', args=[person.pk])
 
     def test_self_can_edit_their_own_declared_roles(self):
-        """The self viewer can declare their own Roles through this endpoint."""
+        """The self viewer can declare their own standing Roles through this endpoint."""
         role = RoleFactory(name='Bassist')
         self.client.login(username=self.self_person.email, password=PASSWORD)
 
@@ -416,8 +423,22 @@ class MembershipRolesFormEditRightsTests(TestCase):
         self.assertTrue(response.json()['ok'])
         self.assertIn('Bassist', str(response.json()['data']['roles']))
 
+    def test_self_can_remove_a_declared_role(self):
+        """A second save with the Role omitted deletes the standing `PersonRole` row."""
+        role = RoleFactory(name='Bassist')
+        PersonRoleFactory(person=self.self_person, role=role)
+        self.client.login(username=self.self_person.email, password=PASSWORD)
+
+        response = self.client.post(
+            self._roles_url(self.self_person), data={'role_ids': []}, content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()['ok'])
+        self.assertEqual(response.json()['data']['roles'], [])
+
     def test_admin_can_edit_anyones_declared_roles(self):
-        """An admin can declare Roles on any Person's Membership, per issue #232."""
+        """An admin can declare standing Roles on any Person, per issue #232/#378."""
         role = RoleFactory(name='Drummer')
         self.client.login(username=self.admin.email, password=PASSWORD)
 
@@ -429,6 +450,7 @@ class MembershipRolesFormEditRightsTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()['ok'])
+        self.assertIn('Drummer', str(response.json()['data']['roles']))
 
     def test_non_admin_teammate_gets_a_404_not_a_rejected_form(self):
         """A non-admin teammate's POST to someone else's Roles endpoint 404s rather than rendering a form error."""
@@ -442,6 +464,35 @@ class MembershipRolesFormEditRightsTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 404)
+
+    def test_inactive_or_unknown_role_id_is_rejected_with_ok_false(self):
+        """A submitted role id that isn't an active Role is refused as a validation error, not a 500 or a silent no-op."""
+        inactive_role = RoleFactory(name='Retired Role', is_active=False)
+        self.client.login(username=self.self_person.email, password=PASSWORD)
+
+        response = self.client.post(
+            self._roles_url(self.self_person),
+            data={'role_ids': [inactive_role.pk]},
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()['ok'])
+        self.assertIn('not valid', str(response.json()['non_field_errors']))
+
+    def test_self_edit_does_not_require_a_membership(self):
+        """A not-yet-rostered self viewer (no Membership at all) can still declare standing Roles."""
+        unrostered_person = PersonFactory(password=PASSWORD, name='Fresh Invite Placeholder')
+        role = RoleFactory(name='Vocalist')
+        self.client.login(username=unrostered_person.email, password=PASSWORD)
+
+        response = self.client.post(
+            self._roles_url(unrostered_person), data={'role_ids': [role.pk]}, content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()['ok'])
+        self.assertIn('Vocalist', str(response.json()['data']['roles']))
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)
@@ -495,17 +546,17 @@ class MemberDetailBackupPrivacyTests(TestCase):
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)
-class MembershipRoleDeclaredRoleTests(TestCase):
-    """Declared Roles render alongside a `MembershipRole` factory-built row, sanity-checking the retargeted fixtures."""
+class PersonRoleDeclaredRoleTests(TestCase):
+    """Declared Roles render alongside a `PersonRole` factory-built row (ADR-0014), sanity-checking the retargeted fixtures."""
 
     def test_declared_role_renders_on_the_teammate_payload(self):
-        """A teammate's declared Roles for the viewing Semester render by name in the `roles` list."""
+        """A teammate's standing declared Roles render by name in the `roles` list."""
         semester = SemesterFactory()
         viewer = PersonFactory(password=PASSWORD, name='Viewer Placeholder')
         MembershipFactory(person=viewer, semester=semester)
         teammate = PersonFactory(name='Teammate Placeholder')
-        membership = MembershipFactory(person=teammate, semester=semester)
-        MembershipRole.objects.create(membership=membership, role=RoleFactory(name='Bassist'))
+        MembershipFactory(person=teammate, semester=semester)
+        PersonRoleFactory(person=teammate, role=RoleFactory(name='Bassist'))
         self.client.login(username=viewer.email, password=PASSWORD)
 
         data = self.client.get(person_api_url(teammate)).json()['data']

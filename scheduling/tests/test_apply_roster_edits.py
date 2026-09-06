@@ -11,6 +11,7 @@ from identity.models import Person
 from scheduling.factories import (
     ConflictFactory,
     MembershipFactory,
+    PersonRoleFactory,
     RehearsalFactory,
     RoleFactory,
     SemesterFactory,
@@ -92,11 +93,18 @@ class ApplyRosterEditsTests(TestCase):
             {keep_role.pk, add_role.pk},
         )
 
-    def test_role_removal_reevaluates_is_role_mismatch_through_the_model(self):
-        """Dropping a declared Role flips is_role_mismatch on that Person's existing SongRoleAssignment for it, via the model's own signal."""
+    def test_role_removal_no_longer_drives_is_role_mismatch(self):
+        """Dropping a declared MembershipRole here has no effect on is_role_mismatch (ADR-0014, issue #377): only PersonRole does now.
+
+        Superseded `test_role_removal_reevaluates_is_role_mismatch_through_the_model`,
+        which pinned the retired behavior — `MembershipRole`'s own
+        post_save/post_delete signals used to drive the resweep, before
+        issue #377 repointed it at `PersonRole` exclusively.
+        """
         person = PersonFactory()
         membership = MembershipFactory(person=person, semester=self.semester)
         MembershipRole.objects.create(membership=membership, role=self.role)
+        PersonRoleFactory(person=person, role=self.role)
         song = SongFactory(semester=self.semester)
         assignment = SongRoleAssignmentFactory(song=song, role=self.role, person=person)
         self.assertFalse(assignment.is_role_mismatch)
@@ -105,7 +113,7 @@ class ApplyRosterEditsTests(TestCase):
         apply_roster_edits(buffer, viewing_semester=self.semester, requesting_admin=self.admin)
 
         assignment.refresh_from_db()
-        self.assertTrue(assignment.is_role_mismatch)
+        self.assertFalse(assignment.is_role_mismatch)
 
     def test_removal_purges_membership_roles_assignments_and_conflicts_for_that_semester(self):
         """Removing a Person deletes their Membership, declared Roles, Role Assignments and Conflicts scoped to the Semester, with non-trivial counts."""
