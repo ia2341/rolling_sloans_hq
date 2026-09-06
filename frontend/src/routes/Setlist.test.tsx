@@ -266,9 +266,7 @@ describe('Setlist', () => {
 
     renderShell(<Setlist />, ['/setlist'])
 
-    await waitFor(() =>
-      expect(assignSpy).toHaveBeenCalledWith('/accounts/login/'),
-    )
+    await waitFor(() => expect(assignSpy).toHaveBeenCalledWith('/login'))
     expect(screen.queryByText(/error/i)).not.toBeInTheDocument()
 
     Object.defineProperty(window, 'location', {

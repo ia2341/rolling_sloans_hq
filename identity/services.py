@@ -144,6 +144,17 @@ def send_invite_email(person):
         raise EmailDeliveryError(f'invite email to {person.email} was not delivered')
 
 
+def client_ip(request):
+    """Return the requesting client's IP address, for the rate-limit keys (issue #327, #362).
+
+    No reverse proxy is configured in front of this project, so
+    `REMOTE_ADDR` is the real client address; there is no `X-Forwarded-For`
+    to trust. Shared by the server-rendered `LoginView` and the SPA's
+    `LoginApiView`, so both enforce the same rate limit from the same key.
+    """
+    return request.META.get('REMOTE_ADDR', '0.0.0.0')
+
+
 def record_login_attempt(*, email, ip_address, was_successful):
     """Record one sign-in POST for the failed-sign-in rate limit."""
     LoginAttempt.objects.create(email=email, ip_address=ip_address, was_successful=was_successful)
