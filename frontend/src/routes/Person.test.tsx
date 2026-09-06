@@ -148,6 +148,55 @@ describe('Person', () => {
     ).toBeInTheDocument()
   })
 
+  it('lets an admin add and save a Role on a teammate’s page (issue #378)', async () => {
+    const roleFetch = vi.fn()
+    mockFetchByUrl({
+      '/api/members/2/roles/': () => {
+        roleFetch()
+        return {
+          status: 200,
+          body: {
+            context: memberContext({
+              viewer: { ...memberContext().viewer, is_admin: true },
+            }),
+            ok: true,
+            errors: {},
+            non_field_errors: [],
+            fallout: null,
+            values: null,
+            data: adminViewingTeammatePayload({
+              roles: [
+                { id: 1, name: 'Drummer' },
+                { id: 2, name: 'Singer' },
+              ],
+            }),
+          },
+        }
+      },
+      '/api/members/2/': () => ({
+        status: 200,
+        body: {
+          context: memberContext({
+            viewer: { ...memberContext().viewer, is_admin: true },
+          }),
+          data: adminViewingTeammatePayload(),
+        },
+      }),
+    })
+
+    const user = (await import('@testing-library/user-event')).default.setup()
+    renderPerson('/members/2')
+
+    await screen.findByText('Drummer')
+    await user.selectOptions(
+      await screen.findByLabelText('Add a role'),
+      'Singer',
+    )
+    await user.click(screen.getByRole('button', { name: 'Save roles' }))
+
+    await waitFor(() => expect(roleFetch).toHaveBeenCalledTimes(1))
+  })
+
   it('does not render a "Deliberately absent" card, for any viewer state (issue #363)', async () => {
     mockFetchByUrl({
       '/api/members/2/': () => ({
@@ -174,7 +223,10 @@ describe('Person', () => {
     expect(await screen.findByText('Not on any song yet.')).toBeInTheDocument()
   })
 
-  it('omits the Roles-list, Songs and Recordings sections entirely for a not-yet-rostered self viewer', async () => {
+  it('omits the Songs and Recordings sections, but still renders the editable Roles card, for a not-yet-rostered self viewer', async () => {
+    // `roles` is unconditional (issue #378, ADR-0014) — a standing PersonRole
+    // declaration needs no Membership to exist, so a newly-invited member can
+    // declare Roles here before an admin rosters them.
     mockFetchByUrl({
       '/api/members/1/': () => ({
         status: 200,
@@ -189,6 +241,7 @@ describe('Person', () => {
             semester_name: 'Spring 2026',
             email: 'sam@example.com',
             available_roles: [{ id: 1, name: 'Drummer' }],
+            roles: [],
           },
         },
       }),

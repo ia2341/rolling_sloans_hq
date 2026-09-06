@@ -98,8 +98,8 @@ class ApplyRosterEditsTests(TestCase):
 
         is_role_mismatch now reads the person-level PersonRole, which the
         Roster editor's Role-set reconciliation doesn't write to (that
-        surface still edits MembershipRole -- migrating it to PersonRole is
-        separate work, tracked against the person-page Role editor). A
+        surface still edits MembershipRole -- Role declarations are edited
+        via PersonRole on the person page instead, issue #378). A
         PersonRole declared independently of this Buffer keeps the
         assignment unflagged even after its MembershipRole is dropped.
         """
