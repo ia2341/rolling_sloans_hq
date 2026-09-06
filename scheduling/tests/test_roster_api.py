@@ -9,11 +9,10 @@ from django.urls import reverse
 from identity.models import Person
 from scheduling.factories import (
     MembershipFactory,
-    MembershipRoleFactory,
     RoleFactory,
     SemesterFactory,
 )
-from scheduling.models import Membership
+from scheduling.models import Membership, MembershipRole
 from scheduling.tests.api_test_helpers import (
     admin_client,
     member_client,
@@ -201,7 +200,7 @@ class RosterReadTests(TestCase):
 
         active_person = PersonFactory(name='Active Person', password='a-strong-test-password-123')
         active_membership = MembershipFactory(person=active_person, semester=self.semester)
-        MembershipRoleFactory(membership=active_membership, role=self.role)
+        MembershipRole.objects.create(membership=active_membership, role=self.role)
         invited_person = PersonFactory(name='Invited Person', password=None)
         MembershipFactory(person=invited_person, semester=self.semester)
 

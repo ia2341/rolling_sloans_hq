@@ -6,6 +6,7 @@ from .models import (
     ConflictWindow,
     Membership,
     MembershipRole,
+    PersonRole,
     Rehearsal,
     RehearsalPattern,
     RehearsalSong,
@@ -75,6 +76,15 @@ class MembershipRoleAdmin(admin.ModelAdmin):
 
     list_display = ('membership', 'role')
     list_filter = ('role',)
+
+
+@admin.register(PersonRole)
+class PersonRoleAdmin(admin.ModelAdmin):
+    """Admin for a Person's durable standing Role (ADR-0014), for direct lookup/filtering."""
+
+    list_display = ('person', 'role')
+    list_filter = ('role',)
+    search_fields = ('person__name', 'person__email')
 
 
 class SongRoleRequirementInline(admin.TabularInline):

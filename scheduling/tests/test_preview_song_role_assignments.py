@@ -10,7 +10,6 @@ from scheduling.factories import (
     ConflictFactory,
     ConflictWindowFactory,
     MembershipFactory,
-    MembershipRoleFactory,
     RehearsalFactory,
     RehearsalSongFactory,
     RoleFactory,
@@ -19,7 +18,7 @@ from scheduling.factories import (
     SongRoleAssignmentFactory,
     SongRoleRequirementFactory,
 )
-from scheduling.models import Conflict, SongRoleAssignment
+from scheduling.models import Conflict, MembershipRole, SongRoleAssignment
 from scheduling.services import (
     AssignmentEditBuffer,
     apply_song_role_assignments,
@@ -182,7 +181,7 @@ class PreviewSongRoleAssignmentsTests(TestCase):
     def test_matched_role_raises_no_mismatch_line(self):
         """A Person who has declared the cell's Role is assigned with no mismatch line."""
         membership = MembershipFactory(semester=self.semester)
-        MembershipRoleFactory(membership=membership, role=self.role)
+        MembershipRole.objects.create(membership=membership, role=self.role)
 
         fallout = self._preview(self._buffer(
             added_entries=[(self.song.pk, self.role.pk, membership.person.pk)],

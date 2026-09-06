@@ -11,7 +11,6 @@ from identity.models import Person
 from scheduling.factories import (
     ConflictFactory,
     MembershipFactory,
-    MembershipRoleFactory,
     RehearsalFactory,
     RoleFactory,
     SemesterFactory,
@@ -80,8 +79,8 @@ class ApplyRosterEditsTests(TestCase):
         add_role = RoleFactory()
         person = PersonFactory()
         membership = MembershipFactory(person=person, semester=self.semester)
-        MembershipRoleFactory(membership=membership, role=keep_role)
-        MembershipRoleFactory(membership=membership, role=drop_role)
+        MembershipRole.objects.create(membership=membership, role=keep_role)
+        MembershipRole.objects.create(membership=membership, role=drop_role)
         buffer = self._buffer(entries=[
             RosterEditEntry(person=person, name=person.name, role_ids=frozenset({keep_role.pk, add_role.pk})),
         ])
@@ -97,7 +96,7 @@ class ApplyRosterEditsTests(TestCase):
         """Dropping a declared Role flips is_role_mismatch on that Person's existing SongRoleAssignment for it, via the model's own signal."""
         person = PersonFactory()
         membership = MembershipFactory(person=person, semester=self.semester)
-        MembershipRoleFactory(membership=membership, role=self.role)
+        MembershipRole.objects.create(membership=membership, role=self.role)
         song = SongFactory(semester=self.semester)
         assignment = SongRoleAssignmentFactory(song=song, role=self.role, person=person)
         self.assertFalse(assignment.is_role_mismatch)
@@ -112,7 +111,7 @@ class ApplyRosterEditsTests(TestCase):
         """Removing a Person deletes their Membership, declared Roles, Role Assignments and Conflicts scoped to the Semester, with non-trivial counts."""
         person = PersonFactory()
         membership = MembershipFactory(person=person, semester=self.semester)
-        MembershipRoleFactory(membership=membership, role=self.role)
+        MembershipRole.objects.create(membership=membership, role=self.role)
         song_a = SongFactory(semester=self.semester)
         song_b = SongFactory(semester=self.semester)
         SongRoleAssignmentFactory(song=song_a, person=person)
@@ -147,7 +146,7 @@ class ApplyRosterEditsTests(TestCase):
         person = PersonFactory()
         prior_semester = SemesterFactory()
         prior_membership = MembershipFactory(person=person, semester=prior_semester)
-        MembershipRoleFactory(membership=prior_membership, role=self.role)
+        MembershipRole.objects.create(membership=prior_membership, role=self.role)
         prior_song = SongFactory(semester=prior_semester)
         prior_assignment = SongRoleAssignmentFactory(song=prior_song, person=person)
         prior_rehearsal = RehearsalFactory(semester=prior_semester)
@@ -173,7 +172,7 @@ class ApplyRosterEditsTests(TestCase):
         """
         prior = SemesterFactory()
         prior_membership = MembershipFactory(person=PersonFactory(), semester=prior)
-        MembershipRoleFactory(membership=prior_membership, role=self.role)
+        MembershipRole.objects.create(membership=prior_membership, role=self.role)
         person = prior_membership.person
         buffer = self._buffer(entries=[RosterEditEntry(person=person, name=person.name, role_ids=frozenset({self.role.pk}))])
 
