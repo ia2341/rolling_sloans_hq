@@ -82,6 +82,20 @@ from scheduling.services import (
 )
 
 
+class HomeApiView(ApiView, View):
+    """`GET /api/`: Home's Next-rehearsal, Upcoming-rehearsals and Song-progress regions, plus (admin, draft) the setup checklist (issue #332).
+
+    Member-facing, not admin-gated: the admin-only setup-checklist block
+    is decided inside `serializers.serialize_home()`, not by gating the
+    whole endpoint — a non-admin still needs to read the rest of Home.
+    """
+
+    def get(self, request):
+        """Return the Home envelope for `get_viewing_semester(request)`, or its empty shape when nothing is published/selected."""
+        semester = services.get_viewing_semester(request)
+        return self.read_response(request, serializers.serialize_home(request, semester))
+
+
 class SetlistApiView(ApiView, View):
     """`GET /api/setlist/`: the viewing Semester's whole Setlist read model, in one round trip."""
 
@@ -1206,7 +1220,10 @@ class SemesterCreateApiView(AdminApiView, View):
     reported as a per-field error at HTTP 200 (a rejected input, not a
     client protocol error) — every other malformed field (a missing name,
     or a non-integer/negative timing default) is a genuine 4xx, since 4xx
-    stays reserved for auth, staleness and malformed payloads.
+    stays reserved for auth, staleness and malformed payloads. Also marks
+    the new Semester as just-created in the session (issue #332), so the
+    admin's very next Home read shows the one-off "created / Draft" status
+    card.
     """
 
     #: The six timing-default fields `create_semester()` takes as `**timing_defaults`, matching `SemesterSetupForm`.
@@ -1244,6 +1261,7 @@ class SemesterCreateApiView(AdminApiView, View):
             return self.write_response(request, ok=False, errors={'name': [str(error)]})
 
         services.set_viewing_semester(request, semester)
+        services.mark_semester_just_created(request, semester)
         return self.write_response(request, ok=True, values=None)
 
 

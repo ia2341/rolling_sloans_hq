@@ -9,10 +9,12 @@ surface; the other five admin edit surfaces (#335-#340) each add their
 own `preview/`/`save/` pair later, following this one's shape. Issue #336
 adds the Roster edit surface's own read/preview/save/candidates/roles/
 resend-invite endpoints, the second full surface to follow that shape.
-`#332` (Home) is a separate, unrelated ticket. Issue #335 adds no new
-`preview/`/`save/` pair of its own — it reuses #334's — only the
-read-only Spotify-fetch endpoint the setlist editor's `+ Add songs`
-sheet calls before a track ever joins the Buffer.
+Issue #335 adds no new `preview/`/`save/` pair of its own — it reuses
+#334's — only the read-only Spotify-fetch endpoint the setlist editor's
+`+ Add songs` sheet calls before a track ever joins the Buffer. Issue
+#332 adds the root `''` route: Home's Next-rehearsal, Upcoming-rehearsals,
+Song-progress and setup-checklist read model, one round trip like every
+other page-shaped surface here.
 
 The Recordings routes deliberately nest under `members/` rather than
 mirroring the old `/me/recordings/` prefix: Recordings is no longer its own
@@ -31,6 +33,7 @@ from django.urls import path
 from scheduling import api_views
 
 urlpatterns = [
+    path('', api_views.HomeApiView.as_view(), name='api-home'),
     path('setlist/', api_views.SetlistApiView.as_view(), name='api-setlist'),
     path('setlist/preview/', api_views.SetlistPreviewApiView.as_view(), name='api-setlist-preview'),
     path('setlist/save/', api_views.SetlistSaveApiView.as_view(), name='api-setlist-save'),
