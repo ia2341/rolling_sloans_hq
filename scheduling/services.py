@@ -2060,16 +2060,33 @@ def _dress_rehearsal_attendance_suggestion(rehearsal, person):
 
 def _regular_rehearsal_attendance_suggestion(rehearsal, person):
     """Return `person`'s suggestion for a non-Dress Rehearsal, derived from the slots they are on."""
-    bounds = slots_for_person(rehearsal, person).aggregate(
-        earliest_start=models.Min('start_time'), latest_end=models.Max('end_time'),
-    )
-    if bounds['earliest_start'] is None:
+    rehearsal_songs = list(RehearsalSong.objects.filter(rehearsal=rehearsal))
+    your_rehearsal_songs = list(slots_for_person(rehearsal, person))
+    return _regular_attendance_suggestion_from_slots(rehearsal, rehearsal_songs, your_rehearsal_songs)
+
+
+def _regular_attendance_suggestion_from_slots(rehearsal, rehearsal_songs, your_rehearsal_songs):
+    """Return the same suggestion `_regular_rehearsal_attendance_suggestion()` would, from already-fetched rows (issue #394).
+
+    Single source of truth for the derivation — mirrors
+    `Rehearsal.attendance_for()`'s bounds/needed-orders logic exactly, just
+    read off caller-supplied lists instead of fresh queries, so
+    `rehearsal_schedule_for()` can compute every Rehearsal's suggestion in
+    the Semester from lists it already fetched in bulk, rather than
+    querying once per Rehearsal.
+    """
+    if not your_rehearsal_songs:
         return None
-    attendance = rehearsal.attendance_for(person)
-    if attendance.needed_from_start and attendance.needed_until_end:
+    earliest_start = min(rehearsal_song.start_time for rehearsal_song in your_rehearsal_songs)
+    latest_end = max(rehearsal_song.end_time for rehearsal_song in your_rehearsal_songs)
+    orders = [rehearsal_song.order for rehearsal_song in rehearsal_songs]
+    your_orders = {rehearsal_song.order for rehearsal_song in your_rehearsal_songs}
+    needed_from_start = bool(orders) and min(orders) in your_orders
+    needed_until_end = bool(orders) and max(orders) in your_orders
+    if needed_from_start and needed_until_end:
         return AttendanceSuggestion(arrival_time=rehearsal.start_time, departure_time=rehearsal.end_time)
-    arrival_time = _shift_time(rehearsal.date, bounds['earliest_start'], -rehearsal.arrival_buffer_minutes)
-    departure_time = _shift_time(rehearsal.date, bounds['latest_end'], rehearsal.departure_buffer_minutes)
+    arrival_time = _shift_time(rehearsal.date, earliest_start, -rehearsal.arrival_buffer_minutes)
+    departure_time = _shift_time(rehearsal.date, latest_end, rehearsal.departure_buffer_minutes)
     return AttendanceSuggestion(arrival_time=arrival_time, departure_time=departure_time)
 
 
@@ -2080,10 +2097,21 @@ def _shift_time(date, time_value, minutes):
 
 @dataclass(frozen=True)
 class RehearsalListRow:
-    """One row of the All-Rehearsals view: a Rehearsal plus `person`'s one-line attendance summary (issue #97)."""
+    """One row of the All-Rehearsals view: a Rehearsal plus `person`'s one-line attendance summary (issue #97).
+
+    `songs`/`your_rehearsal_songs` are precomputed in bulk by
+    `rehearsal_schedule_for()` alongside every other Rehearsal in the
+    Semester (issue #394) — carrying them here, rather than having the
+    serializer re-derive them per row via `assignment_matrix_for()` /
+    `slots_for_person()`, is what keeps the All-rehearsals list's query
+    cost flat as a Semester's Rehearsal (and roster) size grows, instead of
+    scaling with the number of Rehearsals.
+    """
 
     rehearsal: Rehearsal
     attendance_suggestion: AttendanceSuggestion | None
+    songs: list[Song]
+    your_rehearsal_songs: list[RehearsalSong]
 
 
 @dataclass(frozen=True)
@@ -2102,14 +2130,66 @@ def rehearsal_schedule_for(semester, person) -> RehearsalSchedule:
     All-Rehearsals list, not a "what's next" lookup, so a same-day
     already-ended Rehearsal still renders in the future/expanded section
     rather than being hidden away with the past ones.
+
+    Computed in a fixed, small number of bulk queries regardless of how
+    many Rehearsals `semester` has (issue #394): one query fetches every
+    non-Dress Rehearsal's RehearsalSong rows (with their Song) up front,
+    and two more fetch `person`'s Assignments/Backups across all of them,
+    rather than calling `assignment_matrix_for()`/`slots_for_person()`
+    once per Rehearsal the way this used to. The Dress Rehearsal's live
+    setlist (ADR-0003) is fetched at most once and reused across every
+    Dress Rehearsal row, since it depends only on `semester`.
     """
     today = timezone.localdate()
-    rehearsals = Rehearsal.objects.filter(semester=semester).order_by('date', 'start_time')
+    rehearsals = list(Rehearsal.objects.filter(semester=semester).order_by('date', 'start_time'))
+    regular_ids = [rehearsal.pk for rehearsal in rehearsals if not rehearsal.is_full_setlist]
+
+    rehearsal_songs = list(
+        RehearsalSong.objects.filter(rehearsal_id__in=regular_ids)
+        .select_related('song')
+        .order_by('rehearsal_id', 'order'),
+    )
+    songs_by_rehearsal_id: dict[int, list[RehearsalSong]] = defaultdict(list)
+    for rehearsal_song in rehearsal_songs:
+        songs_by_rehearsal_id[rehearsal_song.rehearsal_id].append(rehearsal_song)
+
+    assigned_song_ids = frozenset(
+        SongRoleAssignment.objects.filter(
+            person=person, song__semester=semester,
+        ).values_list('song_id', flat=True),
+    )
+    backed_up_rehearsal_song_ids = frozenset(
+        Backup.objects.filter(
+            person=person, rehearsal_song_id__in=[rehearsal_song.pk for rehearsal_song in rehearsal_songs],
+        ).values_list('rehearsal_song_id', flat=True),
+    )
+
+    dress_songs: list[Song] | None = None
     past, future = [], []
     for rehearsal in rehearsals:
+        if rehearsal.is_full_setlist:
+            if dress_songs is None:
+                dress_songs = list(rehearsal.dress_rehearsal_songs)
+            songs = dress_songs
+            your_rehearsal_songs: list[RehearsalSong] = []
+            suggestion = _dress_rehearsal_attendance_suggestion(rehearsal, person)
+        else:
+            rehearsal_song_list = songs_by_rehearsal_id.get(rehearsal.pk, [])
+            songs = [rehearsal_song.song for rehearsal_song in rehearsal_song_list]
+            your_rehearsal_songs = [
+                rehearsal_song
+                for rehearsal_song in rehearsal_song_list
+                if rehearsal_song.song_id in assigned_song_ids
+                or rehearsal_song.pk in backed_up_rehearsal_song_ids
+            ]
+            suggestion = _regular_attendance_suggestion_from_slots(
+                rehearsal, rehearsal_song_list, your_rehearsal_songs,
+            )
         row = RehearsalListRow(
             rehearsal=rehearsal,
-            attendance_suggestion=attendance_suggestion_for(rehearsal, person),
+            attendance_suggestion=suggestion,
+            songs=songs,
+            your_rehearsal_songs=your_rehearsal_songs,
         )
         (past if rehearsal.date < today else future).append(row)
     return RehearsalSchedule(past=past, future=future)
