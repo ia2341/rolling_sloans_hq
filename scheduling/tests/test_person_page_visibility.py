@@ -26,7 +26,6 @@ from scheduling.factories import (
     ConflictFactory,
     ConflictWindowFactory,
     MembershipFactory,
-    MembershipRoleFactory,
     RecordingFactory,
     RehearsalFactory,
     RehearsalSongFactory,
@@ -35,7 +34,7 @@ from scheduling.factories import (
     SongFactory,
     SongRoleAssignmentFactory,
 )
-from scheduling.models import Conflict
+from scheduling.models import Conflict, MembershipRole
 
 PASSWORD = 'a-strong-test-password-123'
 
@@ -506,7 +505,7 @@ class MembershipRoleDeclaredRoleTests(TestCase):
         MembershipFactory(person=viewer, semester=semester)
         teammate = PersonFactory(name='Teammate Placeholder')
         membership = MembershipFactory(person=teammate, semester=semester)
-        MembershipRoleFactory(membership=membership, role=RoleFactory(name='Bassist'))
+        MembershipRole.objects.create(membership=membership, role=RoleFactory(name='Bassist'))
         self.client.login(username=viewer.email, password=PASSWORD)
 
         data = self.client.get(person_api_url(teammate)).json()['data']

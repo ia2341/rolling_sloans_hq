@@ -14,7 +14,6 @@ from django.urls import reverse
 from identity.factories import PersonFactory
 from scheduling.factories import (
     MembershipFactory,
-    MembershipRoleFactory,
     RecordingFactory,
     RehearsalFactory,
     RehearsalSongFactory,
@@ -23,7 +22,7 @@ from scheduling.factories import (
     SongFactory,
     SongRoleAssignmentFactory,
 )
-from scheduling.models import Membership
+from scheduling.models import Membership, MembershipRole
 from scheduling.serializers import (
     serialize_band,
     serialize_person,
@@ -155,7 +154,7 @@ class SerializePersonExactKeySetTests(TestCase):
         semester = SemesterFactory()
         person = PersonFactory(name='Self Placeholder')
         membership = MembershipFactory(person=person, semester=semester)
-        MembershipRoleFactory(membership=membership, role=RoleFactory(name='Bassist'))
+        MembershipRole.objects.create(membership=membership, role=RoleFactory(name='Bassist'))
 
         data = serialize_person(person, semester=semester, is_self=True, can_edit_roles=True, membership=membership)
 
@@ -287,7 +286,7 @@ class BandApiViewTests(TestCase):
         """Each row carries its declared Role names and its distinct assigned-Song count."""
         semester = SemesterFactory()
         membership = MembershipFactory(person=self.person, semester=semester)
-        MembershipRoleFactory(membership=membership, role=RoleFactory(name='Bassist'))
+        MembershipRole.objects.create(membership=membership, role=RoleFactory(name='Bassist'))
         song = SongFactory(semester=semester)
         SongRoleAssignmentFactory(song=song, person=self.person)
 

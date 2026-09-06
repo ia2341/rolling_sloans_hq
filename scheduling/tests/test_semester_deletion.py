@@ -20,10 +20,10 @@ from identity.models import Person
 from scheduling.factories import (
     ConflictFactory,
     MembershipFactory,
-    MembershipRoleFactory,
     RecordingFactory,
     RehearsalFactory,
     RehearsalSongFactory,
+    RoleFactory,
     SemesterFactory,
     SongFactory,
 )
@@ -85,7 +85,7 @@ class DeleteSemesterServiceTests(TestCase):
         draft = SemesterFactory(draft=True)
         person = PersonFactory()
         membership = MembershipFactory(semester=draft, person=person)
-        MembershipRoleFactory(membership=membership)
+        MembershipRole.objects.create(membership=membership, role=RoleFactory())
         song = SongFactory(semester=draft)
         rehearsal = RehearsalFactory(semester=draft)
         rehearsal_song = RehearsalSongFactory(rehearsal=rehearsal, song=song)
