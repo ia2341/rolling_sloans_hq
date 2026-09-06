@@ -948,6 +948,27 @@ def mismatched_person_ids_for(semester) -> frozenset[int]:
     )
 
 
+def unassigned_role_holders_for(semester):
+    """Return Persons holding a SongRoleAssignment on `semester`'s Songs but no Membership for that Semester.
+
+    ADR-0001 makes Membership the deliberate, re-created-fresh-per-Semester
+    roster, so a Person cast via `SongRoleAssignment` (its own `person` FK,
+    independent of Membership per ADR-0007's Backup discussion) can exist
+    with no roster row at all. That's a silent gap on the Band page (which
+    reads Membership only) rather than something to auto-fix here — this
+    just surfaces who's missing so an admin can add the Membership by hand.
+    Returns `Person.objects.none()` when `semester` is `None`, matching the
+    other viewing-Semester-scoped helpers in this module.
+    """
+    if semester is None:
+        return Person.objects.none()
+    return Person.objects.filter(
+        songroleassignment__song__semester=semester,
+    ).exclude(
+        membership__semester=semester,
+    ).distinct().order_by('name')
+
+
 def assigned_songs_for(person, semester):
     """Return `person`'s SongRoleAssignments on `semester`'s Songs, in setlist-position order (issue #138).
 

@@ -124,6 +124,35 @@ describe('Band', () => {
     ).toBeInTheDocument()
   })
 
+  it('renders the unassigned-role-holders gap banner for an admin when the count is positive', async () => {
+    mockFetchOnce(200, {
+      context: adminContext(),
+      data: bandPayload({
+        unassigned_role_holders: { count: 1, names: ['Jamie Ortiz'] },
+      }),
+    })
+
+    renderShell(<Band />, ['/members'])
+
+    const banner = await screen.findByRole('alert')
+    expect(banner).toHaveTextContent('1 member has role assignments')
+    expect(banner).toHaveTextContent('Jamie Ortiz')
+  })
+
+  it('renders no gap banner when the count is zero or the key is absent', async () => {
+    mockFetchOnce(200, {
+      context: adminContext(),
+      data: bandPayload({
+        unassigned_role_holders: { count: 0, names: [] },
+      }),
+    })
+
+    renderShell(<Band />, ['/members'])
+
+    await screen.findByText('Spring 2026', { exact: false })
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
   it('renders the pre-publish empty state when no Semester is published', async () => {
     mockFetchOnce(200, {
       context: memberContext(),

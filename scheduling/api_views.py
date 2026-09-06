@@ -494,13 +494,21 @@ class BandApiView(ApiView, View):
     """
 
     def get(self, request):
-        """Return the Band envelope for `get_viewing_semester(request)`, or its empty shape when nothing is published/selected."""
+        """Return the Band envelope for `get_viewing_semester(request)`, or its empty shape when nothing is published/selected.
+
+        For an admin viewer, also surfaces `unassigned_role_holders` — the
+        admin-only gap-flag between `SongRoleAssignment` and `Membership`
+        (see `services.unassigned_role_holders_for`'s docstring) — so a
+        casting done ahead of a roster row doesn't stay invisible.
+        """
         semester = services.get_viewing_semester(request)
         if semester is None:
             memberships = Membership.objects.none()
         else:
             memberships = services.active_roster_for(Membership.objects.filter(semester=semester))
-        data = serializers.serialize_band(memberships, semester)
+        is_admin = bool(getattr(request.user, 'is_admin', False))
+        gap_holders = services.unassigned_role_holders_for(semester) if is_admin else None
+        data = serializers.serialize_band(memberships, semester, unassigned_role_holders=gap_holders)
         return self.read_response(request, data)
 
 

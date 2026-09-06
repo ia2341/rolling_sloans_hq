@@ -29,7 +29,7 @@ from scheduling.serializers import (
     serialize_person,
     serialize_person_recordings,
 )
-from scheduling.services import active_roster_for
+from scheduling.services import active_roster_for, unassigned_role_holders_for
 
 PASSWORD = 'a-strong-test-password-123'
 
@@ -73,6 +73,30 @@ class SerializeBandExactKeySetTests(TestCase):
         self.assertEqual(set(data.keys()), {'semester_name', 'member_count', 'members'})
         self.assertEqual(data['member_count'], 0)
         self.assertEqual(data['members'], [])
+
+    def test_unassigned_role_holders_omitted_when_not_passed(self):
+        """The gap-flag key is absent, not null, when the caller passes no queryset (a non-admin viewer)."""
+        semester = SemesterFactory()
+
+        data = serialize_band(Membership.objects.none(), semester)
+
+        self.assertNotIn('unassigned_role_holders', data)
+
+    def test_unassigned_role_holders_present_and_shaped_when_passed(self):
+        """Passing a queryset (an admin viewer) adds `unassigned_role_holders` with exactly `count`/`names`."""
+        semester = SemesterFactory()
+        gap_person = PersonFactory(name='Uncast Placeholder')
+        song = SongFactory(semester=semester)
+        SongRoleAssignmentFactory(song=song, person=gap_person)
+
+        data = serialize_band(
+            Membership.objects.none(), semester,
+            unassigned_role_holders=unassigned_role_holders_for(semester),
+        )
+
+        self.assertEqual(set(data['unassigned_role_holders'].keys()), {'count', 'names'})
+        self.assertEqual(data['unassigned_role_holders']['count'], 1)
+        self.assertEqual(data['unassigned_role_holders']['names'], ['Uncast Placeholder'])
 
 
 class SerializePersonExactKeySetTests(TestCase):
@@ -271,6 +295,118 @@ class BandApiViewTests(TestCase):
         row = response.json()['data']['members'][0]
         self.assertEqual(row['roles'], ['Bassist'])
         self.assertEqual(row['song_count'], 1)
+
+    def test_member_with_membership_but_no_assignment_shows_normally(self):
+        """A Person with only a Membership (no SongRoleAssignment) still appears on the Roster as usual."""
+        semester = SemesterFactory()
+        MembershipFactory(person=self.person, semester=semester)
+
+        response = self.client.get(band_api_url())
+
+        names = [row['name'] for row in response.json()['data']['members']]
+        self.assertIn(self.person.name, names)
+
+    def test_gap_field_absent_for_a_non_admin_viewer(self):
+        """A non-admin viewer's payload never carries `unassigned_role_holders`, even when a gap exists."""
+        semester = SemesterFactory()
+        gap_person = PersonFactory(name='Uncast Placeholder')
+        SongRoleAssignmentFactory(song=SongFactory(semester=semester), person=gap_person)
+
+        response = self.client.get(band_api_url())
+
+        self.assertNotIn('unassigned_role_holders', response.json()['data'])
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class BandApiViewAdminGapFlagTests(TestCase):
+    """`GET /api/members/`'s admin-only `unassigned_role_holders` gap flag (assignment without Membership)."""
+
+    def setUp(self):
+        """Log in as an admin before each test."""
+        self.admin = PersonFactory(password=PASSWORD, is_admin=True)
+        self.client.login(username=self.admin.email, password=PASSWORD)
+
+    def test_assignment_only_person_is_excluded_from_the_main_roster(self):
+        """A Person with a SongRoleAssignment but no Membership for the Semester never appears in `members`."""
+        semester = SemesterFactory()
+        gap_person = PersonFactory(name='Uncast Placeholder')
+        SongRoleAssignmentFactory(song=SongFactory(semester=semester), person=gap_person)
+
+        response = self.client.get(band_api_url())
+
+        names = [row['name'] for row in response.json()['data']['members']]
+        self.assertNotIn(gap_person.name, names)
+
+    def test_assignment_only_person_is_counted_and_named_in_the_gap_flag(self):
+        """That same Person is counted and named in `unassigned_role_holders` for an admin viewer."""
+        semester = SemesterFactory()
+        gap_person = PersonFactory(name='Uncast Placeholder')
+        SongRoleAssignmentFactory(song=SongFactory(semester=semester), person=gap_person)
+
+        response = self.client.get(band_api_url())
+
+        gap = response.json()['data']['unassigned_role_holders']
+        self.assertEqual(gap['count'], 1)
+        self.assertEqual(gap['names'], ['Uncast Placeholder'])
+
+    def test_gap_flag_empty_when_everyone_with_an_assignment_has_a_membership(self):
+        """A Person with both a Membership and a SongRoleAssignment never appears in the gap flag."""
+        semester = SemesterFactory()
+        MembershipFactory(person=self.admin, semester=semester)
+        SongRoleAssignmentFactory(song=SongFactory(semester=semester), person=self.admin)
+
+        response = self.client.get(band_api_url())
+
+        self.assertEqual(response.json()['data']['unassigned_role_holders']['count'], 0)
+
+    def test_gap_flag_absent_with_no_published_semester(self):
+        """With no viewing Semester at all, the response falls into the empty Band shape, which carries no gap key."""
+        response = self.client.get(band_api_url())
+
+        self.assertNotIn('unassigned_role_holders', response.json()['data'])
+
+
+class UnassignedRoleHoldersForTests(TestCase):
+    """`services.unassigned_role_holders_for()` (the Band page's admin-only casting-without-roster gap)."""
+
+    def test_none_semester_returns_an_empty_queryset(self):
+        """Passing `None` (no viewing Semester) returns an empty queryset, matching sibling viewing-Semester helpers."""
+        self.assertEqual(list(unassigned_role_holders_for(None)), [])
+
+    def test_excludes_a_person_with_a_membership_for_the_semester(self):
+        """A Person who has both a Membership and a SongRoleAssignment for the Semester is not a gap."""
+        semester = SemesterFactory()
+        person = PersonFactory(name='Rostered Placeholder')
+        MembershipFactory(person=person, semester=semester)
+        SongRoleAssignmentFactory(song=SongFactory(semester=semester), person=person)
+
+        self.assertEqual(list(unassigned_role_holders_for(semester)), [])
+
+    def test_includes_a_person_with_an_assignment_but_no_membership(self):
+        """A Person with a SongRoleAssignment on the Semester's Songs but no Membership row is a gap."""
+        semester = SemesterFactory()
+        gap_person = PersonFactory(name='Uncast Placeholder')
+        SongRoleAssignmentFactory(song=SongFactory(semester=semester), person=gap_person)
+
+        self.assertEqual(list(unassigned_role_holders_for(semester)), [gap_person])
+
+    def test_does_not_include_a_person_whose_assignment_is_on_a_different_semester(self):
+        """A SongRoleAssignment scoped to another Semester's Song never counts as a gap for this one."""
+        semester = SemesterFactory()
+        other_semester = SemesterFactory()
+        other_person = PersonFactory(name='Other Semester Placeholder')
+        SongRoleAssignmentFactory(song=SongFactory(semester=other_semester), person=other_person)
+
+        self.assertEqual(list(unassigned_role_holders_for(semester)), [])
+
+    def test_distinct_across_multiple_assignments_for_the_same_person(self):
+        """A Person with several assignments this Semester appears only once in the gap list."""
+        semester = SemesterFactory()
+        gap_person = PersonFactory(name='Uncast Placeholder')
+        SongRoleAssignmentFactory(song=SongFactory(semester=semester), person=gap_person)
+        SongRoleAssignmentFactory(song=SongFactory(semester=semester), person=gap_person)
+
+        self.assertEqual(list(unassigned_role_holders_for(semester)), [gap_person])
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)

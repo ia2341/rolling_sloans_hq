@@ -793,22 +793,39 @@ def _serialize_roster_entry(membership):
     }
 
 
-def serialize_band(memberships, semester) -> dict:
+def serialize_band(memberships, semester, *, unassigned_role_holders=None) -> dict:
     """Return the `/api/members/` `data` shape (issue #333): the viewing Semester's active Roster, or the empty/no-Semester shape.
 
-    Carries no admin-only field — `can_edit_roster` isn't needed on the
-    wire since the "Edit roster" button is unconditionally rendered for an
-    admin viewer by `context.viewer.is_admin`, matching how Setlist's "Edit
-    setlist" button reads that same flag rather than a per-payload one.
+    Carries one admin-only key, `unassigned_role_holders` — the count and
+    names of people with a `SongRoleAssignment` this Semester but no
+    `Membership` row (see `services.unassigned_role_holders_for`). Per the
+    "absent, not null" wire contract, it's included only when the caller
+    passes a queryset (an admin viewer); passing `None` (a member viewer,
+    or no Semester) omits the key entirely rather than sending an empty
+    list, since a member has no business seeing casting/roster gaps.
+    Names are shown, not just a count — these are roster facts about who's
+    cast, not the free-text Conflict data ADR 0005 restricts.
+
+    `can_edit_roster` isn't needed on the wire since the "Edit roster"
+    button is unconditionally rendered for an admin viewer by
+    `context.viewer.is_admin`, matching how Setlist's "Edit setlist" button
+    reads that same flag rather than a per-payload one.
     """
     if semester is None:
         return {'semester_name': None, 'member_count': 0, 'members': []}
     entries = list(memberships)
-    return {
+    data = {
         'semester_name': semester.name,
         'member_count': len(entries),
         'members': [_serialize_roster_entry(membership) for membership in entries],
     }
+    if unassigned_role_holders is not None:
+        holders = list(unassigned_role_holders)
+        data['unassigned_role_holders'] = {
+            'count': len(holders),
+            'names': [person.name for person in holders],
+        }
+    return data
 
 
 def _serialize_role(role) -> dict:
