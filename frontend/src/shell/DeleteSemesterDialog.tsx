@@ -1,6 +1,7 @@
 import { useState } from 'react'
 
 import { apiFetch, ApiError } from '../api/client'
+import { notifyViewingSemesterChanged } from '../api/viewingSemesterChangeStore'
 import type { SemesterDeletionSummary } from '../api/semesterTypes'
 import type { ReadEnvelope, WriteEnvelope } from '../api/types'
 import { ResponsiveDialog } from '../components/ui/ResponsiveDialog'
@@ -24,6 +25,10 @@ interface DeleteSemesterDialogProps {
  * (member/song/rehearsal/recording), so there is structurally no way for
  * this component to render a Conflict's reason or who declared it (ADR
  * 0005) — the payload never carries either.
+ *
+ * Also bumps `viewingSemesterChangeStore`'s counter on success (issue
+ * #402), so `Home` refetches when the deleted Semester was the one it was
+ * showing, even though nothing here navigates.
  */
 export function DeleteSemesterDialog({
   open,
@@ -58,6 +63,7 @@ export function DeleteSemesterDialog({
         )
         return
       }
+      notifyViewingSemesterChanged()
       onSuccess?.()
       onOpenChange(false)
     } catch (thrown) {

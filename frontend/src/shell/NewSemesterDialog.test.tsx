@@ -4,7 +4,12 @@ import { useLocation } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { resetContextForTests, setContext } from '../api/contextStore'
+import {
+  getViewingSemesterChangeSnapshot,
+  resetViewingSemesterChangeForTests,
+} from '../api/viewingSemesterChangeStore'
 import { adminContext } from '../test/fixtures'
+import { stubFetchSequence } from '../test/mockFetch'
 import { mockMatchMedia } from '../test/mockMatchMedia'
 import { renderShell } from '../test/renderShell'
 import { NewSemesterDialog } from './NewSemesterDialog'
@@ -26,23 +31,9 @@ const existingOption = {
 }
 const options = [existingOption]
 
-function stubFetchSequence(
-  responses: Array<{ status: number; body: unknown }>,
-) {
-  const fetchSpy = vi.fn()
-  for (const { status, body } of responses) {
-    fetchSpy.mockResolvedValueOnce({
-      status,
-      ok: status >= 200 && status < 300,
-      json: () => Promise.resolve(body),
-    })
-  }
-  vi.stubGlobal('fetch', fetchSpy)
-  return fetchSpy
-}
-
 afterEach(() => {
   resetContextForTests()
+  resetViewingSemesterChangeForTests()
   vi.unstubAllGlobals()
   mockMatchMedia(false)
 })
@@ -207,6 +198,43 @@ describe('NewSemesterDialog', () => {
 
     await waitFor(() =>
       expect(screen.getByTestId('location')).toHaveTextContent('/'),
+    )
+  })
+
+  it('bumps the viewing-semester-change signal on success, so Home refetches even when the navigate-to-/ is a same-route no-op (issue #402)', async () => {
+    setContext(adminContext({ semester_options: options }))
+    stubFetchSequence([
+      {
+        status: 200,
+        body: {
+          context: adminContext({ semester_options: options }),
+          data: { semester_defaults: null },
+        },
+      },
+      {
+        status: 200,
+        body: {
+          context: adminContext({ semester_options: options }),
+          ok: true,
+          errors: {},
+          non_field_errors: [],
+          fallout: null,
+          values: null,
+          data: null,
+        },
+      },
+    ])
+    const user = userEvent.setup()
+    const before = getViewingSemesterChangeSnapshot()
+    renderShell(<NewSemesterDialog open onOpenChange={() => {}} />)
+
+    await waitFor(() =>
+      expect(screen.getByDisplayValue('Spring 2026')).toBeInTheDocument(),
+    )
+    await user.click(screen.getByRole('button', { name: /Create/ }))
+
+    await waitFor(() =>
+      expect(getViewingSemesterChangeSnapshot()).toBe(before + 1),
     )
   })
 })
