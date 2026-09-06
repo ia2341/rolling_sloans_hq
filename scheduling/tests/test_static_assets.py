@@ -84,6 +84,7 @@ class BuildOutputResolutionTests(TestCase):
                     with self.subTest(asset_path=asset_path):
                         self.assertIsNotNone(finders.find(asset_path))
 
+    @override_settings(SECURE_SSL_REDIRECT=False)
     def test_rendering_the_index_view_emits_exactly_the_manifests_hashed_tags(self):
         """SpaIndexView's rendered document carries the entry script, its stylesheet and its modulepreload chunk."""
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -102,6 +103,7 @@ class BuildOutputResolutionTests(TestCase):
 class NoThirdPartyOriginTests(TestCase):
     """No rendered page, and no built asset, ever references a third-party host — the load-bearing privacy assertion."""
 
+    @override_settings(SECURE_SSL_REDIRECT=False)
     def test_the_rendered_shell_carries_no_external_src_or_href(self):
         """The SPA shell's document has no off-origin src/href, so no CDN ever sees a member's IP or referer."""
         with tempfile.TemporaryDirectory() as tmp_dir:

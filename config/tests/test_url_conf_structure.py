@@ -13,7 +13,7 @@ that must never regress.
 """
 
 from django.contrib import admin
-from django.test import Client, SimpleTestCase
+from django.test import Client, SimpleTestCase, override_settings
 from django.urls import URLResolver, get_resolver, reverse
 
 from config.views import AdminApiView, AdminPreviewApiView, ApiView, BaseView
@@ -147,6 +147,7 @@ class ApiViewCoverageTests(SimpleTestCase):
             f'The following /api/ views do not inherit ApiView: {offenders}',
         )
 
+    @override_settings(SECURE_SSL_REDIRECT=False)
     def test_every_zero_argument_api_route_401s_anonymously_and_never_302s(self):
         """An anonymous request to every parameter-free `/api/` route returns 401 with no `Location` header."""
         api_resolver = _find_api_resolver(get_resolver().url_patterns)
@@ -231,6 +232,7 @@ class BandPersonApiRouteCoverageTests(SimpleTestCase):
                 self.assertTrue(issubclass(view_class, ApiView), f'{name} must inherit ApiView')
                 self.assertFalse(issubclass(view_class, AdminApiView), f'{name} must not inherit AdminApiView')
 
+    @override_settings(SECURE_SSL_REDIRECT=False)
     def test_anonymous_get_401s_on_every_new_route_never_302s(self):
         """An anonymous GET to every new #333 route (zero-argument or parameterised) answers 401, never a redirect."""
         client = Client()
@@ -261,6 +263,7 @@ class BandPersonApiRouteCoverageTests(SimpleTestCase):
 class ScheduleEditorApiRouteCoverageTests(SimpleTestCase):
     """Issue #337's schedule-editor routes: every view is `AdminApiView`/`AdminPreviewApiView`, and a bare 401 anonymously."""
 
+    @override_settings(SECURE_SSL_REDIRECT=False)
     def test_shuffle_route_401s_anonymously_and_never_302s(self):
         """An anonymous GET to the parameterised per-Rehearsal shuffle route answers 401, never a redirect."""
         client = Client()
@@ -298,6 +301,7 @@ class ScheduleEditorApiRouteCoverageTests(SimpleTestCase):
 class AssignmentEditorApiRouteCoverageTests(SimpleTestCase):
     """Issue #338's assignment-editor routes: every view is `AdminApiView`/`AdminPreviewApiView`, and a bare 401 anonymously."""
 
+    @override_settings(SECURE_SSL_REDIRECT=False)
     def test_routes_401_anonymously_and_never_302(self):
         """An anonymous GET/POST to every parameterised #338 route answers 401, never a redirect."""
         client = Client()
@@ -338,6 +342,7 @@ class AssignmentEditorApiRouteCoverageTests(SimpleTestCase):
 class SemesterControlApiRouteCoverageTests(SimpleTestCase):
     """Issue #329's Semester-control routes: every view is `AdminApiView`/`AdminPreviewApiView`, and a bare 401 anonymously."""
 
+    @override_settings(SECURE_SSL_REDIRECT=False)
     def test_every_parameterised_route_401s_anonymously_and_never_302s(self):
         """An anonymous GET/POST to each parameterised per-Semester route answers 401, never a redirect."""
         client = Client()
