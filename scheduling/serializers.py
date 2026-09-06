@@ -864,18 +864,19 @@ def _serialize_role(role) -> dict:
 
 
 def _serialize_roster_edit_member(membership, *, mismatched_person_ids: frozenset[int]) -> dict:
-    """Return one Roster editor row: name, declared Roles, Song count, mismatch flag and invite status (issue #336).
+    """Return one Roster editor row: name, Song count, mismatch flag and invite status (issue #336, narrowed by #379).
 
     No `email` (ADR 0005 — it stays off every Roster surface but the
-    removal lines in the Save popup). `is_role_mismatch` is the ADR 0002
-    soft flag, never a block; `is_pending_invite` is `not
+    removal lines in the Save popup). No Role data at all (issue #379):
+    the Roster editor is add/remove-only now, and a Person's declared
+    Roles are set only on their Person page (#378). `is_role_mismatch` is
+    the ADR 0002 soft flag, never a block; `is_pending_invite` is `not
     has_usable_password()`, letting the editor show "invited · not active
     yet" without a second query per row.
     """
     return {
         'id': membership.person_id,
         'name': membership.person.name,
-        'roles': [_serialize_role(entry.role) for entry in membership.membershiprole_set.all()],
         'song_count': membership.songs_count,
         'is_role_mismatch': membership.person_id in mismatched_person_ids,
         'is_pending_invite': not membership.person.has_usable_password(),
@@ -889,8 +890,9 @@ def serialize_roster_edit(semester, memberships, *, mismatched_person_ids: froze
     model, so it uses `roster_for()` rather than `active_roster_for()` — an
     admin needs to see, rename and offer "Invite again" on a Person who
     hasn't set a password yet, which is exactly the row `serialize_band()`
-    deliberately excludes. `available_roles` is the catalog the `+ Role`
-    chip's picker offers before falling back to declaring a new one.
+    deliberately excludes. Carries no `available_roles` (issue #379): the
+    editor no longer offers any Role-editing control, so there is no Role
+    catalog for it to pick from.
     """
     entries = list(memberships)
     active_count = sum(1 for membership in entries if membership.person.has_usable_password())
@@ -903,7 +905,6 @@ def serialize_roster_edit(semester, memberships, *, mismatched_person_ids: froze
             _serialize_roster_edit_member(membership, mismatched_person_ids=mismatched_person_ids)
             for membership in entries
         ],
-        'available_roles': [_serialize_role(role) for role in services.active_roles_for(semester)],
     }
 
 
@@ -930,7 +931,6 @@ def serialize_roster_edit_fallout(fallout: RosterEditFallout) -> dict:
         'pending_adds': list(fallout.pending_adds),
         'pending_invites': list(fallout.pending_invites),
         'pending_removals': [_serialize_roster_removal(removal) for removal in fallout.pending_removals],
-        'pending_role_changes': list(fallout.pending_role_changes),
         'pending_name_edits': list(fallout.pending_name_edits),
         'loud': list(fallout.loud),
         'quiet': list(fallout.quiet),
@@ -938,17 +938,17 @@ def serialize_roster_edit_fallout(fallout: RosterEditFallout) -> dict:
 
 
 def _serialize_roster_edit_entry_echo(entry, index: int) -> dict:
-    """Return one `RosterEditEntry` echoed back in `build_roster_buffer_from_request()`'s wire shape (issue #336).
+    """Return one `RosterEditEntry` echoed back in `build_roster_buffer_from_request()`'s wire shape (issue #336, narrowed by #379).
 
     `row_key` isn't reconstructable from a `RosterEditEntry` (never stored
     on the Buffer, only used transiently to key a validation failure), so a
-    successfully built Buffer's echo indexes positionally.
+    successfully built Buffer's echo indexes positionally. No `role_ids`
+    (issue #379) — this Buffer carries no Role data at all.
     """
     return {
         'row_key': f'entry-{index}',
         'person_id': entry.person.pk,
         'name': entry.name,
-        'role_ids': sorted(entry.role_ids),
     }
 
 

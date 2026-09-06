@@ -1,4 +1,4 @@
-"""apply_roster_edits(): the batch write, the semester-scoped purge, and the two staleness checks (issue #226)."""
+"""apply_roster_edits(): the batch write, the semester-scoped purge, and the two staleness checks (issue #226, narrowed to add/remove-only by issue #379)."""
 
 from datetime import date
 
@@ -48,64 +48,43 @@ class ApplyRosterEditsTests(TestCase):
             pending_invites=list(pending_invites),
         )
 
-    def test_adds_a_new_person_with_declared_roles(self):
-        """A Buffer entry for a Person with no existing Membership creates one, with the declared Role set."""
+    def test_adds_a_new_person(self):
+        """A Buffer entry for a Person with no existing Membership creates one, with no declared Roles."""
         person = PersonFactory()
-        buffer = self._buffer(entries=[RosterEditEntry(person=person, name=person.name, role_ids=frozenset({self.role.pk}))])
+        buffer = self._buffer(entries=[RosterEditEntry(person=person, name=person.name)])
 
         apply_roster_edits(buffer, viewing_semester=self.semester, requesting_admin=self.admin)
 
         membership = Membership.objects.get(person=person, semester=self.semester)
-        self.assertEqual(
-            set(MembershipRole.objects.filter(membership=membership).values_list('role_id', flat=True)),
-            {self.role.pk},
-        )
+        self.assertEqual(MembershipRole.objects.filter(membership=membership).count(), 0)
 
     def test_name_edit_saves_onto_the_person(self):
         """A Buffer entry carrying a different name updates the Person row."""
         person = PersonFactory(name='Old Name')
         MembershipFactory(person=person, semester=self.semester)
-        buffer = self._buffer(entries=[RosterEditEntry(person=person, name='New Name', role_ids=frozenset())])
+        buffer = self._buffer(entries=[RosterEditEntry(person=person, name='New Name')])
 
         apply_roster_edits(buffer, viewing_semester=self.semester, requesting_admin=self.admin)
 
         person.refresh_from_db()
         self.assertEqual(person.name, 'New Name')
 
-    def test_role_set_change_adds_and_removes_membership_roles(self):
-        """A Buffer entry's role_ids fully replaces the Membership's declared Roles: additions and removals both apply."""
+    def test_entry_leaves_existing_declared_roles_untouched(self):
+        """Applying a name-only entry for a Person with declared Roles leaves those Roles exactly as they were — this Buffer carries no Role data at all."""
         keep_role = RoleFactory()
-        drop_role = RoleFactory()
-        add_role = RoleFactory()
-        person = PersonFactory()
+        other_role = RoleFactory()
+        person = PersonFactory(name='Old Name')
         membership = MembershipFactory(person=person, semester=self.semester)
         MembershipRole.objects.create(membership=membership, role=keep_role)
-        MembershipRole.objects.create(membership=membership, role=drop_role)
-        buffer = self._buffer(entries=[
-            RosterEditEntry(person=person, name=person.name, role_ids=frozenset({keep_role.pk, add_role.pk})),
-        ])
+        buffer = self._buffer(entries=[RosterEditEntry(person=person, name='New Name')])
 
         apply_roster_edits(buffer, viewing_semester=self.semester, requesting_admin=self.admin)
 
         self.assertEqual(
             set(MembershipRole.objects.filter(membership=membership).values_list('role_id', flat=True)),
-            {keep_role.pk, add_role.pk},
+            {keep_role.pk},
         )
-
-    def test_role_removal_reevaluates_is_role_mismatch_through_the_model(self):
-        """Dropping a declared Role flips is_role_mismatch on that Person's existing SongRoleAssignment for it, via the model's own signal."""
-        person = PersonFactory()
-        membership = MembershipFactory(person=person, semester=self.semester)
-        MembershipRole.objects.create(membership=membership, role=self.role)
-        song = SongFactory(semester=self.semester)
-        assignment = SongRoleAssignmentFactory(song=song, role=self.role, person=person)
-        self.assertFalse(assignment.is_role_mismatch)
-        buffer = self._buffer(entries=[RosterEditEntry(person=person, name=person.name, role_ids=frozenset())])
-
-        apply_roster_edits(buffer, viewing_semester=self.semester, requesting_admin=self.admin)
-
-        assignment.refresh_from_db()
-        self.assertTrue(assignment.is_role_mismatch)
+        self.assertFalse(MembershipRole.objects.filter(membership=membership, role=other_role).exists())
 
     def test_removal_purges_membership_roles_assignments_and_conflicts_for_that_semester(self):
         """Removing a Person deletes their Membership, declared Roles, Role Assignments and Conflicts scoped to the Semester, with non-trivial counts."""
@@ -174,23 +153,20 @@ class ApplyRosterEditsTests(TestCase):
         prior_membership = MembershipFactory(person=PersonFactory(), semester=prior)
         MembershipRole.objects.create(membership=prior_membership, role=self.role)
         person = prior_membership.person
-        buffer = self._buffer(entries=[RosterEditEntry(person=person, name=person.name, role_ids=frozenset({self.role.pk}))])
+        buffer = self._buffer(entries=[RosterEditEntry(person=person, name=person.name)])
 
         apply_roster_edits(buffer, viewing_semester=self.semester, requesting_admin=self.admin)
 
         new_membership = Membership.objects.get(person=person, semester=self.semester)
         self.assertNotEqual(new_membership.pk, prior_membership.pk)
-        self.assertEqual(
-            set(MembershipRole.objects.filter(membership=new_membership).values_list('role_id', flat=True)),
-            {self.role.pk},
-        )
+        self.assertEqual(MembershipRole.objects.filter(membership=new_membership).count(), 0)
         # The prior Semester's own Membership/MembershipRole rows are untouched.
         self.assertTrue(Membership.objects.filter(pk=prior_membership.pk).exists())
         self.assertEqual(Membership.objects.filter(semester=prior).count(), 1)
         self.assertEqual(MembershipRole.objects.filter(membership__semester=prior).count(), 1)
 
     def test_a_failure_mid_batch_applies_nothing(self):
-        """A stale stamp fails the whole Buffer: no add, removal, Role change or name edit lands, even ones ordered before it in the diff."""
+        """A stale stamp fails the whole Buffer: no add, removal or name edit lands, even ones ordered before it in the diff."""
         added_person = PersonFactory()
         kept_person = PersonFactory(name='Original Name')
         MembershipFactory(person=kept_person, semester=self.semester)
@@ -198,8 +174,8 @@ class ApplyRosterEditsTests(TestCase):
         MembershipFactory(person=removed_person, semester=self.semester)
         buffer = self._buffer(
             entries=[
-                RosterEditEntry(person=added_person, name=added_person.name, role_ids=frozenset()),
-                RosterEditEntry(person=kept_person, name='Changed Name', role_ids=frozenset({self.role.pk})),
+                RosterEditEntry(person=added_person, name=added_person.name),
+                RosterEditEntry(person=kept_person, name='Changed Name'),
             ],
             removed_person_ids=[removed_person.pk],
             updated_at=self.semester.updated_at.replace(year=self.semester.updated_at.year - 1),
@@ -211,7 +187,6 @@ class ApplyRosterEditsTests(TestCase):
         self.assertFalse(Membership.objects.filter(person=added_person, semester=self.semester).exists())
         kept_person.refresh_from_db()
         self.assertEqual(kept_person.name, 'Original Name')
-        self.assertFalse(MembershipRole.objects.filter(membership__person=kept_person).exists())
         self.assertTrue(Membership.objects.filter(person=removed_person, semester=self.semester).exists())
 
     def test_stale_semester_stamp_names_what_happened(self):
