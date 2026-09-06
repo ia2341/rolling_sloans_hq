@@ -1597,6 +1597,11 @@ def assignment_picker_for(song, role, semester, *, rehearsal_song=None) -> Assig
     non-rostered Person would create a row that would then be deleted.
     Ordering is Person name within each declared/others group.
 
+    The declared/others split reads `PersonRole` (issue #380, ADR-0014):
+    "has this Person declared the Role" is a standing, person-level fact,
+    not a per-Semester one, so the query carries no Semester filter — only
+    the candidate population above stays Semester-scoped.
+
     `rehearsal_song` scopes the Backup section: pass the Rehearsal's
     RehearsalSong for `song` to populate it, or None (the Dress
     Rehearsal's case, ADR-0006) to leave both Backup lists empty and let
@@ -1606,9 +1611,7 @@ def assignment_picker_for(song, role, semester, *, rehearsal_song=None) -> Assig
         SongRoleAssignment.objects.filter(song=song, role=role).values_list('person_id', flat=True)
     )
     declared_person_ids = frozenset(
-        MembershipRole.objects.filter(
-            membership__semester=semester, role=role,
-        ).values_list('membership__person_id', flat=True)
+        PersonRole.objects.filter(role=role).values_list('person_id', flat=True)
     )
     people = Person.objects.filter(
         membership__semester=semester,
@@ -4071,8 +4074,8 @@ def preview_song_role_requirements(
     role_ids_in_play = set(existing_by_role_id) | {entry.role_id for entry in buffer.entries}
     role_names_by_id = dict(Role.objects.filter(pk__in=role_ids_in_play).values_list('pk', 'name'))
     declared_role_ids = set(
-        MembershipRole.objects.filter(
-            role_id__in=role_ids_in_play, membership__semester=current_semester,
+        PersonRole.objects.filter(
+            role_id__in=role_ids_in_play, person__membership__semester=current_semester,
         ).values_list('role_id', flat=True)
     )
 

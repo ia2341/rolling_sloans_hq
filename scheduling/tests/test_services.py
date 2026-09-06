@@ -692,8 +692,8 @@ class AssignmentPickerForTests(TestCase):
         song = SongFactory(semester=semester)
         role = RoleFactory()
         declarer = PersonFactory(name='Ada')
-        declarer_membership = MembershipFactory(person=declarer, semester=semester)
-        MembershipRole.objects.create(membership=declarer_membership, role=role)
+        MembershipFactory(person=declarer, semester=semester)
+        PersonRoleFactory(person=declarer, role=role)
         non_declarer = PersonFactory(name='Bea')
         MembershipFactory(person=non_declarer, semester=semester)
 
@@ -703,6 +703,38 @@ class AssignmentPickerForTests(TestCase):
         self.assertTrue(result.declared[0].has_declared_role)
         self.assertEqual([option.person for option in result.others], [non_declarer])
         self.assertFalse(result.others[0].has_declared_role)
+
+    def test_declared_role_persists_across_semesters(self):
+        """A PersonRole declared once lands a Person in `declared` for every Semester they're rostered in (ADR-0014, issue #380)."""
+        first_semester = SemesterFactory()
+        second_semester = SemesterFactory()
+        role = RoleFactory()
+        person = PersonFactory(name='Ada')
+        PersonRoleFactory(person=person, role=role)
+        MembershipFactory(person=person, semester=first_semester)
+        MembershipFactory(person=person, semester=second_semester)
+        first_song = SongFactory(semester=first_semester)
+        second_song = SongFactory(semester=second_semester)
+
+        first_result = assignment_picker_for(first_song, role, first_semester)
+        second_result = assignment_picker_for(second_song, role, second_semester)
+
+        self.assertEqual([option.person for option in first_result.declared], [person])
+        self.assertEqual([option.person for option in second_result.declared], [person])
+
+    def test_a_membership_role_alone_no_longer_counts_as_declared(self):
+        """A legacy `MembershipRole` row with no matching `PersonRole` no longer lands a Person in `declared` (issue #380)."""
+        semester = SemesterFactory()
+        song = SongFactory(semester=semester)
+        role = RoleFactory()
+        person = PersonFactory(name='Ada')
+        membership = MembershipFactory(person=person, semester=semester)
+        MembershipRole.objects.create(membership=membership, role=role)
+
+        result = assignment_picker_for(song, role, semester)
+
+        self.assertEqual(result.declared, [])
+        self.assertEqual([option.person for option in result.others], [person])
 
     def test_options_ordered_by_person_name_within_each_group(self):
         """Within `declared` and within `others`, options are ordered by Person.name."""

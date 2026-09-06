@@ -52,8 +52,9 @@ export function CastCell({
 
 /**
  * Compact visual marker for a Role Assignment saved outside the assigned
- * Person's Membership roles (ADR 0002, `is_role_mismatch`) -- admin-only,
- * since the underlying fact is never shown to a non-admin (issue #365).
+ * Person's declared Roles (person-level, ADR 0014; ADR 0002's
+ * `is_role_mismatch`) -- admin-only, since the underlying fact is never
+ * shown to a non-admin (issue #365).
  * Exported so a future admin-only grid (issue #366, Band tab redesign) can
  * reuse the same visual vocabulary instead of inventing its own; a caller
  * must only mount this once the viewer is confirmed to be an admin, and
