@@ -720,9 +720,7 @@ function AssignmentCellEntries({
             <div className="text-xs text-rs-muted">⚠ conflict</div>
           )}
           {entry.is_role_mismatch && (
-            <div className="text-xs text-rs-muted">
-              ◦ role not declared
-            </div>
+            <div className="text-xs text-rs-muted">◦ role not declared</div>
           )}
         </div>
       ))}
