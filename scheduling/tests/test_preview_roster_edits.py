@@ -11,6 +11,7 @@ from identity.models import Person
 from scheduling.factories import (
     ConflictFactory,
     MembershipFactory,
+    PersonRoleFactory,
     RehearsalFactory,
     RoleFactory,
     SemesterFactory,
@@ -162,6 +163,7 @@ class PreviewRosterEditsTests(TestCase):
         person = PersonFactory(name='Has Roles')
         membership = MembershipFactory(person=person, semester=self.semester)
         MembershipRole.objects.create(membership=membership, role=self.role)
+        PersonRoleFactory(person=person, role=self.role)
         song = SongFactory(semester=self.semester, title='Some Song')
         assignment = SongRoleAssignmentFactory(song=song, role=self.role, person=person)
         self.assertFalse(assignment.is_role_mismatch)
