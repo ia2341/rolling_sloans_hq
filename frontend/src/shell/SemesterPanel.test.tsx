@@ -116,6 +116,42 @@ describe('SemesterPanel', () => {
     )
   })
 
+  it('enables Publish for a previously-published, non-live viewing Semester (rollback, ADR 0010)', () => {
+    setContext(
+      adminContext({
+        viewing_semester: {
+          id: 9,
+          name: 'Spring 2025',
+          status: 'previously_published',
+          published_at: '2025-01-01T00:00:00Z',
+          updated_at: '2025-01-01T00:00:00Z',
+        },
+        semester_options: options,
+      }),
+    )
+    renderShell(<SemesterPanel collapsed={false} />)
+
+    expect(screen.getByRole('button', { name: 'Publish' })).toBeEnabled()
+  })
+
+  it('disables Publish for an admin viewing the already-live Semester', () => {
+    setContext(
+      adminContext({
+        viewing_semester: {
+          id: 10,
+          name: 'Spring 2026',
+          status: 'live',
+          published_at: '2026-01-01T00:00:00Z',
+          updated_at: '2026-01-01T00:00:00Z',
+        },
+        semester_options: options,
+      }),
+    )
+    renderShell(<SemesterPanel collapsed={false} />)
+
+    expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled()
+  })
+
   it('renders with only + New semester before any Semester exists', () => {
     setContext(
       adminContext({

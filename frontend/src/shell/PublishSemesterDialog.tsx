@@ -21,8 +21,10 @@ interface PublishSemesterDialogProps {
  * on open and renders it directly, with no ADR-0008 preview/rollback
  * machinery, since publishing has nothing to roll back a computation
  * through (it's a single timestamp stamp, per ADR 0010). Reachable both
- * from the sidebar/top-bar Publish button (always the viewing Semester,
- * always a draft) and from the Manage-semesters sheet's per-row
+ * from the sidebar/top-bar Publish button (always the viewing Semester —
+ * a draft or a previously-published one being rolled back to, per ADR
+ * 0010; disabled only when the viewing Semester is already live) and
+ * from the Manage-semesters sheet's per-row
  * Publish/Re-publish button (any Semester, including the already-live
  * one, for a harmless re-stamp).
  */

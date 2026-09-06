@@ -39,7 +39,7 @@ export function SemesterPanel({ collapsed }: SemesterPanelProps) {
 
   const canPublish =
     viewingSemester !== null &&
-    viewingSemester.published_at === null &&
+    viewingSemester.status !== 'live' &&
     !isBlocked
   const canSaveChanges = (editSession?.changeCount ?? 0) > 0 && !isBlocked
 
