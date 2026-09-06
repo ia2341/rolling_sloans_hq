@@ -23,14 +23,14 @@ function rosterEditPayload(overrides: Record<string, unknown> = {}) {
         name: 'Sam Rivera',
         song_count: 3,
         is_role_mismatch: false,
-        is_pending_invite: false,
+        invite_status: 'accepted',
       },
       {
         id: 2,
         name: 'Alex Kim',
         song_count: 0,
         is_role_mismatch: false,
-        is_pending_invite: true,
+        invite_status: 'invited',
       },
     ],
     ...overrides,
@@ -600,6 +600,37 @@ describe('Band roster editor', () => {
     expect(await screen.findByDisplayValue('Taylor Nguyen')).toBeInTheDocument()
   })
 
+  it('unchecking "Send the invite email now" stages an Add row instead of an Invite row (#397)', async () => {
+    stubFetchSequence([
+      { status: 200, body: { context: adminContext(), data: bandPayload() } },
+      {
+        status: 200,
+        body: { context: adminContext(), data: rosterEditPayload() },
+      },
+      {
+        status: 200,
+        body: { context: adminContext(), data: rosterCandidatesPayload() },
+      },
+    ])
+    const user = userEvent.setup()
+
+    renderShell(<Band />, ['/members'])
+    await user.click(await screen.findByRole('button', { name: 'Edit roster' }))
+    await screen.findByDisplayValue('Sam Rivera')
+
+    await user.click(screen.getByRole('button', { name: '+ Add people' }))
+    await screen.findByText('Jamie Ortiz', { exact: false })
+    await user.click(screen.getByRole('radio', { name: 'Invite new member' }))
+    await user.type(screen.getByLabelText('Name'), 'Jordan Reyes')
+    await user.type(screen.getByLabelText('Email'), 'jordan@example.com')
+    await user.click(screen.getByLabelText('Send the invite email now'))
+    await user.click(screen.getByRole('button', { name: 'Add to the buffer' }))
+
+    expect(await screen.findByDisplayValue('Jordan Reyes')).toBeInTheDocument()
+    expect(screen.getByText('not yet invited')).toBeInTheDocument()
+    expect(screen.getByText('Add')).toBeInTheDocument()
+  })
+
   it('opening the Save popup calls preview exactly once and renders its changes', async () => {
     const fetchSpy = stubFetchSequence([
       { status: 200, body: { context: adminContext(), data: bandPayload() } },
@@ -620,6 +651,7 @@ describe('Band roster editor', () => {
             is_stale: false,
             pending_adds: [],
             pending_invites: [],
+            pending_added_without_invite: [],
             pending_removals: [],
             pending_name_edits: ['Sam Rivera → Samantha Rivera'],
             loud: [],
@@ -673,6 +705,7 @@ describe('Band roster editor', () => {
             is_stale: false,
             pending_adds: [],
             pending_invites: [],
+            pending_added_without_invite: [],
             pending_removals: [],
             pending_name_edits: ['Sam Rivera → Samantha Rivera'],
             loud: [],

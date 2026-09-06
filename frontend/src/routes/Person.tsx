@@ -136,7 +136,7 @@ function DetailsAndRolesCard({
     <section className="rounded border border-rs-border p-4">
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 md:divide-x md:divide-rs-border">
         <div>
-          <DetailsSection data={data} />
+          <DetailsSection data={data} onDataChange={onDataChange} />
         </div>
         <div className="md:pl-4">
           <RolesSection data={data} onDataChange={onDataChange} />
@@ -146,8 +146,14 @@ function DetailsAndRolesCard({
   )
 }
 
-/** Details section content: Name, and Email (self only) — plus the self-only change-password row (issue #333). */
-function DetailsSection({ data }: { data: PersonPayload }) {
+/** Details section content: Name, and Email (self only) — plus the self-only change-password row (issue #333) and the admin-only Invite action (issue #397). */
+function DetailsSection({
+  data,
+  onDataChange,
+}: {
+  data: PersonPayload
+  onDataChange: (next: PersonPayload) => void
+}) {
   return (
     <div>
       <h2 className="text-sm font-semibold uppercase text-rs-muted">Details</h2>
@@ -164,7 +170,64 @@ function DetailsSection({ data }: { data: PersonPayload }) {
         )}
       </dl>
       {data.is_self && <ChangePasswordRow />}
+      {data.invite_status !== undefined &&
+        data.invite_status !== 'accepted' && (
+          <InviteRow
+            personId={data.id}
+            inviteStatus={data.invite_status}
+            onDataChange={onDataChange}
+          />
+        )}
     </div>
+  )
+}
+
+/**
+ * The admin-only Invite action (issue #397): renders for a teammate whose
+ * `invite_status` isn't `'accepted'` yet — "Invite" for `'not_yet_invited'`,
+ * "Invite again" for `'invited'`. Calls the same
+ * `RosterResendInviteApiView` the Roster editor's "Invite again" control
+ * calls, mounted here at `/api/members/<pk>/invite/`.
+ */
+function InviteRow({
+  personId,
+  inviteStatus,
+  onDataChange,
+}: {
+  personId: number
+  inviteStatus: Exclude<PersonPayload['invite_status'], 'accepted' | undefined>
+  onDataChange: (next: PersonPayload) => void
+}) {
+  const [status, setStatus] = useState<'idle' | 'sending' | 'sent'>('idle')
+
+  /** Sends (or re-sends) the invite and refreshes the page with the server's fresh Person payload. */
+  async function handleInvite() {
+    setStatus('sending')
+    const envelope = await apiFetch<WriteEnvelope<PersonPayload>>(
+      `/api/members/${personId}/invite/`,
+      { method: 'POST' },
+    )
+    if (envelope.ok && envelope.data !== null) {
+      onDataChange(envelope.data)
+      setStatus('sent')
+    } else {
+      setStatus('idle')
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => void handleInvite()}
+      disabled={status !== 'idle'}
+      className="mt-3 rounded border border-rs-border px-3 py-1.5 text-sm font-medium text-rs-accent disabled:cursor-not-allowed disabled:opacity-50"
+    >
+      {status === 'sent'
+        ? 'Invite sent'
+        : inviteStatus === 'not_yet_invited'
+          ? 'Invite'
+          : 'Invite again'}
+    </button>
   )
 }
 

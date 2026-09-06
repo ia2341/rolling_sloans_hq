@@ -9,10 +9,15 @@ from faker import Faker
 
 from identity.factories import PersonFactory
 from identity.models import Person
-from identity.services import EmailDeliveryError
+from identity.services import EmailDeliveryError, invite_person
 
 fake = Faker()
 PASSWORD = 'a-strong-test-password-123'
+
+
+def invite_args():
+    """Build a fresh, fake (name, email) kwargs dict for calling invite_person in tests."""
+    return {'name': fake.name(), 'email': fake.email(domain='example.com')}
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)
@@ -109,26 +114,28 @@ class PeopleViewGetTests(TestCase):
         self.assertIn(other, response.context['people'])
         self.assertIn(self.admin, response.context['people'])
 
-    def test_marks_pending_people_as_pending(self):
-        """A never-set-password Person is flagged is_pending_invite; a settled one is not (#327)."""
-        pending = PersonFactory()
+    def test_marks_pending_people_with_their_invite_status(self):
+        """A factory Person (never invited) reads 'not_yet_invited', an invited one 'invited', a settled one 'accepted' (#327, #397)."""
+        not_yet_invited = PersonFactory()
+        invited = invite_person(**invite_args())
         settled = PersonFactory(password=PASSWORD)
 
         response = self.client.get(reverse('identity:people'))
 
         by_pk = {person.pk: person for person in response.context['people']}
-        self.assertTrue(by_pk[pending.pk].is_pending_invite)
-        self.assertFalse(by_pk[settled.pk].is_pending_invite)
+        self.assertEqual(by_pk[not_yet_invited.pk].invite_status, 'not_yet_invited')
+        self.assertEqual(by_pk[invited.pk].invite_status, 'invited')
+        self.assertEqual(by_pk[settled.pk].invite_status, 'accepted')
 
     def test_invite_again_button_present_only_for_pending_people(self):
-        """The 'Invite again' control renders for a pending person and not for a settled one."""
-        pending = PersonFactory()
+        """The 'Invite'/'Invite again' control renders for a not-yet-invited or invited person and not for a settled one."""
+        not_yet_invited = PersonFactory()
         settled = PersonFactory(password=PASSWORD)
 
         response = self.client.get(reverse('identity:people'))
 
         self.assertContains(
-            response, reverse('identity:people-resend-invite', args=[pending.pk]),
+            response, reverse('identity:people-resend-invite', args=[not_yet_invited.pk]),
         )
         self.assertNotContains(
             response, reverse('identity:people-resend-invite', args=[settled.pk]),

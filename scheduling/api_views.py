@@ -578,22 +578,32 @@ class RoleDeclareApiView(AdminApiView, View):
 
 
 class RosterResendInviteApiView(AdminApiView, View):
-    """`POST /api/members/roster/<pk>/resend-invite/`: re-sends a pending invite from the Roster editor (issue #336, #327).
+    """`POST /api/members/roster/<pk>/resend-invite/` and `POST /api/members/<pk>/invite/`: (re)send a pending invite (issue #336, #327, #397).
 
-    An immediate act, not a Buffer row: it changes no Roster state, so
-    there is nothing to stage and nothing for the Save popup to describe.
-    Calls the same `resend_invite()` `/manage/people/<id>/resend-invite/`
-    calls — never a second implementation.
+    One view, two routes: the Roster editor's "Invite again" control and
+    the Person page's "Invite"/"Invite again" action both call this —
+    never a second implementation. It equally serves the *first* invite
+    for someone `identity.services.add_person()` created without ever
+    emailing them (issue #397): `resend_invite()` only refuses a Person
+    who already has a usable password, so it doesn't care whether
+    `invited_at` was set before this call. An immediate act, not a Buffer
+    row: it changes no Roster state, so there is nothing to stage and
+    nothing for the Save popup to describe.
     """
 
     def post(self, request, pk):
-        """Re-send `pk`'s invite, or report the refusal if they already have a password."""
+        """Re-send (or send for the first time) `pk`'s invite, returning their fresh Person payload, or the refusal if they already have a password."""
         person = get_object_or_404(Person, pk=pk)
         try:
             resend_invite(person)
         except AlreadyHasPasswordError as error:
             return self.write_response(request, ok=False, non_field_errors=[str(error)])
-        return self.write_response(request, ok=True, values=None)
+        semester = services.get_viewing_semester(request)
+        membership = Membership.objects.filter(person=person, semester=semester).first() if semester is not None else None
+        data = serializers.serialize_person(
+            person, semester=semester, is_self=False, can_edit_roles=True, membership=membership,
+        )
+        return self.write_response(request, ok=True, data=data)
 
 
 def _wrong_roster_semester_response(message: str) -> JsonResponse:
