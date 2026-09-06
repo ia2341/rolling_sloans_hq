@@ -6,8 +6,10 @@ import type {
   AssignmentEditFalloutPayload,
   AssignmentPickerOption,
   AssignmentPickerPayload,
+  RunningOrderReorderInput,
 } from '../../api/assignmentEditorTypes'
 import type { PreviewResult } from '../../api/previewTypes'
+import type { RehearsalEditFalloutPayload } from '../../api/scheduleEditorTypes'
 import type {
   MatrixCell,
   MatrixEntry,
@@ -29,6 +31,8 @@ interface PendingEntry {
   roleId: number
   personId: number
   personName: string
+  /** Whether this pick's Person had *not* declared the cell's Role (ADR 0002) — predicts the `is_role_mismatch` flag the server would compute on save, so a not-yet-saved pick can carry the same warning badge a saved one does. */
+  isRoleMismatch: boolean
   coveringForId: number | null
   coveringForName: string | null
 }
@@ -75,7 +79,13 @@ function fromServerEntry(entry: MatrixEntry): DisplayEntry {
   }
 }
 
-/** Adapts a not-yet-saved `PendingEntry` pick into the grid's rendered `DisplayEntry` shape, marked `pending: true`. */
+/** Adapts a not-yet-saved `PendingEntry` pick into the grid's rendered `DisplayEntry` shape, marked `pending: true`.
+ *
+ * `isRoleMismatch` carries the pick's own predicted flag (ADR 0002) — a
+ * pending pill for someone who hasn't declared the Role shows the same
+ * "◦ role not on membership" marker a saved mismatch does, rather than
+ * only appearing after a round trip.
+ */
 function fromPendingEntry(
   kind: 'assignment' | 'backup',
   pending: PendingEntry,
@@ -85,7 +95,7 @@ function fromPendingEntry(
     kind,
     id: null,
     personName: pending.personName,
-    isRoleMismatch: false,
+    isRoleMismatch: pending.isRoleMismatch,
     hasConflict: false,
     coveringForName: pending.coveringForName,
     pending: true,
@@ -102,13 +112,19 @@ interface AssignmentEditorProps {
 }
 
 /**
- * The Assignments surface (issue #338, ADR 0009): the per-Rehearsal
- * standing-assignment grid and its "+" picker, reached from either the
- * Schedule surface's "Edit assignments" action or the rehearsal editor's
- * mode switch. Fetches its own `GET /api/schedule/?rehearsal=<id>` — the
- * same read the member-facing grid uses (issue #331) — rather than a
- * second endpoint, per #307's "one endpoint per surface" rule; the picker
- * is the one extra fetch, and only when a cell's "+" is opened.
+ * The "Edit Rehearsal" surface (issue #338, ADR 0009; consolidated with
+ * Running Order reordering): the per-Rehearsal standing-assignment grid,
+ * its "+" picker, and the Running Order drag-and-drop, all reached from
+ * the Schedule surface's "Edit Rehearsal" action. A cell edit here is a
+ * standing Assignment (semester-wide, ADR 0009) unless made through the
+ * Backup picker section (this evening only, ADR 0007); a Running Order
+ * reorder is scoped to this one Rehearsal. Both buffer locally and only
+ * reach the server when "Save changes" is confirmed (ADR 0008's Buffer →
+ * preview → apply shape) — nothing here autosaves per click. Fetches its
+ * own `GET /api/schedule/?rehearsal=<id>` — the same read the
+ * member-facing grid uses (issue #331) — rather than a second endpoint,
+ * per #307's "one endpoint per surface" rule; the picker is the one extra
+ * fetch, and only when a cell's "+" is opened.
  */
 export function AssignmentEditor({ rehearsalId }: AssignmentEditorProps) {
   const isPhone = useIsPhone()
@@ -138,6 +154,10 @@ export function AssignmentEditor({ rehearsalId }: AssignmentEditorProps) {
     roleName: string
   } | null>(null)
   const [saveOpen, setSaveOpen] = useState(false)
+  /** The Running Order's current order, as `RehearsalSong` ids — `null` on the Dress Rehearsal (ADR 0003), which has none to reorder. */
+  const [runningOrder, setRunningOrder] = useState<number[] | null>(null)
+  /** The order the server last returned, to diff `runningOrder` against for the dirty flag and to discard back to. */
+  const [originalOrder, setOriginalOrder] = useState<number[] | null>(null)
 
   /** Clears every unsaved pick/removal, restoring the grid to what the server last returned. */
   const resetPendingBuffer = useCallback(() => {
@@ -148,18 +168,27 @@ export function AssignmentEditor({ rehearsalId }: AssignmentEditorProps) {
     setExtraRoles([])
   }, [])
 
-  /** (Re-)fetches this Rehearsal's matrix from the shared Schedule endpoint and resets the pending buffer to match. */
+  /** (Re-)fetches this Rehearsal's matrix from the shared Schedule endpoint and resets the pending buffer (assignments and Running Order both) to match. */
   const load = useCallback(() => {
     void apiFetch<ReadEnvelope<SchedulePayload>>(
       `/api/schedule/?rehearsal=${rehearsalId}`,
     ).then((envelope) => {
-      setDetail(envelope.data.selected)
+      const nextDetail = envelope.data.selected
+      setDetail(nextDetail)
       const viewingSemester = envelope.context.viewing_semester
       setSemester(
         viewingSemester !== null
           ? { id: viewingSemester.id, updatedAt: viewingSemester.updated_at }
           : null,
       )
+      const nextOrder =
+        nextDetail !== null && !nextDetail.is_dress
+          ? nextDetail.rows
+              .map((row) => row.rehearsal_song_id)
+              .filter((id): id is number => id !== null)
+          : null
+      setRunningOrder(nextOrder)
+      setOriginalOrder(nextOrder)
       resetPendingBuffer()
     })
   }, [rehearsalId, resetPendingBuffer])
@@ -167,6 +196,23 @@ export function AssignmentEditor({ rehearsalId }: AssignmentEditorProps) {
   useEffect(() => {
     load()
   }, [load])
+
+  /** Song titles by `RehearsalSong` id, for the Running Order editor to render a reordered id list as titles. */
+  const songTitleByRehearsalSongId = useMemo(() => {
+    const map = new Map<number, string>()
+    for (const row of detail?.rows ?? []) {
+      if (row.rehearsal_song_id !== null)
+        map.set(row.rehearsal_song_id, row.song_title)
+    }
+    return map
+  }, [detail])
+
+  /** True once `runningOrder` differs from what the server last returned — the Running Order half of `changeCount`. */
+  const hasReorderChange =
+    runningOrder !== null &&
+    originalOrder !== null &&
+    (runningOrder.length !== originalOrder.length ||
+      runningOrder.some((id, index) => id !== originalOrder[index]))
 
   const roles: DisplayRole[] = useMemo(
     () => [...(detail?.roles ?? []), ...extraRoles],
@@ -185,7 +231,8 @@ export function AssignmentEditor({ rehearsalId }: AssignmentEditorProps) {
     removedAssignmentIds.size +
     addedEntries.size +
     removedBackupIds.size +
-    addedBackupEntries.size
+    addedBackupEntries.size +
+    (hasReorderChange ? 1 : 0)
 
   /** Serializes the pending buffer's state into the `AssignmentEditBufferInput` wire shape `preview`/`save` post, or `null` with no viewed Semester. */
   const buildBufferInput = useCallback((): AssignmentEditBufferInput | null => {
@@ -216,10 +263,90 @@ export function AssignmentEditor({ rehearsalId }: AssignmentEditorProps) {
     addedBackupEntries,
   ])
 
-  /** Posts the pending buffer to `.../assignments/preview/` and adapts its response into `SaveChangesDialog`'s `PreviewResult` shape. */
+  /** Serializes `runningOrder` into the `RunningOrderReorderInput` wire shape `.../running-order/{preview,save}/` post, or `null` with no viewed Semester or no reorder to submit. */
+  const buildReorderInput = useCallback((): RunningOrderReorderInput | null => {
+    if (semester === null || runningOrder === null) return null
+    return {
+      semester_id: semester.id,
+      semester_updated_at: semester.updatedAt,
+      ordered_rehearsal_song_ids: runningOrder,
+    }
+  }, [semester, runningOrder])
+
+  /** Adapts `.../assignments/{preview,save}/`'s Fallout envelope into `SaveChangesDialog`'s `PreviewResult` shape. */
+  const toAssignmentResult = useCallback(
+    (
+      envelope: WriteEnvelope<null, unknown, AssignmentEditFalloutPayload>,
+    ): PreviewResult => {
+      if (!envelope.ok || envelope.fallout === null) {
+        return {
+          ok: false,
+          changes: [],
+          fallout: { loud: [], quiet: [] },
+          nonFieldErrors: envelope.non_field_errors,
+        }
+      }
+      if (envelope.fallout.is_blocked) {
+        return {
+          ok: false,
+          changes: [],
+          fallout: { loud: [], quiet: [] },
+          nonFieldErrors: [envelope.fallout.block_message],
+        }
+      }
+      return {
+        ok: true,
+        changes: [],
+        fallout: { loud: envelope.fallout.loud, quiet: envelope.fallout.quiet },
+      }
+    },
+    [],
+  )
+
+  /** Adapts `.../running-order/{preview,save}/`'s Fallout envelope into `SaveChangesDialog`'s `PreviewResult` shape, including the doomed-Recordings block (mirrors `ScheduleEdit.tsx`'s `toPreviewResult()`). */
+  const toReorderResult = useCallback(
+    (
+      envelope: WriteEnvelope<null, unknown, RehearsalEditFalloutPayload>,
+    ): PreviewResult => {
+      if (!envelope.ok || envelope.fallout === null) {
+        return {
+          ok: false,
+          changes: [],
+          fallout: { loud: [], quiet: [] },
+          nonFieldErrors: envelope.non_field_errors,
+        }
+      }
+      if (envelope.fallout.is_blocked) {
+        return {
+          ok: false,
+          changes: [],
+          fallout: { loud: [], quiet: [] },
+          nonFieldErrors: [envelope.fallout.block_message],
+        }
+      }
+      return {
+        ok: true,
+        changes: [],
+        fallout: { loud: envelope.fallout.loud, quiet: envelope.fallout.quiet },
+        doomed:
+          envelope.fallout.doomed_recording_groups.length > 0
+            ? {
+                heading: 'This deletes Recordings with no undo and no export',
+                items: envelope.fallout.doomed_recording_groups.map(
+                  (group) =>
+                    `${group.label} — ${group.recording_count} recording${group.recording_count === 1 ? '' : 's'} from ${group.uploader_count} member${group.uploader_count === 1 ? '' : 's'}`,
+                ),
+              }
+            : undefined,
+      }
+    },
+    [],
+  )
+
+  /** Posts both pending buffers (assignments always, Running Order only if reordered) and merges their Fallout into one `PreviewResult` (ADR 0008 — each Preview runs its surface's real save and rolls it back). */
   const preview = useCallback(async (): Promise<PreviewResult> => {
-    const body = buildBufferInput()
-    if (body === null) {
+    const assignmentBody = buildBufferInput()
+    if (assignmentBody === null) {
       return {
         ok: false,
         changes: [],
@@ -227,55 +354,77 @@ export function AssignmentEditor({ rehearsalId }: AssignmentEditorProps) {
         nonFieldErrors: ['No Semester is being viewed.'],
       }
     }
-    const envelope = await apiFetch<
+    const assignmentEnvelope = await apiFetch<
       WriteEnvelope<null, unknown, AssignmentEditFalloutPayload>
     >(`/api/schedule/${rehearsalId}/assignments/preview/`, {
       method: 'POST',
-      body: JSON.stringify(body),
+      body: JSON.stringify(assignmentBody),
     })
-    if (!envelope.ok || envelope.fallout === null) {
-      return {
-        ok: false,
-        changes: [],
-        fallout: { loud: [], quiet: [] },
-        nonFieldErrors: envelope.non_field_errors,
-      }
-    }
-    if (envelope.fallout.is_blocked) {
-      return {
-        ok: false,
-        changes: [],
-        fallout: { loud: [], quiet: [] },
-        nonFieldErrors: [envelope.fallout.block_message],
-      }
-    }
+    const assignmentResult = toAssignmentResult(assignmentEnvelope)
+    if (!assignmentResult.ok) return assignmentResult
+
+    const reorderBody = hasReorderChange ? buildReorderInput() : null
+    if (reorderBody === null) return assignmentResult
+
+    const reorderEnvelope = await apiFetch<
+      WriteEnvelope<null, unknown, RehearsalEditFalloutPayload>
+    >(`/api/schedule/${rehearsalId}/running-order/preview/`, {
+      method: 'POST',
+      body: JSON.stringify(reorderBody),
+    })
+    const reorderResult = toReorderResult(reorderEnvelope)
+    if (!reorderResult.ok) return reorderResult
+
     return {
       ok: true,
-      changes: [],
-      fallout: { loud: envelope.fallout.loud, quiet: envelope.fallout.quiet },
+      changes: [...assignmentResult.changes, ...reorderResult.changes],
+      fallout: {
+        loud: [...assignmentResult.fallout.loud, ...reorderResult.fallout.loud],
+        quiet: [
+          ...assignmentResult.fallout.quiet,
+          ...reorderResult.fallout.quiet,
+        ],
+      },
+      doomed: reorderResult.doomed,
     }
-  }, [buildBufferInput, rehearsalId])
+  }, [
+    buildBufferInput,
+    rehearsalId,
+    hasReorderChange,
+    buildReorderInput,
+    toAssignmentResult,
+    toReorderResult,
+  ])
 
-  /** Posts the pending buffer to `.../assignments/save/` and, on success, closes the save dialog and reloads from the server. */
+  /** Saves both pending buffers in sequence (assignments always, Running Order only if reordered) and, on success, closes the popup and reloads. */
   const confirmSave = useCallback(() => {
-    const body = buildBufferInput()
-    if (body === null) return
+    const assignmentBody = buildBufferInput()
+    if (assignmentBody === null) return
     void apiFetch<WriteEnvelope>(
       `/api/schedule/${rehearsalId}/assignments/save/`,
-      {
-        method: 'POST',
-        body: JSON.stringify(body),
-      },
-    ).then((envelope) => {
-      if (envelope.ok) {
+      { method: 'POST', body: JSON.stringify(assignmentBody) },
+    ).then((assignmentEnvelope) => {
+      if (!assignmentEnvelope.ok) return
+      const reorderBody = hasReorderChange ? buildReorderInput() : null
+      if (reorderBody === null) {
         setSaveOpen(false)
         load()
+        return
       }
+      void apiFetch<WriteEnvelope>(
+        `/api/schedule/${rehearsalId}/running-order/save/`,
+        { method: 'POST', body: JSON.stringify(reorderBody) },
+      ).then((reorderEnvelope) => {
+        if (reorderEnvelope.ok) {
+          setSaveOpen(false)
+          load()
+        }
+      })
     })
-  }, [buildBufferInput, rehearsalId, load])
+  }, [buildBufferInput, rehearsalId, hasReorderChange, buildReorderInput, load])
 
   useRegisterEditSession({
-    what: 'this Rehearsal’s standing assignments',
+    what: 'this Rehearsal’s assignments and Running Order',
     changeCount,
     blockedReason: null,
     discard: load,
@@ -378,6 +527,7 @@ export function AssignmentEditor({ rehearsalId }: AssignmentEditorProps) {
           roleId: pickerCell.roleId,
           personId: option.person_id,
           personName: option.person_name,
+          isRoleMismatch: !option.has_declared_role,
           coveringForId: null,
           coveringForName: null,
         })
@@ -409,6 +559,7 @@ export function AssignmentEditor({ rehearsalId }: AssignmentEditorProps) {
           roleId: pickerCell.roleId,
           personId: option.person_id,
           personName: option.person_name,
+          isRoleMismatch: !option.has_declared_role,
           rehearsalSongId,
           coveringForId: coveringFor?.id ?? null,
           coveringForName: coveringFor?.name ?? null,
@@ -437,24 +588,36 @@ export function AssignmentEditor({ rehearsalId }: AssignmentEditorProps) {
         </p>
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <ul className="flex flex-wrap gap-3 text-sm">
-          {roles.map((role, index) => (
-            <li key={role.id} className="flex items-center gap-1.5">
-              <span
-                aria-hidden="true"
-                className="inline-block h-3 w-3 rounded-full"
-                style={{ backgroundColor: roleHueVar(index) }}
-              />
-              {role.name}
-            </li>
-          ))}
-        </ul>
-        <p className="text-sm text-rs-muted">
-          Order is fixed here — switch to <strong>Running order</strong> above
-          to change it.
-        </p>
-      </div>
+      <ul className="flex flex-wrap gap-3 text-sm">
+        {roles.map((role, index) => (
+          <li key={role.id} className="flex items-center gap-1.5">
+            <span
+              aria-hidden="true"
+              className="inline-block h-3 w-3 rounded-full"
+              style={{ backgroundColor: roleHueVar(index) }}
+            />
+            {role.name}
+          </li>
+        ))}
+      </ul>
+
+      {runningOrder !== null && (
+        <section className="flex flex-col gap-2">
+          <h2 className="text-sm font-semibold uppercase text-rs-muted">
+            Running order
+          </h2>
+          <p className="text-xs text-rs-muted">
+            Drag a row, or use the arrows, to reorder tonight's Running Order —
+            this changes when each Song happens (and which Conflict Windows
+            overlap it), never the Setlist's concert position.
+          </p>
+          <RunningOrderEditor
+            order={runningOrder}
+            titleById={songTitleByRehearsalSongId}
+            onReorder={setRunningOrder}
+          />
+        </section>
+      )}
 
       <div className="flex flex-wrap gap-3 text-xs text-rs-muted">
         <span>backup — covers one evening only</span>
@@ -546,6 +709,101 @@ export function AssignmentEditor({ rehearsalId }: AssignmentEditorProps) {
         onConfirm={confirmSave}
       />
     </div>
+  )
+}
+
+/** Moves the item at `fromIndex` to `toIndex`, returning a new array (never mutating `list`). */
+function moveItem<T>(list: T[], fromIndex: number, toIndex: number): T[] {
+  if (
+    toIndex < 0 ||
+    toIndex >= list.length ||
+    fromIndex === toIndex ||
+    fromIndex < 0 ||
+    fromIndex >= list.length
+  ) {
+    return list
+  }
+  const next = [...list]
+  const [item] = next.splice(fromIndex, 1)
+  if (item === undefined) return list
+  next.splice(toIndex, 0, item)
+  return next
+}
+
+/**
+ * The Running Order sub-grid's reorder control (issue: "Edit Rehearsal"
+ * consolidation) — one row per `RehearsalSong`, reorderable by native
+ * HTML5 drag-and-drop or by the Move up/down buttons (kept alongside the
+ * drag handle for keyboard/screen-reader access, since HTML5 `draggable`
+ * offers neither on its own). Purely a local reorder of `order` (an array
+ * of `RehearsalSong` ids): nothing here posts a request — the caller only
+ * ever submits the buffer's current `order` when "Save" is clicked
+ * (ADR 0008's Buffer → preview → apply shape, extended to this surface).
+ */
+function RunningOrderEditor({
+  order,
+  titleById,
+  onReorder,
+}: {
+  order: number[]
+  titleById: Map<number, string>
+  onReorder: (next: number[]) => void
+}) {
+  const [dragIndex, setDragIndex] = useState<number | null>(null)
+
+  const move = (fromIndex: number, toIndex: number) => {
+    const next = moveItem(order, fromIndex, toIndex)
+    if (next !== order) onReorder(next)
+  }
+
+  return (
+    <ul className="flex flex-col gap-1">
+      {order.map((rehearsalSongId, index) => {
+        const title = titleById.get(rehearsalSongId) ?? 'Unknown song'
+        return (
+          <li
+            key={rehearsalSongId}
+            draggable
+            onDragStart={() => setDragIndex(index)}
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={(event) => {
+              event.preventDefault()
+              if (dragIndex !== null) move(dragIndex, index)
+              setDragIndex(null)
+            }}
+            onDragEnd={() => setDragIndex(null)}
+            className="flex items-center justify-between gap-2 rounded border border-rs-border bg-rs-surface px-2 py-1.5 text-sm"
+          >
+            <span className="flex items-center gap-2">
+              <span aria-hidden="true" className="cursor-grab text-rs-muted">
+                ⠿
+              </span>
+              {title}
+            </span>
+            <span className="flex gap-1">
+              <button
+                type="button"
+                aria-label={`Move ${title} up`}
+                disabled={index === 0}
+                onClick={() => move(index, index - 1)}
+                className="rounded border border-rs-border px-1.5 py-0.5 text-xs disabled:cursor-not-allowed disabled:opacity-30"
+              >
+                ↑
+              </button>
+              <button
+                type="button"
+                aria-label={`Move ${title} down`}
+                disabled={index === order.length - 1}
+                onClick={() => move(index, index + 1)}
+                className="rounded border border-rs-border px-1.5 py-0.5 text-xs disabled:cursor-not-allowed disabled:opacity-30"
+              >
+                ↓
+              </button>
+            </span>
+          </li>
+        )
+      })}
+    </ul>
   )
 }
 

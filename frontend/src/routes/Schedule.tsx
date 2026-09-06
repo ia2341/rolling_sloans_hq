@@ -1,3 +1,4 @@
+import type { KeyboardEvent } from 'react'
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 
@@ -83,35 +84,6 @@ export function Schedule() {
     [setSearchParams],
   )
 
-  /** All Rehearsals' "Add conflict" column: opens that date's page and asks `AvailabilityBlock` to auto-open its Declare dialog. */
-  const openConflictDialog = useCallback(
-    (id: number) => {
-      setEditingAssignments(false)
-      setSearchParams(
-        (previous) => {
-          const params = new URLSearchParams(previous)
-          params.set('rehearsal', String(id))
-          params.set('conflict', '1')
-          params.delete('view')
-          return params
-        },
-        { replace: true },
-      )
-    },
-    [setSearchParams],
-  )
-
-  const clearConflictParam = useCallback(() => {
-    setSearchParams(
-      (previous) => {
-        const params = new URLSearchParams(previous)
-        params.delete('conflict')
-        return params
-      },
-      { replace: true },
-    )
-  }, [setSearchParams])
-
   if (data === null) return null
 
   if (
@@ -178,7 +150,7 @@ export function Schedule() {
                   aria-pressed={editingAssignments}
                   className="rounded border border-rs-border px-3 py-1.5 text-sm font-medium disabled:opacity-50"
                 >
-                  {editingAssignments ? 'Done editing' : 'Edit assignments'}
+                  {editingAssignments ? 'Done editing' : 'Edit Rehearsal'}
                 </button>
               )}
             </div>
@@ -216,16 +188,13 @@ export function Schedule() {
             onSelectRehearsal={selectRehearsal}
             onDataChanged={load}
             editingAssignments={editingAssignments}
-            autoOpenDeclare={searchParams.get('conflict') === '1'}
-            onAutoOpenConsumed={clearConflictParam}
           />
         )
       ) : (
         <AllRehearsals
           rows={allRows}
-          isAdmin={appContext?.viewer.is_admin ?? false}
           onOpen={selectRehearsal}
-          onAddConflict={openConflictDialog}
+          onChanged={load}
         />
       )}
     </div>
@@ -268,16 +237,12 @@ function ThisRehearsal({
   onSelectRehearsal,
   onDataChanged,
   editingAssignments,
-  autoOpenDeclare,
-  onAutoOpenConsumed,
 }: {
   detail: RehearsalDetail
   allRows: ScheduleListRow[]
   onSelectRehearsal: (id: number) => void
   onDataChanged: () => void
   editingAssignments: boolean
-  autoOpenDeclare: boolean
-  onAutoOpenConsumed: () => void
 }) {
   return (
     <div>
@@ -293,8 +258,6 @@ function ThisRehearsal({
         rehearsalEnd={detail.end_time}
         availability={detail.availability}
         onChanged={onDataChanged}
-        autoOpenDeclare={autoOpenDeclare}
-        onAutoOpenConsumed={onAutoOpenConsumed}
       />
       {editingAssignments ? (
         <AssignmentEditor rehearsalId={detail.id} />
@@ -397,41 +360,14 @@ function AvailabilityBlock({
   rehearsalEnd,
   availability,
   onChanged,
-  autoOpenDeclare,
-  onAutoOpenConsumed,
 }: {
   rehearsalId: number
   rehearsalStart: string
   rehearsalEnd: string
   availability: Availability
   onChanged: () => void
-  /** True once, right after arriving here via All rehearsals' "Add conflict" column — opens the Declare dialog immediately. */
-  autoOpenDeclare: boolean
-  onAutoOpenConsumed: () => void
 }) {
   const [dialogOpen, setDialogOpen] = useState(false)
-  // Adjusting state directly during render (React's documented pattern for
-  // syncing local state to a prop change) rather than in an effect, so
-  // opening the dialog isn't a cascading second render behind the query
-  // param's own effect-driven clear below.
-  const [autoOpenedForRehearsal, setAutoOpenedForRehearsal] = useState<
-    number | null
-  >(null)
-  if (
-    autoOpenDeclare &&
-    availability.is_editable &&
-    !availability.is_dress &&
-    autoOpenedForRehearsal !== rehearsalId
-  ) {
-    setAutoOpenedForRehearsal(rehearsalId)
-    setDialogOpen(true)
-  }
-
-  useEffect(() => {
-    if (autoOpenDeclare) {
-      onAutoOpenConsumed()
-    }
-  }, [autoOpenDeclare, onAutoOpenConsumed])
 
   if (availability.is_dress) {
     return (
@@ -900,140 +836,163 @@ function isConflictDeclarable(row: ScheduleListRow): boolean {
   return !row.is_dress && !row.is_past
 }
 
-function AllRehearsals({
-  rows,
-  isAdmin,
+/** The Dress Rehearsal's badge, matching Home's "Next rehearsal"/"Upcoming rehearsals" pill exactly (issue: pills/tables UI overhaul). */
+function DressBadge() {
+  return (
+    <span className="rounded-full bg-rs-accent px-2 py-0.5 text-xs font-medium text-rs-accent-fg">
+      Dress
+    </span>
+  )
+}
+
+/** Keyboard handler making a non-anchor "clickable card" activate on Enter/Space like a link would (mirrors Home.tsx's helper). */
+function activateOnEnterOrSpace(onActivate: () => void) {
+  return (event: KeyboardEvent) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      onActivate()
+    }
+  }
+}
+
+/** One card's whole Running Order — every Song on the Rehearsal, not only the viewer's own — as an inline, comma-joined list of links. */
+function RunningOrderInline({ songs }: { songs: ScheduleListRow['songs'] }) {
+  if (songs.length === 0) {
+    return <p className="text-xs text-rs-muted">No songs yet</p>
+  }
+  return (
+    <p className="text-xs text-rs-muted">
+      {songs.map((song, index) => (
+        <span key={song.id}>
+          <Link to={`/songs/${song.id}`} className="text-rs-accent">
+            {song.title}
+          </Link>
+          {index < songs.length - 1 ? ', ' : ''}
+        </span>
+      ))}
+    </p>
+  )
+}
+
+/**
+ * One All-rehearsals card (issue: pills/tables UI overhaul, replacing the old table/"Open" button row).
+ *
+ * The whole card is clickable, navigating to this Rehearsal (the old
+ * "Open" button's job) — the "+ Conflict" control sits on top of it and
+ * stops its click from bubbling into the card's own navigation, since
+ * without that both handlers would fire on one click.
+ */
+function RehearsalCard({
+  row,
   onOpen,
   onAddConflict,
 }: {
-  rows: ScheduleListRow[]
-  isAdmin: boolean
+  row: ScheduleListRow
   onOpen: (id: number) => void
   onAddConflict: (id: number) => void
 }) {
-  const isPhone = useIsPhone()
+  return (
+    <li
+      role="link"
+      tabIndex={0}
+      onClick={() => onOpen(row.id)}
+      onKeyDown={activateOnEnterOrSpace(() => onOpen(row.id))}
+      aria-label={formatRehearsalDate(row.date)}
+      className={`relative flex cursor-pointer flex-col gap-2 rounded border border-rs-border p-3 hover:bg-rs-border/20 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-rs-accent ${
+        row.is_past ? 'opacity-60' : ''
+      }`}
+    >
+      <div className="flex items-center justify-between gap-2 pr-16">
+        <p className="font-medium">{formatRehearsalDate(row.date)}</p>
+        {row.is_dress && <DressBadge />}
+      </div>
+      <p className="text-sm text-rs-muted">
+        {formatClockTime(row.start_time)}–{formatClockTime(row.end_time)}
+      </p>
+      <div className="flex items-center justify-between text-sm">
+        <YourStateChip state={row.your_state} />
+        <span className="text-rs-muted">{row.song_count} songs</span>
+      </div>
+      <RunningOrderInline songs={row.songs} />
+      {row.your_songs.length > 0 && (
+        <div>
+          <p className="text-xs font-semibold uppercase text-rs-muted">
+            Your songs
+          </p>
+          <YourSongsList songs={row.your_songs} />
+        </div>
+      )}
+      {row.pending_count !== undefined && (
+        <p className="text-xs text-rs-muted">{row.pending_count} pending</p>
+      )}
+      {isConflictDeclarable(row) && (
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation()
+            onAddConflict(row.id)
+          }}
+          className="absolute right-2 top-2 rounded border border-rs-border bg-rs-bg px-2 py-1 text-xs font-medium text-rs-accent"
+        >
+          + Conflict
+        </button>
+      )}
+    </li>
+  )
+}
 
-  if (isPhone) {
-    return (
-      <ul className="flex flex-col gap-3">
-        {rows.map((row) => (
-          <li
-            key={row.id}
-            className={`rounded border border-rs-border p-3 ${row.is_past ? 'opacity-60' : ''}`}
-          >
-            <button
-              type="button"
-              onClick={() => onOpen(row.id)}
-              className="w-full text-left"
-            >
-              <div className="flex items-center justify-between">
-                <p className="font-medium">{formatRehearsalDate(row.date)}</p>
-                {row.is_dress && (
-                  <span className="text-xs">Dress · required</span>
-                )}
-              </div>
-              <p className="text-sm text-rs-muted">
-                {formatClockTime(row.start_time)}–
-                {formatClockTime(row.end_time)}
-              </p>
-              <div className="flex items-center justify-between pt-1 text-sm">
-                <YourStateChip state={row.your_state} />
-                <span>{row.song_count} songs</span>
-              </div>
-              {row.pending_count !== undefined && (
-                <p className="text-xs text-rs-muted">
-                  {row.pending_count} pending
-                </p>
-              )}
-            </button>
-            <div className="pt-2">
-              <YourSongsList songs={row.your_songs} />
-            </div>
-            {isConflictDeclarable(row) && (
-              <button
-                type="button"
-                onClick={() => onAddConflict(row.id)}
-                className="mt-2 text-sm text-rs-accent"
-              >
-                Add conflict
-              </button>
-            )}
-          </li>
-        ))}
-      </ul>
-    )
-  }
+/**
+ * The All-rehearsals sub-view (issue: pills/tables UI overhaul): a responsive grid of clickable cards, one per Rehearsal.
+ *
+ * Replaces the old desktop table (with its "Open" button column and its
+ * separate "Add conflict" column) with the same card layout on every
+ * viewport — the card itself is the "Open" affordance, and "+ Conflict"
+ * is a control on the card rather than its own column.
+ */
+function AllRehearsals({
+  rows,
+  onOpen,
+  onChanged,
+}: {
+  rows: ScheduleListRow[]
+  onOpen: (id: number) => void
+  onChanged: () => void
+}) {
+  const [conflictRowId, setConflictRowId] = useState<number | null>(null)
+  const conflictRow =
+    conflictRowId !== null
+      ? (rows.find((row) => row.id === conflictRowId) ?? null)
+      : null
 
   return (
-    <table className="w-full border-collapse text-left text-sm">
-      <thead>
-        <tr>
-          <th className="border border-rs-border px-2 py-2">Date</th>
-          <th className="border border-rs-border px-2 py-2">Time</th>
-          <th className="border border-rs-border px-2 py-2">You</th>
-          <th className="border border-rs-border px-2 py-2">Songs</th>
-          <th className="border border-rs-border px-2 py-2">Your songs</th>
-          {isAdmin && (
-            <th className="border border-rs-border px-2 py-2">Conflicts</th>
-          )}
-          <th className="border border-rs-border px-2 py-2">Add conflict</th>
-          <th className="border border-rs-border px-2 py-2" />
-        </tr>
-      </thead>
-      <tbody>
+    <>
+      <ul className="grid grid-cols-1 gap-3 md:grid-cols-2">
         {rows.map((row) => (
-          <tr key={row.id} className={row.is_past ? 'opacity-60' : ''}>
-            <td className="border border-rs-border px-2 py-2 align-top">
-              {formatRehearsalDate(row.date)}
-              {row.is_dress && (
-                <span className="ml-2 text-xs">Dress · required</span>
-              )}
-            </td>
-            <td className="border border-rs-border px-2 py-2 align-top">
-              {formatClockTime(row.start_time)}–{formatClockTime(row.end_time)}
-            </td>
-            <td className="border border-rs-border px-2 py-2 align-top">
-              <YourStateChip state={row.your_state} />
-            </td>
-            <td className="border border-rs-border px-2 py-2 align-top">
-              {row.song_count}
-            </td>
-            <td className="border border-rs-border px-2 py-2 align-top">
-              <YourSongsList songs={row.your_songs} />
-            </td>
-            {isAdmin && (
-              <td className="border border-rs-border px-2 py-2 align-top">
-                {row.pending_count !== undefined
-                  ? `${row.pending_count} pending`
-                  : ''}
-              </td>
-            )}
-            <td className="border border-rs-border px-2 py-2 align-top">
-              {isConflictDeclarable(row) ? (
-                <button
-                  type="button"
-                  onClick={() => onAddConflict(row.id)}
-                  className="text-rs-accent"
-                >
-                  Add conflict
-                </button>
-              ) : (
-                <span className="text-xs text-rs-muted">—</span>
-              )}
-            </td>
-            <td className="border border-rs-border px-2 py-2 align-top">
-              <button
-                type="button"
-                onClick={() => onOpen(row.id)}
-                className="text-rs-accent"
-              >
-                Open
-              </button>
-            </td>
-          </tr>
+          <RehearsalCard
+            key={row.id}
+            row={row}
+            onOpen={onOpen}
+            onAddConflict={setConflictRowId}
+          />
         ))}
-      </tbody>
-    </table>
+      </ul>
+      {conflictRow !== null && (
+        <DeclareDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setConflictRowId(null)
+          }}
+          rehearsalId={conflictRow.id}
+          rehearsalStart={conflictRow.start_time}
+          rehearsalEnd={conflictRow.end_time}
+          initial={conflictRow.availability}
+          onSaved={() => {
+            setConflictRowId(null)
+            onChanged()
+          }}
+        />
+      )}
+    </>
   )
 }
 
