@@ -148,9 +148,7 @@ describe('GenerateDatesModal', () => {
     await user.click(screen.getByText('+ Add weekly time'))
     expect(screen.getByLabelText('Day of week')).toBeInTheDocument()
 
-    await user.click(
-      screen.getByRole('button', { name: '+ Add skip date' }),
-    )
+    await user.click(screen.getByRole('button', { name: '+ Add skip date' }))
     const skipDateInput = screen.getByLabelText('Add skip date')
     await user.type(skipDateInput, '2026-03-24')
     expect(await screen.findByText('2026-03-24')).toBeInTheDocument()
