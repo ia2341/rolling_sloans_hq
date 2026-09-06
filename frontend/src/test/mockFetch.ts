@@ -35,3 +35,19 @@ export function mockFetchByUrl(
     }),
   )
 }
+
+/** Stubs `window.fetch` to resolve each call with the next `{status, body}` in `responses`, in order -- for a test spanning more than one distinct round trip to the same URL (e.g. an initial load, then a write). */
+export function stubFetchSequence(
+  responses: Array<{ status: number; body: unknown }>,
+): ReturnType<typeof vi.fn> {
+  const fetchSpy = vi.fn()
+  for (const { status, body } of responses) {
+    fetchSpy.mockResolvedValueOnce({
+      status,
+      ok: status >= 200 && status < 300,
+      json: () => Promise.resolve(body),
+    })
+  }
+  vi.stubGlobal('fetch', fetchSpy)
+  return fetchSpy
+}

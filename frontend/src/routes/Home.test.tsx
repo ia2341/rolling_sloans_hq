@@ -5,12 +5,16 @@ import {
   waitFor,
   within,
 } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { HomePayload } from '../api/homeTypes'
 import { ContextProvider } from '../api/ContextProvider'
+import { resetViewingSemesterChangeForTests } from '../api/viewingSemesterChangeStore'
+import { DeleteSemesterDialog } from '../shell/DeleteSemesterDialog'
 import { EditSessionProvider } from '../shell/EditSessionContext'
+import { NewSemesterDialog } from '../shell/NewSemesterDialog'
 import { PageTitleProvider } from '../shell/PageTitleContext'
 import { adminContext, memberContext } from '../test/fixtures'
 import { mockFetchOnce } from '../test/mockFetch'
@@ -141,6 +145,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  resetViewingSemesterChangeForTests()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })
@@ -432,5 +437,185 @@ describe('Home', () => {
 
     await screen.findByText(/Arrive around/)
     expect(screen.queryByText(/^Setting up/)).not.toBeInTheDocument()
+  })
+
+  it("shows the newly created Semester's setup checklist immediately after Create, with Home already mounted on / (issue #402)", async () => {
+    const checklist = (semesterName: string) => ({
+      semester_name: semesterName,
+      items: [
+        {
+          key: 'roster',
+          label: 'Roster',
+          is_done: false,
+          status: 'Empty',
+          destination: '/members',
+          waiting_on: null,
+        },
+      ],
+    })
+    let homeCallCount = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((input: RequestInfo | URL) => {
+        const url = typeof input === 'string' ? input : input.toString()
+        if (url.includes('/api/schedule/editor/')) {
+          return Promise.resolve({
+            status: 200,
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                context: adminContext(),
+                data: { semester_defaults: null },
+              }),
+          })
+        }
+        if (url.includes('/api/semesters/create/')) {
+          return Promise.resolve({
+            status: 200,
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                context: adminContext(),
+                ok: true,
+                errors: {},
+                non_field_errors: [],
+                fallout: null,
+                values: null,
+                data: null,
+              }),
+          })
+        }
+        homeCallCount += 1
+        return Promise.resolve({
+          status: 200,
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              context: adminContext(),
+              data: homePayload({
+                setup_checklist: checklist(
+                  homeCallCount === 1 ? 'Fall 2026' : 'Spring 2027',
+                ),
+              }),
+            }),
+        })
+      }),
+    )
+    const user = userEvent.setup()
+
+    renderShell(
+      <>
+        <Home />
+        <NewSemesterDialog open onOpenChange={() => {}} />
+      </>,
+      ['/'],
+    )
+
+    await screen.findByText('Setting up Fall 2026')
+
+    await user.clear(screen.getByLabelText('Name'))
+    await user.type(screen.getByLabelText('Name'), 'Spring 2027')
+    await user.click(screen.getByRole('button', { name: 'Create Spring 2027' }))
+
+    await screen.findByText('Setting up Spring 2027')
+  })
+
+  it("reflects a deleted Semester's fallback immediately, with Home already mounted on / (issue #402)", async () => {
+    const checklist = (semesterName: string) => ({
+      semester_name: semesterName,
+      items: [
+        {
+          key: 'roster',
+          label: 'Roster',
+          is_done: false,
+          status: 'Empty',
+          destination: '/members',
+          waiting_on: null,
+        },
+      ],
+    })
+    let homeCallCount = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((input: RequestInfo | URL) => {
+        const url = typeof input === 'string' ? input : input.toString()
+        if (url.includes('/deletion-summary/')) {
+          return Promise.resolve({
+            status: 200,
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                context: adminContext(),
+                data: {
+                  member_count: 5,
+                  song_count: 8,
+                  rehearsal_count: 3,
+                  recording_count: 0,
+                },
+              }),
+          })
+        }
+        if (url.includes('/delete/')) {
+          return Promise.resolve({
+            status: 200,
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                context: adminContext(),
+                ok: true,
+                errors: {},
+                non_field_errors: [],
+                fallout: null,
+                values: null,
+                data: null,
+              }),
+          })
+        }
+        homeCallCount += 1
+        return Promise.resolve({
+          status: 200,
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              context: adminContext(),
+              data: homePayload({
+                setup_checklist:
+                  homeCallCount === 1 ? checklist('Fall 2026 (draft)') : null,
+              }),
+            }),
+        })
+      }),
+    )
+    const user = userEvent.setup()
+
+    renderShell(
+      <>
+        <Home />
+        <DeleteSemesterDialog
+          open
+          onOpenChange={() => {}}
+          semesterId={11}
+          semesterName="Fall 2026 (draft)"
+        />
+      </>,
+      ['/'],
+    )
+
+    await screen.findByText('Setting up Fall 2026 (draft)')
+
+    await waitFor(() =>
+      expect(screen.getByText('This permanently deletes')).toBeInTheDocument(),
+    )
+    await user.click(
+      screen.getByRole('button', {
+        name: 'Delete Fall 2026 (draft) permanently',
+      }),
+    )
+
+    await waitFor(() =>
+      expect(
+        screen.queryByText('Setting up Fall 2026 (draft)'),
+      ).not.toBeInTheDocument(),
+    )
   })
 })

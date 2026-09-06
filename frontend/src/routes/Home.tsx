@@ -4,6 +4,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 
 import { apiFetch } from '../api/client'
 import { useAppContext } from '../api/ContextProvider'
+import { useViewingSemesterChangeSignal } from '../api/viewingSemesterChangeStore'
 import type {
   HomePayload,
   NextRehearsalCard as NextRehearsalCardData,
@@ -74,6 +75,7 @@ export function Home() {
   const [data, setData] = useState<HomePayload | null>(null)
   const [searchParams, setSearchParams] = useSearchParams()
   const mineOnly = searchParams.get('mine') === '1'
+  const viewingSemesterChangeSignal = useViewingSemesterChangeSignal()
 
   const load = useCallback(() => {
     void apiFetch<ReadEnvelope<HomePayload>>('/api/').then((envelope) =>
@@ -83,7 +85,10 @@ export function Home() {
 
   useEffect(() => {
     load()
-  }, [load])
+    // `navigate('/')` from the New/Delete Semester dialogs is a no-op while
+    // already on Home (issue #402) -- `viewingSemesterChangeSignal` is what
+    // actually tells this effect to re-fire when that happens.
+  }, [load, viewingSemesterChangeSignal])
 
   const setMineOnly = useCallback(
     (next: boolean) => {
