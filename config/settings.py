@@ -190,14 +190,13 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 
-# The top-level static/ directory holds the vendored admin UI stack (HTMX,
-# Alpine, Pico.css, SortableJS — each pinned by version in its filename) and
-# the hand-written override sheet. Per-app static/ directories are still
-# picked up by AppDirectoriesFinder; this only adds the project-wide one.
-# The Vite build output is a second, physically separate STATICFILES_DIRS
-# entry (issue #325): it coexists with the vendored static/ tree above until
-# issue #341 deletes the old frontend, and Vite's own assets/ subdirectory
-# guarantees neither can shadow the other's filenames.
+# The top-level static/ directory held the vendored admin UI stack (HTMX,
+# Alpine, Pico.css, SortableJS) and the hand-written override sheet, both
+# deleted by issue #341 — it may now be empty of committed files. Per-app
+# static/ directories are still picked up by AppDirectoriesFinder; this only
+# adds the project-wide one. The Vite build output is a second, physically
+# separate STATICFILES_DIRS entry (issue #325), and Vite's own assets/
+# subdirectory guarantees it can never shadow anything in the first entry.
 FRONTEND_DIR = BASE_DIR / 'frontend'
 FRONTEND_BUILD_DIR = FRONTEND_DIR / 'dist'
 STATICFILES_DIRS = [BASE_DIR / 'static', FRONTEND_BUILD_DIR]
