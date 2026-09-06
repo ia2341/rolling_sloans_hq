@@ -73,10 +73,14 @@ interface PersonPageProps {
 /**
  * Renders the loaded payload's sections in the issue's fixed order: page
  * head, Details, Declared roles, Songs (only when `songs` is present),
- * Your recordings (only when `recordings` is present), and the
- * "Deliberately absent" card, always. `onDataChange` lets a child section
- * (Roles save, an upload confirm, a delete) hand back the fresh payload it
- * received rather than re-fetching the whole page.
+ * and Your recordings (only when `recordings` is present). `onDataChange`
+ * lets a child section (Roles save, an upload confirm, a delete) hand
+ * back the fresh payload it received rather than re-fetching the whole
+ * page. There used to be a "Deliberately absent" card here explaining
+ * that Conflicts/Backups/attendance/admin status never appear on this
+ * page — removed as unnecessary chrome (issue #363); ADR 0005's
+ * boundary and `docs/person-page-visibility.md` still govern what this
+ * page may show, this was only ever a footnote about it.
  */
 function PersonPage({
   data,
@@ -111,8 +115,6 @@ function PersonPage({
           }
         />
       )}
-
-      <DeliberatelyAbsentCard />
     </div>
   )
 }
@@ -392,7 +394,7 @@ function RolesSection({
         ))}
         {addableRoles.length > 0 && (
           <li>
-            <AddRoleChip roles={addableRoles} onAdd={stageAddition} />
+            <AddRoleSelect roles={addableRoles} onAdd={stageAddition} />
           </li>
         )}
       </ul>
@@ -408,8 +410,16 @@ function RolesSection({
   )
 }
 
-/** The `+ add a role` chip: a native `<select>` disguised as a chip, listing only Roles not already staged. */
-function AddRoleChip({
+/**
+ * The "add a role" affordance (issue #363): a native `<select>` whose own
+ * placeholder option reads "+ add a role", rather than a separate pill
+ * label sitting beside an empty-looking dropdown. Disabled and unselectable
+ * (`<option disabled>`, matching `ScheduleEdit`'s "+ Add song" select), so
+ * it can never itself be staged as a chosen Role — it resets to itself
+ * after each pick since the `<select>` is uncontrolled. Lists only Roles
+ * not already staged.
+ */
+function AddRoleSelect({
   roles,
   onAdd,
 }: {
@@ -417,25 +427,25 @@ function AddRoleChip({
   onAdd: (roleId: number) => void
 }) {
   return (
-    <label className="flex items-center gap-1 rounded-full border border-dashed border-rs-border px-3 py-1 text-sm text-rs-muted">
-      + add a role
-      <select
-        aria-label="Add a role"
-        value=""
-        onChange={(event) => {
-          const roleId = Number(event.target.value)
-          if (roleId) onAdd(roleId)
-        }}
-        className="bg-transparent text-sm"
-      >
-        <option value="" />
-        {roles.map((role) => (
-          <option key={role.id} value={role.id}>
-            {role.name}
-          </option>
-        ))}
-      </select>
-    </label>
+    <select
+      aria-label="Add a role"
+      defaultValue=""
+      onChange={(event) => {
+        const roleId = Number(event.target.value)
+        if (roleId) onAdd(roleId)
+        event.target.value = ''
+      }}
+      className="rounded-full border border-dashed border-rs-border bg-transparent px-3 py-1 text-sm text-rs-muted"
+    >
+      <option value="" disabled>
+        + add a role
+      </option>
+      {roles.map((role) => (
+        <option key={role.id} value={role.id}>
+          {role.name}
+        </option>
+      ))}
+    </select>
   )
 }
 
@@ -647,19 +657,5 @@ function RecordingTable({
         ))}
       </tbody>
     </table>
-  )
-}
-
-/** The dashed "Deliberately absent" card (issue #333), rendered for every viewer state. */
-function DeliberatelyAbsentCard() {
-  return (
-    <section className="rounded border border-dashed border-rs-border p-4 text-sm text-rs-muted">
-      <p>
-        <strong>Deliberately absent.</strong> Conflicts, Backups, attendance and
-        admin status are never on this page, for any viewer including an admin.
-        Availability lives on the Schedule; a Backup needs a Rehearsal in scope
-        and this page has none.
-      </p>
-    </section>
   )
 }

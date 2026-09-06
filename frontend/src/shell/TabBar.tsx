@@ -2,6 +2,7 @@ import { Menu } from 'lucide-react'
 import { useState } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 
+import { useAppContext } from '../api/ContextProvider'
 import { cn } from '../lib/utils'
 import { MoreSheet } from './MoreSheet'
 import { isNavItemActive, TAB_BAR_NAV_ITEMS } from './navigation'
@@ -15,6 +16,7 @@ import { isNavItemActive, TAB_BAR_NAV_ITEMS } from './navigation'
 export function TabBar() {
   const [moreOpen, setMoreOpen] = useState(false)
   const location = useLocation()
+  const appContext = useAppContext()
 
   return (
     <>
@@ -23,7 +25,11 @@ export function TabBar() {
         className="fixed inset-x-0 bottom-0 z-20 flex border-t border-rs-border bg-rs-surface"
       >
         {TAB_BAR_NAV_ITEMS.map((item) => {
-          const isActive = isNavItemActive(item, location)
+          const isActive = isNavItemActive(
+            item,
+            location,
+            appContext?.viewer.id,
+          )
           return (
             <NavLink
               key={item.key}
