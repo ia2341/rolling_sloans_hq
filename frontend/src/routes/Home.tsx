@@ -427,10 +427,10 @@ function SongProgressTable({ songs }: { songs: SongProgressRow[] }) {
         <tr>
           <th className="w-8 pb-2">#</th>
           <th className="pb-2">Song</th>
-          <th className="pb-2">Artist</th>
+          <th className="w-20 pb-2">Artist</th>
           <th className="w-16 pb-2">Length</th>
           <th className="w-24 pb-2">Next rehearsal</th>
-          <th className="w-32 pb-2">Progress</th>
+          <th className="w-44 pb-2">Progress</th>
           <th className="w-1/3 pb-2">Notes</th>
         </tr>
       </thead>
@@ -441,7 +441,9 @@ function SongProgressTable({ songs }: { songs: SongProgressRow[] }) {
             <td className="py-2 align-top font-medium">
               <Link to={`/songs/${song.id}`}>{song.title}</Link>
             </td>
-            <td className="py-2 align-top text-rs-muted">{song.artist}</td>
+            <td className="truncate py-2 align-top text-rs-muted">
+              {song.artist}
+            </td>
             <td className="py-2 align-top">{song.length}</td>
             <td className="py-2 align-top text-rs-muted">
               {song.next_rehearsal !== null
