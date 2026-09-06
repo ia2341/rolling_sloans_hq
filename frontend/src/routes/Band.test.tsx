@@ -274,6 +274,28 @@ describe('Band', () => {
     ).not.toBeInTheDocument()
   })
 
+  it('does nothing when Edit roster is clicked with no Semester selected', async () => {
+    const fetchSpy = stubFetchSequence([
+      {
+        status: 200,
+        body: {
+          context: adminContext({ viewing_semester: null }),
+          data: bandPayload(),
+        },
+      },
+    ])
+    const user = userEvent.setup()
+
+    renderShell(<Band />, ['/members'])
+
+    await user.click(await screen.findByRole('button', { name: 'Edit roster' }))
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    expect(
+      screen.queryByRole('button', { name: '+ Add people' }),
+    ).not.toBeInTheDocument()
+  })
+
   it('renders an empty-roster state', async () => {
     mockFetchOnce(200, {
       context: memberContext(),
@@ -412,6 +434,32 @@ describe('Band roster editor', () => {
     expect(screen.getByText('Rename')).toBeInTheDocument()
   })
 
+  it('removing a pending-invite row hides its Invite again control', async () => {
+    stubFetchSequence([
+      { status: 200, body: { context: adminContext(), data: bandPayload() } },
+      {
+        status: 200,
+        body: { context: adminContext(), data: rosterEditPayload() },
+      },
+    ])
+    const user = userEvent.setup()
+
+    renderShell(<Band />, ['/members'])
+    await user.click(await screen.findByRole('button', { name: 'Edit roster' }))
+    await screen.findByDisplayValue('Alex Kim')
+
+    expect(
+      screen.getByRole('button', { name: 'Invite again' }),
+    ).toBeInTheDocument()
+
+    const removeButtons = screen.getAllByRole('button', { name: 'Remove' })
+    await user.click(removeButtons[1] as HTMLElement) // Alex Kim's row
+
+    expect(
+      screen.queryByRole('button', { name: 'Invite again' }),
+    ).not.toBeInTheDocument()
+  })
+
   it('removing an existing member strikes the row through, and Undo restores it with no changes left', async () => {
     stubFetchSequence([
       { status: 200, body: { context: adminContext(), data: bandPayload() } },
@@ -440,6 +488,37 @@ describe('Band roster editor', () => {
     expect(screen.getByText('0 unsaved')).toBeInTheDocument()
   })
 
+  it('shows an error with a Retry action when + Add people fails to load candidates', async () => {
+    stubFetchSequence([
+      { status: 200, body: { context: adminContext(), data: bandPayload() } },
+      {
+        status: 200,
+        body: { context: adminContext(), data: rosterEditPayload() },
+      },
+      { status: 500, body: { context: adminContext(), data: null } },
+      {
+        status: 200,
+        body: { context: adminContext(), data: rosterCandidatesPayload() },
+      },
+    ])
+    const user = userEvent.setup()
+
+    renderShell(<Band />, ['/members'])
+    await user.click(await screen.findByRole('button', { name: 'Edit roster' }))
+    await screen.findByDisplayValue('Sam Rivera')
+
+    await user.click(screen.getByRole('button', { name: '+ Add people' }))
+    expect(
+      await screen.findByText("Couldn't load candidates.", { exact: false }),
+    ).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Retry' }))
+
+    expect(
+      await screen.findByText('Jamie Ortiz', { exact: false }),
+    ).toBeInTheDocument()
+  })
+
   it('importing a candidate through + Add people appends a New row to the buffer', async () => {
     stubFetchSequence([
       { status: 200, body: { context: adminContext(), data: bandPayload() } },
@@ -463,6 +542,68 @@ describe('Band roster editor', () => {
     await user.click(screen.getByRole('button', { name: 'Add to the buffer' }))
 
     expect(await screen.findByDisplayValue('Jamie Ortiz')).toBeInTheDocument()
+  })
+
+  it('reopening + Add people and importing the same candidate again does not duplicate the row', async () => {
+    stubFetchSequence([
+      { status: 200, body: { context: adminContext(), data: bandPayload() } },
+      {
+        status: 200,
+        body: { context: adminContext(), data: rosterEditPayload() },
+      },
+      {
+        status: 200,
+        body: { context: adminContext(), data: rosterCandidatesPayload() },
+      },
+      {
+        status: 200,
+        body: { context: adminContext(), data: rosterCandidatesPayload() },
+      },
+    ])
+    const user = userEvent.setup()
+
+    renderShell(<Band />, ['/members'])
+    await user.click(await screen.findByRole('button', { name: 'Edit roster' }))
+    await screen.findByDisplayValue('Sam Rivera')
+
+    await user.click(screen.getByRole('button', { name: '+ Add people' }))
+    await screen.findByText('Jamie Ortiz', { exact: false })
+    await user.click(screen.getByRole('button', { name: 'Add to the buffer' }))
+    await screen.findByDisplayValue('Jamie Ortiz')
+
+    await user.click(screen.getByRole('button', { name: '+ Add people' }))
+    await screen.findByText('Jamie Ortiz', { exact: false })
+    await user.click(screen.getByRole('button', { name: 'Add to the buffer' }))
+
+    expect(screen.getAllByDisplayValue('Jamie Ortiz')).toHaveLength(1)
+  })
+
+  it('shows an error and re-enables Add when declaring a new Role fails', async () => {
+    stubFetchSequence([
+      { status: 200, body: { context: adminContext(), data: bandPayload() } },
+      {
+        status: 200,
+        body: { context: adminContext(), data: rosterEditPayload() },
+      },
+      { status: 500, body: { context: adminContext(), data: null } },
+    ])
+    const user = userEvent.setup()
+
+    renderShell(<Band />, ['/members'])
+    await user.click(await screen.findByRole('button', { name: 'Edit roster' }))
+    await screen.findByDisplayValue('Sam Rivera')
+
+    const roleButtons = screen.getAllByRole('button', { name: 'Edit roles' })
+    await user.click(roleButtons[0] as HTMLElement)
+    await user.type(screen.getByPlaceholderText('Declare a new Role…'), 'Keys')
+    await user.click(screen.getByRole('button', { name: 'Add' }))
+
+    expect(
+      await screen.findByText("Couldn't declare that Role.", {
+        exact: false,
+      }),
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Add' })).not.toBeDisabled()
   })
 
   it('inviting a new member through + Add people appends an Invite row', async () => {
@@ -548,6 +689,84 @@ describe('Band roster editor', () => {
     expect(screen.getByText('Sam Rivera: +Drums')).toBeInTheDocument()
     expect(fetchSpy).toHaveBeenCalledTimes(3)
     expect(fetchSpy.mock.calls[2]?.[0]).toBe('/api/members/roster/preview/')
+  })
+
+  it('a rejected save closes the popup and surfaces the rejection in the grid', async () => {
+    stubFetchSequence([
+      { status: 200, body: { context: adminContext(), data: bandPayload() } },
+      {
+        status: 200,
+        body: { context: adminContext(), data: rosterEditPayload() },
+      },
+      {
+        status: 200,
+        body: {
+          context: adminContext(),
+          ok: true,
+          errors: {},
+          non_field_errors: [],
+          fallout: {
+            is_blocked: false,
+            block_message: '',
+            is_stale: false,
+            pending_adds: [],
+            pending_invites: [],
+            pending_removals: [],
+            pending_role_changes: ['Sam Rivera: +Drums'],
+            pending_name_edits: [],
+            loud: [],
+            quiet: [],
+          },
+          values: null,
+          data: null,
+        },
+      },
+      {
+        status: 200,
+        body: {
+          context: adminContext(),
+          ok: false,
+          errors: {},
+          non_field_errors: [
+            'This Semester changed since you started editing.',
+          ],
+          fallout: null,
+          values: null,
+          data: null,
+        },
+      },
+    ])
+    const user = userEvent.setup()
+
+    renderShell(
+      <>
+        <Band />
+        <EditSessionSpy />
+      </>,
+      ['/members'],
+    )
+    await user.click(await screen.findByRole('button', { name: 'Edit roster' }))
+    await screen.findByDisplayValue('Sam Rivera')
+
+    const roleButtons = screen.getAllByRole('button', { name: 'Edit roles' })
+    await user.click(roleButtons[0] as HTMLElement)
+    await user.click(screen.getByRole('menuitemcheckbox', { name: 'Drums' }))
+    await user.keyboard('{Escape}')
+
+    await user.click(screen.getByRole('button', { name: 'toolbar save' }))
+    await waitFor(() =>
+      expect(screen.getByText('What changes')).toBeInTheDocument(),
+    )
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    expect(
+      await screen.findByText(
+        'This Semester changed since you started editing.',
+      ),
+    ).toBeInTheDocument()
+    expect(screen.queryByText('What changes')).not.toBeInTheDocument()
+    // Still editing -- a rejected save must not clear the buffer.
+    expect(screen.getByDisplayValue('Sam Rivera')).toBeInTheDocument()
   })
 
   it('starts editing for ?intent=edit-roster, then strips the param, without auto-opening + Add people', async () => {

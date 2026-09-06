@@ -30,6 +30,7 @@ export function RolePicker({
   const [open, setOpen] = useState(false)
   const [declareName, setDeclareName] = useState('')
   const [declaring, setDeclaring] = useState(false)
+  const [declareError, setDeclareError] = useState(false)
 
   const rolesById = new Map(availableRoles.map((role) => [role.id, role]))
 
@@ -44,14 +45,21 @@ export function RolePicker({
     const name = declareName.trim()
     if (!name) return
     setDeclaring(true)
-    void apiFetch<ReadEnvelope<RoleDeclaration>>('/api/members/roster/roles/', {
+    setDeclareError(false)
+    apiFetch<ReadEnvelope<RoleDeclaration>>('/api/members/roster/roles/', {
       method: 'POST',
       body: JSON.stringify({ name }),
-    }).then((envelope) => {
-      setDeclaring(false)
-      setDeclareName('')
-      onRoleDeclared(envelope.data.role)
     })
+      .then((envelope) => {
+        setDeclareName('')
+        onRoleDeclared(envelope.data.role)
+      })
+      .catch(() => {
+        setDeclareError(true)
+      })
+      .finally(() => {
+        setDeclaring(false)
+      })
   }
 
   return (
@@ -97,28 +105,35 @@ export function RolePicker({
                 {role.name}
               </DropdownMenu.CheckboxItem>
             ))}
-            <div className="flex items-center gap-1 border-t border-rs-border px-2 py-1.5">
-              <input
-                type="text"
-                value={declareName}
-                onChange={(event) => setDeclareName(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
-                    event.preventDefault()
-                    declareRole()
-                  }
-                }}
-                placeholder="Declare a new Role…"
-                className="min-w-0 flex-1 rounded border border-rs-border px-1.5 py-1 text-xs"
-              />
-              <button
-                type="button"
-                onClick={declareRole}
-                disabled={declareName.trim() === '' || declaring}
-                className="shrink-0 rounded border border-rs-border px-2 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Add
-              </button>
+            <div className="border-t border-rs-border px-2 py-1.5">
+              <div className="flex items-center gap-1">
+                <input
+                  type="text"
+                  value={declareName}
+                  onChange={(event) => setDeclareName(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault()
+                      declareRole()
+                    }
+                  }}
+                  placeholder="Declare a new Role…"
+                  className="min-w-0 flex-1 rounded border border-rs-border px-1.5 py-1 text-xs"
+                />
+                <button
+                  type="button"
+                  onClick={declareRole}
+                  disabled={declareName.trim() === '' || declaring}
+                  className="shrink-0 rounded border border-rs-border px-2 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Add
+                </button>
+              </div>
+              {declareError && (
+                <p role="alert" className="pt-1 text-xs text-rs-danger">
+                  Couldn't declare that Role. Try again.
+                </p>
+              )}
             </div>
           </DropdownMenu.Content>
         </DropdownMenu.Portal>

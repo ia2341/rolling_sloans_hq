@@ -63,6 +63,7 @@ export function Band() {
   const [availableRoles, setAvailableRoles] = useState<MemberRole[]>([])
   const [addSheetOpen, setAddSheetOpen] = useState(false)
   const [saveDialogOpen, setSaveDialogOpen] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
   const [resentPersonIds, setResentPersonIds] = useState<Set<number>>(new Set())
   const [searchParams, setSearchParams] = useSearchParams()
   const handledIntentRef = useRef(false)
@@ -81,7 +82,14 @@ export function Band() {
 
   const viewingSemester = appContext?.viewing_semester ?? null
 
+  // Requires a selected Semester -- `GET /api/members/roster/` returns an
+  // empty payload with none selected, which would flip `isEditing` to
+  // `true` with no Semester to save against and no
+  // `RosterEditSessionRegistrar`/`SaveChangesDialog` mounted to leave it
+  // (both are gated on `viewingSemester !== null`), stranding the admin in
+  // an edit grid with no Save or Discard control.
   const startEditing = useCallback(() => {
+    if (viewingSemester === null) return
     void apiFetch<ReadEnvelope<RosterEditPayload>>('/api/members/roster/').then(
       (envelope) => {
         setRows(rowsFromPayload(envelope.data.members))
@@ -91,7 +99,7 @@ export function Band() {
         setIsEditing(true)
       },
     )
-  }, [])
+  }, [viewingSemester])
 
   // `?intent=edit-roster` (issue #374): Home's Roster checklist row lands
   // here already mid-workflow -- editing started for you -- rather than
@@ -120,6 +128,7 @@ export function Band() {
     setIsEditing(false)
     setRows([])
     setRowErrors({})
+    setSaveError(null)
   }, [])
 
   const requestSave = useCallback(() => setSaveDialogOpen(true), [])
@@ -148,8 +157,22 @@ export function Band() {
     )
   }, [])
 
+  // Excludes anyone already staged in the buffer (import or existing-member
+  // rows both carry a `personId`) so reopening the Add-people sheet can't
+  // stage the same person twice -- a deleted row's `personId` doesn't
+  // count, since undoing the delete is how that person comes back.
   const addRows = useCallback((newRows: RosterEditRow[]) => {
-    setRows((current) => [...current, ...newRows])
+    setRows((current) => {
+      const bufferedIds = new Set(
+        current
+          .filter((row) => !row.deleted && row.personId !== null)
+          .map((row) => row.personId),
+      )
+      const deduped = newRows.filter(
+        (row) => row.personId === null || !bufferedIds.has(row.personId),
+      )
+      return [...current, ...deduped]
+    })
   }, [])
 
   const onRoleDeclared = useCallback((role: MemberRole) => {
@@ -200,7 +223,22 @@ export function Band() {
       method: 'POST',
       body: JSON.stringify(body),
     }).then((envelope) => {
-      if (!envelope.ok) return
+      if (!envelope.ok) {
+        // A rejected save (e.g. a stale Semester) means the successful
+        // preview the dialog is still showing no longer reflects what the
+        // server will do -- close it rather than leaving "Save changes"
+        // enabled over stale Fallout, and surface the rejection in the
+        // grid itself so a re-opened Save popup runs a fresh preview.
+        setSaveDialogOpen(false)
+        setSaveError(
+          envelope.non_field_errors.length > 0
+            ? envelope.non_field_errors.join(' ')
+            : 'This save was rejected. Review the roster and try again.',
+        )
+        setRowErrors(envelope.errors)
+        return
+      }
+      setSaveError(null)
       setSaveDialogOpen(false)
       setIsEditing(false)
       setRows([])
@@ -291,6 +329,14 @@ export function Band() {
             {data.unassigned_role_holders.names.join(', ')}
           </p>
         )}
+      {isEditing && saveError !== null && (
+        <p
+          role="alert"
+          className="mb-3 rounded border border-rs-danger/40 bg-rs-danger/5 px-3 py-2 text-sm text-rs-danger"
+        >
+          {saveError}
+        </p>
+      )}
       {isEditing ? (
         <RosterEditGrid
           rows={rows}

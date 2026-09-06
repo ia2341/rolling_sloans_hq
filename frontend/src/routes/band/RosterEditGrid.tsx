@@ -113,18 +113,20 @@ export function RosterEditGrid({
                 <p className="text-rs-muted">
                   {row.songCount} song{row.songCount === 1 ? '' : 's'}
                 </p>
-                {row.isPendingInvite && row.personId !== null && (
-                  <button
-                    type="button"
-                    onClick={() => onResendInvite(row.personId as number)}
-                    disabled={resentPersonIds.has(row.personId)}
-                    className="rounded border border-rs-border px-2 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {resentPersonIds.has(row.personId)
-                      ? 'Invite sent'
-                      : 'Invite again'}
-                  </button>
-                )}
+                {!row.deleted &&
+                  row.isPendingInvite &&
+                  row.personId !== null && (
+                    <button
+                      type="button"
+                      onClick={() => onResendInvite(row.personId as number)}
+                      disabled={resentPersonIds.has(row.personId)}
+                      className="rounded border border-rs-border px-2 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {resentPersonIds.has(row.personId)
+                        ? 'Invite sent'
+                        : 'Invite again'}
+                    </button>
+                  )}
                 {row.deleted ? (
                   <button
                     type="button"

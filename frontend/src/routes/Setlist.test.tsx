@@ -627,9 +627,8 @@ describe('Setlist edit mode', () => {
     ).toBeInTheDocument()
     expect(screen.getByLabelText('Title for row 1')).toBeInTheDocument()
     await waitFor(() =>
-      expect(screen.getByTestId('location')).toHaveTextContent('/setlist'),
+      expect(screen.getByTestId('location')).toHaveTextContent(/^\/setlist$/),
     )
-    expect(screen.getByTestId('location')).not.toHaveTextContent('intent')
   })
 
   it('does nothing for a plain load with no ?intent (issue #374)', async () => {
@@ -644,5 +643,22 @@ describe('Setlist edit mode', () => {
       await screen.findByRole('button', { name: 'Edit setlist' }),
     ).toBeInTheDocument()
     expect(screen.queryByText('Add songs')).not.toBeInTheDocument()
+  })
+
+  it('ignores ?intent=add-songs for a non-admin viewer, staying read-only (issue #374)', async () => {
+    mockFetchOnce(200, {
+      context: memberContext(),
+      data: setlistPayload(),
+    })
+
+    renderShell(<Setlist />, ['/setlist?intent=add-songs'])
+
+    await screen.findByText('Test Song')
+    expect(
+      screen.queryByRole('button', { name: 'Edit setlist' }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('heading', { name: 'Add songs' }),
+    ).not.toBeInTheDocument()
   })
 })

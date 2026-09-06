@@ -43,6 +43,7 @@ export function AddPeopleSheet({
 }: AddPeopleSheetProps) {
   const [source, setSource] = useState<Source>('import')
   const [loaded, setLoaded] = useState(false)
+  const [loadError, setLoadError] = useState(false)
   const [candidates, setCandidates] = useState<RosterCandidatesPayload | null>(
     null,
   )
@@ -55,6 +56,7 @@ export function AddPeopleSheet({
   function resetAndClose() {
     setSource('import')
     setLoaded(false)
+    setLoadError(false)
     setCandidates(null)
     setImportTicked(new Set())
     setExistingTicked(new Set())
@@ -74,15 +76,25 @@ export function AddPeopleSheet({
   // changed (e.g. the "+ Add people" button), never because Radix calls
   // `onOpenChange` on the caller's behalf.
   useEffect(() => {
-    if (!open || loaded) return
-    void apiFetch<ReadEnvelope<RosterCandidatesPayload>>(
+    if (!open || loaded || loadError) return
+    apiFetch<ReadEnvelope<RosterCandidatesPayload>>(
       '/api/members/roster/candidates/',
-    ).then((envelope) => {
-      setCandidates(envelope.data)
-      setImportTicked(new Set(envelope.data.import_candidates.map((c) => c.id)))
-      setLoaded(true)
-    })
-  }, [open, loaded])
+    )
+      .then((envelope) => {
+        setCandidates(envelope.data)
+        setImportTicked(
+          new Set(envelope.data.import_candidates.map((c) => c.id)),
+        )
+        setLoaded(true)
+      })
+      .catch(() => {
+        setLoadError(true)
+      })
+  }, [open, loaded, loadError])
+
+  function retryLoad() {
+    setLoadError(false)
+  }
 
   function toggleImportTicked(id: number) {
     setImportTicked((current) => {
@@ -173,7 +185,20 @@ export function AddPeopleSheet({
         onChange={(next) => setSource(next as Source)}
       />
 
-      {!loaded ? (
+      {loadError ? (
+        <div className="pt-3">
+          <p role="alert" className="mb-2 text-sm text-rs-danger">
+            Couldn't load candidates. Nothing has been added.
+          </p>
+          <button
+            type="button"
+            onClick={retryLoad}
+            className="rounded border border-rs-border px-2 py-1 text-sm font-medium hover:bg-rs-border/40"
+          >
+            Retry
+          </button>
+        </div>
+      ) : !loaded ? (
         <p className="pt-3 text-sm text-rs-muted">Loading…</p>
       ) : source === 'import' ? (
         <div className="pt-3">

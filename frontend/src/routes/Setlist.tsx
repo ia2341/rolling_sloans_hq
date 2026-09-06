@@ -44,7 +44,8 @@ type EditField = 'title' | 'artist' | 'length' | 'notes'
  * never rendered to a non-admin. A `?intent=add-songs` query param (issue
  * #374, from Home's setup checklist) starts editing and opens the
  * Add-songs sheet once the initial read has landed, then strips itself so
- * reloading doesn't repeat it.
+ * reloading doesn't repeat it -- ignored entirely for a non-admin viewer,
+ * who must stay read-only regardless of the URL.
  */
 export function Setlist() {
   usePageTitle('Setlist')
@@ -142,6 +143,7 @@ export function Setlist() {
     if (data === null) return
     if (handledIntentRef.current) return
     if (searchParams.get('intent') !== 'add-songs') return
+    if (!(appContext?.viewer.is_admin ?? false)) return
     handledIntentRef.current = true
     // Deferred a tick (rather than calling these setters inline) so this
     // reads as reacting to an external signal -- the URL -- rather than
@@ -158,7 +160,7 @@ export function Setlist() {
         { replace: true },
       )
     })
-  }, [data, searchParams, setSearchParams, startEditing])
+  }, [data, searchParams, setSearchParams, startEditing, appContext])
 
   const previewSetlist = useCallback((): Promise<PreviewResult> => {
     if (viewingSemester === null) {
