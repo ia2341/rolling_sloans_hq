@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 
 import { apiFetch } from '../api/client'
 import { useAppContext } from '../api/ContextProvider'
@@ -62,17 +62,21 @@ export function Setlist() {
   const [uploadSongId, setUploadSongId] = useState<number | null>(null)
   const [searchParams, setSearchParams] = useSearchParams()
   const handledIntentRef = useRef(false)
+  const [newSongLinks, setNewSongLinks] = useState<
+    { id: number; title: string }[]
+  >([])
 
   const load = useCallback(() => {
-    void apiFetch<ReadEnvelope<SetlistPayload>>('/api/setlist/').then(
+    return apiFetch<ReadEnvelope<SetlistPayload>>('/api/setlist/').then(
       (envelope) => {
         setData(envelope.data)
+        return envelope.data
       },
     )
   }, [])
 
   useEffect(() => {
-    load()
+    void load()
   }, [load])
 
   const viewingSemester = appContext?.viewing_semester ?? null
@@ -82,6 +86,7 @@ export function Setlist() {
     setRows(rowsFromPayload(data.songs))
     setRowErrors({})
     setIsEditing(true)
+    setNewSongLinks([])
   }, [data])
 
   const discard = useCallback(() => {
@@ -187,6 +192,7 @@ export function Setlist() {
 
   const confirmSave = useCallback(() => {
     if (viewingSemester === null) return
+    const previousSongIds = new Set((data?.songs ?? []).map((song) => song.id))
     const body = buildBufferWire(
       viewingSemester.id,
       viewingSemester.updated_at,
@@ -201,9 +207,20 @@ export function Setlist() {
       setIsEditing(false)
       setRows([])
       setRowErrors({})
-      load()
+      // A newly-created Song has no Role Requirements yet (issue #441) --
+      // diffing the reloaded Song ids against the pre-save snapshot finds
+      // exactly the Songs this save created, regardless of edits/reorders
+      // to existing ones, without the server naming them in the envelope.
+      void load().then((payload) => {
+        const newSongs = payload.songs.filter(
+          (song) => !previousSongIds.has(song.id),
+        )
+        setNewSongLinks(
+          newSongs.map((song) => ({ id: song.id, title: song.title })),
+        )
+      })
     })
-  }, [rows, viewingSemester, load])
+  }, [rows, viewingSemester, load, data])
 
   const changeCount = useMemo(() => computeChangeCount(rows), [rows])
   const isAdmin = appContext?.viewer.is_admin ?? false
@@ -248,6 +265,12 @@ export function Setlist() {
           )
         }
       />
+      {!isEditing && newSongLinks.length > 0 && (
+        <NewSongRequirementsPrompt
+          songs={newSongLinks}
+          onDismiss={() => setNewSongLinks([])}
+        />
+      )}
       {isEditing ? (
         <SetlistEditGrid
           rows={rows}
@@ -307,6 +330,53 @@ export function Setlist() {
           onConfirm={confirmSave}
         />
       )}
+    </div>
+  )
+}
+
+/**
+ * Shown once, in read mode, right after a save that created one or more
+ * new Songs (issue #441) -- once #439 lands, a Song with no Role
+ * Requirements can't be assigned at all, so a freshly-added Song needs an
+ * obvious path into its Requirements editor rather than relying on the
+ * admin to notice its row in the read-only table below. Dismissed by the
+ * admin's own "x", or silently cleared the next time editing starts
+ * (`startEditing`) so it never survives into an unrelated later save.
+ */
+function NewSongRequirementsPrompt({
+  songs,
+  onDismiss,
+}: {
+  songs: { id: number; title: string }[]
+  onDismiss: () => void
+}) {
+  return (
+    <div className="mb-3 flex items-start justify-between gap-2 rounded border border-rs-accent/40 bg-rs-accent/10 p-3 text-sm">
+      <div className="flex flex-col gap-1">
+        <p className="font-medium">
+          {songs.length === 1
+            ? 'New song saved'
+            : `${songs.length} new songs saved`}{' '}
+          — set its Role Requirements to make it assignable.
+        </p>
+        <ul className="flex flex-col gap-1">
+          {songs.map((song) => (
+            <li key={song.id}>
+              <Link to={`/songs/${song.id}`} className="underline">
+                {song.title} — Edit requirements
+              </Link>
+            </li>
+          ))}
+        </ul>
+      </div>
+      <button
+        type="button"
+        aria-label="Dismiss"
+        onClick={onDismiss}
+        className="text-rs-muted"
+      >
+        ×
+      </button>
     </div>
   )
 }

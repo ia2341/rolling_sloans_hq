@@ -665,6 +665,119 @@ describe('Setlist edit mode', () => {
     expect(fetchSpy.mock.calls[3]?.[0]).toBe('/api/setlist/')
   })
 
+  it('saving a newly-added Song shows a link into its Requirements editor (issue #441)', async () => {
+    const reloadedPayload = setlistPayload()
+    reloadedPayload.songs.push({
+      id: 2,
+      title: 'Hand-Added Song',
+      artist: '',
+      length: '',
+      position: 2,
+      notes: '',
+      cast: [
+        { role_id: 1, role_name: 'Singer', code: 'SIN', performers: [] },
+        { role_id: 2, role_name: 'Drummer', code: 'DRU', performers: [] },
+      ],
+      recording_count: 0,
+    })
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        json: () =>
+          Promise.resolve({ context: adminContext(), data: setlistPayload() }),
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            context: adminContext(),
+            ok: true,
+            errors: {},
+            non_field_errors: [],
+            fallout: {
+              is_blocked: false,
+              block_message: '',
+              is_stale: false,
+              pending_adds: ['Hand-Added Song'],
+              pending_edits: [],
+              reordered: false,
+              pending_deletions: [],
+              loud: [],
+              quiet: [],
+            },
+            values: null,
+            data: null,
+          }),
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            context: adminContext(),
+            ok: true,
+            errors: {},
+            non_field_errors: [],
+            fallout: null,
+            values: null,
+            data: null,
+          }),
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        json: () =>
+          Promise.resolve({ context: adminContext(), data: reloadedPayload }),
+      })
+    vi.stubGlobal('fetch', fetchSpy)
+    const user = userEvent.setup()
+
+    renderShell(
+      <>
+        <Setlist />
+        <EditSessionSpy />
+      </>,
+      ['/setlist'],
+    )
+    await user.click(
+      await screen.findByRole('button', { name: 'Edit setlist' }),
+    )
+    await user.click(screen.getByRole('button', { name: '+ Add songs' }))
+    await user.click(screen.getByRole('radio', { name: 'By hand' }))
+    await user.type(screen.getByLabelText('Title'), 'Hand-Added Song')
+    await user.click(screen.getByRole('button', { name: 'Add to the buffer' }))
+
+    await user.click(screen.getByRole('button', { name: 'toolbar save' }))
+    await waitFor(() =>
+      expect(screen.getByText('What changes')).toBeInTheDocument(),
+    )
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'Edit setlist' }),
+      ).toBeInTheDocument(),
+    )
+    const link = screen.getByRole('link', {
+      name: 'Hand-Added Song — Edit requirements',
+    })
+    expect(link).toHaveAttribute('href', '/songs/2')
+    // The existing, untouched Song never gets a link -- only the Song this save created.
+    expect(
+      screen.queryByRole('link', { name: /Test Song/ }),
+    ).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Dismiss' }))
+    expect(
+      screen.queryByRole('link', {
+        name: 'Hand-Added Song — Edit requirements',
+      }),
+    ).not.toBeInTheDocument()
+  })
+
   it('starts editing and opens the Add-songs sheet for ?intent=add-songs, then strips the param (issue #374)', async () => {
     mockFetchOnce(200, {
       context: adminContext(),
