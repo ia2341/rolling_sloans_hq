@@ -154,25 +154,23 @@ def _build_songs(semester, count=7):
 def _build_song_requirements_and_assignments(songs, roles, memberships):
     """Build a SongRoleRequirement per Role on every Song, then cast People onto them via SongRoleAssignment.
 
-    Mostly casts a Person whose Membership declares the required Role;
-    every third Song intentionally casts a mismatched Person instead
-    (`SongRoleAssignment.save()` flags `is_role_mismatch` on its own, per
-    ADR-0002 — a realistic seed should include a couple of these rather
-    than none).
+    Always casts a Person who actually declared the required Role as a
+    `PersonRole` — `_build_memberships` guarantees every Role has at least
+    one such Person, so this never falls back to an arbitrary Person who
+    can't play the part. A seed is meant to be a plausible example of the
+    domain, not a stress test of `is_role_mismatch` (ADR-0002); that flag
+    is exercised by its own model-level tests, not by seed data.
     """
     people_by_role = {}
     for membership in memberships.values():
-        for membership_role in membership.membershiprole_set.all():
-            people_by_role.setdefault(membership_role.role_id, []).append(membership.person)
+        for person_role in membership.person.personrole_set.all():
+            people_by_role.setdefault(person_role.role_id, []).append(membership.person)
 
-    all_people = [membership.person for membership in memberships.values()]
-
-    for song_index, song in enumerate(songs):
+    for song in songs:
         for role in roles:
             requirement = SongRoleRequirementFactory(song=song, role=role, count=1)
-            force_mismatch = song_index % 3 == 0
-            candidates = all_people if force_mismatch else people_by_role.get(role.pk, all_people)
-            person = fake.random_element(candidates) if candidates else fake.random_element(all_people)
+            candidates = people_by_role.get(role.pk, [])
+            person = fake.random_element(candidates)
             SongRoleAssignmentFactory(song=requirement.song, role=role, person=person)
 
 

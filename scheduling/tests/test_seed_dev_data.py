@@ -70,6 +70,17 @@ class SeedDevDataTests(TestCase):
                 f'{assignment} has no matching SongRoleRequirement',
             )
 
+        # Every seeded SongRoleAssignment casts a Person who actually
+        # declared the assigned Role (regression: this command used to
+        # deliberately cast a mismatched Person on every third Song to
+        # exercise is_role_mismatch, which made a "logical" seed roster
+        # impossible to rely on).
+        for assignment in SongRoleAssignment.objects.filter(song__semester=semester):
+            self.assertFalse(
+                assignment.is_role_mismatch,
+                f'{assignment} is role-mismatched: {assignment.person} has not declared {assignment.role}',
+            )
+
         output = out.getvalue()
         self.assertIn(semester.name, output)
 
