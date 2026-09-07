@@ -204,7 +204,9 @@ export interface RosterRemovalWire {
  * `/api/members/roster/preview/` response's `fallout` value. No
  * `pending_role_changes` (issue #379) -- this Buffer never touches Role
  * data. `pending_added_without_invite` (issue #397) lists a send_invite:
- * false row's outcome separately from `pending_invites`.
+ * false row's outcome separately from `pending_invites`. No
+ * `pending_name_edits` (issue #407) -- the Roster editor no longer offers
+ * a name-edit affordance.
  */
 export interface RosterEditFalloutWire {
   is_blocked: boolean
@@ -214,7 +216,6 @@ export interface RosterEditFalloutWire {
   pending_invites: string[]
   pending_added_without_invite: string[]
   pending_removals: RosterRemovalWire[]
-  pending_name_edits: string[]
   loud: string[]
   quiet: string[]
 }

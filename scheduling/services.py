@@ -3582,7 +3582,14 @@ def _purge_person_from_semester(person_id: int, semester: Semester) -> None:
 
 
 def _apply_roster_edit_entry(entry: RosterEditEntry, semester: Semester) -> None:
-    """Save `entry.name` onto its Person, then get-or-create their Membership on `semester` (issue #379: no Role data here)."""
+    """Save `entry.name` onto its Person, then get-or-create their Membership on `semester` (issue #379: no Role data here).
+
+    The Roster editor's grid no longer offers a name-edit affordance
+    (issue #407) — `entry.name` is always the value the row loaded with —
+    so this branch is now unreachable through the SPA and only guards a
+    directly-built `RosterEditEntry` (a test, or a future caller) that
+    does submit a changed name.
+    """
     if entry.person.name != entry.name:
         entry.person.name = entry.name
         entry.person.save(update_fields=['name'])
@@ -3642,7 +3649,9 @@ class RosterEditFallout:
     neither ever blocks a save. `is_stale` flags a `Semester.updated_at`
     mismatch — reported, never refused, per ADR 0008. Carries no
     Role-change field (issue #379): this Buffer never touches Role data,
-    so there is nothing to report there.
+    so there is nothing to report there. Carries no name-change field
+    either (issue #407): the Roster editor no longer offers a name-edit
+    affordance, so there is nothing for a Preview to surface here.
     """
 
     is_blocked: bool
@@ -3652,7 +3661,6 @@ class RosterEditFallout:
     pending_invites: list[str]
     pending_added_without_invite: list[str]
     pending_removals: list[RosterRemoval]
-    pending_name_edits: list[str]
     loud: list[str]
     quiet: list[str]
 
@@ -3667,7 +3675,6 @@ def _blocked_roster_fallout(block_message: str, *, is_stale: bool = False) -> Ro
         pending_invites=[],
         pending_added_without_invite=[],
         pending_removals=[],
-        pending_name_edits=[],
         loud=[],
         quiet=[],
     )
@@ -3715,7 +3722,6 @@ def preview_roster_edits(buffer: RosterEditBuffer, *, viewing_semester: Semester
         Membership.objects.filter(semester=viewing_semester, person_id__in=person_ids_in_batch)
         .values_list('person_id', flat=True)
     )
-    names_before_by_person = {entry.person.pk: entry.person.name for entry in buffer.entries}
 
     removed_people_by_id = Person.objects.in_bulk(buffer.removed_person_ids)
     removal_counts_before = {
@@ -3742,14 +3748,9 @@ def preview_roster_edits(buffer: RosterEditBuffer, *, viewing_semester: Semester
         RosterRemoval(person_id=person_id, name=person.name, email=person.email)
         for person_id, person in removed_people_by_id.items()
     ]
-    pending_name_edits = []
     for entry in buffer.entries:
-        person_id = entry.person.pk
-        if person_id not in membership_person_ids_before:
+        if entry.person.pk not in membership_person_ids_before:
             pending_adds.append(entry.name)
-            continue
-        if entry.name != names_before_by_person[person_id]:
-            pending_name_edits.append(f'{names_before_by_person[person_id]} → {entry.name}')
 
     loud = []
     for person_id, (assignment_count, conflict_count) in removal_counts_before.items():
@@ -3781,7 +3782,6 @@ def preview_roster_edits(buffer: RosterEditBuffer, *, viewing_semester: Semester
         pending_invites=pending_invites,
         pending_added_without_invite=pending_added_without_invite,
         pending_removals=pending_removals,
-        pending_name_edits=pending_name_edits,
         loud=loud,
         quiet=quiet,
     )

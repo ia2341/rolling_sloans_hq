@@ -129,12 +129,6 @@ export function Band() {
 
   const requestSave = useCallback(() => setSaveDialogOpen(true), [])
 
-  const updateName = useCallback((rowKey: string, name: string) => {
-    setRows((current) =>
-      current.map((row) => (row.rowKey === rowKey ? { ...row, name } : row)),
-    )
-  }, [])
-
   const deleteRow = useCallback((rowKey: string) => {
     setRows((current) => deleteRosterRow(current, rowKey))
   }, [])
@@ -327,7 +321,6 @@ export function Band() {
         <RosterEditGrid
           rows={rows}
           rowErrors={rowErrors}
-          onUpdateName={updateName}
           onDelete={deleteRow}
           onUndoDelete={undoDelete}
           onResendInvite={resendInvite}
