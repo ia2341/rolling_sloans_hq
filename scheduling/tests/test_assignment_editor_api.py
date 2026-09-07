@@ -29,6 +29,7 @@ from scheduling.factories import (
     SemesterFactory,
     SongFactory,
     SongRoleAssignmentFactory,
+    SongRoleRequirementFactory,
 )
 from scheduling.models import (
     Backup,
@@ -597,6 +598,64 @@ class AddableRolesTests(TestCase):
         _response, envelope = _get_json(self, _schedule_url(self.rehearsal))
 
         self.assertNotIn('addable_roles', envelope['data']['selected'])
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class AvailableSongsTests(TestCase):
+    """`/api/schedule/`'s rehearsal detail carries `available_songs` for an admin's song-swap dropdown (issue #406)."""
+
+    def setUp(self):
+        """Build a regular Rehearsal with one scheduled Song and one Song not yet scheduled here, plus a Dress Rehearsal."""
+        self.semester = SemesterFactory()
+        self.rehearsal = RehearsalFactory(semester=self.semester, is_full_setlist=False)
+        self.dress = RehearsalFactory(semester=self.semester, is_full_setlist=True)
+        self.role = RoleFactory()
+        self.song_scheduled = SongFactory(semester=self.semester, position=1)
+        self.song_unscheduled = SongFactory(semester=self.semester, position=2)
+        self.rehearsal_song = RehearsalSongFactory(rehearsal=self.rehearsal, song=self.song_scheduled)
+        SongRoleRequirementFactory(song=self.song_unscheduled, role=self.role)
+        self.assignment = SongRoleAssignmentFactory(song=self.song_unscheduled, role=self.role)
+
+    def test_admin_payload_lists_every_setlist_song_with_its_cells(self):
+        """An admin's rehearsal detail lists every setlist Song, including one not currently scheduled here, with its standing assignments as cells."""
+        admin_client(self)
+        select(self, self.semester)
+
+        _response, envelope = _get_json(self, _schedule_url(self.rehearsal))
+
+        options = {option['id']: option for option in envelope['data']['selected']['available_songs']}
+        self.assertIn(self.song_scheduled.pk, options)
+        self.assertIn(self.song_unscheduled.pk, options)
+        unscheduled_option = options[self.song_unscheduled.pk]
+        role_ids_with_entries = {
+            cell['role_id'] for cell in unscheduled_option['cells'] if cell['entries']
+        }
+        self.assertIn(self.role.pk, role_ids_with_entries)
+        entry = next(
+            entry
+            for cell in unscheduled_option['cells']
+            for entry in cell['entries']
+            if cell['role_id'] == self.role.pk
+        )
+        self.assertEqual(entry['person_id'], self.assignment.person_id)
+
+    def test_member_payload_has_no_available_songs_key(self):
+        """A member's rehearsal detail carries no `available_songs` key at all."""
+        member_client(self)
+        select(self, self.semester)
+
+        _response, envelope = _get_json(self, _schedule_url(self.rehearsal))
+
+        self.assertNotIn('available_songs', envelope['data']['selected'])
+
+    def test_dress_rehearsal_has_no_available_songs_key(self):
+        """The Dress Rehearsal has no RehearsalSong row to swap (ADR-0003), so it carries no `available_songs` key even for an admin."""
+        admin_client(self)
+        select(self, self.semester)
+
+        _response, envelope = _get_json(self, _schedule_url(self.dress))
+
+        self.assertNotIn('available_songs', envelope['data']['selected'])
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)

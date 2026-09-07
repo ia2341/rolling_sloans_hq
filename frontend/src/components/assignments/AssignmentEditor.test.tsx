@@ -67,6 +67,33 @@ function schedulePayload() {
           },
         ],
         addable_roles: [],
+        available_songs: [
+          {
+            id: 100,
+            title: 'Song One',
+            cells: [{ role_id: 5, role_name: 'Guitar', entries: [] }],
+          },
+          {
+            id: 102,
+            title: 'Song Three',
+            cells: [
+              {
+                role_id: 5,
+                role_name: 'Guitar',
+                entries: [
+                  {
+                    id: 55,
+                    kind: 'assignment',
+                    person_id: 30,
+                    person_name: 'Alex Three',
+                    is_role_mismatch: false,
+                    has_conflict: false,
+                  },
+                ],
+              },
+            ],
+          },
+        ],
         roster: [
           { person_id: 9, person_name: 'Riley Song', declared_role_ids: [5] },
           { person_id: 12, person_name: 'Jordan Wren', declared_role_ids: [5] },
@@ -373,6 +400,96 @@ describe('AssignmentEditor', () => {
     expect(
       screen.getByRole('button', { name: 'Move Song One down' }),
     ).not.toBeDisabled()
+  })
+
+  it('picking a different song in the swap dropdown rerenders its cells instantly with no extra fetch (issue #406)', async () => {
+    mockMatchMedia(false)
+    const fetchSpy = queueFetch(schedulePayload())
+    const user = userEvent.setup()
+
+    renderEditor()
+    await screen.findAllByText('Song One')
+
+    const callsBeforeSwap = fetchSpy.mock.calls.length
+    await user.selectOptions(
+      screen.getByRole('combobox', { name: 'Song for Song One' }),
+      'Song Three',
+    )
+
+    expect(await screen.findByText('Alex Three')).toBeInTheDocument()
+    expect(fetchSpy.mock.calls.length).toBe(callsBeforeSwap)
+  })
+
+  it('a pending song swap marks the surface dirty, gating Save on changeCount', async () => {
+    mockMatchMedia(false)
+    queueFetch(schedulePayload())
+    const user = userEvent.setup()
+
+    renderEditor()
+    await screen.findAllByText('Song One')
+    expect(
+      screen.getByRole('button', { name: /Save 0 change/ }),
+    ).toBeInTheDocument()
+
+    await user.selectOptions(
+      screen.getByRole('combobox', { name: 'Song for Song One' }),
+      'Song Three',
+    )
+
+    expect(
+      screen.getByRole('button', { name: /Save 1 change/ }),
+    ).toBeInTheDocument()
+  })
+
+  it('Save posts the swap as a song_overrides entry on the Running Order endpoint', async () => {
+    mockMatchMedia(false)
+    const okFallout = (extra: Record<string, unknown> = {}) => ({
+      context: adminContext(),
+      ok: true,
+      errors: {},
+      non_field_errors: [],
+      fallout: {
+        is_blocked: false,
+        block_message: '',
+        is_stale: false,
+        loud: [],
+        quiet: [],
+        ...extra,
+      },
+      values: null,
+      data: null,
+    })
+    const fetchSpy = queueFetch(
+      schedulePayload(),
+      okFallout(), // assignments/preview
+      okFallout({ doomed_recording_groups: [] }), // running-order/preview
+      okFallout(), // assignments/save
+      okFallout({ doomed_recording_groups: [] }), // running-order/save
+      schedulePayload(), // load() after a successful save
+    )
+    const user = userEvent.setup()
+
+    renderEditor()
+    await screen.findAllByText('Song One')
+    await user.selectOptions(
+      screen.getByRole('combobox', { name: 'Song for Song One' }),
+      'Song Three',
+    )
+
+    await user.click(screen.getByRole('button', { name: /Save 1 change/ }))
+    await user.click(
+      await screen.findByRole('button', { name: 'Save changes' }),
+    )
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(6))
+    const reorderCall = fetchSpy.mock.calls.find(([url]) =>
+      String(url).includes('/running-order/save/'),
+    )
+    expect(reorderCall).toBeDefined()
+    const body = JSON.parse(String(reorderCall?.[1]?.body))
+    expect(body.song_overrides).toEqual([
+      { rehearsal_song_id: 200, song_id: 102 },
+    ])
   })
 
   it('Discard reloads and calls onDone, since Discard is the only way to leave edit mode (issue: UI overhaul round 2, item 2)', async () => {

@@ -43,12 +43,13 @@ def _post_json(test_case, url, body):
     return response, json.loads(response.content)
 
 
-def _valid_body(semester, ordered_rehearsal_song_ids):
+def _valid_body(semester, ordered_rehearsal_song_ids, song_overrides=None):
     """Build a well-formed `/api/schedule/<id>/running-order/{preview,save}/` request body for `semester`."""
     return {
         'semester_id': semester.pk,
         'semester_updated_at': semester.updated_at.isoformat(),
         'ordered_rehearsal_song_ids': ordered_rehearsal_song_ids,
+        'song_overrides': song_overrides or [],
     }
 
 
@@ -259,3 +260,88 @@ class SaveCommitsTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(envelope['ok'])
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class SongSwapTests(TestCase):
+    """`song_overrides` (issue #406's song-swap dropdown) changes an existing slot's Song without touching its order or slot_count."""
+
+    def setUp(self):
+        """Build a Rehearsal with two RehearsalSong rows and a third setlist Song not currently scheduled here."""
+        admin_client(self)
+        self.semester = SemesterFactory()
+        select(self, self.semester)
+        self.rehearsal = RehearsalFactory(semester=self.semester, is_full_setlist=False)
+        self.song_a = SongFactory(semester=self.semester, position=1)
+        self.song_b = SongFactory(semester=self.semester, position=2)
+        self.song_c = SongFactory(semester=self.semester, position=3)
+        self.rehearsal_song_a = RehearsalSongFactory(rehearsal=self.rehearsal, song=self.song_a, order=1, slot_count=2)
+        self.rehearsal_song_b = RehearsalSongFactory(rehearsal=self.rehearsal, song=self.song_b, order=2)
+
+    def test_valid_save_swaps_the_song_and_preserves_order_and_slot_count(self):
+        """Overriding one row's song_id changes only that row's Song, leaving order and slot_count untouched."""
+        body = _valid_body(
+            self.semester,
+            [self.rehearsal_song_a.pk, self.rehearsal_song_b.pk],
+            song_overrides=[{'rehearsal_song_id': self.rehearsal_song_a.pk, 'song_id': self.song_c.pk}],
+        )
+
+        response, envelope = _post_json(self, _save_url(self.rehearsal), body)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(envelope['ok'])
+        self.rehearsal_song_a.refresh_from_db()
+        self.rehearsal_song_b.refresh_from_db()
+        self.assertEqual(self.rehearsal_song_a.song_id, self.song_c.pk)
+        self.assertEqual(self.rehearsal_song_a.order, 1)
+        self.assertEqual(self.rehearsal_song_a.slot_count, 2)
+        self.assertEqual(self.rehearsal_song_b.song_id, self.song_b.pk)
+
+    def test_preview_swaps_cleanly_and_writes_nothing(self):
+        """Previewing a song swap answers `ok: true` and leaves the RehearsalSong's song_id untouched (ADR 0008)."""
+        body = _valid_body(
+            self.semester,
+            [self.rehearsal_song_a.pk, self.rehearsal_song_b.pk],
+            song_overrides=[{'rehearsal_song_id': self.rehearsal_song_a.pk, 'song_id': self.song_c.pk}],
+        )
+
+        response = assert_preview_writes_nothing(
+            self, _preview_url(self.rehearsal),
+            models_to_check=[RehearsalSong], semester=self.semester, json_body=body,
+        )
+        envelope = json.loads(response.content)
+
+        self.assertTrue(envelope['ok'])
+        self.rehearsal_song_a.refresh_from_db()
+        self.assertEqual(self.rehearsal_song_a.song_id, self.song_a.pk)
+
+    def test_song_outside_semester_setlist_is_refused(self):
+        """A song_id from a different Semester's setlist is refused, never silently assigned."""
+        other_song = SongFactory(position=1)
+        body = _valid_body(
+            self.semester,
+            [self.rehearsal_song_a.pk, self.rehearsal_song_b.pk],
+            song_overrides=[{'rehearsal_song_id': self.rehearsal_song_a.pk, 'song_id': other_song.pk}],
+        )
+
+        response, envelope = _post_json(self, _save_url(self.rehearsal), body)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(envelope['ok'])
+        self.rehearsal_song_a.refresh_from_db()
+        self.assertEqual(self.rehearsal_song_a.song_id, self.song_a.pk)
+
+    def test_override_naming_a_foreign_rehearsal_song_id_is_refused(self):
+        """A song_overrides entry naming a RehearsalSong id outside this Rehearsal is refused."""
+        other_rehearsal = RehearsalFactory(semester=self.semester, is_full_setlist=False)
+        other_rehearsal_song = RehearsalSongFactory(rehearsal=other_rehearsal, song=self.song_c)
+        body = _valid_body(
+            self.semester,
+            [self.rehearsal_song_a.pk, self.rehearsal_song_b.pk],
+            song_overrides=[{'rehearsal_song_id': other_rehearsal_song.pk, 'song_id': self.song_c.pk}],
+        )
+
+        response, envelope = _post_json(self, _save_url(self.rehearsal), body)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(envelope['ok'])

@@ -662,6 +662,33 @@ def _serialize_matrix_row(row, *, is_admin, conflicted_person_ids) -> dict:
     }
 
 
+def _serialize_available_song_option(option, *, is_admin, conflicted_person_ids) -> dict:
+    """Return one `AvailableSongOption` for the Assignments table's song-swap dropdown (issue #406): identity plus its previewed cells.
+
+    Each cell carries its own `role_name` (unlike `_serialize_matrix_cell`,
+    which leaves a client to look the name up by `role_id` against the
+    shared `roles` column list) — an option's cells cover only that Song's
+    own Roles, which may include one the Rehearsal's *current* columns
+    don't, so the client can render that column's header without a second
+    read even before the swap is saved.
+    """
+    return {
+        'id': option.song.pk,
+        'title': option.song.title,
+        'cells': [
+            {
+                'role_id': cell.role.pk,
+                'role_name': cell.role.name,
+                'entries': [
+                    _serialize_matrix_entry(entry, is_admin=is_admin, conflicted_person_ids=conflicted_person_ids)
+                    for entry in cell.entries
+                ],
+            }
+            for cell in option.cells
+        ],
+    }
+
+
 def _serialize_rehearsal_summary(rehearsal, *, today) -> dict:
     """Return one Rehearsal's quick-jump/list identity: id, date, window and whether it's the Dress Rehearsal or past."""
     return {
@@ -761,7 +788,12 @@ def _serialize_rehearsal_detail(rehearsal, *, viewer, is_admin, today) -> dict:
     re-derived by the client. `addable_roles` (admin-only) is #338's "+ Add
     role" column source — Roles not already a matrix column, so an admin
     can cast a Role nobody wrote a Requirement for without this ticket
-    adding a second read of the grid. `roster`/`conflicted_person_ids`
+    adding a second read of the grid. `available_songs` (admin-only, absent
+    on the Dress Rehearsal, which has no RehearsalSong row to swap — ADR-0003)
+    is issue #406's song-swap dropdown source: every one of the Semester's
+    setlist Songs, each already carrying the cells picking it would show, so
+    a swap rerenders instantly with no second read of the grid either.
+    `roster`/`conflicted_person_ids`
     (admin-only, issue #399) are the "+" picker's candidate source: paired
     with the matrix rows' own entries (who's already assigned/backed-up
     per cell), the client derives the whole picker with no per-cell fetch.
@@ -793,6 +825,11 @@ def _serialize_rehearsal_detail(rehearsal, *, viewer, is_admin, today) -> dict:
     }
     if is_admin:
         data['addable_roles'] = [_serialize_role(role) for role in services.addable_roles_for(matrix)]
+        if not rehearsal.is_full_setlist:
+            data['available_songs'] = [
+                _serialize_available_song_option(option, is_admin=is_admin, conflicted_person_ids=conflicted_person_ids)
+                for option in services.available_song_options_for(rehearsal)
+            ]
         data['roster'] = [
             _serialize_assignable_roster_entry(entry)
             for entry in services.assignable_roster_for(rehearsal.semester)

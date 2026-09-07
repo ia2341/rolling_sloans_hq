@@ -587,17 +587,30 @@ def build_rehearsal_reorder_buffer_from_request(request, *, rehearsal) -> Rehear
         {
             "semester_id": 1,
             "semester_updated_at": "2026-01-01T00:00:00.000000+00:00",
-            "ordered_rehearsal_song_ids": [10, 7, 12]
+            "ordered_rehearsal_song_ids": [10, 7, 12],
+            "song_overrides": [{"rehearsal_song_id": 10, "song_id": 4}]
         }
+
+    `song_overrides` (issue #406's song-swap dropdown) is optional and
+    defaults to empty: each entry substitutes a different `song_id` for one
+    of `ordered_rehearsal_song_ids`' existing rows, everything else about
+    that row (`slot_count`, its position in the order) still read fresh off
+    the database exactly as an un-overridden row's `song_id` is. It changes
+    what a slot *is*, never how many slots exist or their sequence, so it
+    piggybacks on this endpoint rather than earning a second one.
 
     Raises `RehearsalBufferValidationError` (with no per-row `row_errors`,
     since there is only ever the one row here — everything lands in
     `non_field_errors`) for a missing/malformed `semester_id` or
-    `semester_updated_at`, a non-list `ordered_rehearsal_song_ids`, or a
-    list that doesn't name *exactly* `rehearsal`'s current RehearsalSong
-    ids once each — no id dropped, added, or duplicated — since anything
-    else can't be turned into a well-formed reorder of what's actually
-    there.
+    `semester_updated_at`, a non-list `ordered_rehearsal_song_ids`, a list
+    that doesn't name *exactly* `rehearsal`'s current RehearsalSong ids once
+    each — no id dropped, added, or duplicated — or a malformed
+    `song_overrides` entry (non-integer fields, or a `rehearsal_song_id` not
+    among `rehearsal`'s own rows) — since anything else can't be turned into
+    a well-formed reorder of what's actually there. A `song_id` naming a
+    Song outside the viewing Semester's setlist is instead refused by
+    `apply_rehearsal_edits()`'s own check, shared with every other caller
+    that submits a Running Order.
     """
     from config.views import ApiView
 
@@ -640,6 +653,22 @@ def build_rehearsal_reorder_buffer_from_request(request, *, rehearsal) -> Rehear
             else:
                 ordered_ids.append(rehearsal_song_id)
 
+    raw_overrides = body.get('song_overrides', [])
+    song_overrides = {}
+    if not isinstance(raw_overrides, list):
+        non_field_errors.append('song_overrides must be a list.')
+    else:
+        for entry in raw_overrides:
+            if not isinstance(entry, dict):
+                non_field_errors.append(f'song_overrides contains a non-object value: {entry!r}.')
+                continue
+            override_rehearsal_song_id = _expect_int(entry.get('rehearsal_song_id'))
+            override_song_id = _expect_int(entry.get('song_id'))
+            if override_rehearsal_song_id is None or override_song_id is None:
+                non_field_errors.append(f'song_overrides entry is missing an integer rehearsal_song_id/song_id: {entry!r}.')
+                continue
+            song_overrides[override_rehearsal_song_id] = override_song_id
+
     if non_field_errors:
         raise RehearsalBufferValidationError(
             row_errors={}, non_field_errors=non_field_errors, raw_rows=[], raw_body=raw_body
@@ -656,10 +685,19 @@ def build_rehearsal_reorder_buffer_from_request(request, *, rehearsal) -> Rehear
             raw_rows=[], raw_body=raw_body,
         )
 
+    if any(rehearsal_song_id not in existing_by_id for rehearsal_song_id in song_overrides):
+        raise RehearsalBufferValidationError(
+            row_errors={},
+            non_field_errors=[
+                "song_overrides names a RehearsalSong id outside this Rehearsal's current Running Order rows — reload and reapply.",
+            ],
+            raw_rows=[], raw_body=raw_body,
+        )
+
     running_order = [
         RunningOrderRow(
             rehearsal_song_id=rehearsal_song_id,
-            song_id=existing_by_id[rehearsal_song_id].song_id,
+            song_id=song_overrides.get(rehearsal_song_id, existing_by_id[rehearsal_song_id].song_id),
             slot_count=existing_by_id[rehearsal_song_id].slot_count,
         )
         for rehearsal_song_id in ordered_ids

@@ -70,6 +70,20 @@ export interface RoleLegendEntry {
   code: string
 }
 
+/** One cell of an `AvailableSongOption` — like `MatrixCell`, but carries its own Role name (issue #406): an option's Roles may include one the Rehearsal's current columns don't. */
+export interface AvailableSongCell {
+  role_id: number
+  role_name: string
+  entries: MatrixEntry[]
+}
+
+/** One Song the Assignments table's song-swap dropdown can pick for a slot, its cells previewing what picking it would show — computed up front, so a swap rerenders with no second read (issue #406). */
+export interface AvailableSongOption {
+  id: number
+  title: string
+  cells: AvailableSongCell[]
+}
+
 /** One rostered Person plus their declared Role ids (ADR-0014, person-level) — the "+" picker's candidate source (issue #399). */
 export interface AssignableRosterEntry {
   person_id: number
@@ -91,6 +105,8 @@ export interface RehearsalDetail {
   rows: MatrixRow[]
   /** Admin-only (issue #338): Roles not already a matrix column, for the "+ Add role" affordance. Absent for a member. */
   addable_roles?: { id: number; name: string }[]
+  /** Admin-only, absent on the Dress Rehearsal (ADR-0003 — no RehearsalSong row to swap): every setlist Song, for the Assignments table's per-slot song-swap dropdown (issue #406). */
+  available_songs?: AvailableSongOption[]
   /** Admin-only (issue #399): this Semester's roster plus each Person's declared Role ids — combined with `rows`' own entries, the "+" picker derives its candidates with no per-cell fetch. Absent for a member. */
   roster?: AssignableRosterEntry[]
   /** Admin-only (issue #399): Person ids with a Conflict on this Rehearsal — a bare marker list only (ADR 0005), never a reason. Absent for a member. */
