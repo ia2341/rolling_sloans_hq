@@ -287,10 +287,10 @@ describe('ScheduleEdit', () => {
       expect(screen.getByText(/Save \d+ change/)).toBeInTheDocument(),
     )
     expect(
-      fetchSpy.mock.calls.some(
+      fetchSpy.mock.calls.filter(
         ([url]) => String(url) === '/api/schedule/editor/preview/',
       ),
-    ).toBe(true)
+    ).toHaveLength(1)
   })
 
   it('disables Save when the Buffer has no unsaved changes', async () => {
