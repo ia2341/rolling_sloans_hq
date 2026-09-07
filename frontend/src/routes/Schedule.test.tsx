@@ -288,6 +288,27 @@ describe('Schedule', () => {
     ).toBeDisabled()
   })
 
+  it('does not repeat the date under "You at this rehearsal", but still names dress status in the page subline', async () => {
+    const payload = schedulePayload()
+    payload.selected!.is_dress = true
+    payload.selected!.timeline.is_dress_rehearsal = true
+    mockFetchOnce(200, { context: memberContext(), data: payload })
+
+    renderShell(<Schedule />, ['/schedule'])
+
+    expect(
+      await screen.findByRole('heading', { name: 'You at this rehearsal' }),
+    ).toBeInTheDocument()
+    // The date/dress-status sentence used to also appear here, duplicating
+    // the SegmentedControl pill above it (issue #427) — now it's gone, and
+    // dress status is named only in the PageHead subline.
+    expect(screen.queryByText('dress rehearsal')).not.toBeInTheDocument()
+    expect(screen.getByText(/· dress rehearsal ·/)).toBeInTheDocument()
+    expect(
+      screen.getByRole('radio', { name: '10th March, Tuesday' }),
+    ).toBeInTheDocument()
+  })
+
   it('renders "This rehearsal has passed." for a past Rehearsal with nothing declared', async () => {
     const payload = schedulePayload()
     payload.selected!.is_past = true

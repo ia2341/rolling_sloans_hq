@@ -253,6 +253,7 @@ function ThisRehearsal({
         date={detail.date}
         isDress={detail.is_dress}
         timeline={detail.timeline}
+        showDate={false}
       />
       <AvailabilityBlock
         rehearsalId={detail.id}
