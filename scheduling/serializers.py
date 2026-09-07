@@ -889,7 +889,7 @@ def _serialize_roster_entry(membership):
     return {
         'id': membership.person_id,
         'name': membership.person.name,
-        'roles': [role.role.name for role in membership.membershiprole_set.all()],
+        'roles': [person_role.role.name for person_role in membership.person.personrole_set.all()],
         'song_count': membership.songs_count,
     }
 

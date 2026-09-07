@@ -4,11 +4,15 @@ Unlike `seed_dev_data` (DEBUG-only, and deliberately never safe to run
 against production because it gives every seeded Person the same
 publicly-documented password), this command is meant to run against a
 real production database. It reuses `seed_dev_data`'s Song/Rehearsal
-builders for realistic demo content, but every demo Person here gets an
-**unusable** password (`set_unusable_password`), never a known one — they
-exist to make the demo Semester look populated to a logged-in member, not
-to be logged into themselves. This command creates no admin account and
-touches no existing Person outside its own demo roster.
+builders for realistic demo content, but every demo Person here gets a
+**random, discarded** password, never a known one — they exist to make
+the demo Semester look populated to a logged-in member, not to be logged
+into themselves. Deliberately not `set_unusable_password()`: an unusable
+password reads to `services.active_roster_for()` as an invited-but-not-
+yet-active member and hides the Person from the Band page entirely,
+which would defeat the point of this command. This command creates no
+admin account and touches no existing Person outside its own demo
+roster.
 
 Requires `--confirm` so it can't run by accident. Running it again rewrites
 the existing "Example Semester" in place (issue #396): the old demo
@@ -19,6 +23,7 @@ rather than refusing to run or leaving a second Semester behind.
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.utils import timezone
+from django.utils.crypto import get_random_string
 from faker import Faker
 
 from identity.factories import PersonFactory
@@ -59,9 +64,9 @@ class Command(BaseCommand):
 
     help = (
         'Seed a demo "Example Semester" (fake Roles/People/Songs/Rehearsals, all with '
-        'unusable passwords), published live so any logged-in member sees it. Creates no '
-        'admin account and touches no existing Person outside its own demo roster. Re-running '
-        'this command rewrites the existing "Example Semester" in place.'
+        'random, discarded passwords), published live so any logged-in member sees it. Creates '
+        'no admin account and touches no existing Person outside its own demo roster. '
+        'Re-running this command rewrites the existing "Example Semester" in place.'
     )
 
     def add_arguments(self, parser):
@@ -105,7 +110,7 @@ class Command(BaseCommand):
 
         self.stdout.write(self.style.SUCCESS(
             f'Seeded Semester "{semester.name}" (published_at={semester.published_at}, live): '
-            f'{len(people)} People (all with unusable passwords), {len(songs)} Songs, '
+            f'{len(people)} People (all with random, discarded passwords), {len(songs)} Songs, '
             f'{len(rehearsals)} Rehearsals. No admin account was created or modified.'
         ))
 
@@ -132,14 +137,25 @@ def _delete_existing_example_semester(semester):
 
 
 def _build_demo_people(count=12):
-    """Build `count` demo People with unusable passwords (none of them are ever loggable-in).
+    """Build `count` demo People, each with a random, discarded password (none of them are ever loggable-in).
 
     The production analogue of `seed_dev_data._build_people`, minus the
     known shared dev password and minus the first-person-is-admin carve-out
     — these exist to populate the demo Semester's roster, not to be signed
     into, and this command must never create or touch an admin account.
+
+    Deliberately a random `set_password()`, not `set_unusable_password()`:
+    `services.active_roster_for()` (issue #333) hides any Person whose
+    password is unusable from the Band page, treating them as an
+    invited-but-not-yet-active member — exactly the wrong read for a demo
+    roster that issue #396 needs to render as populated. A random,
+    never-surfaced password satisfies `has_usable_password()` without
+    making the account actually loggable-in by anyone.
     """
-    return [PersonFactory(email=fake.unique.safe_email(), is_admin=False) for _ in range(count)]
+    return [
+        PersonFactory(email=fake.unique.safe_email(), is_admin=False, password=get_random_string(32))
+        for _ in range(count)
+    ]
 
 
 def _build_memberships(semester, people):

@@ -793,15 +793,18 @@ def roster_for(memberships):
     Each row is annotated with `songs_count` — the number of distinct Songs
     in that Membership's own Semester the Person holds any
     SongRoleAssignment on, counted regardless of is_role_mismatch per
-    ADR-0002 — and prefetches its MembershipRoles in Role-name order. Both
-    are batched deliberately: the roster's cardinality is the band, so the
-    per-row lookups `SetlistView` does per Song would grow the query count
-    with the roster.
+    ADR-0002 — and prefetches the Person's declared `PersonRole`s in
+    Role-name order (retargeted from the retired `MembershipRole` by
+    ADR-0014/#378 — nothing in the live app writes `MembershipRole` rows
+    anymore, so reading it here left every roster row showing no Roles).
+    Both are batched deliberately: the roster's cardinality is the band, so
+    the per-row lookups `SetlistView` does per Song would grow the query
+    count with the roster.
     """
     return memberships.select_related('person').prefetch_related(
         models.Prefetch(
-            'membershiprole_set',
-            queryset=MembershipRole.objects.select_related('role').order_by('role__name'),
+            'person__personrole_set',
+            queryset=PersonRole.objects.select_related('role').order_by('role__name'),
         ),
     ).annotate(
         songs_count=Count(

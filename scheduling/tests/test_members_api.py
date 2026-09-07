@@ -26,7 +26,7 @@ from scheduling.factories import (
     SongFactory,
     SongRoleAssignmentFactory,
 )
-from scheduling.models import Membership, MembershipRole, PersonRole
+from scheduling.models import Membership, PersonRole
 from scheduling.serializers import (
     serialize_band,
     serialize_person,
@@ -363,8 +363,8 @@ class BandApiViewTests(TestCase):
     def test_song_count_and_roles_render_per_row(self):
         """Each row carries its declared Role names and its distinct assigned-Song count."""
         semester = SemesterFactory()
-        membership = MembershipFactory(person=self.person, semester=semester)
-        MembershipRole.objects.create(membership=membership, role=RoleFactory(name='Bassist'))
+        MembershipFactory(person=self.person, semester=semester)
+        PersonRoleFactory(person=self.person, role=RoleFactory(name='Bassist'))
         song = SongFactory(semester=semester)
         SongRoleAssignmentFactory(song=song, person=self.person)
 
