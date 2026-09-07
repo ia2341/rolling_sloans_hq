@@ -71,7 +71,29 @@ afterEach(() => {
 
 describe('Setlist', () => {
   it('renders all Roles in fixed order, including an unfilled one, for a partial cast', async () => {
-    mockFetchOnce(200, { context: memberContext(), data: setlistPayload() })
+    // Two Songs so both columns have at least one performer somewhere in
+    // the table (issue #436 hides a column with zero matches across every
+    // row) while each keeps an unfilled cell to exercise issue #365's "-".
+    const payload = setlistPayload()
+    payload.songs.push({
+      id: 2,
+      title: 'Second Song',
+      artist: 'Second Artist',
+      length: '2:45',
+      position: 2,
+      notes: '',
+      cast: [
+        { role_id: 1, role_name: 'Singer', code: 'SIN', performers: [] },
+        {
+          role_id: 2,
+          role_name: 'Drummer',
+          code: 'DRU',
+          performers: [{ id: 2, name: 'Alex Chen', is_role_mismatch: false }],
+        },
+      ],
+      recording_count: 0,
+    })
+    mockFetchOnce(200, { context: memberContext(), data: payload })
 
     renderShell(<Setlist />, ['/setlist'])
 
@@ -86,7 +108,24 @@ describe('Setlist', () => {
       screen.getByRole('columnheader', { name: 'Drums' }),
     ).toBeInTheDocument()
     expect(screen.getByText('Sam')).toBeInTheDocument() // shortened -- only one "Sam" in this table
-    expect(screen.getByText('-')).toBeInTheDocument() // Drums has no performer (issue #365 -- not the word "unfilled")
+    expect(screen.getAllByText('-').length).toBeGreaterThan(0) // an unfilled cell renders "-" (issue #365 -- not the word "unfilled")
+  })
+
+  it('hides a Role column entirely when every Song in the table has no performer for it', async () => {
+    mockFetchOnce(200, { context: memberContext(), data: setlistPayload() })
+
+    renderShell(<Setlist />, ['/setlist'])
+
+    await screen.findByText('Test Song')
+    // The fixture's only Song has a Singer performer but no Drummer one, so
+    // the Drums column (which matched no performers anywhere in this table)
+    // must not render at all (issue #436).
+    expect(
+      screen.getByRole('columnheader', { name: 'Singer' }),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole('columnheader', { name: 'Drums' }),
+    ).not.toBeInTheDocument()
   })
 
   it('renders a Song with no notes with no notes row at all', async () => {
@@ -311,13 +350,35 @@ describe('Setlist role-mismatch display (issue #365)', () => {
   })
 
   it('renders an unfilled position as a plain "-" for every viewer', async () => {
-    mockFetchOnce(200, { context: memberContext(), data: setlistPayload() })
+    // A second Song keeps the Drums column visible (issue #436 hides a
+    // column with zero matches across every row) so the first Song's
+    // unfilled Drummer cell still renders its "-".
+    const payload = setlistPayload()
+    payload.songs.push({
+      id: 2,
+      title: 'Second Song',
+      artist: 'Second Artist',
+      length: '2:45',
+      position: 2,
+      notes: '',
+      cast: [
+        { role_id: 1, role_name: 'Singer', code: 'SIN', performers: [] },
+        {
+          role_id: 2,
+          role_name: 'Drummer',
+          code: 'DRU',
+          performers: [{ id: 2, name: 'Alex Chen', is_role_mismatch: false }],
+        },
+      ],
+      recording_count: 0,
+    })
+    mockFetchOnce(200, { context: memberContext(), data: payload })
 
     renderShell(<Setlist />, ['/setlist'])
 
     await screen.findByText('Test Song')
     expect(screen.queryByText(/unfilled/i)).not.toBeInTheDocument()
-    expect(screen.getByText('-')).toBeInTheDocument()
+    expect(screen.getAllByText('-').length).toBeGreaterThan(0)
   })
 })
 

@@ -67,6 +67,40 @@ export interface CastGridColumn {
   roleIds: number[]
 }
 
+/** A `CastGridRow`-shaped value narrow enough for `columnHasPerformers`/`visibleCastGridColumns` to check without depending on `CastLine.tsx`'s full row type. */
+export interface CastGridColumnRow {
+  cast: { role_id: number; performers: unknown[] }[]
+}
+
+/** Whether at least one row's cast has a performer under any of `column`'s Role ids. */
+function columnHasPerformers(
+  column: CastGridColumn,
+  rows: CastGridColumnRow[],
+): boolean {
+  return rows.some((row) =>
+    row.cast.some(
+      (entry) =>
+        column.roleIds.includes(entry.role_id) && entry.performers.length > 0,
+    ),
+  )
+}
+
+/**
+ * Narrows `columns` (from `buildCastGridColumns()`) to those with at least
+ * one performer somewhere across `rows` — evaluated per table instance
+ * (issue #436), since a Role can be globally declared yet unused by every
+ * row a particular Setlist/Rehearsal table renders (e.g. a rehearsal whose
+ * songs never call for Flute). A different table (another rehearsal, or
+ * the Setlist) still gets its own pass over its own rows, so the same Role
+ * can be hidden on one and shown on another.
+ */
+export function visibleCastGridColumns(
+  columns: CastGridColumn[],
+  rows: CastGridColumnRow[],
+): CastGridColumn[] {
+  return columns.filter((column) => columnHasPerformers(column, rows))
+}
+
 /**
  * Builds the Setlist/Schedule cast table's column list from whatever
  * Roles this Semester actually declares: the fixed families that have at

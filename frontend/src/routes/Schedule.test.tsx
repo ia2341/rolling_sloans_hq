@@ -129,6 +129,73 @@ afterEach(() => {
 })
 
 describe('Schedule', () => {
+  it('hides a Role column entirely when no Song in this Rehearsal has a performer for it (issue #436)', async () => {
+    // Drummer matches no performer on either Song in this Rehearsal, so it
+    // must not render as a column at all, even though it's declared roles.
+    const payload = schedulePayload()
+    payload.selected!.roles = [
+      { id: 1, name: 'Singer', code: 'SIN' },
+      { id: 2, name: 'Drummer', code: 'DRU' },
+    ]
+    payload.selected!.rows[0]!.cells.push({ role_id: 2, entries: [] })
+    mockFetchOnce(200, { context: memberContext(), data: payload })
+
+    renderShell(<Schedule />, ['/schedule'])
+
+    await screen.findByRole('table')
+    expect(
+      screen.getByRole('columnheader', { name: 'Singer' }),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole('columnheader', { name: 'Drums' }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('keeps a Role column visible when only one Song in this Rehearsal has a performer for it', async () => {
+    const payload = schedulePayload()
+    payload.selected!.roles = [
+      { id: 1, name: 'Singer', code: 'SIN' },
+      { id: 2, name: 'Drummer', code: 'DRU' },
+    ]
+    payload.selected!.rows[0]!.cells.push({ role_id: 2, entries: [] })
+    payload.selected!.rows.push({
+      song_id: 2,
+      song_title: 'Second Song',
+      song_artist: 'Second Artist',
+      song_position: 2,
+      song_length: '2:45',
+      start_time: '19:00:00',
+      rehearsal_song_id: 101,
+      cells: [
+        { role_id: 1, entries: [] },
+        {
+          role_id: 2,
+          entries: [
+            {
+              id: 2,
+              kind: 'assignment',
+              person_id: 2,
+              person_name: 'Alex Chen',
+              is_role_mismatch: false,
+              has_conflict: false,
+            },
+          ],
+        },
+      ],
+    })
+    mockFetchOnce(200, { context: memberContext(), data: payload })
+
+    renderShell(<Schedule />, ['/schedule'])
+
+    await screen.findByRole('table')
+    expect(
+      screen.getByRole('columnheader', { name: 'Singer' }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('columnheader', { name: 'Drums' }),
+    ).toBeInTheDocument()
+  })
+
   it('renders one table with the Song length and linked assignment names, with no Running order | Assignments mode switch', async () => {
     mockFetchOnce(200, { context: memberContext(), data: schedulePayload() })
 
