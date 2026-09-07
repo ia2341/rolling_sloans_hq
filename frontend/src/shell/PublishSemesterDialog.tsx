@@ -139,12 +139,6 @@ export function PublishSemesterDialog({
               {impact.target_semester_name} has no rehearsals scheduled yet.
             </p>
           )}
-
-          <p className="text-xs text-rs-muted">
-            Publishing only changes visibility — it never locks or unlocks
-            editing, and there is no unpublish; rolling back is publishing an
-            older Semester the same way (ADR 0010).
-          </p>
         </div>
       )}
     </ResponsiveDialog>

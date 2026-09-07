@@ -14,7 +14,7 @@ afterEach(() => {
 })
 
 describe('ReapplyDefaultsDialog', () => {
-  it('renders the ADR-0008 provenance line and both fallout tiers, with commit enabled when not blocked', async () => {
+  it('renders the provenance line and both fallout tiers, with commit enabled when not blocked', async () => {
     setContext(adminContext())
     mockFetchOnce(200, {
       context: adminContext(),
@@ -45,11 +45,7 @@ describe('ReapplyDefaultsDialog', () => {
     await waitFor(() =>
       expect(screen.getByText(/upcoming rehearsal/)).toBeInTheDocument(),
     )
-    expect(
-      screen.getByText(
-        /Computed by running the real save and rolling it back \(ADR 0008\)/,
-      ),
-    ).toBeInTheDocument()
+    expect(screen.getByText('Nothing has been written.')).toBeInTheDocument()
     expect(screen.getByText('Needs your attention · 1')).toBeInTheDocument()
     expect(screen.getByText('Also true · 1')).toBeInTheDocument()
     expect(

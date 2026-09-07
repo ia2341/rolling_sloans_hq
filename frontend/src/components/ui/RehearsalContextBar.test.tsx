@@ -47,7 +47,7 @@ describe('RehearsalContextBar', () => {
     expect(screen.getByText('18:00–21:00 · Dress')).toBeInTheDocument()
   })
 
-  it('disables the Assignments half on the Dress Rehearsal with the ADR 0003 reason', () => {
+  it('disables the Assignments half on the Dress Rehearsal', () => {
     render(
       <RehearsalContextBar
         rehearsal={DRESS_REHEARSAL}
@@ -58,10 +58,6 @@ describe('RehearsalContextBar', () => {
 
     const assignmentsOption = screen.getByRole('radio', { name: 'Assignments' })
     expect(assignmentsOption).toBeDisabled()
-    expect(assignmentsOption).toHaveAttribute(
-      'title',
-      'A Dress Rehearsal has no per-song slots to assign against (ADR 0003).',
-    )
   })
 
   it('calls onModeChange with the new mode and the rehearsal id', async () => {

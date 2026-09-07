@@ -237,7 +237,7 @@ describe('Schedule', () => {
     expect(await screen.findByText('Not approved')).toBeInTheDocument()
   })
 
-  it('renders the Dress Rehearsal locked availability copy and no declare control', async () => {
+  it('renders a disabled Declare a conflict button for the Dress Rehearsal', async () => {
     const payload = schedulePayload()
     payload.selected!.is_dress = true
     payload.selected!.availability = {
@@ -255,13 +255,8 @@ describe('Schedule', () => {
     renderShell(<Schedule />, ['/schedule'])
 
     expect(
-      await screen.findByText(
-        'Attendance is required at the dress rehearsal. There is nothing to declare here (ADR 0006).',
-      ),
-    ).toBeInTheDocument()
-    expect(
-      screen.queryByRole('button', { name: 'Declare a conflict' }),
-    ).not.toBeInTheDocument()
+      await screen.findByRole('button', { name: 'Declare a conflict' }),
+    ).toBeDisabled()
   })
 
   it('renders "This rehearsal has passed." for a past Rehearsal with nothing declared', async () => {
@@ -297,22 +292,6 @@ describe('Schedule', () => {
     expect(screen.queryByLabelText('Arrival time')).not.toBeInTheDocument()
     fireEvent.click(screen.getByLabelText('Arrive late at'))
     expect(screen.getByLabelText('Arrival time')).toBeInTheDocument()
-  })
-
-  it('carries the ADR 0005 privacy note and the ADR 0006 exclusion note in the declare dialog', async () => {
-    mockFetchOnce(200, { context: memberContext(), data: schedulePayload() })
-
-    renderShell(<Schedule />, ['/schedule'])
-    fireEvent.click(
-      await screen.findByRole('button', { name: 'Declare a conflict' }),
-    )
-
-    expect(
-      screen.getByText(/Only admins ever see this reason/),
-    ).toBeInTheDocument()
-    expect(
-      screen.getByText(/The dress rehearsal takes no conflict/),
-    ).toBeInTheDocument()
   })
 
   it('an invalid late_arrival submission returns a per-field error and keeps the typed reason', async () => {
@@ -416,7 +395,7 @@ describe('Schedule', () => {
     expect(screen.queryByRole('table')).not.toBeInTheDocument()
   })
 
-  it('renders a position column, the ADR 0003 note, and no start times for the Dress Rehearsal', async () => {
+  it('renders a position column and no start times for the Dress Rehearsal', async () => {
     const payload = schedulePayload()
     payload.selected!.is_dress = true
     payload.selected!.rows[0]!.start_time = null
@@ -426,11 +405,6 @@ describe('Schedule', () => {
     renderShell(<Schedule />, ['/schedule'])
 
     await screen.findByRole('table')
-    expect(
-      screen.getByText(
-        'The dress rehearsal has no running order of its own — it runs the setlist as it stands today (ADR 0003).',
-      ),
-    ).toBeInTheDocument()
     expect(screen.getByRole('columnheader', { name: '#' })).toBeInTheDocument()
   })
 

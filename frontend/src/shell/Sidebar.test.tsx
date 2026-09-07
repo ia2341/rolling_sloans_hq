@@ -46,13 +46,11 @@ describe('Sidebar', () => {
     ).not.toBeInTheDocument()
   })
 
-  it('shows the draft warning naming the Live Semester when viewing a non-live Semester', () => {
+  it('enables Publish when viewing a non-live Semester', () => {
     setContext(adminContext())
     renderShell(<Sidebar />)
 
-    expect(
-      screen.getByText('Not what members see — they see Spring 2026'),
-    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Publish' })).toBeEnabled()
   })
 
   it('disables Save changes and Publish while blocked', () => {

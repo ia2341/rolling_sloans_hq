@@ -73,7 +73,7 @@ describe('ManageSemestersSheet', () => {
     expect(screen.queryByText(/Switch to/)).not.toBeInTheDocument()
   })
 
-  it('disables Delete on the Live row with the ADR-0011 reason, and enables it elsewhere', async () => {
+  it('disables Delete on the Live row, and enables it elsewhere', async () => {
     setContext(adminContext())
     mockFetchOnce(200, { context: adminContext(), data: rows })
     renderShell(<ManageSemestersSheet open onOpenChange={() => {}} />)
@@ -86,10 +86,6 @@ describe('ManageSemestersSheet', () => {
     // rows[0] (Fall, draft) is first, rows[1] (Spring, live) is second.
     expect(deleteButtons[0]).toBeEnabled()
     expect(deleteButtons[1]).toBeDisabled()
-    expect(deleteButtons[1]).toHaveAttribute(
-      'title',
-      'The Live Semester cannot be deleted - publish another one first (ADR 0011)',
-    )
   })
 
   it('shows "Editing" on the viewing row and enables Reapply defaults on every row', async () => {

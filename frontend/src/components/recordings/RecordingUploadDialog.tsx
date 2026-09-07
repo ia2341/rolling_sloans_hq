@@ -274,9 +274,6 @@ function UploadForm({
 
       <label className="mt-3 flex cursor-pointer flex-col items-center gap-1 rounded border border-dashed border-rs-border px-3 py-4 text-center text-sm">
         Drop an audio file, or browse
-        <span className="text-xs text-rs-muted">
-          Uploads straight to storage, not through the app (ADR 0004).
-        </span>
         <input
           type="file"
           accept="audio/*"

@@ -166,7 +166,7 @@ function renderEditor(onDone: () => void = vi.fn()) {
 }
 
 describe('AssignmentEditor', () => {
-  it('renders the non-dismissible scope bar naming the ADR 0009 blast radius', async () => {
+  it('renders the non-dismissible scope bar naming the Backup escape hatch', async () => {
     mockMatchMedia(false)
     queueFetch(schedulePayload())
 
@@ -175,9 +175,7 @@ describe('AssignmentEditor', () => {
     expect(
       await screen.findByText('Editing standing assignments.'),
     ).toBeInTheDocument()
-    expect(
-      screen.getByText(/every rehearsal and the concert/),
-    ).toBeInTheDocument()
+    expect(screen.getByText(/To cover one evening only/)).toBeInTheDocument()
     expect(
       screen.queryByRole('button', { name: /dismiss/i }),
     ).not.toBeInTheDocument()
