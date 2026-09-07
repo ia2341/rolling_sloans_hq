@@ -25,7 +25,7 @@ from django.views import View
 
 from config.views import AdminApiView, AdminPreviewApiView, ApiView
 from identity.models import Person
-from identity.services import AlreadyHasPasswordError, resend_invite
+from identity.services import AlreadyHasPasswordError, EmailDeliveryError, resend_invite
 from scheduling import serializers, services, spotify
 from scheduling.api_builders import (
     AdjudicationBufferValidationError,
@@ -592,12 +592,16 @@ class RosterResendInviteApiView(AdminApiView, View):
     """
 
     def post(self, request, pk):
-        """Re-send (or send for the first time) `pk`'s invite, returning their fresh Person payload, or the refusal if they already have a password."""
+        """Re-send (or send for the first time) `pk`'s invite, returning their fresh Person payload, or the refusal if they already have a password or the email fails to send."""
         person = get_object_or_404(Person, pk=pk)
         try:
             resend_invite(person)
         except AlreadyHasPasswordError as error:
             return self.write_response(request, ok=False, non_field_errors=[str(error)])
+        except EmailDeliveryError:
+            return self.write_response(
+                request, ok=False, non_field_errors=[f"Couldn't send the invite email to {person.email}."],
+            )
         semester = services.get_viewing_semester(request)
         membership = Membership.objects.filter(person=person, semester=semester).first() if semester is not None else None
         data = serializers.serialize_person(

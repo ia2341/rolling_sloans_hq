@@ -9,7 +9,7 @@ from faker import Faker
 
 from identity.factories import PersonFactory
 from identity.models import Person
-from identity.services import EmailDeliveryError, invite_person
+from identity.services import invite_person
 
 fake = Faker()
 PASSWORD = 'a-strong-test-password-123'
@@ -179,14 +179,16 @@ class PeopleViewPostTests(TestCase):
         self.assertEqual(Person.objects.filter(email=existing.email).count(), 1)
 
     def test_rolled_back_invite_does_not_create_person(self):
-        """If the invite email fails to send, the exception propagates and no Person row is left committed."""
+        """If the invite email fails to send, the request redirects with a clean error message instead of 500ing, and no Person row is left committed (issue #409)."""
         args = {'name': fake.name(), 'email': fake.email(domain='example.com')}
 
-        with patch('identity.services.send_mail', return_value=0), \
-                self.assertRaises(EmailDeliveryError):
-            self.client.post(reverse('identity:people'), args)
+        with patch('identity.services.send_mail', return_value=0):
+            response = self.client.post(reverse('identity:people'), args, follow=True)
 
+        self.assertRedirects(response, reverse('identity:people'))
         self.assertFalse(Person.objects.filter(email=args['email']).exists())
+        messages = [str(m) for m in response.context['messages']]
+        self.assertTrue(any(args['email'] in m for m in messages))
 
     def test_toggle_admin_flips_flag_and_redirects_with_message(self):
         """A valid POST toggles is_admin on an existing Person and redirects with a success message."""
@@ -259,3 +261,17 @@ class PeopleViewPostTests(TestCase):
         response = self.client.post(reverse('identity:people-resend-invite', args=[999999]))
 
         self.assertEqual(response.status_code, 404)
+
+    def test_resend_invite_reports_a_clean_failure_when_the_email_backend_raises(self):
+        """A production-shaped email-backend failure redirects with a clean error message, never a 500 (issue #409)."""
+        target = PersonFactory()
+
+        with patch('identity.services.send_mail', return_value=0):
+            response = self.client.post(
+                reverse('identity:people-resend-invite', args=[target.pk]), follow=True,
+            )
+
+        self.assertRedirects(response, reverse('identity:people'))
+        self.assertEqual(len(mail.outbox), 0)
+        messages = [str(m) for m in response.context['messages']]
+        self.assertTrue(any(target.email in m for m in messages))

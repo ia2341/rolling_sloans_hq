@@ -321,6 +321,24 @@ class ResendInviteTests(TestCase):
         self.assertFalse(envelope['ok'])
         self.assertTrue(envelope['non_field_errors'])
 
+    def test_resend_invite_reports_a_clean_failure_when_the_email_backend_raises(self):
+        """A production-shaped `AnymailError` (e.g. a rejected API key) from `send_mail()` surfaces as `ok: false`, never a 500 (issue #409)."""
+        from unittest import mock
+
+        from anymail.exceptions import AnymailAPIError
+
+        from identity.factories import PersonFactory
+
+        pending = PersonFactory(name='Pending Person', password=None, email='pending@example.com')
+
+        with mock.patch('identity.services.send_mail', side_effect=AnymailAPIError('bad api key')):
+            response, envelope = _post_json(self, _resend_invite_url(pending.pk), {})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(envelope['ok'])
+        self.assertTrue(envelope['non_field_errors'])
+        self.assertEqual(len(mail.outbox), 0)
+
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class PersonPageInviteTests(TestCase):
@@ -592,3 +610,53 @@ class SaveCommitsTests(TransactionTestCase):
         self.assertIsNone(person.invited_at)
         self.assertTrue(Membership.objects.filter(person=person, semester=self.semester).exists())
         self.assertEqual(len(mail.outbox), 0)
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class PreviewThenSaveRoundTripTests(TransactionTestCase):
+    """Regression test for issue #409: Preview's echoed `updated_at`, fed straight back into Save, must not falsely read as stale.
+
+    Reproduces the reported bug exactly: an admin opens the Save dialog
+    (which auto-runs a Preview, `usePreviewOnOpen`), then clicks Save —
+    the SPA's `confirmSave()` sends whatever `updated_at` the shared
+    context currently holds, which is the value the *Preview* response's
+    envelope carried. With zero concurrent edits, that round trip must
+    still match the real DB row when Save runs its own staleness check.
+    Before issue #409's fix this failed for two independent reasons that
+    had to be fixed together: `apply_roster_edits()` (run for real by
+    Preview, then rolled back) bumps `Semester.updated_at`, and that
+    bumped-but-about-to-be-discarded value leaked into the Preview
+    response's `context` because `PreviewMixin` built it mid-transaction
+    (Cause A); and `_serialize_semester()` emitted `updated_at` as a raw
+    `datetime`, which `DjangoJSONEncoder` truncates to millisecond
+    precision on the wire, so even a correctly-timed read echoes back a
+    value that no longer equals the full-precision DB stamp once
+    round-tripped through `parse_datetime()` (Cause B).
+    """
+
+    def setUp(self):
+        """Log in a synthetic admin against a fresh Semester with one existing member."""
+        admin_client(self)
+        self.semester = SemesterFactory()
+        select(self, self.semester)
+        from identity.factories import PersonFactory
+
+        self.kept = PersonFactory(name='Kept Person')
+        MembershipFactory(person=self.kept, semester=self.semester)
+
+    def test_saving_with_previews_echoed_updated_at_succeeds_with_no_concurrent_edits(self):
+        """Preview then Save, using exactly the `updated_at` Preview's own response echoed back, must succeed."""
+        body = _valid_body(self.semester, invites=[
+            {'row_key': 'invite-1', 'name': 'New Invitee', 'email': 'new-invitee@example.com'},
+        ])
+
+        _preview_response, preview_envelope = _post_json(self, _preview_url(), body)
+        self.assertTrue(preview_envelope['ok'])
+        echoed_updated_at = preview_envelope['context']['viewing_semester']['updated_at']
+
+        save_body = {**body, 'semester_updated_at': echoed_updated_at}
+        save_response, save_envelope = _post_json(self, _save_url(), save_body)
+
+        self.assertEqual(save_response.status_code, 200)
+        self.assertTrue(save_envelope['ok'], save_envelope.get('non_field_errors'))
+        self.assertTrue(Person.objects.filter(email='new-invitee@example.com').exists())
