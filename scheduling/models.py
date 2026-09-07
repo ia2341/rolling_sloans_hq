@@ -188,7 +188,10 @@ class SongRoleAssignment(models.Model):
     is_role_mismatch is never a hard block on save (per ADR-0002): it just
     flags that the assigned Role isn't among the Person's declared
     `PersonRole`s (person-level, not Semester-scoped — ADR-0014), so an
-    admin can notice and resolve it either way.
+    admin can notice and resolve it either way. A Role is only assignable
+    on a Song once a `SongRoleRequirement` exists for that (song, role)
+    pair (issue #439) — that gate *is* a hard block, `count` staying a
+    display target only.
     """
 
     song = models.ForeignKey(Song, on_delete=models.CASCADE)
@@ -208,8 +211,36 @@ class SongRoleAssignment(models.Model):
             role=self.role,
         ).exists()
 
+    def _has_matching_requirement(self):
+        """True when this assignment's (song, role) pair carries a SongRoleRequirement (issue #439)."""
+        return SongRoleRequirement.objects.filter(song_id=self.song_id, role_id=self.role_id).exists()
+
+    def clean(self):
+        """Surface an assignment with no matching SongRoleRequirement as a normal form error (issue #439)."""
+        if self.song_id and self.role_id and not self._has_matching_requirement():
+            raise ValidationError({
+                'role': (
+                    'This Song has no Role Requirement for this Role yet -- add one on the Song page before '
+                    'assigning it.'
+                ),
+            })
+
     def save(self, *args, **kwargs):
-        """Recompute is_role_mismatch from the Person's currently declared Roles before saving."""
+        """Reject an assignment with no matching SongRoleRequirement, then recompute is_role_mismatch and save.
+
+        Mirrors Conflict.save()'s belt-and-suspenders check (ADR-0006):
+        every write path (.objects.create(), the Django admin,
+        apply_song_role_assignments()) rejects a (song, role) pair with no
+        SongRoleRequirement, not only callers that run full_clean() first.
+        There is deliberately no DB-level constraint: a constraint
+        expression cannot reach through the `song`/`role` FKs to check for
+        a matching SongRoleRequirement row.
+        """
+        if not self._has_matching_requirement():
+            raise ValueError(
+                'This Song has no Role Requirement for this Role yet -- add one on the Song page before '
+                'assigning it.'
+            )
         self.is_role_mismatch = self._compute_is_role_mismatch()
         super().save(*args, **kwargs)
 

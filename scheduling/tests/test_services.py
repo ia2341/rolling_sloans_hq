@@ -28,7 +28,6 @@ from scheduling.services import (
     AssignmentMatrixEntryKind,
     SongRehearsalProgress,
     active_roles_for,
-    addable_roles_for,
     assignable_roster_for,
     assignment_grid_is_editable,
     assignment_matrix_for,
@@ -590,11 +589,14 @@ class AssignmentMatrixForTests(TestCase):
 
         self.assertEqual(matrix.roles, [guitarist, singer])
 
-    def test_role_with_assignment_and_no_requirement_is_a_column(self):
-        """A Role with a SongRoleAssignment but no Requirement on the Rehearsal's Songs is still a column (issue #213).
+    def test_a_song_role_assignment_always_implies_a_column(self):
+        """A SongRoleAssignment is a column, since issue #439 gates it on a matching SongRoleRequirement existing.
 
-        The regression test for the gate #151/#186 removed: a Requirement
-        is a target, never a cap, so it must confer no assignability.
+        Unlike the gate #151/#186 removed (and #213 restored), issue #439
+        reverses course again: a Role is only ever assignable once its
+        Requirement exists, so `SongRoleAssignmentFactory()`'s
+        auto-created Requirement (see its docstring) is what actually
+        makes this Role a column here, not the Assignment on its own.
         """
         rehearsal = RehearsalFactory(is_full_setlist=False)
         song = SongFactory(semester=rehearsal.semester, position=1)
@@ -674,57 +676,6 @@ class AssignmentMatrixForTests(TestCase):
 
         [cell] = matrix.rows[0].cells
         self.assertEqual(cell.entries, [])
-
-
-class AddableRolesForTests(TestCase):
-    def test_excludes_roles_already_a_column(self):
-        """A Role already a column in the matrix (via Requirement or Assignment) is not addable again (issue #213)."""
-        rehearsal = RehearsalFactory(is_full_setlist=False)
-        song = SongFactory(semester=rehearsal.semester, position=1)
-        RehearsalSongFactory(song=song, rehearsal=rehearsal, order=1)
-        required_role = RoleFactory(name='Singer')
-        SongRoleRequirementFactory(song=song, role=required_role, count=1)
-        addable_role = RoleFactory(name='Bassist')
-
-        matrix = assignment_matrix_for(rehearsal)
-        addable = addable_roles_for(matrix)
-
-        self.assertEqual(addable, [addable_role])
-
-    def test_excludes_a_role_already_a_column_via_assignment_only(self):
-        """A Role that's a column solely through a SongRoleAssignment (no Requirement) is not addable again (issue #213)."""
-        rehearsal = RehearsalFactory(is_full_setlist=False)
-        song = SongFactory(semester=rehearsal.semester, position=1)
-        RehearsalSongFactory(song=song, rehearsal=rehearsal, order=1)
-        assigned_role = RoleFactory(name='Bassist')
-        SongRoleAssignmentFactory(song=song, role=assigned_role)
-        addable_role = RoleFactory(name='Drummer')
-
-        matrix = assignment_matrix_for(rehearsal)
-        addable = addable_roles_for(matrix)
-
-        self.assertEqual(addable, [addable_role])
-
-    def test_excludes_retired_roles(self):
-        """A retired (is_active=False) Role is never offered as addable."""
-        rehearsal = RehearsalFactory(is_full_setlist=False)
-        RoleFactory(name='Retired Role', is_active=False)
-
-        matrix = assignment_matrix_for(rehearsal)
-        addable = addable_roles_for(matrix)
-
-        self.assertEqual(addable, [])
-
-    def test_orders_by_name(self):
-        """Addable Roles are ordered by name."""
-        rehearsal = RehearsalFactory(is_full_setlist=False)
-        RoleFactory(name='Zed Role')
-        RoleFactory(name='Anna Role')
-
-        matrix = assignment_matrix_for(rehearsal)
-        addable = addable_roles_for(matrix)
-
-        self.assertEqual([role.name for role in addable], ['Anna Role', 'Zed Role'])
 
 
 class AssignmentGridIsEditableTests(TestCase):

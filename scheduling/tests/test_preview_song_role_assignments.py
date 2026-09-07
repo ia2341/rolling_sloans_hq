@@ -200,6 +200,19 @@ class PreviewSongRoleAssignmentsTests(TestCase):
         self.assertEqual(fallout.loud, [])
         self.assertEqual(fallout.quiet, [])
 
+    def test_added_entry_for_a_role_with_no_requirement_is_blocked(self):
+        """An added entry naming a (song, role) pair with no SongRoleRequirement is blocked, with no Fallout (issue #439)."""
+        membership = MembershipFactory(semester=self.semester)
+        unrequired_role = RoleFactory()
+
+        fallout = self._preview(
+            self._buffer(added_entries=[(self.song.pk, unrequired_role.pk, membership.person.pk)]),
+        )
+
+        self.assertTrue(fallout.is_blocked)
+        self.assertEqual(fallout.loud, [])
+        self.assertEqual(fallout.quiet, [])
+
     def test_stale_stamp_is_reported_but_not_blocking(self):
         """A stale Semester stamp is reported via is_stale, and the Preview still runs and computes Fallout."""
         stale_stamp = self.semester.updated_at - timedelta(days=1)

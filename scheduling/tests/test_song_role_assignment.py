@@ -1,5 +1,6 @@
 """SongRoleAssignment + role-mismatch flag (issue #35, repointed to PersonRole by issue #377)."""
 
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.test import TestCase
 
@@ -10,6 +11,7 @@ from scheduling.factories import (
     RoleFactory,
     SongFactory,
     SongRoleAssignmentFactory,
+    SongRoleRequirementFactory,
 )
 from scheduling.models import SongRoleAssignment
 
@@ -123,6 +125,51 @@ class SongRoleAssignmentMultipleAssignmentsTests(TestCase):
         SongRoleAssignmentFactory(song=song_two, role=singer, person=person)
 
         self.assertEqual(SongRoleAssignment.objects.filter(person=person).count(), 3)
+
+
+class SongRoleAssignmentRequirementGateTests(TestCase):
+    def test_save_rejects_a_role_with_no_matching_requirement(self):
+        """Saving a SongRoleAssignment for a (song, role) with no SongRoleRequirement raises ValueError (issue #439)."""
+        song = SongFactory()
+        role = RoleFactory()
+        person = PersonFactory()
+
+        with self.assertRaises(ValueError):
+            SongRoleAssignment.objects.create(song=song, role=role, person=person)
+
+    def test_clean_rejects_a_role_with_no_matching_requirement(self):
+        """full_clean() surfaces the same rule as a ValidationError, for form/admin callers (issue #439)."""
+        song = SongFactory()
+        role = RoleFactory()
+        person = PersonFactory()
+        assignment = SongRoleAssignment(song=song, role=role, person=person)
+
+        with self.assertRaises(ValidationError):
+            assignment.clean()
+
+    def test_save_succeeds_once_a_matching_requirement_exists(self):
+        """A (song, role) pair with a SongRoleRequirement can be assigned regardless of its count (issue #439)."""
+        song = SongFactory()
+        role = RoleFactory()
+        person = PersonFactory()
+        SongRoleRequirementFactory(song=song, role=role, count=1)
+
+        assignment = SongRoleAssignment.objects.create(song=song, role=role, person=person)
+
+        self.assertEqual(SongRoleAssignment.objects.get(pk=assignment.pk).role, role)
+
+    def test_multiple_assignments_allowed_regardless_of_requirement_count(self):
+        """A Requirement's count is a display target only -- more people can be assigned than count (issue #439)."""
+        song = SongFactory()
+        role = RoleFactory()
+        SongRoleRequirementFactory(song=song, role=role, count=1)
+        first = PersonFactory()
+        second = PersonFactory()
+
+        SongRoleAssignment.objects.create(song=song, role=role, person=first)
+        SongRoleAssignment.objects.create(song=song, role=role, person=second)
+
+        self.assertEqual(SongRoleAssignment.objects.filter(song=song, role=role).count(), 2)
 
 
 class SongRoleAssignmentFieldTests(TestCase):

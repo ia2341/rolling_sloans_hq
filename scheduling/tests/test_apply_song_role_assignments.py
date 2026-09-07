@@ -12,10 +12,12 @@ from scheduling.factories import (
     SemesterFactory,
     SongFactory,
     SongRoleAssignmentFactory,
+    SongRoleRequirementFactory,
 )
 from scheduling.models import SongRoleAssignment
 from scheduling.services import (
     AssignmentEditBuffer,
+    MissingSongRoleRequirementError,
     StaleAssignmentSemesterError,
     WrongViewingSemesterError,
     apply_song_role_assignments,
@@ -220,6 +222,32 @@ class ApplySongRoleAssignmentsTests(TestCase):
         self.assertFalse(SongRoleAssignment.objects.filter(pk=self.assignment.pk).exists())
         self.assertTrue(
             SongRoleAssignment.objects.filter(song=self.song, role=self.role, person=membership.person).exists()
+        )
+
+    def test_added_entry_for_a_role_with_no_requirement_is_rejected_and_writes_nothing(self):
+        """An added entry naming a (song, role) pair with no SongRoleRequirement is rejected outright (issue #439)."""
+        membership = MembershipFactory(semester=self.semester)
+        unrequired_role = RoleFactory()
+        buffer = self._buffer(added_entries=[(self.song.pk, unrequired_role.pk, membership.person.pk)])
+
+        with self.assertRaises(MissingSongRoleRequirementError):
+            apply_song_role_assignments(buffer, viewing_semester=self.semester)
+
+        self.assertFalse(
+            SongRoleAssignment.objects.filter(song=self.song, role=unrequired_role, person=membership.person).exists()
+        )
+
+    def test_added_entry_for_a_role_with_a_requirement_succeeds(self):
+        """An added entry for a (song, role) pair carrying a SongRoleRequirement is created (issue #439)."""
+        membership = MembershipFactory(semester=self.semester)
+        required_role = RoleFactory()
+        SongRoleRequirementFactory(song=self.song, role=required_role, count=1)
+        buffer = self._buffer(added_entries=[(self.song.pk, required_role.pk, membership.person.pk)])
+
+        apply_song_role_assignments(buffer, viewing_semester=self.semester)
+
+        self.assertTrue(
+            SongRoleAssignment.objects.filter(song=self.song, role=required_role, person=membership.person).exists()
         )
 
     def test_add_rejected_when_semester_stamp_is_stale(self):

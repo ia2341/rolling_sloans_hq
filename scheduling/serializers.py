@@ -793,20 +793,20 @@ def _serialize_rehearsal_detail(rehearsal, *, viewer, is_admin, today) -> dict:
 
     `can_edit_assignments` is the ADR-0009 gate: true only for an admin on
     an editable grid (`services.assignment_grid_is_editable()`), never
-    re-derived by the client. `addable_roles` (admin-only) is #338's "+ Add
-    role" column source — Roles not already a matrix column, so an admin
-    can cast a Role nobody wrote a Requirement for without this ticket
-    adding a second read of the grid. `available_songs` (admin-only, absent
-    on the Dress Rehearsal, which has no RehearsalSong row to swap — ADR-0003)
-    is issue #406's song-swap dropdown source: every one of the Semester's
-    setlist Songs, each already carrying the cells picking it would show, so
-    a swap rerenders instantly with no second read of the grid either.
-    `roster`/`conflicted_person_ids`
-    (admin-only, issue #399) are the "+" picker's candidate source: paired
-    with the matrix rows' own entries (who's already assigned/backed-up
-    per cell), the client derives the whole picker with no per-cell fetch.
-    Both are admin-only for the same reason `addable_roles` is: a
-    non-admin viewer gets no Edit-assignments affordance at all
+    re-derived by the client. Issue #439 removed the grid's ad-hoc "+ Add
+    role" column control (and the `addable_roles` field that backed it):
+    a Role becomes a matrix column only once an admin has added a
+    SongRoleRequirement for it on the Song page, never client-side.
+    `available_songs` (admin-only, absent on the Dress Rehearsal, which
+    has no RehearsalSong row to swap — ADR-0003) is issue #406's
+    song-swap dropdown source: every one of the Semester's setlist Songs,
+    each already carrying the cells picking it would show, so a swap
+    rerenders instantly with no second read of the grid either.
+    `roster`/`conflicted_person_ids` (admin-only, issue #399) are the "+"
+    picker's candidate source: paired with the matrix rows' own entries
+    (who's already assigned/backed-up per cell), the client derives the
+    whole picker with no per-cell fetch. Both are admin-only for the same
+    reason: a non-admin viewer gets no Edit-assignments affordance at all
     (`can_edit_assignments`), and `conflicted_person_ids` — unlike the
     per-entry `has_conflict` marker every viewer already sees for an
     assigned/backed-up Person — would otherwise reveal which *unassigned*
@@ -832,7 +832,6 @@ def _serialize_rehearsal_detail(rehearsal, *, viewer, is_admin, today) -> dict:
         ],
     }
     if is_admin:
-        data['addable_roles'] = [_serialize_role(role) for role in services.addable_roles_for(matrix)]
         if not rehearsal.is_full_setlist:
             data['available_songs'] = [
                 _serialize_available_song_option(option, is_admin=is_admin, conflicted_person_ids=conflicted_person_ids)

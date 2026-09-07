@@ -66,7 +66,6 @@ function schedulePayload() {
             cells: [{ role_id: 5, entries: [] }],
           },
         ],
-        addable_roles: [],
         available_songs: [
           {
             id: 100,

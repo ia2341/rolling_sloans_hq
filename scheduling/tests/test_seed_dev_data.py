@@ -14,6 +14,7 @@ from scheduling.models import (
     Semester,
     Song,
     SongRoleAssignment,
+    SongRoleRequirement,
 )
 
 
@@ -56,6 +57,18 @@ class SeedDevDataTests(TestCase):
         # At least one seeded Person should be able to log in locally.
         person = Person.objects.first()
         self.assertTrue(person.has_usable_password())
+
+        # Every seeded SongRoleAssignment has a matching SongRoleRequirement
+        # (issue #439's gate) -- a no-op check today since seed_dev_data
+        # already pairs every assignment with a requirement per (song, role),
+        # but a regression here would mean the seeder can no longer run.
+        requirement_pairs = set(SongRoleRequirement.objects.values_list('song_id', 'role_id'))
+        for assignment in SongRoleAssignment.objects.filter(song__semester=semester):
+            self.assertIn(
+                (assignment.song_id, assignment.role_id),
+                requirement_pairs,
+                f'{assignment} has no matching SongRoleRequirement',
+            )
 
         output = out.getvalue()
         self.assertIn(semester.name, output)

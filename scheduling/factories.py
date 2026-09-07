@@ -122,7 +122,11 @@ class SongRoleAssignmentFactory(factory.django.DjangoModelFactory):
     """Builds a Person's Role assignment on a Song, with a fresh Song/Role/Person by default.
 
     Leaves is_role_mismatch unset since SongRoleAssignment.save() always
-    recomputes it from the Person's current Membership.
+    recomputes it from the Person's current Membership. Issue #439 gates a
+    save on a matching SongRoleRequirement existing for (song, role), so
+    `_create` ensures one first (`get_or_create`, so an explicitly passed
+    `song`/`role` that already carries a Requirement isn't duplicated)
+    rather than requiring every call site to pass one explicitly.
     """
 
     class Meta:
@@ -131,6 +135,12 @@ class SongRoleAssignmentFactory(factory.django.DjangoModelFactory):
     song = factory.SubFactory(SongFactory)
     role = factory.SubFactory(RoleFactory)
     person = factory.SubFactory(PersonFactory)
+
+    @classmethod
+    def _create(cls, model_class, *args, **kwargs):
+        """Ensure a matching SongRoleRequirement exists before creating the assignment (issue #439)."""
+        SongRoleRequirement.objects.get_or_create(song=kwargs['song'], role=kwargs['role'], defaults={'count': 1})
+        return super()._create(model_class, *args, **kwargs)
 
 
 class RehearsalFactory(factory.django.DjangoModelFactory):

@@ -19,6 +19,7 @@ from scheduling.models import (
     Semester,
     Song,
     SongRoleAssignment,
+    SongRoleRequirement,
 )
 
 
@@ -57,6 +58,18 @@ class SeedExampleSemesterTests(TestCase):
         assignments = SongRoleAssignment.objects.filter(song__semester=semester)
         self.assertGreater(assignments.count(), 0)
         self.assertFalse(assignments.filter(is_role_mismatch=True).exists())
+
+        # Every seeded SongRoleAssignment has a matching SongRoleRequirement
+        # (issue #439's gate) -- a no-op check today since seed_example_semester
+        # already pairs every assignment with a requirement per (song, role),
+        # but a regression here would mean the seeder can no longer run.
+        requirement_pairs = set(SongRoleRequirement.objects.values_list('song_id', 'role_id'))
+        for assignment in assignments:
+            self.assertIn(
+                (assignment.song_id, assignment.role_id),
+                requirement_pairs,
+                f'{assignment} has no matching SongRoleRequirement',
+            )
 
         # Every seeded Person has a usable password hash (so the Band page's
         # active_roster_for() doesn't hide them as invited-but-not-active),
