@@ -2,7 +2,7 @@ import { fireEvent, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { SchedulePayload } from '../api/scheduleTypes'
-import { memberContext } from '../test/fixtures'
+import { adminContext, memberContext } from '../test/fixtures'
 import { mockFetchOnce } from '../test/mockFetch'
 import { mockMatchMedia } from '../test/mockMatchMedia'
 import { renderShell } from '../test/renderShell'
@@ -141,6 +141,35 @@ describe('Schedule', () => {
     expect(
       screen.queryByRole('tab', { name: 'Assignments' }),
     ).not.toBeInTheDocument()
+  })
+
+  it('renders the admin "Edit Rehearsal" button beside the assignments heading, not in the page header', async () => {
+    mockFetchOnce(200, { context: adminContext(), data: schedulePayload() })
+
+    renderShell(<Schedule />, ['/schedule'])
+
+    const heading = await screen.findByRole('heading', {
+      name: 'Running order & assignments',
+    })
+    const button = screen.getByRole('button', { name: 'Edit Rehearsal' })
+    expect(heading.parentElement).toContainElement(button)
+
+    const pageHead = screen.getByRole('heading', {
+      name: /^Schedule:/,
+    }).parentElement
+    expect(pageHead).not.toContainElement(button)
+  })
+
+  it('disables the "Edit Rehearsal" button when the rehearsal is not editable, and enters edit mode on click when it is', async () => {
+    const payload = schedulePayload()
+    payload.selected!.can_edit_assignments = false
+    mockFetchOnce(200, { context: adminContext(), data: payload })
+
+    renderShell(<Schedule />, ['/schedule'])
+
+    expect(
+      await screen.findByRole('button', { name: 'Edit Rehearsal' }),
+    ).toBeDisabled()
   })
 
   it('switches sub-views via the segmented control without a second fetch', async () => {
