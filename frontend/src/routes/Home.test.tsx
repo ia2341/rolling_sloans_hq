@@ -181,12 +181,16 @@ describe('Home', () => {
     expect(screen.getByText(/Members still see/)).toBeInTheDocument()
   })
 
-  it("renders the Next-rehearsal card's arrival/departure line and timeline slots", async () => {
+  it("renders the Next-rehearsal card's date sentence, arrival/departure line, and timeline slots", async () => {
     mockFetchOnce(200, { context: memberContext(), data: homePayload() })
 
     renderShell(<Home />, ['/'])
 
+    // Home has no SegmentedControl pill naming the date, unlike Schedule
+    // (issue #427), so this card keeps its own date sentence -- also
+    // named in the Upcoming-rehearsals table below it, hence getAllByText.
     await screen.findByText(/Arrive around/)
+    expect(screen.getAllByText('10th March, Tuesday').length).toBeGreaterThan(0)
     expect(screen.queryByRole('link', { name: 'Open' })).not.toBeInTheDocument()
     expect(screen.getAllByText('First Song').length).toBeGreaterThan(0)
   })
