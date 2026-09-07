@@ -321,7 +321,7 @@ function AvailabilityBlock({
         <h2 className="text-sm font-semibold uppercase text-rs-muted">
           Your availability
         </h2>
-        <div className="flex items-center justify-between pt-1">
+        <div className="flex flex-col items-start gap-2 pt-1">
           <button
             type="button"
             disabled
@@ -351,7 +351,7 @@ function AvailabilityBlock({
         Your availability
       </h2>
       {availability.declaration_type === null ? (
-        <div className="flex items-center justify-between pt-1">
+        <div className="flex flex-col items-start gap-2 pt-1">
           <p className="text-sm">Available for the whole rehearsal</p>
           <button
             type="button"
