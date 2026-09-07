@@ -599,6 +599,7 @@ class AddableRolesTests(TestCase):
         self.assertNotIn('addable_roles', envelope['data']['selected'])
 
 
+@override_settings(SECURE_SSL_REDIRECT=False)
 class AssignableRosterTests(TestCase):
     """`/api/schedule/`'s rehearsal detail carries `roster`/`conflicted_person_ids` for an admin, the "+" picker's client-side candidate source (issue #399), and omits both for a member."""
 
