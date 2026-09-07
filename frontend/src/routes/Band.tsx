@@ -422,11 +422,15 @@ function RosterFilterBar({
 /**
  * The Roster's card grid (issue #366): one card per member, every
  * viewport, in a CSS grid that reflows continuously rather than snapping
- * at a Tailwind breakpoint. `minmax(260px, 1fr)` fits exactly three cards
- * across a typical desktop content width (roughly 900–1100px once the
- * shell's own padding is subtracted — three columns plus two 12px gaps is
- * just under 900px at the 260px floor) while still collapsing to a single
- * column under about 560px, so a phone and a desktop share one layout
+ * at a Tailwind breakpoint. `auto-fill` with a fixed 200px track (issue
+ * #425) sizes columns purely from the container's width, never from how
+ * many cards are actually present -- unlike `auto-fit`/`1fr`, which
+ * collapses empty tracks and stretches the remaining cards to fill the
+ * freed space, so a 2-member filtered view would render much wider cards
+ * than a 20-member one at the same viewport. A fixed, non-`1fr` track
+ * keeps card width/height constant regardless of item count: roughly one
+ * column under about 560px, up to five across a typical desktop content
+ * width (roughly 900–1100px once the shell's own padding is subtracted),
  * with no `isPhone` branch.
  */
 function BandGrid({
@@ -444,7 +448,7 @@ function BandGrid({
     )
   }
   return (
-    <ul className="grid grid-cols-[repeat(auto-fit,minmax(260px,1fr))] gap-3">
+    <ul className="grid grid-cols-[repeat(auto-fill,200px)] gap-3">
       {members.map((member) => (
         <li key={member.id} className="rounded border border-rs-border">
           <Link to={`/members/${member.id}`} className="block p-3">
