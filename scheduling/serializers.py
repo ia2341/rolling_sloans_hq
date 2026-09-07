@@ -897,7 +897,7 @@ def _serialize_roster_entry(membership):
     return {
         'id': membership.person_id,
         'name': membership.person.name,
-        'roles': [role.role.name for role in membership.membershiprole_set.all()],
+        'roles': [person_role.role.name for person_role in membership.person.personrole_set.all()],
         'song_count': membership.songs_count,
     }
 
@@ -1055,7 +1055,7 @@ def serialize_roster_edit_buffer(buffer: RosterEditBuffer) -> dict:
 
 
 def _serialize_roster_import_candidate(candidate) -> dict:
-    """Return one `RosterImportPerson`: the Person's name and the Roles they held last term, copied as fresh values (ADR 0001, issue #336)."""
+    """Return one `RosterImportPerson`: the Person's name and their current, person-level declared Roles (ADR-0014, issue #336)."""
     return {
         'id': candidate.person.pk,
         'name': candidate.person.name,

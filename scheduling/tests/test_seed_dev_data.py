@@ -7,7 +7,14 @@ from django.core.management.base import CommandError
 from django.test import TestCase, override_settings
 
 from identity.models import Person
-from scheduling.models import Membership, Rehearsal, Semester, Song, SongRoleAssignment
+from scheduling.models import (
+    Membership,
+    PersonRole,
+    Rehearsal,
+    Semester,
+    Song,
+    SongRoleAssignment,
+)
 
 
 class SeedDevDataTests(TestCase):
@@ -36,6 +43,15 @@ class SeedDevDataTests(TestCase):
         self.assertGreater(Song.objects.filter(semester=semester).count(), 0)
         self.assertGreater(Rehearsal.objects.filter(semester=semester).count(), 0)
         self.assertGreater(SongRoleAssignment.objects.filter(song__semester=semester).count(), 0)
+
+        # Every seeded, rostered Person has at least one declared, person-level
+        # Role (regression: this command used to write the retired
+        # MembershipRole instead of PersonRole, which roster_for() no longer reads).
+        for membership in Membership.objects.filter(semester=semester):
+            self.assertTrue(
+                PersonRole.objects.filter(person=membership.person).exists(),
+                f'{membership.person} has no declared PersonRole',
+            )
 
         # At least one seeded Person should be able to log in locally.
         person = Person.objects.first()

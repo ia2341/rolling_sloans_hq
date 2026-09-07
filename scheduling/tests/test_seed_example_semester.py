@@ -6,6 +6,7 @@ from django.core.management import call_command
 from django.test import TestCase
 
 from identity.models import Person
+from scheduling import services
 from scheduling.management.commands.seed_example_semester import (
     EXAMPLE_ROLE_NAMES,
     EXAMPLE_SEMESTER_NAME,
@@ -57,9 +58,20 @@ class SeedExampleSemesterTests(TestCase):
         self.assertGreater(assignments.count(), 0)
         self.assertFalse(assignments.filter(is_role_mismatch=True).exists())
 
-        # No seeded Person is loggable-in.
+        # Every seeded Person has a usable password hash (so the Band page's
+        # active_roster_for() doesn't hide them as invited-but-not-active),
+        # but it's a random, never-surfaced value nobody can log in with.
         for membership in memberships:
-            self.assertFalse(membership.person.has_usable_password())
+            self.assertTrue(membership.person.has_usable_password())
+            self.assertFalse(membership.person.check_password('password'))
+
+        # The full roster actually appears through the Band page's own query,
+        # not just via a raw Membership filter (regression: seeding with
+        # set_unusable_password() previously passed every check above while
+        # leaving the Band page rendering zero members).
+        self.assertEqual(
+            services.active_roster_for(memberships).count(), memberships.count(),
+        )
 
         # No admin account is created.
         self.assertFalse(Person.objects.filter(is_admin=True).exists())
