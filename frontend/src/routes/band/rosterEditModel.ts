@@ -29,12 +29,15 @@ export interface RosterWriteEnvelope {
 /**
  * One row of the Roster editor's Pending Buffer, held entirely in client
  * state (issue #374, mirroring `setlistEditModel.ts`'s `EditRow`). The
- * grid *is* this Buffer and nothing else -- a struck-through row and a
- * `Rename`/`Add`/`Invite` badge are all derived from the fields here,
- * never from a second, server-computed shape (ADR 0008: only the server's
- * Preview computes Fallout; this is display-only bookkeeping). Carries no
- * Role data (issue #379): the Roster editor is add/remove-only, and a
- * Person's declared Roles are set only on their Person page (#378).
+ * grid *is* this Buffer and nothing else -- a struck-through row and an
+ * `Add`/`Invite` badge are all derived from the fields here, never from a
+ * second, server-computed shape (ADR 0008: only the server's Preview
+ * computes Fallout; this is display-only bookkeeping). Carries no Role
+ * data (issue #379): the Roster editor is add/remove-only, and a Person's
+ * declared Roles are set only on their Person page (#378). Every card is
+ * read-only (issue #407): there is no name-edit affordance, so no
+ * `Rename` badge either -- fixing a typo in a not-yet-saved invite is
+ * remove-and-re-add through the Add-people popup.
  */
 export interface RosterEditRow {
   rowKey: string
@@ -45,15 +48,15 @@ export interface RosterEditRow {
   email: string | null
   /** Invite rows only (issue #397): `true` mails them immediately on Save, `false` stages them `'not_yet_invited'` with no mail sent. Meaningless for every other origin. */
   sendInvite: boolean
-  /** Struck through and kept in place with Undo, rather than removed from the array -- but only for a row that has something to undo to (`original !== null`); see `deleteRosterRow()`. */
+  /** Struck through and kept in place with Undo, rather than removed from the array -- but only for a row that has something to undo to (`original`); see `deleteRosterRow()`. */
   deleted: boolean
   origin: 'existing' | 'imported' | 'added' | 'invited'
   /** From the server for an existing row (issue #397), or set locally for a row staged this session -- backs the "not yet invited"/"invited · not active yet" badge and the Invite/Invite again control. */
   inviteStatus: InviteStatus
   isRoleMismatch: boolean
   songCount: number
-  /** The saved name at load time, for an existing row -- `null` for a brand-new one (imported, added or invited this session), which has nothing to diff against. */
-  original: { name: string } | null
+  /** `true` for a row present when the page loaded (`origin: 'existing'`); `false` for a brand-new one (imported, added or invited this session) -- backs the strike-through-and-Undo delete rule, since only a loaded row has a server state to undo to. */
+  original: boolean
 }
 
 let rowKeySequence = 0
@@ -77,7 +80,7 @@ export function rowsFromPayload(members: RosterEditMember[]): RosterEditRow[] {
     inviteStatus: member.invite_status,
     isRoleMismatch: member.is_role_mismatch,
     songCount: member.song_count,
-    original: { name: member.name },
+    original: true,
   }))
 }
 
@@ -96,7 +99,7 @@ export function newImportedRow(
     inviteStatus: 'accepted',
     isRoleMismatch: false,
     songCount: 0,
-    original: null,
+    original: false,
   }
 }
 
@@ -113,7 +116,7 @@ export function newAddedRow(person: UnrosteredPerson): RosterEditRow {
     inviteStatus: 'accepted',
     isRoleMismatch: false,
     songCount: 0,
-    original: null,
+    original: false,
   }
 }
 
@@ -140,20 +143,14 @@ export function newInviteRow(
     inviteStatus: sendInvite ? 'invited' : 'not_yet_invited',
     isRoleMismatch: false,
     songCount: 0,
-    original: null,
+    original: false,
   }
-}
-
-/** True if `row` differs from its saved snapshot; always `false` for a brand-new row (nothing to diff against). */
-export function isEdited(row: RosterEditRow): boolean {
-  if (row.original === null) return false
-  return row.name !== row.original.name
 }
 
 /**
  * Deletes `rowKey` from the Buffer (issue #374, mirroring
  * `setlistEditModel.ts`'s `EditRow` delete rule): a row with nothing to
- * undo to (added/imported/invited this same session, `original === null`)
+ * undo to (added/imported/invited this same session, `original: false`)
  * is simply removed from the array outright; an existing row is struck
  * through and kept in place, since removing it needs Undo and the Save
  * popup's `pending_removals` line.
@@ -164,7 +161,7 @@ export function deleteRosterRow(
 ): RosterEditRow[] {
   const row = rows.find((candidate) => candidate.rowKey === rowKey)
   if (!row) return rows
-  if (row.original === null) {
+  if (!row.original) {
     return rows.filter((candidate) => candidate.rowKey !== rowKey)
   }
   return rows.map((candidate) =>
@@ -172,20 +169,25 @@ export function deleteRosterRow(
   )
 }
 
-/** Returns the badges a grid row should render (issue #374), reusing `PreviewChange['op']`'s existing tokens rather than inventing new display vocabulary. */
+/**
+ * Returns the badges a grid row should render (issue #374, narrowed by
+ * #407: no `Rename` badge -- the grid no longer offers a name-edit
+ * affordance, so an existing row never has anything to badge), reusing
+ * `PreviewChange['op']`'s existing tokens rather than inventing new
+ * display vocabulary.
+ */
 export function rowBadges(row: RosterEditRow): PreviewChange['op'][] {
   if (row.deleted) return ['Remove']
-  if (row.original === null)
+  if (!row.original)
     return [row.origin === 'invited' && row.sendInvite ? 'Invite' : 'Add']
-  const badges: PreviewChange['op'][] = []
-  if (row.name !== row.original.name) badges.push('Rename')
-  return badges
+  return []
 }
 
 /**
  * How many unsaved changes the toolbar should report (issue #374,
- * mirroring `setlistEditModel.ts`'s `computeChangeCount`): every new row,
- * every edit to an existing row, plus every removal.
+ * narrowed by #407): every new row, plus every removal. There is no
+ * per-field edit to an existing row to count anymore -- the Roster
+ * editor is add/remove-only once a row is loaded.
  */
 export function computeChangeCount(rows: RosterEditRow[]): number {
   let count = 0
@@ -194,11 +196,7 @@ export function computeChangeCount(rows: RosterEditRow[]): number {
       count += 1
       return
     }
-    if (row.original === null) {
-      count += 1
-      return
-    }
-    if (isEdited(row)) count += 1
+    if (!row.original) count += 1
   })
   return count
 }
@@ -220,7 +218,7 @@ export function buildBufferWire(
         name: row.name,
       })),
     removed_person_ids: rows
-      .filter((row) => row.original !== null && row.deleted)
+      .filter((row) => row.original && row.deleted)
       .map((row) => row.personId as number),
     invites: rows
       .filter((row) => row.personId === null && !row.deleted)
@@ -288,10 +286,6 @@ export function mapRosterPreviewToResult(
     ...fallout.pending_added_without_invite.map((name): PreviewChange => ({
       op: 'Add',
       object: name,
-    })),
-    ...fallout.pending_name_edits.map((description): PreviewChange => ({
-      op: 'Rename',
-      object: description,
     })),
     ...fallout.pending_removals.map((removal): PreviewChange => ({
       op: 'Remove',

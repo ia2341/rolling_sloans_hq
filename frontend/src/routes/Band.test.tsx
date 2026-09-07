@@ -1,4 +1,4 @@
-import { screen, waitFor } from '@testing-library/react'
+import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useLocation } from 'react-router-dom'
@@ -364,10 +364,40 @@ describe('Band roster editor', () => {
     expect(
       await screen.findByRole('button', { name: '+ Add people' }),
     ).toBeInTheDocument()
-    expect(screen.getByDisplayValue('Sam Rivera')).toBeInTheDocument()
-    expect(screen.getByDisplayValue('Alex Kim')).toBeInTheDocument()
+    expect(screen.getByText('Sam Rivera')).toBeInTheDocument()
+    expect(screen.getByText('Alex Kim')).toBeInTheDocument()
     expect(screen.getByText('invited · not active yet')).toBeInTheDocument()
     expect(screen.getByText('3 songs')).toBeInTheDocument()
+  })
+
+  it('starts editing for ?intent=edit-roster, then strips the param, without auto-opening + Add people', async () => {
+    stubFetchSequence([
+      { status: 200, body: { context: adminContext(), data: bandPayload() } },
+      {
+        status: 200,
+        body: { context: adminContext(), data: rosterEditPayload() },
+      },
+    ])
+
+    renderShell(
+      <>
+        <Band />
+        <LocationSpy />
+      </>,
+      ['/members?intent=edit-roster'],
+    )
+
+    await waitFor(
+      () => expect(screen.getByText('Sam Rivera')).toBeInTheDocument(),
+      { timeout: 3000, interval: 25 },
+    )
+    expect(screen.queryByText('Add people')).not.toBeInTheDocument()
+    await waitFor(
+      () =>
+        expect(screen.getByTestId('location')).not.toHaveTextContent('intent'),
+      { timeout: 3000 },
+    )
+    expect(screen.getByTestId('location')).toHaveTextContent('/members')
   })
 
   it('registers an EditSession only while editing, and clears it on Discard', async () => {
@@ -391,7 +421,7 @@ describe('Band roster editor', () => {
     expect(screen.getByText('no edit session')).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: 'Edit roster' }))
-    await screen.findByDisplayValue('Sam Rivera')
+    await screen.findByText('Sam Rivera')
     expect(screen.getByText('0 unsaved')).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: 'toolbar discard' }))
@@ -401,7 +431,7 @@ describe('Band roster editor', () => {
     ).toBeInTheDocument()
   })
 
-  it('renaming a row updates the buffer and reports one unsaved change', async () => {
+  it('renders no editable name input for any row, existing or pending-invite (#407)', async () => {
     stubFetchSequence([
       { status: 200, body: { context: adminContext(), data: bandPayload() } },
       {
@@ -411,21 +441,11 @@ describe('Band roster editor', () => {
     ])
     const user = userEvent.setup()
 
-    renderShell(
-      <>
-        <Band />
-        <EditSessionSpy />
-      </>,
-      ['/members'],
-    )
+    renderShell(<Band />, ['/members'])
     await user.click(await screen.findByRole('button', { name: 'Edit roster' }))
-    const nameInput = await screen.findByDisplayValue('Sam Rivera')
-    await user.clear(nameInput)
-    await user.type(nameInput, 'Samantha Rivera')
+    await screen.findByText('Sam Rivera')
 
-    expect(nameInput).toHaveValue('Samantha Rivera')
-    expect(screen.getByText('1 unsaved')).toBeInTheDocument()
-    expect(screen.getByText('Rename')).toBeInTheDocument()
+    expect(screen.queryAllByRole('textbox')).toHaveLength(0)
   })
 
   it('removing a pending-invite row hides its Invite again control', async () => {
@@ -440,7 +460,7 @@ describe('Band roster editor', () => {
 
     renderShell(<Band />, ['/members'])
     await user.click(await screen.findByRole('button', { name: 'Edit roster' }))
-    await screen.findByDisplayValue('Alex Kim')
+    await screen.findByText('Alex Kim')
 
     expect(
       screen.getByRole('button', { name: 'Invite again' }),
@@ -472,7 +492,7 @@ describe('Band roster editor', () => {
       ['/members'],
     )
     await user.click(await screen.findByRole('button', { name: 'Edit roster' }))
-    await screen.findByDisplayValue('Sam Rivera')
+    await screen.findByText('Sam Rivera')
 
     const removeButtons = screen.getAllByRole('button', { name: 'Remove' })
     await user.click(removeButtons[0] as HTMLElement)
@@ -499,7 +519,7 @@ describe('Band roster editor', () => {
 
     renderShell(<Band />, ['/members'])
     await user.click(await screen.findByRole('button', { name: 'Edit roster' }))
-    await screen.findByDisplayValue('Sam Rivera')
+    await screen.findByText('Sam Rivera')
 
     await user.click(screen.getByRole('button', { name: '+ Add people' }))
     expect(
@@ -529,13 +549,13 @@ describe('Band roster editor', () => {
 
     renderShell(<Band />, ['/members'])
     await user.click(await screen.findByRole('button', { name: 'Edit roster' }))
-    await screen.findByDisplayValue('Sam Rivera')
+    await screen.findByText('Sam Rivera')
 
     await user.click(screen.getByRole('button', { name: '+ Add people' }))
     await screen.findByText('Jamie Ortiz', { exact: false })
     await user.click(screen.getByRole('button', { name: 'Add to the buffer' }))
 
-    expect(await screen.findByDisplayValue('Jamie Ortiz')).toBeInTheDocument()
+    expect(await screen.findByText('Jamie Ortiz')).toBeInTheDocument()
   })
 
   it('reopening + Add people and importing the same candidate again does not duplicate the row', async () => {
@@ -558,18 +578,22 @@ describe('Band roster editor', () => {
 
     renderShell(<Band />, ['/members'])
     await user.click(await screen.findByRole('button', { name: 'Edit roster' }))
-    await screen.findByDisplayValue('Sam Rivera')
+    await screen.findByText('Sam Rivera')
 
     await user.click(screen.getByRole('button', { name: '+ Add people' }))
-    await screen.findByText('Jamie Ortiz', { exact: false })
+    await within(await screen.findByRole('dialog')).findByText('Jamie Ortiz', {
+      exact: false,
+    })
     await user.click(screen.getByRole('button', { name: 'Add to the buffer' }))
-    await screen.findByDisplayValue('Jamie Ortiz')
+    await screen.findByText('Jamie Ortiz')
 
     await user.click(screen.getByRole('button', { name: '+ Add people' }))
-    await screen.findByText('Jamie Ortiz', { exact: false })
+    await within(await screen.findByRole('dialog')).findByText('Jamie Ortiz', {
+      exact: false,
+    })
     await user.click(screen.getByRole('button', { name: 'Add to the buffer' }))
 
-    expect(screen.getAllByDisplayValue('Jamie Ortiz')).toHaveLength(1)
+    expect(screen.getAllByText('Jamie Ortiz')).toHaveLength(1)
   })
 
   it('inviting a new member through + Add people appends an Invite row', async () => {
@@ -588,7 +612,7 @@ describe('Band roster editor', () => {
 
     renderShell(<Band />, ['/members'])
     await user.click(await screen.findByRole('button', { name: 'Edit roster' }))
-    await screen.findByDisplayValue('Sam Rivera')
+    await screen.findByText('Sam Rivera')
 
     await user.click(screen.getByRole('button', { name: '+ Add people' }))
     await screen.findByText('Jamie Ortiz', { exact: false })
@@ -597,7 +621,7 @@ describe('Band roster editor', () => {
     await user.type(screen.getByLabelText('Email'), 'taylor@example.com')
     await user.click(screen.getByRole('button', { name: 'Add to the buffer' }))
 
-    expect(await screen.findByDisplayValue('Taylor Nguyen')).toBeInTheDocument()
+    expect(await screen.findByText('Taylor Nguyen')).toBeInTheDocument()
   })
 
   it('unchecking "Send the invite email now" stages an Add row instead of an Invite row (#397)', async () => {
@@ -616,7 +640,7 @@ describe('Band roster editor', () => {
 
     renderShell(<Band />, ['/members'])
     await user.click(await screen.findByRole('button', { name: 'Edit roster' }))
-    await screen.findByDisplayValue('Sam Rivera')
+    await screen.findByText('Sam Rivera')
 
     await user.click(screen.getByRole('button', { name: '+ Add people' }))
     await screen.findByText('Jamie Ortiz', { exact: false })
@@ -626,7 +650,7 @@ describe('Band roster editor', () => {
     await user.click(screen.getByLabelText('Send the invite email now'))
     await user.click(screen.getByRole('button', { name: 'Add to the buffer' }))
 
-    expect(await screen.findByDisplayValue('Jordan Reyes')).toBeInTheDocument()
+    expect(await screen.findByText('Jordan Reyes')).toBeInTheDocument()
     expect(screen.getByText('not yet invited')).toBeInTheDocument()
     expect(screen.getByText('Add')).toBeInTheDocument()
   })
@@ -652,8 +676,9 @@ describe('Band roster editor', () => {
             pending_adds: [],
             pending_invites: [],
             pending_added_without_invite: [],
-            pending_removals: [],
-            pending_name_edits: ['Sam Rivera → Samantha Rivera'],
+            pending_removals: [
+              { person_id: 1, name: 'Sam Rivera', email: 'sam@example.com' },
+            ],
             loud: [],
             quiet: [],
           },
@@ -672,15 +697,20 @@ describe('Band roster editor', () => {
       ['/members'],
     )
     await user.click(await screen.findByRole('button', { name: 'Edit roster' }))
-    const nameInput = await screen.findByDisplayValue('Sam Rivera')
-    await user.clear(nameInput)
-    await user.type(nameInput, 'Samantha Rivera')
+    await screen.findByText('Sam Rivera')
+    await user.click(
+      screen.getAllByRole('button', { name: 'Remove' })[0] as HTMLElement,
+    )
+    await screen.findByRole('button', { name: 'Undo' })
 
     await user.click(screen.getByRole('button', { name: 'toolbar save' }))
     await waitFor(() =>
       expect(screen.getByText('What changes')).toBeInTheDocument(),
     )
-    expect(screen.getByText('Sam Rivera → Samantha Rivera')).toBeInTheDocument()
+    const changesSection = screen
+      .getByText('What changes')
+      .closest('section') as HTMLElement
+    expect(within(changesSection).getByText('Sam Rivera')).toBeInTheDocument()
     expect(fetchSpy).toHaveBeenCalledTimes(3)
     expect(fetchSpy.mock.calls[2]?.[0]).toBe('/api/members/roster/preview/')
   })
@@ -706,8 +736,9 @@ describe('Band roster editor', () => {
             pending_adds: [],
             pending_invites: [],
             pending_added_without_invite: [],
-            pending_removals: [],
-            pending_name_edits: ['Sam Rivera → Samantha Rivera'],
+            pending_removals: [
+              { person_id: 1, name: 'Sam Rivera', email: 'sam@example.com' },
+            ],
             loud: [],
             quiet: [],
           },
@@ -740,9 +771,11 @@ describe('Band roster editor', () => {
       ['/members'],
     )
     await user.click(await screen.findByRole('button', { name: 'Edit roster' }))
-    const nameInput = await screen.findByDisplayValue('Sam Rivera')
-    await user.clear(nameInput)
-    await user.type(nameInput, 'Samantha Rivera')
+    await screen.findByText('Sam Rivera')
+    await user.click(
+      screen.getAllByRole('button', { name: 'Remove' })[0] as HTMLElement,
+    )
+    await screen.findByRole('button', { name: 'Undo' })
 
     await user.click(screen.getByRole('button', { name: 'toolbar save' }))
     await waitFor(() =>
@@ -757,36 +790,6 @@ describe('Band roster editor', () => {
     ).toBeInTheDocument()
     expect(screen.queryByText('What changes')).not.toBeInTheDocument()
     // Still editing -- a rejected save must not clear the buffer.
-    expect(screen.getByDisplayValue('Samantha Rivera')).toBeInTheDocument()
-  })
-
-  it('starts editing for ?intent=edit-roster, then strips the param, without auto-opening + Add people', async () => {
-    stubFetchSequence([
-      { status: 200, body: { context: adminContext(), data: bandPayload() } },
-      {
-        status: 200,
-        body: { context: adminContext(), data: rosterEditPayload() },
-      },
-    ])
-
-    renderShell(
-      <>
-        <Band />
-        <LocationSpy />
-      </>,
-      ['/members?intent=edit-roster'],
-    )
-
-    expect(await screen.findByDisplayValue('Sam Rivera')).toBeInTheDocument()
-    expect(screen.queryByText('Add people')).not.toBeInTheDocument()
-    // `/members?intent=edit-roster` already contains "/members", so a
-    // waitFor asserting only that substring would pass on its very first,
-    // pre-strip check and never actually wait for the param to be gone.
-    // Wait on the absence of "intent" instead, which is false until the
-    // effect's setSearchParams call has flushed.
-    await waitFor(() =>
-      expect(screen.getByTestId('location')).not.toHaveTextContent('intent'),
-    )
-    expect(screen.getByTestId('location')).toHaveTextContent('/members')
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeInTheDocument()
   })
 })

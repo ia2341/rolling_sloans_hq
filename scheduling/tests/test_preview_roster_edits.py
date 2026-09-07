@@ -102,18 +102,6 @@ class PreviewRosterEditsTests(TestCase):
         self.assertIn('Brand New', fallout.pending_adds)
         self.assertFalse(fallout.is_blocked)
 
-    def test_pending_name_edit_is_reported(self):
-        """A name mutation to an existing Membership shows up in pending_name_edits."""
-        person = PersonFactory(name='Old Name')
-        MembershipFactory(person=person, semester=self.semester)
-        buffer = self._buffer(entries=[
-            RosterEditEntry(person=person, name='New Name'),
-        ])
-
-        fallout = self._preview(buffer)
-
-        self.assertTrue(any('New Name' in line for line in fallout.pending_name_edits))
-
     def test_pending_removals_carries_name_and_email(self):
         """A Buffer removal shows up in pending_removals with the removed Person's name and email."""
         removed = PersonFactory(name='Gone Person')

@@ -1004,7 +1004,6 @@ def serialize_roster_edit_fallout(fallout: RosterEditFallout) -> dict:
         'pending_invites': list(fallout.pending_invites),
         'pending_added_without_invite': list(fallout.pending_added_without_invite),
         'pending_removals': [_serialize_roster_removal(removal) for removal in fallout.pending_removals],
-        'pending_name_edits': list(fallout.pending_name_edits),
         'loud': list(fallout.loud),
         'quiet': list(fallout.quiet),
     }
