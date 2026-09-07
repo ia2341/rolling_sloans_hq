@@ -260,7 +260,12 @@ class BackupFactory(factory.django.DjangoModelFactory):
 
     covering_for defaults to None (an unattributed stand-in is legal per
     ADR-0007) and is_role_mismatch is left unset since Backup.save() always
-    recomputes it from the Person's current Membership.
+    recomputes it from the Person's current Membership. Issue #440 gates a
+    save on a matching SongRoleRequirement existing for the RehearsalSong's
+    (song, role), so `_create` ensures one first (`get_or_create`, so an
+    explicitly passed `rehearsal_song`/`role` that already carries a
+    Requirement isn't duplicated) rather than requiring every call site to
+    pass one explicitly.
     """
 
     class Meta:
@@ -270,6 +275,14 @@ class BackupFactory(factory.django.DjangoModelFactory):
     role = factory.SubFactory(RoleFactory)
     person = factory.SubFactory(PersonFactory)
     covering_for = None
+
+    @classmethod
+    def _create(cls, model_class, *args, **kwargs):
+        """Ensure a matching SongRoleRequirement exists before creating the Backup (issue #440)."""
+        SongRoleRequirement.objects.get_or_create(
+            song=kwargs['rehearsal_song'].song, role=kwargs['role'], defaults={'count': 1},
+        )
+        return super()._create(model_class, *args, **kwargs)
 
 
 class RecordingFactory(factory.django.DjangoModelFactory):

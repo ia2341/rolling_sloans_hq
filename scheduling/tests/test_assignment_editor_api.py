@@ -469,6 +469,47 @@ class SaveCommitsTests(TestCase):
             SongRoleAssignment.objects.filter(song=self.song, role=unrequired_role, person=self.new_person).exists()
         )
 
+    def test_adding_a_backup_for_a_role_with_no_requirement_is_rejected(self):
+        """Backing up a Role nobody wrote a Requirement for is rejected as ok: false, and writes nothing (issue #440)."""
+        rehearsal_song = RehearsalSongFactory(rehearsal=self.rehearsal, song=self.song)
+        unrequired_role = RoleFactory()
+        body = _valid_body(
+            self.semester,
+            added_backup_entries=[{
+                'rehearsal_song_id': rehearsal_song.pk, 'role_id': unrequired_role.pk,
+                'person_id': self.new_person.pk, 'covering_for_id': None,
+            }],
+        )
+
+        response, envelope = _post_json(self, _save_url(self.rehearsal), body)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(envelope['ok'])
+        self.assertFalse(
+            Backup.objects.filter(rehearsal_song=rehearsal_song, role=unrequired_role, person=self.new_person).exists()
+        )
+
+    def test_adding_a_backup_for_a_role_with_a_requirement_succeeds(self):
+        """Backing up a Role that does carry a SongRoleRequirement on the underlying Song is created (issue #440)."""
+        rehearsal_song = RehearsalSongFactory(rehearsal=self.rehearsal, song=self.song)
+        required_role = RoleFactory()
+        SongRoleRequirementFactory(song=self.song, role=required_role, count=1)
+        body = _valid_body(
+            self.semester,
+            added_backup_entries=[{
+                'rehearsal_song_id': rehearsal_song.pk, 'role_id': required_role.pk,
+                'person_id': self.new_person.pk, 'covering_for_id': None,
+            }],
+        )
+
+        response, envelope = _post_json(self, _save_url(self.rehearsal), body)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(envelope['ok'])
+        self.assertTrue(
+            Backup.objects.filter(rehearsal_song=rehearsal_song, role=required_role, person=self.new_person).exists()
+        )
+
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class BackupScopingTests(TestCase):
@@ -481,6 +522,7 @@ class BackupScopingTests(TestCase):
         select(self, self.semester)
         self.song = SongFactory(semester=self.semester, position=1)
         self.role = RoleFactory()
+        SongRoleRequirementFactory(song=self.song, role=self.role, count=1)
         self.rehearsal = RehearsalFactory(semester=self.semester)
         self.other_rehearsal = RehearsalFactory(semester=self.semester)
         self.rehearsal_song = RehearsalSongFactory(rehearsal=self.rehearsal, song=self.song)
