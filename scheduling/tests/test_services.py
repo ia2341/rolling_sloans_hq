@@ -29,6 +29,7 @@ from scheduling.services import (
     SongRehearsalProgress,
     active_roles_for,
     addable_roles_for,
+    assignable_roster_for,
     assignment_grid_is_editable,
     assignment_matrix_for,
     assignment_picker_for,
@@ -869,6 +870,82 @@ class AssignmentPickerForTests(TestCase):
         result = assignment_picker_for(song, role, semester)
 
         self.assertEqual([option.person for option in result.others], [person])
+
+
+class AssignableRosterForTests(TestCase):
+    """`assignable_roster_for()` (issue #399): the picker's roster+declared-Roles source, embedded once per Rehearsal detail so the "+" picker needs no per-cell fetch."""
+
+    def test_returns_every_rostered_person_with_their_declared_role_ids(self):
+        """Each entry carries the Person and the pk set of every Role they've declared (ADR-0014, person-level)."""
+        semester = SemesterFactory()
+        guitar = RoleFactory()
+        vocals = RoleFactory()
+        person = PersonFactory(name='Ada')
+        MembershipFactory(person=person, semester=semester)
+        PersonRoleFactory(person=person, role=guitar)
+        PersonRoleFactory(person=person, role=vocals)
+
+        result = assignable_roster_for(semester)
+
+        self.assertEqual([entry.person for entry in result], [person])
+        self.assertEqual(result[0].declared_role_ids, frozenset({guitar.pk, vocals.pk}))
+
+    def test_a_rostered_person_with_no_declared_role_gets_an_empty_set(self):
+        """A rostered Person who has declared no Role gets an empty `declared_role_ids`, not a missing entry."""
+        semester = SemesterFactory()
+        person = PersonFactory(name='Bea')
+        MembershipFactory(person=person, semester=semester)
+
+        result = assignable_roster_for(semester)
+
+        self.assertEqual(result[0].declared_role_ids, frozenset())
+
+    def test_a_non_rostered_person_is_excluded(self):
+        """A Person with no Membership in the Semester is offered nowhere in the picker."""
+        semester = SemesterFactory()
+        PersonFactory(name='Outsider')  # no Membership in `semester`
+
+        result = assignable_roster_for(semester)
+
+        self.assertEqual(result, [])
+
+    def test_a_membership_in_a_different_semester_is_excluded(self):
+        """A Membership in a different Semester doesn't make a Person eligible for this one."""
+        semester = SemesterFactory()
+        other_semester = SemesterFactory()
+        MembershipFactory(semester=other_semester)
+
+        result = assignable_roster_for(semester)
+
+        self.assertEqual(result, [])
+
+    def test_declared_role_persists_across_semesters(self):
+        """A PersonRole declared once shows up in `declared_role_ids` for every Semester the Person is rostered in (ADR-0014, issue #380)."""
+        first_semester = SemesterFactory()
+        second_semester = SemesterFactory()
+        role = RoleFactory()
+        person = PersonFactory(name='Ada')
+        PersonRoleFactory(person=person, role=role)
+        MembershipFactory(person=person, semester=first_semester)
+        MembershipFactory(person=person, semester=second_semester)
+
+        first_result = assignable_roster_for(first_semester)
+        second_result = assignable_roster_for(second_semester)
+
+        self.assertEqual(first_result[0].declared_role_ids, frozenset({role.pk}))
+        self.assertEqual(second_result[0].declared_role_ids, frozenset({role.pk}))
+
+    def test_ordered_by_person_name(self):
+        """Entries come back ordered by `Person.name`, independent of Membership creation order."""
+        semester = SemesterFactory()
+        zed = PersonFactory(name='Zed')
+        anna = PersonFactory(name='Anna')
+        MembershipFactory(person=zed, semester=semester)
+        MembershipFactory(person=anna, semester=semester)
+
+        result = assignable_roster_for(semester)
+
+        self.assertEqual([entry.person for entry in result], [anna, zed])
 
 
 class FutureRehearsalsForTests(TestCase):

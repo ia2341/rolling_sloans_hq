@@ -70,6 +70,13 @@ export interface RoleLegendEntry {
   code: string
 }
 
+/** One rostered Person plus their declared Role ids (ADR-0014, person-level) — the "+" picker's candidate source (issue #399). */
+export interface AssignableRosterEntry {
+  person_id: number
+  person_name: string
+  declared_role_ids: number[]
+}
+
 export interface RehearsalDetail {
   id: number
   date: string
@@ -84,6 +91,10 @@ export interface RehearsalDetail {
   rows: MatrixRow[]
   /** Admin-only (issue #338): Roles not already a matrix column, for the "+ Add role" affordance. Absent for a member. */
   addable_roles?: { id: number; name: string }[]
+  /** Admin-only (issue #399): this Semester's roster plus each Person's declared Role ids — combined with `rows`' own entries, the "+" picker derives its candidates with no per-cell fetch. Absent for a member. */
+  roster?: AssignableRosterEntry[]
+  /** Admin-only (issue #399): Person ids with a Conflict on this Rehearsal — a bare marker list only (ADR 0005), never a reason. Absent for a member. */
+  conflicted_person_ids?: number[]
 }
 
 export type YourState =
