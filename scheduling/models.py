@@ -249,6 +249,19 @@ class SongRoleAssignment(models.Model):
         return f'{self.person} as {self.role} on {self.song}'
 
 
+@receiver(post_delete, sender=SongRoleRequirement)
+def _song_role_requirement_deleted(sender, instance, **kwargs):
+    """Cascade-delete now-ungated SongRoleAssignments when their backing Requirement is removed (issue #439).
+
+    A queryset `.delete()` (used by `apply_song_role_requirements()`), a
+    direct `.delete()`, and admin deletion all route through this signal,
+    so a SongRoleAssignment can never outlive the SongRoleRequirement that
+    made it assignable, per the invariant `SongRoleAssignment.clean()`/
+    `save()` enforce on the write side.
+    """
+    SongRoleAssignment.objects.filter(song_id=instance.song_id, role_id=instance.role_id).delete()
+
+
 def _reevaluate_role_mismatches_for(person_id, role_id):
     """Recompute is_role_mismatch on every SongRoleAssignment and Backup this PersonRole change could affect.
 

@@ -13,7 +13,7 @@ from scheduling.factories import (
     SongRoleAssignmentFactory,
     SongRoleRequirementFactory,
 )
-from scheduling.models import SongRoleAssignment
+from scheduling.models import SongRoleAssignment, SongRoleRequirement
 
 
 class SongRoleAssignmentMismatchTests(TestCase):
@@ -170,6 +170,41 @@ class SongRoleAssignmentRequirementGateTests(TestCase):
         SongRoleAssignment.objects.create(song=song, role=role, person=second)
 
         self.assertEqual(SongRoleAssignment.objects.filter(song=song, role=role).count(), 2)
+
+    def test_deleting_the_requirement_directly_cascades_to_its_assignments(self):
+        """A direct .delete() on a SongRoleRequirement removes every SongRoleAssignment sharing its (song, role) (issue #439)."""
+        song = SongFactory()
+        role = RoleFactory()
+        requirement = SongRoleRequirementFactory(song=song, role=role, count=1)
+        assignment = SongRoleAssignmentFactory(song=song, role=role)
+
+        requirement.delete()
+
+        self.assertFalse(SongRoleAssignment.objects.filter(pk=assignment.pk).exists())
+
+    def test_deleting_the_requirement_via_a_queryset_still_cascades(self):
+        """A bulk queryset .delete() on SongRoleRequirement still dispatches the cascade signal per row (issue #439)."""
+        song = SongFactory()
+        role = RoleFactory()
+        SongRoleRequirementFactory(song=song, role=role, count=1)
+        assignment = SongRoleAssignmentFactory(song=song, role=role)
+
+        SongRoleRequirement.objects.filter(song=song, role=role).delete()
+
+        self.assertFalse(SongRoleAssignment.objects.filter(pk=assignment.pk).exists())
+
+    def test_deleting_one_requirement_leaves_other_song_role_pairs_assignments_untouched(self):
+        """Deleting one Requirement doesn't cascade to an assignment for a different (song, role) pair (issue #439)."""
+        song = SongFactory()
+        role = RoleFactory()
+        requirement = SongRoleRequirementFactory(song=song, role=role, count=1)
+        other_role = RoleFactory()
+        SongRoleRequirementFactory(song=song, role=other_role, count=1)
+        other_assignment = SongRoleAssignmentFactory(song=song, role=other_role)
+
+        requirement.delete()
+
+        self.assertTrue(SongRoleAssignment.objects.filter(pk=other_assignment.pk).exists())
 
 
 class SongRoleAssignmentFieldTests(TestCase):
