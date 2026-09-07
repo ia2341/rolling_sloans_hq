@@ -284,6 +284,37 @@ class PreviewRehearsalGenerationTests(TestCase):
             preview_rehearsal_generation(semester, pattern_input)
 
 
+class WireFormatDayOfWeekTests(TestCase):
+    """`day_of_week` is read as a raw wire-format integer, not only via `RehearsalTime`'s named constants (issue #406).
+
+    Pins the frontend/backend numbering contract itself under test:
+    `GenerateDatesModal.tsx`'s `DAY_NAMES` array used to index Sunday=0…
+    Saturday=6 for its `<option value={day}>` values, while this function's
+    `current.weekday()` (and `RehearsalTime.DAY_OF_WEEK_CHOICES`) is
+    Monday=0…Sunday=6 — every previewed date landed one weekday later than
+    the one actually picked. `day_of_week=2` here is the raw integer a
+    fixed frontend submits for "Wednesday" (`RehearsalTime.WEDNESDAY` is
+    also `2`, but this test deliberately never imports that constant, so a
+    future accidental renumbering of it couldn't mask a regression here).
+    """
+
+    def test_raw_integer_two_generates_real_wednesdays_not_thursdays(self):
+        """A Pattern built from the raw integer `2` (not `RehearsalTime.WEDNESDAY`) generates Wednesdays, matching the wire contract's Monday=0 convention."""
+        semester = SemesterFactory()
+        pattern_input = RehearsalPatternInput(
+            start_date=date(2026, 9, 26), end_date=date(2026, 12, 6),
+            rehearsal_times=[RehearsalTimeInput(day_of_week=2, start_time=time(19, 0), end_time=time(21, 0))],
+            skip_dates=[],
+        )
+
+        diff = preview_rehearsal_generation(semester, pattern_input)
+
+        generated_dates = [item.date for item in diff.creates]
+        self.assertTrue(generated_dates)
+        self.assertEqual(generated_dates[0], date(2026, 9, 30))
+        self.assertTrue(all(generated_date.weekday() == 2 for generated_date in generated_dates))
+
+
 class PriorRehearsalTimesForTests(TestCase):
     """prior_rehearsal_times_for(): the retired Semester Setup wizard's opt-in prefill, at the service layer (issue #341).
 

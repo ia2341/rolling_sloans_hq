@@ -1579,6 +1579,61 @@ def addable_roles_for_song(song) -> list[Role]:
     return list(Role.objects.filter(is_active=True).exclude(pk__in=existing_role_ids).order_by('name'))
 
 
+@dataclass(frozen=True)
+class AvailableSongOption:
+    """One Song the Assignments table's song-swap dropdown can pick for a slot, its cells previewing what picking it would show (issue #406).
+
+    Cells cover only *that Song's own* Role columns (mirroring
+    `assignment_matrix_for()`'s own per-Rehearsal rule, scoped to one Song)
+    — not every column the current Rehearsal happens to render, and not
+    every Role in the Semester either, so a swap-dropdown option for a Song
+    nobody currently at this Rehearsal needs a Role for still carries that
+    Role's cell. A Song not currently anchored to this Rehearsal's own
+    RehearsalSong id carries no Backup entries (only standing Assignments):
+    ADR-0007 anchors a Backup to a specific RehearsalSong row, and a
+    not-yet-picked Song isn't at one yet.
+    """
+
+    song: Song
+    cells: list[AssignmentMatrixCell]
+
+
+def available_song_options_for(rehearsal) -> list['AvailableSongOption']:
+    """Return every one of `rehearsal`'s Semester's setlist Songs as a swap-dropdown option, each with its own Role columns (issue #406).
+
+    Backs the Assignments table's per-row song-swap dropdown: the client
+    already has every option's cells up front (this function runs once, at
+    the same read that builds the Rehearsal's own matrix), so picking a
+    different Song rerenders that row instantly with no extra round trip.
+    """
+    songs = list(Song.objects.filter(semester=rehearsal.semester).order_by('position'))
+    _, _, rehearsal_song_ids = _matrix_songs(rehearsal)
+    options = []
+    for song in songs:
+        roles = list(
+            Role.objects.filter(
+                Q(songrolerequirement__song=song) | Q(songroleassignment__song=song),
+            ).distinct().order_by('name')
+        )
+        entries_by_song_role = _matrix_entries_by_song_role([song], roles, rehearsal_song_ids)
+        options.append(
+            AvailableSongOption(
+                song=song,
+                cells=[
+                    AssignmentMatrixCell(
+                        role=role,
+                        entries=(entries := entries_by_song_role.get((song.id, role.id), [])),
+                        standing_assignees=[
+                            entry.person for entry in entries if entry.kind == AssignmentMatrixEntryKind.ASSIGNMENT
+                        ],
+                    )
+                    for role in roles
+                ],
+            )
+        )
+    return options
+
+
 def _matrix_entries_by_song_role(songs, roles, rehearsal_song_ids):
     """Return {(song_id, role_id): [AssignmentMatrixEntry, ...]} for every assignment/Backup among `songs`/`roles` (issue #208, #216).
 
@@ -4554,11 +4609,13 @@ def _apply_running_order(rehearsal: Rehearsal, rows: list[RunningOrderRow]) -> N
 
     `reorder_rehearsal_songs()` is the single place the reorder/re-derive
     logic exists (issue #220's spec), so this function's job is only to
-    make every row it names *exist* with the right `slot_count` first:
-    removed rows are deleted via `delete_rehearsal_songs_with_recordings()`;
-    a surviving existing row's `slot_count` is updated with a bulk
-    `.update()` (bypassing `RehearsalSong.save()`'s own validation, which
-    is redundant here — see below); a brand-new row (no `rehearsal_song_id`)
+    make every row it names *exist* with the right `slot_count` and `song_id`
+    first: removed rows are deleted via `delete_rehearsal_songs_with_recordings()`;
+    a surviving existing row's `slot_count` and `song_id` are updated with a
+    bulk `.update()` (bypassing `RehearsalSong.save()`'s own validation, which
+    is redundant here — see below) — the `song_id` write is what the
+    Assignments table's song-swap dropdown (issue #406) actually persists
+    through; a brand-new row (no `rehearsal_song_id`)
     is created at a throwaway placeholder `order` clear of every other
     row's current or soon-to-be-placeholder value, purely so its `INSERT`
     doesn't collide with `unique_order_per_rehearsal` before
@@ -4585,7 +4642,10 @@ def _apply_running_order(rehearsal: Rehearsal, rows: list[RunningOrderRow]) -> N
 
     for row in rows:
         if row.rehearsal_song_id is not None:
-            RehearsalSong.objects.filter(pk=row.rehearsal_song_id).update(slot_count=row.slot_count)
+            # song_id is included so the Assignments table's song-swap dropdown (issue #406) can
+            # change an existing slot's Song without deleting and recreating its RehearsalSong row —
+            # any Backup already anchored to it (ADR-0007) survives the swap, now describing the new Song.
+            RehearsalSong.objects.filter(pk=row.rehearsal_song_id).update(slot_count=row.slot_count, song_id=row.song_id)
 
     placeholder_base = max([len(rows), *(rehearsal_song.order for rehearsal_song in existing_by_id.values())], default=len(rows))
     ordered_ids = []

@@ -173,4 +173,42 @@ describe('GenerateDatesModal', () => {
       orphanIds: [],
     })
   })
+
+  it("selecting Wednesday submits day_of_week: 2, matching the backend's Monday=0 convention (issue #406)", async () => {
+    const fetchSpy = stubFetchSequence([
+      {
+        status: 200,
+        body: {
+          ok: true,
+          errors: {},
+          non_field_errors: [],
+          fallout: null,
+          values: null,
+          data: null,
+        },
+      },
+      { status: 200, body: { data: diff } },
+    ])
+    const user = userEvent.setup()
+    render(
+      <GenerateDatesModal
+        open
+        onOpenChange={() => {}}
+        pattern={null}
+        onApply={() => {}}
+      />,
+    )
+
+    await user.click(screen.getByText('+ Add weekly time'))
+    await user.selectOptions(screen.getByLabelText('Day of week'), 'Wednesday')
+
+    await user.click(screen.getByRole('button', { name: 'Preview' }))
+    await screen.findByText('Create · 1')
+
+    const patternSaveCall = fetchSpy.mock.calls[0]!
+    const body = JSON.parse(String(patternSaveCall[1]?.body))
+    expect(body.rehearsal_times).toEqual([
+      { day_of_week: 2, start_time: '19:00', end_time: '21:00' },
+    ])
+  })
 })

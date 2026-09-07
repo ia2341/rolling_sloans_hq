@@ -11,14 +11,15 @@ import type {
 import type { ReadEnvelope, WriteEnvelope } from '../../api/types'
 import { ResponsiveDialog } from './ResponsiveDialog'
 
+/** Indexed Monday=0…Sunday=6 (issue #406) — matching the backend's `RehearsalTime.DAY_OF_WEEK_CHOICES`/`date.weekday()` convention, not JavaScript's own Sunday=0 `Date.getDay()`. A mismatched index here silently ships every generated date one weekday later than the one picked. */
 const DAY_NAMES = [
-  'Sunday',
   'Monday',
   'Tuesday',
   'Wednesday',
   'Thursday',
   'Friday',
   'Saturday',
+  'Sunday',
 ]
 
 export interface RetimeApplication {

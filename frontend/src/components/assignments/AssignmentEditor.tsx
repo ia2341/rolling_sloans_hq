@@ -11,6 +11,7 @@ import type {
 import type { PreviewResult } from '../../api/previewTypes'
 import type { RehearsalEditFalloutPayload } from '../../api/scheduleEditorTypes'
 import type {
+  AvailableSongOption,
   MatrixCell,
   MatrixEntry,
   MatrixRow,
@@ -166,6 +167,8 @@ export function AssignmentEditor({
   const [runningOrder, setRunningOrder] = useState<number[] | null>(null)
   /** The order the server last returned, to diff `runningOrder` against for the dirty flag and to discard back to. */
   const [originalOrder, setOriginalOrder] = useState<number[] | null>(null)
+  /** Pending song-swap picks (issue #406): `rehearsal_song_id` -> the newly picked Song's id, keyed so a re-pick of the same row overwrites rather than duplicates it. */
+  const [songSwaps, setSongSwaps] = useState<Map<number, number>>(new Map())
 
   /** Clears every unsaved pick/removal, restoring the grid to what the server last returned. */
   const resetPendingBuffer = useCallback(() => {
@@ -174,6 +177,7 @@ export function AssignmentEditor({
     setRemovedBackupIds(new Set())
     setAddedBackupEntries(new Map())
     setExtraRoles([])
+    setSongSwaps(new Map())
   }, [])
 
   /** (Re-)fetches this Rehearsal's matrix from the shared Schedule endpoint and resets the pending buffer (assignments and Running Order both) to match. */
@@ -205,26 +209,57 @@ export function AssignmentEditor({
     load()
   }, [load])
 
+  /** `detail.available_songs`, keyed by Song id, for the song-swap dropdown's instant rerender (issue #406). */
+  const availableSongsById = useMemo(() => {
+    const map = new Map<number, AvailableSongOption>()
+    for (const option of detail?.available_songs ?? [])
+      map.set(option.id, option)
+    return map
+  }, [detail])
+
   /**
-   * The grid's rows in the current (possibly reordered) Running Order —
-   * the Running Order editor and the assignment table are one table
-   * (issue: UI overhaul round 2), so a drag on a row both reorders and
-   * shows its assignments in the same place. `null` `runningOrder` (the
-   * Dress Rehearsal, ADR 0003) falls back to the server's own row order,
-   * which is unreorderable there anyway.
+   * The grid's rows in the current (possibly reordered, possibly
+   * song-swapped) Running Order — the Running Order editor and the
+   * assignment table are one table (issue: UI overhaul round 2), so a
+   * drag on a row both reorders and shows its assignments in the same
+   * place. `null` `runningOrder` (the Dress Rehearsal, ADR 0003) falls
+   * back to the server's own row order, which is unreorderable (and
+   * unswappable) there anyway. A row with a pending song swap
+   * (`songSwaps`) substitutes its `song_id`/`song_title`/`cells` from the
+   * matching `available_songs` option, so the swapped Song's own
+   * requirements and `is_role_mismatch` flags render immediately with no
+   * second read (issue #406).
    */
   const displayRows = useMemo(() => {
     const rows = detail?.rows ?? []
-    if (runningOrder === null) return rows
-    const byRehearsalSongId = new Map(
-      rows
-        .filter((row) => row.rehearsal_song_id !== null)
-        .map((row) => [row.rehearsal_song_id as number, row]),
-    )
-    return runningOrder
-      .map((id) => byRehearsalSongId.get(id))
-      .filter((row): row is MatrixRow => row !== undefined)
-  }, [detail, runningOrder])
+    const ordered =
+      runningOrder === null
+        ? rows
+        : (() => {
+            const byRehearsalSongId = new Map(
+              rows
+                .filter((row) => row.rehearsal_song_id !== null)
+                .map((row) => [row.rehearsal_song_id as number, row]),
+            )
+            return runningOrder
+              .map((id) => byRehearsalSongId.get(id))
+              .filter((row): row is MatrixRow => row !== undefined)
+          })()
+    if (songSwaps.size === 0) return ordered
+    return ordered.map((row) => {
+      if (row.rehearsal_song_id === null) return row
+      const swappedSongId = songSwaps.get(row.rehearsal_song_id)
+      if (swappedSongId === undefined) return row
+      const option = availableSongsById.get(swappedSongId)
+      if (option === undefined) return row
+      return {
+        ...row,
+        song_id: option.id,
+        song_title: option.title,
+        cells: option.cells,
+      }
+    })
+  }, [detail, runningOrder, songSwaps, availableSongsById])
 
   /** Reorders `runningOrder` by the display-row indices `AssignmentEditorTable`/`AssignmentEditorCards` render at — a drag-and-drop or arrow move on a row. */
   const reorderDisplayRows = useCallback(
@@ -236,12 +271,13 @@ export function AssignmentEditor({
     [],
   )
 
-  /** True once `runningOrder` differs from what the server last returned — the Running Order half of `changeCount`. */
-  const hasReorderChange =
-    runningOrder !== null &&
-    originalOrder !== null &&
-    (runningOrder.length !== originalOrder.length ||
-      runningOrder.some((id, index) => id !== originalOrder[index]))
+  /** True once `runningOrder` differs from what the server last returned, or a song swap is pending — the Running Order half of `changeCount` (both are submitted through the same `.../running-order/{preview,save}/` Buffer, issue #406). */
+  const hasRunningOrderChange =
+    (runningOrder !== null &&
+      originalOrder !== null &&
+      (runningOrder.length !== originalOrder.length ||
+        runningOrder.some((id, index) => id !== originalOrder[index]))) ||
+    songSwaps.size > 0
 
   const roles: DisplayRole[] = useMemo(
     () => [...(detail?.roles ?? []), ...extraRoles],
@@ -282,7 +318,7 @@ export function AssignmentEditor({
     addedEntries.size +
     removedBackupIds.size +
     addedBackupEntries.size +
-    (hasReorderChange ? 1 : 0)
+    (hasRunningOrderChange ? 1 : 0)
 
   /** Serializes the pending buffer's state into the `AssignmentEditBufferInput` wire shape `preview`/`save` post, or `null` with no viewed Semester. */
   const buildBufferInput = useCallback((): AssignmentEditBufferInput | null => {
@@ -313,15 +349,18 @@ export function AssignmentEditor({
     addedBackupEntries,
   ])
 
-  /** Serializes `runningOrder` into the `RunningOrderReorderInput` wire shape `.../running-order/{preview,save}/` post, or `null` with no viewed Semester or no reorder to submit. */
+  /** Serializes `runningOrder`/`songSwaps` into the `RunningOrderReorderInput` wire shape `.../running-order/{preview,save}/` post, or `null` with no viewed Semester or no reorder to submit. */
   const buildReorderInput = useCallback((): RunningOrderReorderInput | null => {
     if (semester === null || runningOrder === null) return null
     return {
       semester_id: semester.id,
       semester_updated_at: semester.updatedAt,
       ordered_rehearsal_song_ids: runningOrder,
+      song_overrides: [...songSwaps.entries()].map(
+        ([rehearsal_song_id, song_id]) => ({ rehearsal_song_id, song_id }),
+      ),
     }
-  }, [semester, runningOrder])
+  }, [semester, runningOrder, songSwaps])
 
   /** Adapts `.../assignments/{preview,save}/`'s Fallout envelope into `SaveChangesDialog`'s `PreviewResult` shape. */
   const toAssignmentResult = useCallback(
@@ -413,7 +452,7 @@ export function AssignmentEditor({
     const assignmentResult = toAssignmentResult(assignmentEnvelope)
     if (!assignmentResult.ok) return assignmentResult
 
-    const reorderBody = hasReorderChange ? buildReorderInput() : null
+    const reorderBody = hasRunningOrderChange ? buildReorderInput() : null
     if (reorderBody === null) return assignmentResult
 
     const reorderEnvelope = await apiFetch<
@@ -440,7 +479,7 @@ export function AssignmentEditor({
   }, [
     buildBufferInput,
     rehearsalId,
-    hasReorderChange,
+    hasRunningOrderChange,
     buildReorderInput,
     toAssignmentResult,
     toReorderResult,
@@ -455,7 +494,7 @@ export function AssignmentEditor({
       { method: 'POST', body: JSON.stringify(assignmentBody) },
     ).then((assignmentEnvelope) => {
       if (!assignmentEnvelope.ok) return
-      const reorderBody = hasReorderChange ? buildReorderInput() : null
+      const reorderBody = hasRunningOrderChange ? buildReorderInput() : null
       if (reorderBody === null) {
         setSaveOpen(false)
         load()
@@ -476,7 +515,7 @@ export function AssignmentEditor({
   }, [
     buildBufferInput,
     rehearsalId,
-    hasReorderChange,
+    hasRunningOrderChange,
     buildReorderInput,
     load,
     onDone,
@@ -556,10 +595,15 @@ export function AssignmentEditor({
     }
   }, [])
 
-  /** Lists a cell's current standing assignees (server-saved minus pending removals, plus pending adds) for the picker's "Covering for" menu, names shortened per `nameFor`. */
+  /** Lists a cell's current standing assignees (server-saved minus pending removals, plus pending adds) for the picker's "Covering for" menu, names shortened per `nameFor`.
+   *
+   * Reads `displayRows`, not the raw `detail.rows`, so a cell on a
+   * pending-song-swap row (issue #406) lists the *new* Song's own standing
+   * assignees rather than the old one's.
+   */
   const standingAssigneesFor = useCallback(
     (songId: number, roleId: number): { id: number; name: string }[] => {
-      const row = detail?.rows.find((candidate) => candidate.song_id === songId)
+      const row = displayRows.find((candidate) => candidate.song_id === songId)
       const cell = row ? cellFor(row, roleId) : undefined
       const fromServer = (cell?.entries ?? [])
         .filter(
@@ -578,8 +622,17 @@ export function AssignmentEditor({
         }))
       return [...fromServer, ...fromPending]
     },
-    [detail, removedAssignmentIds, addedEntries, nameFor],
+    [displayRows, removedAssignmentIds, addedEntries, nameFor],
   )
+
+  /** Records a pending song swap for one Running Order slot (issue #406): the row keeps its position, but its Song — and so its rendered Role columns and assignees — changes immediately, with no round trip. */
+  const swapSong = useCallback((rehearsalSongId: number, songId: number) => {
+    setSongSwaps((previous) => {
+      const next = new Map(previous)
+      next.set(rehearsalSongId, songId)
+      return next
+    })
+  }, [])
 
   /** Records a picker choice as a pending standing Assignment on the open cell, then closes the picker. */
   const pickAssigned = useCallback(
@@ -697,6 +750,8 @@ export function AssignmentEditor({
           }
           reorderable={runningOrder !== null}
           onReorderRow={reorderDisplayRows}
+          availableSongs={detail.available_songs}
+          onSongChange={swapSong}
         />
       ) : (
         <AssignmentEditorTable
@@ -710,6 +765,8 @@ export function AssignmentEditor({
           }
           reorderable={runningOrder !== null}
           onReorderRow={reorderDisplayRows}
+          availableSongs={detail.available_songs}
+          onSongChange={swapSong}
         />
       )}
 
@@ -906,6 +963,10 @@ interface AssignmentGridProps {
   reorderable: boolean
   /** Applies a row move by the display-row indices this grid renders at. */
   onReorderRow: (fromIndex: number, toIndex: number) => void
+  /** The song-swap dropdown's options (issue #406) — admin-only, `undefined` on the Dress Rehearsal (ADR 0003), which has no RehearsalSong row to swap. */
+  availableSongs: AvailableSongOption[] | undefined
+  /** Records a pending song swap for one row (by its `rehearsal_song_id`). */
+  onSongChange: (rehearsalSongId: number, songId: number) => void
 }
 
 /**
@@ -915,6 +976,41 @@ interface AssignmentGridProps {
  * assignments, so a drag reorders and edits in the same place rather than
  * two separate controls for the one Rehearsal.
  */
+/** One row's song-swap dropdown (issue #406): picks a different Song for this Running Order slot without changing its position. Plain text on the Dress Rehearsal (`availableSongs` undefined, `rehearsalSongId` null — ADR 0003), which has no RehearsalSong row to swap. */
+function SongSwapSelect({
+  songTitle,
+  songId,
+  rehearsalSongId,
+  availableSongs,
+  onSongChange,
+}: {
+  songTitle: string
+  songId: number
+  rehearsalSongId: number | null
+  availableSongs: AvailableSongOption[] | undefined
+  onSongChange: (rehearsalSongId: number, songId: number) => void
+}) {
+  if (rehearsalSongId === null || availableSongs === undefined) {
+    return <>{songTitle}</>
+  }
+  return (
+    <select
+      aria-label={`Song for ${songTitle}`}
+      value={songId}
+      onChange={(event) =>
+        onSongChange(rehearsalSongId, Number(event.target.value))
+      }
+      className="rounded border border-rs-border bg-transparent px-1 py-0.5 text-sm"
+    >
+      {availableSongs.map((option) => (
+        <option key={option.id} value={option.id}>
+          {option.title}
+        </option>
+      ))}
+    </select>
+  )
+}
+
 function AssignmentEditorTable({
   roles,
   rows,
@@ -924,6 +1020,8 @@ function AssignmentEditorTable({
   onOpenPicker,
   reorderable,
   onReorderRow,
+  availableSongs,
+  onSongChange,
 }: AssignmentGridProps) {
   const [dragIndex, setDragIndex] = useState<number | null>(null)
 
@@ -948,7 +1046,7 @@ function AssignmentEditorTable({
       <tbody>
         {rows.map((row, index) => (
           <tr
-            key={row.song_id}
+            key={row.rehearsal_song_id ?? row.song_id}
             draggable={reorderable}
             onDragStart={() => setDragIndex(index)}
             onDragOver={(event) => reorderable && event.preventDefault()}
@@ -996,7 +1094,15 @@ function AssignmentEditorTable({
             <td className="py-2 align-top">
               {row.start_time !== null ? formatClockTime(row.start_time) : ''}
             </td>
-            <td className="py-2 align-top">{row.song_title}</td>
+            <td className="py-2 align-top">
+              <SongSwapSelect
+                songTitle={row.song_title}
+                songId={row.song_id}
+                rehearsalSongId={row.rehearsal_song_id}
+                availableSongs={availableSongs}
+                onSongChange={onSongChange}
+              />
+            </td>
             {roles.map((role) => (
               <td key={role.id} className="py-2 align-top">
                 <AssignmentEditorCell
@@ -1033,17 +1139,28 @@ function AssignmentEditorCards({
   onOpenPicker,
   reorderable,
   onReorderRow,
+  availableSongs,
+  onSongChange,
 }: AssignmentGridProps) {
   return (
     <ul className="flex flex-col gap-3">
       {rows.map((row, index) => (
-        <li key={row.song_id} className="rounded border border-rs-border p-3">
+        <li
+          key={row.rehearsal_song_id ?? row.song_id}
+          className="rounded border border-rs-border p-3"
+        >
           <div className="flex items-center justify-between gap-2">
             <p className="font-medium">
               {row.start_time !== null
                 ? `${formatClockTime(row.start_time)} · `
                 : ''}
-              {row.song_title}
+              <SongSwapSelect
+                songTitle={row.song_title}
+                songId={row.song_id}
+                rehearsalSongId={row.rehearsal_song_id}
+                availableSongs={availableSongs}
+                onSongChange={onSongChange}
+              />
             </p>
             {reorderable && (
               <span className="flex shrink-0 gap-1">

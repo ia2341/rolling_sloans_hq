@@ -70,6 +70,20 @@ export interface RoleLegendEntry {
   code: string
 }
 
+/** One cell of an `AvailableSongOption` — like `MatrixCell`, but carries its own Role name (issue #406): an option's Roles may include one the Rehearsal's current columns don't. */
+export interface AvailableSongCell {
+  role_id: number
+  role_name: string
+  entries: MatrixEntry[]
+}
+
+/** One Song the Assignments table's song-swap dropdown can pick for a slot, its cells previewing what picking it would show — computed up front, so a swap rerenders with no second read (issue #406). */
+export interface AvailableSongOption {
+  id: number
+  title: string
+  cells: AvailableSongCell[]
+}
+
 export interface RehearsalDetail {
   id: number
   date: string
@@ -84,6 +98,8 @@ export interface RehearsalDetail {
   rows: MatrixRow[]
   /** Admin-only (issue #338): Roles not already a matrix column, for the "+ Add role" affordance. Absent for a member. */
   addable_roles?: { id: number; name: string }[]
+  /** Admin-only, absent on the Dress Rehearsal (ADR-0003 — no RehearsalSong row to swap): every setlist Song, for the Assignments table's per-slot song-swap dropdown (issue #406). */
+  available_songs?: AvailableSongOption[]
 }
 
 export type YourState =
