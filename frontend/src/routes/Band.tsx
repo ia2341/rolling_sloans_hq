@@ -419,6 +419,9 @@ function RosterFilterBar({
   )
 }
 
+/** The 6-column cap's pixel width: six 240px tracks plus their five `gap-3` gutters. */
+export const BAND_GRID_MAX_WIDTH_PX = 6 * 240 + 5 * 12
+
 /**
  * The Roster's card grid (issue #366): one card per member, every
  * viewport, in a CSS grid that reflows continuously rather than snapping
@@ -446,8 +449,6 @@ function RosterFilterBar({
  * one, so this holds at any viewport width with no JS and no container
  * query.
  */
-export const BAND_GRID_MAX_WIDTH_PX = 6 * 240 + 5 * 12
-
 function BandGrid({
   members,
   viewerId,
