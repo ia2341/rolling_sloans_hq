@@ -158,6 +158,60 @@ describe('NewSemesterDialog', () => {
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false))
   })
 
+  it('lets a timing-defaults field be cleared and retyped without a stray leading 0 (issue #403)', async () => {
+    setContext(adminContext({ semester_options: options }))
+    stubFetchSequence([
+      {
+        status: 200,
+        body: {
+          context: adminContext({ semester_options: options }),
+          data: { semester_defaults: null },
+        },
+      },
+    ])
+    const user = userEvent.setup()
+    renderShell(<NewSemesterDialog open onOpenChange={() => {}} />)
+
+    await waitFor(() =>
+      expect(screen.getByDisplayValue('Spring 2026')).toBeInTheDocument(),
+    )
+    await user.click(screen.getByRole('button', { name: 'Timing defaults' }))
+    const durationInput = screen.getByLabelText('Rehearsal duration (minutes)')
+    expect(durationInput).toHaveValue(120)
+
+    await user.clear(durationInput)
+    expect(durationInput).toHaveValue(null)
+
+    await user.type(durationInput, '240')
+    expect(durationInput).toHaveValue(240)
+  })
+
+  it('normalizes an empty timing-defaults field back to 0 on blur', async () => {
+    setContext(adminContext({ semester_options: options }))
+    stubFetchSequence([
+      {
+        status: 200,
+        body: {
+          context: adminContext({ semester_options: options }),
+          data: { semester_defaults: null },
+        },
+      },
+    ])
+    const user = userEvent.setup()
+    renderShell(<NewSemesterDialog open onOpenChange={() => {}} />)
+
+    await waitFor(() =>
+      expect(screen.getByDisplayValue('Spring 2026')).toBeInTheDocument(),
+    )
+    await user.click(screen.getByRole('button', { name: 'Timing defaults' }))
+    const durationInput = screen.getByLabelText('Rehearsal duration (minutes)')
+
+    await user.clear(durationInput)
+    await user.tab()
+
+    expect(durationInput).toHaveValue(0)
+  })
+
   it('navigates to Home on success, so the admin lands on the setup checklist for the new Semester (issue #374)', async () => {
     setContext(adminContext({ semester_options: options }))
     stubFetchSequence([
