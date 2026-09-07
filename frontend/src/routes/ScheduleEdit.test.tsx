@@ -160,7 +160,6 @@ function assignmentDetailPayload() {
         },
         roles: [],
         rows: [],
-        addable_roles: [],
       },
     },
   }

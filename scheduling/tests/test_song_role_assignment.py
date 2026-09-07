@@ -1,5 +1,6 @@
 """SongRoleAssignment + role-mismatch flag (issue #35, repointed to PersonRole by issue #377)."""
 
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.test import TestCase
 
@@ -10,8 +11,9 @@ from scheduling.factories import (
     RoleFactory,
     SongFactory,
     SongRoleAssignmentFactory,
+    SongRoleRequirementFactory,
 )
-from scheduling.models import SongRoleAssignment
+from scheduling.models import SongRoleAssignment, SongRoleRequirement
 
 
 class SongRoleAssignmentMismatchTests(TestCase):
@@ -123,6 +125,86 @@ class SongRoleAssignmentMultipleAssignmentsTests(TestCase):
         SongRoleAssignmentFactory(song=song_two, role=singer, person=person)
 
         self.assertEqual(SongRoleAssignment.objects.filter(person=person).count(), 3)
+
+
+class SongRoleAssignmentRequirementGateTests(TestCase):
+    def test_save_rejects_a_role_with_no_matching_requirement(self):
+        """Saving a SongRoleAssignment for a (song, role) with no SongRoleRequirement raises ValueError (issue #439)."""
+        song = SongFactory()
+        role = RoleFactory()
+        person = PersonFactory()
+
+        with self.assertRaises(ValueError):
+            SongRoleAssignment.objects.create(song=song, role=role, person=person)
+
+    def test_clean_rejects_a_role_with_no_matching_requirement(self):
+        """full_clean() surfaces the same rule as a ValidationError, for form/admin callers (issue #439)."""
+        song = SongFactory()
+        role = RoleFactory()
+        person = PersonFactory()
+        assignment = SongRoleAssignment(song=song, role=role, person=person)
+
+        with self.assertRaises(ValidationError):
+            assignment.clean()
+
+    def test_save_succeeds_once_a_matching_requirement_exists(self):
+        """A (song, role) pair with a SongRoleRequirement can be assigned regardless of its count (issue #439)."""
+        song = SongFactory()
+        role = RoleFactory()
+        person = PersonFactory()
+        SongRoleRequirementFactory(song=song, role=role, count=1)
+
+        assignment = SongRoleAssignment.objects.create(song=song, role=role, person=person)
+
+        self.assertEqual(SongRoleAssignment.objects.get(pk=assignment.pk).role, role)
+
+    def test_multiple_assignments_allowed_regardless_of_requirement_count(self):
+        """A Requirement's count is a display target only -- more people can be assigned than count (issue #439)."""
+        song = SongFactory()
+        role = RoleFactory()
+        SongRoleRequirementFactory(song=song, role=role, count=1)
+        first = PersonFactory()
+        second = PersonFactory()
+
+        SongRoleAssignment.objects.create(song=song, role=role, person=first)
+        SongRoleAssignment.objects.create(song=song, role=role, person=second)
+
+        self.assertEqual(SongRoleAssignment.objects.filter(song=song, role=role).count(), 2)
+
+    def test_deleting_the_requirement_directly_cascades_to_its_assignments(self):
+        """A direct .delete() on a SongRoleRequirement removes every SongRoleAssignment sharing its (song, role) (issue #439)."""
+        song = SongFactory()
+        role = RoleFactory()
+        requirement = SongRoleRequirementFactory(song=song, role=role, count=1)
+        assignment = SongRoleAssignmentFactory(song=song, role=role)
+
+        requirement.delete()
+
+        self.assertFalse(SongRoleAssignment.objects.filter(pk=assignment.pk).exists())
+
+    def test_deleting_the_requirement_via_a_queryset_still_cascades(self):
+        """A bulk queryset .delete() on SongRoleRequirement still dispatches the cascade signal per row (issue #439)."""
+        song = SongFactory()
+        role = RoleFactory()
+        SongRoleRequirementFactory(song=song, role=role, count=1)
+        assignment = SongRoleAssignmentFactory(song=song, role=role)
+
+        SongRoleRequirement.objects.filter(song=song, role=role).delete()
+
+        self.assertFalse(SongRoleAssignment.objects.filter(pk=assignment.pk).exists())
+
+    def test_deleting_one_requirement_leaves_other_song_role_pairs_assignments_untouched(self):
+        """Deleting one Requirement doesn't cascade to an assignment for a different (song, role) pair (issue #439)."""
+        song = SongFactory()
+        role = RoleFactory()
+        requirement = SongRoleRequirementFactory(song=song, role=role, count=1)
+        other_role = RoleFactory()
+        SongRoleRequirementFactory(song=song, role=other_role, count=1)
+        other_assignment = SongRoleAssignmentFactory(song=song, role=other_role)
+
+        requirement.delete()
+
+        self.assertTrue(SongRoleAssignment.objects.filter(pk=other_assignment.pk).exists())
 
 
 class SongRoleAssignmentFieldTests(TestCase):

@@ -35,7 +35,6 @@ from scheduling.models import (
     Backup,
     Conflict,
     SongRoleAssignment,
-    SongRoleRequirement,
 )
 from scheduling.tests.api_test_helpers import (
     admin_client,
@@ -454,19 +453,21 @@ class SaveCommitsTests(TestCase):
             1,
         )
 
-    def test_adding_a_role_column_writes_no_song_role_requirement(self):
-        """Assigning a Role nobody wrote a Requirement for still writes zero SongRoleRequirement rows (ADR-0009)."""
-        addable_role = RoleFactory()
+    def test_adding_an_assignment_for_a_role_with_no_requirement_is_rejected(self):
+        """Assigning a Role nobody wrote a Requirement for is rejected as ok: false, and writes nothing (issue #439)."""
+        unrequired_role = RoleFactory()
         body = _valid_body(
             self.semester,
-            added_entries=[{'song_id': self.song.pk, 'role_id': addable_role.pk, 'person_id': self.new_person.pk}],
+            added_entries=[{'song_id': self.song.pk, 'role_id': unrequired_role.pk, 'person_id': self.new_person.pk}],
         )
 
         response, envelope = _post_json(self, _save_url(self.rehearsal), body)
 
         self.assertEqual(response.status_code, 200)
-        self.assertTrue(envelope['ok'])
-        self.assertFalse(SongRoleRequirement.objects.filter(song=self.song, role=addable_role).exists())
+        self.assertFalse(envelope['ok'])
+        self.assertFalse(
+            SongRoleAssignment.objects.filter(song=self.song, role=unrequired_role, person=self.new_person).exists()
+        )
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)
@@ -566,38 +567,6 @@ class MemberVisibilityTests(TestCase):
 
         entry = self._backup_entry(envelope)
         self.assertEqual(entry['covering_for_name'], self.covered_person.name)
-
-
-@override_settings(SECURE_SSL_REDIRECT=False)
-class AddableRolesTests(TestCase):
-    """`/api/schedule/`'s rehearsal detail carries `addable_roles` for an admin, and omits it for a member (issue #338)."""
-
-    def setUp(self):
-        """Build a Rehearsal with one Song and one Role that isn't yet a matrix column."""
-        self.semester = SemesterFactory()
-        self.rehearsal = RehearsalFactory(semester=self.semester)
-        self.song = SongFactory(semester=self.semester, position=1)
-        RehearsalSongFactory(rehearsal=self.rehearsal, song=self.song)
-        self.addable_role = RoleFactory()
-
-    def test_admin_payload_carries_addable_roles(self):
-        """An admin's rehearsal detail lists the Role not yet used as a column."""
-        admin_client(self)
-        select(self, self.semester)
-
-        _response, envelope = _get_json(self, _schedule_url(self.rehearsal))
-
-        addable_ids = {role['id'] for role in envelope['data']['selected']['addable_roles']}
-        self.assertIn(self.addable_role.pk, addable_ids)
-
-    def test_member_payload_has_no_addable_roles_key(self):
-        """A member's rehearsal detail carries no `addable_roles` key at all."""
-        member_client(self)
-        select(self, self.semester)
-
-        _response, envelope = _get_json(self, _schedule_url(self.rehearsal))
-
-        self.assertNotIn('addable_roles', envelope['data']['selected'])
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)

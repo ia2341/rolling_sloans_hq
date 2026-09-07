@@ -103,8 +103,6 @@ export interface RehearsalDetail {
   availability: Availability
   roles: RoleLegendEntry[]
   rows: MatrixRow[]
-  /** Admin-only (issue #338): Roles not already a matrix column, for the "+ Add role" affordance. Absent for a member. */
-  addable_roles?: { id: number; name: string }[]
   /** Admin-only, absent on the Dress Rehearsal (ADR-0003 — no RehearsalSong row to swap): every setlist Song, for the Assignments table's per-slot song-swap dropdown (issue #406). */
   available_songs?: AvailableSongOption[]
   /** Admin-only (issue #399): this Semester's roster plus each Person's declared Role ids — combined with `rows`' own entries, the "+" picker derives its candidates with no per-cell fetch. Absent for a member. */

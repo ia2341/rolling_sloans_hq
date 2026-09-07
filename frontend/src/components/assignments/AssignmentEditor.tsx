@@ -51,7 +51,7 @@ interface DisplayEntry {
   pending: boolean
 }
 
-/** Roles the columns are drawn from: the server's matrix columns plus any client-only "+ Add role" picks (issue #338). */
+/** Roles the columns are drawn from: the server's matrix columns, one per Role carrying a SongRoleRequirement (issue #439). */
 interface DisplayRole {
   id: number
   name: string
@@ -104,7 +104,7 @@ function fromPendingEntry(
   }
 }
 
-/** Finds the one `MatrixCell` in `row` for `roleId`, or `undefined` for a client-only "+ Add role" column the server never returned. */
+/** Finds the one `MatrixCell` in `row` for `roleId`, or `undefined` if this Song's Requirements don't reach this column. */
 function cellFor(row: MatrixRow, roleId: number): MatrixCell | undefined {
   return row.cells.find((cell) => cell.role_id === roleId)
 }
@@ -156,8 +156,6 @@ export function AssignmentEditor({
   const [addedBackupEntries, setAddedBackupEntries] = useState<
     Map<string, PendingEntry & { rehearsalSongId: number }>
   >(new Map())
-  const [extraRoles, setExtraRoles] = useState<DisplayRole[]>([])
-  const [addRoleOpen, setAddRoleOpen] = useState(false)
   const [pickerCell, setPickerCell] = useState<{
     songId: number
     songTitle: string
@@ -178,7 +176,6 @@ export function AssignmentEditor({
     setAddedEntries(new Map())
     setRemovedBackupIds(new Set())
     setAddedBackupEntries(new Map())
-    setExtraRoles([])
     setSongSwaps(new Map())
   }, [])
 
@@ -281,18 +278,7 @@ export function AssignmentEditor({
         runningOrder.some((id, index) => id !== originalOrder[index]))) ||
     songSwaps.size > 0
 
-  const roles: DisplayRole[] = useMemo(
-    () => [...(detail?.roles ?? []), ...extraRoles],
-    [detail, extraRoles],
-  )
-
-  const addableRoles = useMemo(
-    () =>
-      (detail?.addable_roles ?? []).filter(
-        (role) => !extraRoles.some((extra) => extra.id === role.id),
-      ),
-    [detail, extraRoles],
-  )
+  const roles: DisplayRole[] = useMemo(() => detail?.roles ?? [], [detail])
 
   /**
    * First-name-only display, disambiguated by last initial on collision
@@ -722,16 +708,6 @@ export function AssignmentEditor({
         </div>
       )}
 
-      {addableRoles.length > 0 && (
-        <button
-          type="button"
-          onClick={() => setAddRoleOpen(true)}
-          className="self-start rounded border border-rs-border px-2 py-1 text-xs font-medium"
-        >
-          + Add role
-        </button>
-      )}
-
       {!compact && runningOrder !== null && (
         <p className="text-xs text-rs-muted">
           Drag a row, or use its arrows, to reorder tonight's Running Order —
@@ -771,29 +747,6 @@ export function AssignmentEditor({
           onSongChange={swapSong}
         />
       )}
-
-      <ResponsiveDialog
-        open={addRoleOpen}
-        onOpenChange={setAddRoleOpen}
-        title="Add a Role column"
-      >
-        <ul className="flex flex-col gap-1">
-          {addableRoles.map((role) => (
-            <li key={role.id}>
-              <button
-                type="button"
-                onClick={() => {
-                  setExtraRoles((previous) => [...previous, role])
-                  setAddRoleOpen(false)
-                }}
-                className="w-full rounded px-2 py-1 text-left text-sm hover:bg-rs-border/40"
-              >
-                {role.name}
-              </button>
-            </li>
-          ))}
-        </ul>
-      </ResponsiveDialog>
 
       {pickerCell !== null && (
         <AssignmentPickerDialog

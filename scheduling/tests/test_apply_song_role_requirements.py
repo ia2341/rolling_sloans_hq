@@ -7,9 +7,10 @@ from scheduling.factories import (
     RoleFactory,
     SemesterFactory,
     SongFactory,
+    SongRoleAssignmentFactory,
     SongRoleRequirementFactory,
 )
-from scheduling.models import SongRoleRequirement
+from scheduling.models import SongRoleAssignment, SongRoleRequirement
 from scheduling.services import (
     SongRoleRequirementBuffer,
     SongRoleRequirementEntry,
@@ -78,6 +79,16 @@ class ApplySongRoleRequirementsTests(TestCase):
         self.assertTrue(SongRoleRequirement.objects.filter(pk=other_requirement.pk).exists())
         self.role.refresh_from_db()
         self.assertTrue(self.role.is_active)
+
+    def test_deleting_a_requirement_cascades_to_its_song_role_assignments(self):
+        """Deleting a stale Requirement also deletes any SongRoleAssignment for that (song, role) pair (issue #439)."""
+        SongRoleRequirementFactory(song=self.song, role=self.role, count=2)
+        assignment = SongRoleAssignmentFactory(song=self.song, role=self.role)
+        buffer = self._buffer(entries=[])
+
+        apply_song_role_requirements(buffer, viewing_semester=self.semester)
+
+        self.assertFalse(SongRoleAssignment.objects.filter(pk=assignment.pk).exists())
 
     def test_a_failure_mid_batch_applies_nothing(self):
         """A stale stamp rolls back every create/update/delete in the same Buffer, not just the offending row."""

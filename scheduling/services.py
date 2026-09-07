@@ -1488,12 +1488,12 @@ def assignment_matrix_for(rehearsal) -> AssignmentMatrix:
     via RehearsalSong for a regular Rehearsal, or the live setlist
     (Rehearsal.dress_rehearsal_songs, ADR-0003) for the Dress Rehearsal,
     which carries no RehearsalSong rows and so no per-row start_time.
-    Columns are every Role carrying a SongRoleRequirement *or* a
-    SongRoleAssignment on any of those Songs, ordered by name (issue #213)
-    — a Requirement is a target, never a cap, so an Assignment with no
-    Requirement is a legal column with no target, not a hidden one. Each
-    cell lists an AssignmentMatrixEntry per SongRoleAssignment for that
-    (Song, Role) pair, ordered by person name, each carrying
+    Columns are every Role carrying a SongRoleRequirement on any of those
+    Songs, ordered by name (issue #213) — issue #439 gates a
+    SongRoleAssignment on a matching SongRoleRequirement existing, so an
+    Assignment can no longer outlive its Requirement as an orphan column.
+    Each cell lists an AssignmentMatrixEntry per SongRoleAssignment for
+    that (Song, Role) pair, ordered by person name, each carrying
     is_role_mismatch (issue #208), plus one per Backup anchored on that
     Song's RehearsalSong at this Rehearsal (issue #216) — the Dress
     Rehearsal has no RehearsalSong rows to anchor a Backup on (ADR-0006),
@@ -1501,9 +1501,7 @@ def assignment_matrix_for(rehearsal) -> AssignmentMatrix:
     """
     songs, start_times, rehearsal_song_ids = _matrix_songs(rehearsal)
     roles = list(
-        Role.objects.filter(
-            Q(songrolerequirement__song__in=songs) | Q(songroleassignment__song__in=songs),
-        ).distinct().order_by('name')
+        Role.objects.filter(songrolerequirement__song__in=songs).distinct().order_by('name')
     )
     entries_by_song_role = _matrix_entries_by_song_role(songs, roles, rehearsal_song_ids)
     rows = [
@@ -1554,28 +1552,16 @@ def _matrix_songs(rehearsal):
     return songs, start_times, rehearsal_song_ids
 
 
-def addable_roles_for(matrix: AssignmentMatrix) -> list[Role]:
-    """Return active Roles not already a column in `matrix`, ordered by name (issue #213).
-
-    Backs "+ Add role" on /schedule/'s assignment grid: a client-side-only
-    column add that writes no SongRoleRequirement. Bounded to active Roles
-    the same way RosterAddRoleView's declared-Role choices are, and
-    excludes anything already a column since re-offering it would be a
-    no-op the admin can't tell apart from a fresh addable Role.
-    """
-    existing_role_ids = {role.pk for role in matrix.roles}
-    return list(Role.objects.filter(is_active=True).exclude(pk__in=existing_role_ids).order_by('name'))
-
-
 def addable_roles_for_song(song) -> list[Role]:
     """Return active Roles `song` has no Requirement for yet, ordered by name (issue #339).
 
     Backs the Requirements editor's "+ Add role requirement" control: the
     add control offers only Roles the current Buffer's save wouldn't
     reject as a duplicate (the `unique_role_requirement_per_song`
-    constraint's backstop). Mirrors `addable_roles_for()`'s shape, scoped
-    to one Song's existing Requirements rather than an assignment matrix's
-    columns.
+    constraint's backstop). This is now the *only* route to making a Role
+    assignable on a Song (issue #439 removed the assignment grid's own
+    ad-hoc "+ Add role" column control, which used to add a column with no
+    backing SongRoleRequirement at all).
     """
     existing_role_ids = set(SongRoleRequirement.objects.filter(song=song).values_list('role_id', flat=True))
     return list(Role.objects.filter(is_active=True).exclude(pk__in=existing_role_ids).order_by('name'))
@@ -1831,6 +1817,10 @@ class StaleAssignmentSemesterError(ValueError):
     """Raised when an assignment edit Buffer's Semester changed since the Buffer was loaded (issue #210)."""
 
 
+class MissingSongRoleRequirementError(ValueError):
+    """Raised when an added assignment entry names a (song, role) pair with no SongRoleRequirement (issue #439)."""
+
+
 @dataclass(frozen=True)
 class AssignmentEditBuffer:
     """The Pending Buffer `apply_song_role_assignments()` commits in one transaction (issues #210, #211, #216).
@@ -1898,7 +1888,12 @@ def apply_song_role_assignments(
     already assigned to the cell, but two concurrent saves could still
     race here. `SongRoleAssignment.save()` recomputes `is_role_mismatch`
     on create (ADR-0002): picking a Person who hasn't declared the Role
-    is allowed, not blocked.
+    is allowed, not blocked. Raises `MissingSongRoleRequirementError`
+    instead of adding an entry naming a (song, role) pair with no
+    SongRoleRequirement (issue #439): a role is only assignable once an
+    admin has added a Requirement for it, so unlike the Song/Membership
+    checks above this is a hard block, not a silent skip -- the same
+    belt-and-suspenders rule `SongRoleAssignment.save()` itself enforces.
 
     An added Backup entry is likewise skipped if its RehearsalSong isn't
     one of `rehearsal`'s — which, since the Dress Rehearsal carries no
@@ -1925,8 +1920,10 @@ def apply_song_role_assignments(
     Raises `WrongViewingSemesterError` if `buffer.semester_id` doesn't
     match `viewing_semester`, checked before any transaction opens. Raises
     `StaleAssignmentSemesterError` inside the transaction if the Semester's
-    `updated_at` no longer matches `buffer.semester_updated_at`, rolling
-    back whatever this call had already applied.
+    `updated_at` no longer matches `buffer.semester_updated_at`, or
+    `MissingSongRoleRequirementError` if an added entry names a
+    Requirement-less (song, role) pair, rolling back whatever this call
+    had already applied either way.
     """
     if viewing_semester is None or buffer.semester_id != viewing_semester.pk:
         raise WrongViewingSemesterError(
@@ -1952,9 +1949,17 @@ def apply_song_role_assignments(
                     semester=semester, pk__in={song_id for song_id, _, _ in buffer.added_entries},
                 ).values_list('pk', flat=True)
             )
+            requirement_pairs = frozenset(
+                SongRoleRequirement.objects.filter(song_id__in=valid_song_ids).values_list('song_id', 'role_id')
+            )
             for song_id, role_id, person_id in buffer.added_entries:
                 if song_id not in valid_song_ids or person_id not in rostered_person_ids:
                     continue
+                if (song_id, role_id) not in requirement_pairs:
+                    raise MissingSongRoleRequirementError(
+                        'This Song has no Role Requirement for this Role yet -- add one on the Song page before '
+                        'assigning it.'
+                    )
                 SongRoleAssignment.objects.get_or_create(song_id=song_id, role_id=role_id, person_id=person_id)
 
         Backup.objects.filter(
@@ -2159,7 +2164,7 @@ def preview_song_role_assignments(buffer: AssignmentEditBuffer, *, rehearsal, vi
     apply_buffer = replace(buffer, semester_updated_at=current_semester.updated_at)
     try:
         apply_song_role_assignments(apply_buffer, viewing_semester=viewing_semester, rehearsal=rehearsal)
-    except (WrongViewingSemesterError, StaleAssignmentSemesterError) as error:
+    except (WrongViewingSemesterError, StaleAssignmentSemesterError, MissingSongRoleRequirementError) as error:
         return _blocked_assignment_fallout(str(error), is_stale=is_stale)
 
     songs, _, _ = _matrix_songs(rehearsal)

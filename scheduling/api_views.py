@@ -63,6 +63,7 @@ from scheduling.services import (
     EmptySetlistError,
     InvalidSemesterNameError,
     LiveSemesterDeletionError,
+    MissingSongRoleRequirementError,
     NoEligibleRehearsalsError,
     PastRehearsalEditError,
     RecordingUploadError,
@@ -1243,12 +1244,12 @@ class AssignmentSaveApiView(AdminApiView, View):
         Mirrors `ScheduleEditorSaveApiView.post()`: the same
         `build_assignment_buffer_from_request()` the Preview endpoint
         calls, then the unchanged `apply_song_role_assignments()`. A
-        `StaleAssignmentSemesterError` is reported as `ok: false` with
-        `non_field_errors` rather than a hard 4xx, since `apply_*()`'s own
-        transaction has already rolled back whatever it had applied by
-        the time this `except` runs. `values` is omitted on every response
-        here, per #326's rule that a write response doesn't echo the
-        Buffer back.
+        `StaleAssignmentSemesterError` and `MissingSongRoleRequirementError`
+        are reported as `ok: false` with `non_field_errors` rather than a
+        hard 4xx, since `apply_*()`'s own transaction has already rolled
+        back whatever it had applied by the time this `except` runs.
+        `values` is omitted on every response here, per #326's rule that a
+        write response doesn't echo the Buffer back.
         """
         rehearsal = _editable_assignment_rehearsal_or_404(request, rehearsal_id)
         viewing_semester = services.get_viewing_semester(request)
@@ -1268,7 +1269,7 @@ class AssignmentSaveApiView(AdminApiView, View):
             services.apply_song_role_assignments(buffer, viewing_semester=viewing_semester, rehearsal=rehearsal)
         except WrongViewingSemesterError as error:
             return _wrong_semester_response(str(error))
-        except StaleAssignmentSemesterError as error:
+        except (StaleAssignmentSemesterError, MissingSongRoleRequirementError) as error:
             return self.write_response(request, ok=False, non_field_errors=[str(error)], fallout=None, values=None)
 
         return self.write_response(request, ok=True, values=None)
