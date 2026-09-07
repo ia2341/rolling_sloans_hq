@@ -19,28 +19,35 @@ function minutesSinceMidnight(isoTime: string): number {
  * unlabeled lines. `heading` is the only thing callers still vary, since
  * Home is describing an upcoming Rehearsal in the abstract ("Next
  * rehearsal") while Schedule is describing the one currently selected
- * ("You at this rehearsal").
+ * ("You at this rehearsal"). `showDate` (default `true`) lets Schedule
+ * suppress the date sentence, since its `PageHead` subline and
+ * `SegmentedControl` pill above already name the date (and, on the
+ * subline, dress-rehearsal status) — issue #427.
  */
 export function RehearsalOverview({
   heading,
   date,
   isDress,
   timeline,
+  showDate = true,
 }: {
   heading: string
   date: string
   isDress: boolean
   timeline: Timeline
+  showDate?: boolean
 }) {
   return (
     <section className="pb-4">
       <h2 className="text-sm font-semibold uppercase text-rs-muted">
         {heading}
       </h2>
-      <p className="pt-1 text-sm">
-        <strong>{formatRehearsalDate(date)}</strong>
-        {isDress && ' · dress rehearsal'}
-      </p>
+      {showDate && (
+        <p className="pt-1 text-sm">
+          <strong>{formatRehearsalDate(date)}</strong>
+          {isDress && ' · dress rehearsal'}
+        </p>
+      )}
       {timeline.is_dress_rehearsal ? null : timeline.viewer_song_count === 0 ? (
         <p className="pt-2 text-sm text-rs-muted">
           You are not on any song here.

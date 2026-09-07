@@ -139,18 +139,6 @@ export function Schedule() {
             <div className="flex gap-2">
               <EditRehearsalsButton />
               <AdjudicateConflictsButton />
-              {subView === 'next' &&
-                selected !== null &&
-                !editingAssignments && (
-                  <button
-                    type="button"
-                    disabled={!selected.can_edit_assignments}
-                    onClick={() => setEditingAssignments(true)}
-                    className="rounded border border-rs-border px-3 py-1.5 text-sm font-medium disabled:opacity-50"
-                  >
-                    Edit Rehearsal
-                  </button>
-                )}
             </div>
           ) : undefined
         }
@@ -191,6 +179,7 @@ export function Schedule() {
             detail={selected}
             onDataChanged={load}
             editingAssignments={editingAssignments}
+            onEnterEditMode={() => setEditingAssignments(true)}
             onExitEditMode={() => {
               setEditingAssignments(false)
               load()
@@ -243,12 +232,14 @@ function ThisRehearsal({
   detail,
   onDataChanged,
   editingAssignments,
+  onEnterEditMode,
   onExitEditMode,
   viewerId,
 }: {
   detail: RehearsalDetail
   onDataChanged: () => void
   editingAssignments: boolean
+  onEnterEditMode: () => void
   onExitEditMode: () => void
   viewerId?: number
 }) {
@@ -262,6 +253,7 @@ function ThisRehearsal({
         date={detail.date}
         isDress={detail.is_dress}
         timeline={detail.timeline}
+        showDate={false}
       />
       <AvailabilityBlock
         rehearsalId={detail.id}
@@ -280,6 +272,8 @@ function ThisRehearsal({
           viewerId={viewerId}
           onOpenSong={(songId) => navigate(`/songs/${songId}`)}
           onAddRecording={setUploadSongId}
+          canEditAssignments={detail.can_edit_assignments}
+          onEditRehearsal={onEnterEditMode}
         />
       )}
       {uploadSongId !== null && (
@@ -328,7 +322,7 @@ function AvailabilityBlock({
         <h2 className="text-sm font-semibold uppercase text-rs-muted">
           Your availability
         </h2>
-        <div className="flex items-center justify-between pt-1">
+        <div className="flex flex-col items-start gap-2 pt-1">
           <button
             type="button"
             disabled
@@ -358,7 +352,7 @@ function AvailabilityBlock({
         Your availability
       </h2>
       {availability.declaration_type === null ? (
-        <div className="flex items-center justify-between pt-1">
+        <div className="flex flex-col items-start gap-2 pt-1">
           <p className="text-sm">Available for the whole rehearsal</p>
           <button
             type="button"
@@ -617,6 +611,8 @@ function AssignmentGrid({
   viewerId,
   onOpenSong,
   onAddRecording,
+  canEditAssignments,
+  onEditRehearsal,
 }: {
   roles: { id: number; name: string; code: string }[]
   rows: MatrixRow[]
@@ -624,6 +620,8 @@ function AssignmentGrid({
   viewerId?: number
   onOpenSong: (songId: number) => void
   onAddRecording: (songId: number) => void
+  canEditAssignments: boolean
+  onEditRehearsal: () => void
 }) {
   const isPhone = useIsPhone()
   const appContext = useAppContext()
@@ -636,6 +634,16 @@ function AssignmentGrid({
         <h2 className="text-sm font-semibold uppercase text-rs-muted">
           Running order & assignments
         </h2>
+        {isAdmin && (
+          <button
+            type="button"
+            disabled={!canEditAssignments}
+            onClick={onEditRehearsal}
+            className="rounded border border-rs-border px-3 py-1.5 text-sm font-medium disabled:opacity-50"
+          >
+            Edit Rehearsal
+          </button>
+        )}
       </div>
       {isPhone ? (
         <AssignmentCards rows={rows} isDress={isDress} />
