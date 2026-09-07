@@ -46,6 +46,35 @@ const TIMING_FIELDS: Array<{
   },
 ]
 
+type TimingDefaultsInputs = Record<keyof SemesterTimingDefaults, string>
+
+/** Renders each timing-defaults field's current numeric value as the string an input shows. */
+function toTimingDefaultsInputs(
+  defaults: SemesterTimingDefaults,
+): TimingDefaultsInputs {
+  return {
+    default_rehearsal_duration_minutes: String(
+      defaults.default_rehearsal_duration_minutes,
+    ),
+    default_setup_grace_minutes: String(defaults.default_setup_grace_minutes),
+    default_teardown_grace_minutes: String(
+      defaults.default_teardown_grace_minutes,
+    ),
+    default_song_slot_count: String(defaults.default_song_slot_count),
+    default_arrival_buffer_minutes: String(
+      defaults.default_arrival_buffer_minutes,
+    ),
+    default_departure_buffer_minutes: String(
+      defaults.default_departure_buffer_minutes,
+    ),
+  }
+}
+
+/** Parses one timing-defaults input's raw text into a valid non-negative integer, falling back to 0 for empty or invalid text. */
+function parseTimingDefaultsInput(raw: string): number {
+  return Math.max(0, Math.trunc(Number(raw) || 0))
+}
+
 /**
  * `+ New semester`'s dialog (issue #329): names the new draft Semester,
  * offers a collapsed "Timing defaults" disclosure prefilled from the
@@ -76,9 +105,10 @@ export function NewSemesterDialog({
   const [name, setName] = useState('')
   const [nameError, setNameError] = useState<string | null>(null)
   const [submitError, setSubmitError] = useState<string | null>(null)
-  const [timingDefaults, setTimingDefaults] = useState<SemesterTimingDefaults>(
-    FALLBACK_TIMING_DEFAULTS,
-  )
+  const [timingDefaultsInputs, setTimingDefaultsInputs] =
+    useState<TimingDefaultsInputs>(
+      toTimingDefaultsInputs(FALLBACK_TIMING_DEFAULTS),
+    )
   const [submitting, setSubmitting] = useState(false)
 
   useEffect(() => {
@@ -91,18 +121,20 @@ export function NewSemesterDialog({
     ).then((envelope) => {
       const defaults = envelope.data.semester_defaults
       if (defaults !== null) {
-        setTimingDefaults({
-          default_rehearsal_duration_minutes:
-            defaults.default_rehearsal_duration_minutes,
-          default_setup_grace_minutes: defaults.default_setup_grace_minutes,
-          default_teardown_grace_minutes:
-            defaults.default_teardown_grace_minutes,
-          default_song_slot_count: defaults.default_song_slot_count,
-          default_arrival_buffer_minutes:
-            defaults.default_arrival_buffer_minutes,
-          default_departure_buffer_minutes:
-            defaults.default_departure_buffer_minutes,
-        })
+        setTimingDefaultsInputs(
+          toTimingDefaultsInputs({
+            default_rehearsal_duration_minutes:
+              defaults.default_rehearsal_duration_minutes,
+            default_setup_grace_minutes: defaults.default_setup_grace_minutes,
+            default_teardown_grace_minutes:
+              defaults.default_teardown_grace_minutes,
+            default_song_slot_count: defaults.default_song_slot_count,
+            default_arrival_buffer_minutes:
+              defaults.default_arrival_buffer_minutes,
+            default_departure_buffer_minutes:
+              defaults.default_departure_buffer_minutes,
+          }),
+        )
       }
     })
   }, [open])
@@ -112,6 +144,27 @@ export function NewSemesterDialog({
     setNameError(null)
     setSubmitError(null)
     try {
+      const timingDefaults: SemesterTimingDefaults = {
+        default_rehearsal_duration_minutes: parseTimingDefaultsInput(
+          timingDefaultsInputs.default_rehearsal_duration_minutes,
+        ),
+        default_setup_grace_minutes: parseTimingDefaultsInput(
+          timingDefaultsInputs.default_setup_grace_minutes,
+        ),
+        default_teardown_grace_minutes: parseTimingDefaultsInput(
+          timingDefaultsInputs.default_teardown_grace_minutes,
+        ),
+        default_song_slot_count: parseTimingDefaultsInput(
+          timingDefaultsInputs.default_song_slot_count,
+        ),
+        default_arrival_buffer_minutes: parseTimingDefaultsInput(
+          timingDefaultsInputs.default_arrival_buffer_minutes,
+        ),
+        default_departure_buffer_minutes: parseTimingDefaultsInput(
+          timingDefaultsInputs.default_departure_buffer_minutes,
+        ),
+      }
+      setTimingDefaultsInputs(toTimingDefaultsInputs(timingDefaults))
       const body: CreateSemesterBody = { name, ...timingDefaults }
       const envelope = await apiFetch<WriteEnvelope>('/api/semesters/create/', {
         method: 'POST',
@@ -204,12 +257,19 @@ export function NewSemesterDialog({
                         type="number"
                         min={0}
                         step={1}
-                        value={timingDefaults[field.key]}
-                        onChange={(event) =>
-                          setTimingDefaults((previous) => ({
+                        value={timingDefaultsInputs[field.key]}
+                        onChange={(event) => {
+                          const raw = event.target.value
+                          setTimingDefaultsInputs((previous) => ({
                             ...previous,
-                            [field.key]: Math.trunc(
-                              Number(event.target.value) || 0,
+                            [field.key]: raw,
+                          }))
+                        }}
+                        onBlur={(event) =>
+                          setTimingDefaultsInputs((previous) => ({
+                            ...previous,
+                            [field.key]: String(
+                              parseTimingDefaultsInput(event.target.value),
                             ),
                           }))
                         }
