@@ -8,13 +8,14 @@ from identity.factories import PersonFactory
 from scheduling.factories import (
     MembershipFactory,
     RehearsalFactory,
+    RehearsalSongFactory,
     RoleFactory,
     SemesterFactory,
     SongFactory,
     SongRoleAssignmentFactory,
     SongRoleRequirementFactory,
 )
-from scheduling.models import SongRoleAssignment
+from scheduling.models import Backup, SongRoleAssignment
 from scheduling.services import (
     AssignmentEditBuffer,
     MissingSongRoleRequirementError,
@@ -33,7 +34,9 @@ class ApplySongRoleAssignmentsTests(TestCase):
         cls.song = SongFactory(semester=cls.semester)
         cls.assignment = SongRoleAssignmentFactory(song=cls.song, role=cls.role)
 
-    def _buffer(self, removed_assignment_ids=(), added_entries=(), semester=None, updated_at=None):
+    def _buffer(
+        self, removed_assignment_ids=(), added_entries=(), added_backup_entries=(), semester=None, updated_at=None,
+    ):
         """Build an AssignmentEditBuffer against self.semester unless overridden."""
         semester = semester or self.semester
         return AssignmentEditBuffer(
@@ -41,6 +44,7 @@ class ApplySongRoleAssignmentsTests(TestCase):
             semester_updated_at=updated_at if updated_at is not None else semester.updated_at,
             removed_assignment_ids=frozenset(removed_assignment_ids),
             added_entries=frozenset(added_entries),
+            added_backup_entries=frozenset(added_backup_entries),
         )
 
     def test_removes_the_buffered_assignment(self):
@@ -263,4 +267,40 @@ class ApplySongRoleAssignmentsTests(TestCase):
 
         self.assertFalse(
             SongRoleAssignment.objects.filter(song=self.song, role=self.role, person=membership.person).exists()
+        )
+
+    def test_added_backup_entry_for_a_role_with_no_requirement_is_rejected_and_writes_nothing(self):
+        """An added Backup entry naming a (song, role) pair with no SongRoleRequirement is rejected (issue #440)."""
+        rehearsal = RehearsalFactory(semester=self.semester)
+        rehearsal_song = RehearsalSongFactory(rehearsal=rehearsal, song=self.song)
+        membership = MembershipFactory(semester=self.semester)
+        unrequired_role = RoleFactory()
+        buffer = self._buffer(
+            added_backup_entries=[(rehearsal_song.pk, unrequired_role.pk, membership.person.pk, None)],
+        )
+
+        with self.assertRaises(MissingSongRoleRequirementError):
+            apply_song_role_assignments(buffer, viewing_semester=self.semester, rehearsal=rehearsal)
+
+        self.assertFalse(
+            Backup.objects.filter(rehearsal_song=rehearsal_song, role=unrequired_role, person=membership.person)
+            .exists()
+        )
+
+    def test_added_backup_entry_for_a_role_with_a_requirement_succeeds(self):
+        """An added Backup entry for a (song, role) pair carrying a SongRoleRequirement is created (issue #440)."""
+        rehearsal = RehearsalFactory(semester=self.semester)
+        rehearsal_song = RehearsalSongFactory(rehearsal=rehearsal, song=self.song)
+        membership = MembershipFactory(semester=self.semester)
+        required_role = RoleFactory()
+        SongRoleRequirementFactory(song=self.song, role=required_role, count=1)
+        buffer = self._buffer(
+            added_backup_entries=[(rehearsal_song.pk, required_role.pk, membership.person.pk, None)],
+        )
+
+        apply_song_role_assignments(buffer, viewing_semester=self.semester, rehearsal=rehearsal)
+
+        self.assertTrue(
+            Backup.objects.filter(rehearsal_song=rehearsal_song, role=required_role, person=membership.person)
+            .exists()
         )

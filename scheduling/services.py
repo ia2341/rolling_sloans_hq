@@ -1818,7 +1818,13 @@ class StaleAssignmentSemesterError(ValueError):
 
 
 class MissingSongRoleRequirementError(ValueError):
-    """Raised when an added assignment entry names a (song, role) pair with no SongRoleRequirement (issue #439)."""
+    """Raised when an added assignment or Backup entry names a (song, role) pair with no SongRoleRequirement.
+
+    Shared by both `SongRoleAssignment` (issue #439) and `Backup` (issue
+    #440) adds in `apply_song_role_assignments()` — a role is only
+    assignable, and only Backup-able, once a SongRoleRequirement exists
+    for it.
+    """
 
 
 @dataclass(frozen=True)
@@ -1900,15 +1906,20 @@ def apply_song_role_assignments(
     RehearsalSong row at all (ADR-0006), is exactly what makes a Backup
     against it impossible by this route, structurally rather than by an
     explicit check — or if its Person holds no Membership in
-    `viewing_semester`. A `covering_for_id` naming the Backup's own
-    Person (which `backup_person_is_not_covering_for_self` would
-    otherwise reject), or anyone who isn't a standing SongRoleAssignment
-    on that same (Song, Role) cell — the only people the "covering for"
-    <select> ever offers — is silently dropped to None rather than
-    failing the whole save: recording who is covered is advisory
-    (ADR-0007), never worth losing the Backup itself over. `get_or_create`
-    makes a duplicate add a no-op against
-    `unique_backup_per_slot_role_person`, matching the assignment side.
+    `viewing_semester`. Like the SongRoleAssignment side, it raises
+    `MissingSongRoleRequirementError` instead of adding an entry naming a
+    (song, role) pair with no SongRoleRequirement (issue #440): a Backup
+    only makes sense as a substitute for a Role the Song actually
+    requires, the same belt-and-suspenders rule `Backup.save()` itself
+    enforces. A `covering_for_id` naming the Backup's own Person (which
+    `backup_person_is_not_covering_for_self` would otherwise reject), or
+    anyone who isn't a standing SongRoleAssignment on that same (Song,
+    Role) cell — the only people the "covering for" <select> ever offers
+    — is silently dropped to None rather than failing the whole save:
+    recording who is covered is advisory (ADR-0007), never worth losing
+    the Backup itself over. `get_or_create` makes a duplicate add a no-op
+    against `unique_backup_per_slot_role_person`, matching the assignment
+    side.
 
     A `backup_covering_for_updates` pair naming a Backup outside
     `rehearsal`, or one this call already deleted (via
@@ -1980,10 +1991,20 @@ def apply_song_role_assignments(
                     pk__in={rehearsal_song_id for rehearsal_song_id, _, _, _ in buffer.added_backup_entries},
                 ).values_list('pk', 'song_id')
             )
+            backup_requirement_pairs = frozenset(
+                SongRoleRequirement.objects.filter(
+                    song_id__in=set(song_id_by_rehearsal_song_id.values()),
+                ).values_list('song_id', 'role_id')
+            )
             for rehearsal_song_id, role_id, person_id, covering_for_id in buffer.added_backup_entries:
                 song_id = song_id_by_rehearsal_song_id.get(rehearsal_song_id)
                 if song_id is None or person_id not in rostered_person_ids:
                     continue
+                if (song_id, role_id) not in backup_requirement_pairs:
+                    raise MissingSongRoleRequirementError(
+                        'This Song has no Role Requirement for this Role yet -- add one on the Song page before '
+                        'backing it up.'
+                    )
                 if covering_for_id == person_id or (song_id, role_id, covering_for_id) not in standing_assignee_cells:
                     covering_for_id = None
                 Backup.objects.get_or_create(

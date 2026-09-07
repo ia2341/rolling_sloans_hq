@@ -1,5 +1,6 @@
 """Backup: rehearsal-scoped substitution model (ADR-0007, issue #174)."""
 
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.test import TestCase
 
@@ -13,8 +14,9 @@ from scheduling.factories import (
     RoleFactory,
     SongFactory,
     SongRoleAssignmentFactory,
+    SongRoleRequirementFactory,
 )
-from scheduling.models import Backup, Conflict, SongRoleAssignment
+from scheduling.models import Backup, Conflict, SongRoleAssignment, SongRoleRequirement
 
 
 class BackupUniquenessTests(TestCase):
@@ -190,6 +192,47 @@ class BackupStalenessTests(TestCase):
         backup = BackupFactory(covering_for=None)
 
         self.assertFalse(backup.is_stale())
+
+
+class BackupRequirementGateTests(TestCase):
+    def test_save_rejects_a_role_with_no_matching_requirement(self):
+        """Saving a Backup for a Role with no SongRoleRequirement on the underlying Song raises ValueError (issue #440)."""
+        rehearsal_song = RehearsalSongFactory()
+        role = RoleFactory()
+        person = PersonFactory()
+
+        with self.assertRaises(ValueError):
+            Backup.objects.create(rehearsal_song=rehearsal_song, role=role, person=person)
+
+    def test_clean_rejects_a_role_with_no_matching_requirement(self):
+        """full_clean() surfaces the same rule as a ValidationError, for form/admin callers (issue #440)."""
+        rehearsal_song = RehearsalSongFactory()
+        role = RoleFactory()
+        person = PersonFactory()
+        backup = Backup(rehearsal_song=rehearsal_song, role=role, person=person)
+
+        with self.assertRaises(ValidationError):
+            backup.clean()
+
+    def test_save_succeeds_once_a_matching_requirement_exists(self):
+        """A Role with a SongRoleRequirement on the underlying Song can be backed up (issue #440)."""
+        rehearsal_song = RehearsalSongFactory()
+        role = RoleFactory()
+        person = PersonFactory()
+        SongRoleRequirementFactory(song=rehearsal_song.song, role=role, count=1)
+
+        backup = Backup.objects.create(rehearsal_song=rehearsal_song, role=role, person=person)
+
+        self.assertEqual(Backup.objects.get(pk=backup.pk).role, role)
+
+    def test_bare_factory_call_auto_creates_a_matching_requirement(self):
+        """BackupFactory() with no arguments succeeds by auto-creating a matching SongRoleRequirement (issue #440)."""
+        backup = BackupFactory()
+
+        self.assertTrue(Backup.objects.filter(pk=backup.pk).exists())
+        self.assertTrue(
+            SongRoleRequirement.objects.filter(song=backup.rehearsal_song.song, role=backup.role).exists()
+        )
 
 
 class BackupFieldTests(TestCase):
