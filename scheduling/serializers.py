@@ -58,13 +58,21 @@ _STATUS_WIRE_VALUES = {
 
 
 def _serialize_semester(semester, status):
-    """Return `semester` as the context block's `viewing_semester` shape: `id`, `name`, `status`, `published_at`, `updated_at`."""
+    """Return `semester` as the context block's `viewing_semester` shape: `id`, `name`, `status`, `published_at`, `updated_at`.
+
+    `published_at`/`updated_at` are explicitly `.isoformat()`'d, like every
+    other timestamp field in this file: left as raw `datetime` objects,
+    `DjangoJSONEncoder` truncates microseconds to milliseconds on encode,
+    and `updated_at` round-tripped back through the client is exactly what
+    `apply_roster_edits()`'s staleness check compares against the
+    full-precision DB value (issue #409).
+    """
     return {
         'id': semester.pk,
         'name': semester.name,
         'status': status,
-        'published_at': semester.published_at,
-        'updated_at': semester.updated_at,
+        'published_at': semester.published_at.isoformat() if semester.published_at else None,
+        'updated_at': semester.updated_at.isoformat(),
     }
 
 
