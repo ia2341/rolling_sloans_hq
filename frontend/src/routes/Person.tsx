@@ -53,7 +53,10 @@ export function Person() {
   }, [personId])
 
   if (state.status === 'loading') return null
-  if (state.status === 'not_found') return <PageHead title="Member not found" />
+  if (state.status === 'not_found')
+    return (
+      <PageHead title="Member not found" backTo="/members" backLabel="Band" />
+    )
 
   return (
     <PersonPage
@@ -94,7 +97,12 @@ function PersonPage({
 
   return (
     <div className="flex flex-col gap-4">
-      <PageHead title={data.name} subline={subline} />
+      <PageHead
+        title={data.name}
+        subline={subline}
+        backTo="/members"
+        backLabel="Band"
+      />
 
       <DetailsAndRolesCard
         key={data.id}

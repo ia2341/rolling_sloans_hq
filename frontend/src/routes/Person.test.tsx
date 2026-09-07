@@ -94,6 +94,20 @@ describe('Person', () => {
     expect(screen.queryByText('Your recordings')).not.toBeInTheDocument()
   })
 
+  it('renders a ← Band back link', async () => {
+    mockFetchByUrl({
+      '/api/members/2/': () => ({
+        status: 200,
+        body: { context: memberContext(), data: teammatePayload() },
+      }),
+    })
+
+    renderPerson('/members/2')
+
+    const link = await screen.findByRole('link', { name: /Band/ })
+    expect(link).toHaveAttribute('href', '/members')
+  })
+
   it('shows the read-only copy for a teammate’s declared Roles', async () => {
     mockFetchByUrl({
       '/api/members/2/': () => ({
