@@ -325,11 +325,6 @@ export function ConflictAdjudicationDetail() {
         subline={`${pendingCount} pending`}
       />
 
-      <p className="pb-4 text-sm text-rs-muted">
-        Reasons and notes are visible only on this page and are never shown to
-        other members.
-      </p>
-
       {isPhone ? (
         <DetailCards
           rows={payload.rows}
@@ -349,14 +344,6 @@ export function ConflictAdjudicationDetail() {
           onNoteChange={setNote}
         />
       )}
-
-      <p className="pt-4 text-sm text-rs-muted">
-        A Note is the exception that travels: its Conflict's owner reads it on
-        their own row at /schedule/, and no other member ever does.
-      </p>
-      <p className="pt-1 text-sm text-rs-muted">
-        Changing any verdict recomputes every row's feasibility.
-      </p>
 
       {showFalloutTiers && ambientFallout !== null && (
         <div className="pt-3">
@@ -438,9 +425,6 @@ function AdminOnlySubRow({
       >
         <div className="flex-1">
           <h4 className="text-sm font-semibold">Admin only</h4>
-          <p className="text-xs text-rs-muted">
-            Never rendered on any member-facing route, for any viewer.
-          </p>
           <p className="pt-1 text-sm">{row.reason}</p>
         </div>
         <label className="flex flex-1 flex-col text-sm">

@@ -779,9 +779,14 @@ describe('Band roster editor', () => {
 
     expect(await screen.findByDisplayValue('Sam Rivera')).toBeInTheDocument()
     expect(screen.queryByText('Add people')).not.toBeInTheDocument()
+    // `/members?intent=edit-roster` already contains "/members", so a
+    // waitFor asserting only that substring would pass on its very first,
+    // pre-strip check and never actually wait for the param to be gone.
+    // Wait on the absence of "intent" instead, which is false until the
+    // effect's setSearchParams call has flushed.
     await waitFor(() =>
-      expect(screen.getByTestId('location')).toHaveTextContent('/members'),
+      expect(screen.getByTestId('location')).not.toHaveTextContent('intent'),
     )
-    expect(screen.getByTestId('location')).not.toHaveTextContent('intent')
+    expect(screen.getByTestId('location')).toHaveTextContent('/members')
   })
 })

@@ -8,10 +8,10 @@ interface EditToolbarProps {
 
 /**
  * The sticky dark edit-in-place toolbar (issue #328 user stories 18-22):
- * `Editing <what> — N unsaved change(s)` (or `no changes yet`), Discard,
- * and Save changes. Rendered from one component so every admin surface's
- * toolbar is the same toolbar. There is deliberately no Preview button —
- * the Save popup (#334) is the only way to see consequences.
+ * Discard and Save changes, plus an unsaved-change count once there is one.
+ * Rendered from one component so every admin surface's toolbar is the same
+ * toolbar. There is deliberately no Preview button — the Save popup (#334)
+ * is the only way to see consequences.
  */
 export function EditToolbar({
   what,
@@ -20,15 +20,15 @@ export function EditToolbar({
   onDiscard,
   onRequestSave,
 }: EditToolbarProps) {
-  const changeSummary =
-    changeCount === 0
-      ? 'no changes yet'
-      : `${changeCount} unsaved change${changeCount === 1 ? '' : 's'}`
-
   return (
-    <div className="sticky top-0 z-30 flex items-center justify-between gap-3 bg-rs-toolbar-bg px-4 py-2 text-rs-toolbar-fg">
+    <div
+      aria-label={`Editing ${what}`}
+      className="sticky top-0 z-30 flex items-center justify-between gap-3 bg-rs-toolbar-bg px-4 py-2 text-rs-toolbar-fg"
+    >
       <span className="text-sm">
-        Editing {what} — {changeSummary}
+        {changeCount > 0
+          ? `${changeCount} unsaved change${changeCount === 1 ? '' : 's'}`
+          : ''}
       </span>
       <div className="flex gap-2">
         <button

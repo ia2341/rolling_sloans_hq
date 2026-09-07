@@ -115,9 +115,7 @@ export function RehearsalContextBar({
             {
               value: 'assignments',
               label: 'Assignments',
-              disabledReason: rehearsal.isDressRehearsal
-                ? 'A Dress Rehearsal has no per-song slots to assign against (ADR 0003).'
-                : undefined,
+              disabled: rehearsal.isDressRehearsal,
             },
           ]}
         />

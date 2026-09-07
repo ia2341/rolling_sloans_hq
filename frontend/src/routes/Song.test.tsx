@@ -56,7 +56,7 @@ describe('Song', () => {
     expect(link).toHaveAttribute('href', '/setlist')
   })
 
-  it('renders the ADR-0009 pointer block for an admin', async () => {
+  it('renders the casting pointer block for an admin', async () => {
     mockFetchOnce(200, {
       context: adminContext(),
       data: songPayload({ next_rehearsal: { id: 5, date: '2026-03-01' } }),
@@ -72,7 +72,7 @@ describe('Song', () => {
     ).toHaveAttribute('href', '/schedule?rehearsal=5')
   })
 
-  it('does not render the ADR-0009 pointer block for a member', async () => {
+  it('does not render the casting pointer block for a member', async () => {
     mockFetchOnce(200, { context: memberContext(), data: songPayload() })
 
     renderShell(<Song />, ['/songs/1'])

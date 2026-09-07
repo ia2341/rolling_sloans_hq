@@ -39,14 +39,12 @@ describe('SemesterPanel', () => {
   // not in this component — see `Sidebar.test.tsx`'s "renders the semester
   // panel only for an admin".
 
-  it('names the viewing Semester and warns when it is not live', () => {
+  it('names the viewing Semester and enables Publish when it is not live', () => {
     setContext(adminContext({ semester_options: options }))
     renderShell(<SemesterPanel collapsed={false} />)
 
     expect(screen.getByText(/Viewing: Fall 2026/)).toBeInTheDocument()
-    expect(
-      screen.getByText('Not what members see — they see Spring 2026'),
-    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Publish' })).toBeEnabled()
   })
 
   it('lists dropdown options newest-first with a status chip, counts and a tick on the viewing option', async () => {

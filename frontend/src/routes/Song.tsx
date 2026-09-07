@@ -239,10 +239,7 @@ export function Song() {
         {song.next_rehearsal !== undefined && (
           <div className="mt-3 rounded border border-rs-warning-border bg-rs-warning-bg p-3 text-sm text-rs-warning-fg">
             <p>
-              <strong>Casting happens on a rehearsal, not here.</strong> A cell
-              edited there changes every rehearsal and the concert (ADR 0009) —
-              the availability check that makes it safe is only computable
-              through a Rehearsal.
+              <strong>Casting happens on a rehearsal, not here.</strong>
             </p>
             {song.next_rehearsal !== null && (
               <Link

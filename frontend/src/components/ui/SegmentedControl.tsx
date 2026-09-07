@@ -5,8 +5,8 @@ import { cn } from '../../lib/utils'
 export interface SegmentedControlOption {
   value: string
   label: string
-  /** Disables this option; the reason renders as its `title` (issue #328 user story 34). */
-  disabledReason?: string
+  /** Disables this option (issue #328 user story 34). */
+  disabled?: boolean
 }
 
 interface SegmentedControlProps {
@@ -44,8 +44,7 @@ export function SegmentedControl({
         <ToggleGroup.Item
           key={option.value}
           value={option.value}
-          disabled={option.disabledReason !== undefined}
-          title={option.disabledReason}
+          disabled={option.disabled === true}
           className={cn(
             'flex-1 rounded px-3 py-1.5 text-sm font-medium text-rs-fg',
             'data-[state=on]:bg-rs-accent data-[state=on]:text-rs-accent-fg',

@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { EditToolbar } from './EditToolbar'
 
 describe('EditToolbar', () => {
-  it('shows "no changes yet" with Save changes disabled when there is nothing pending', () => {
+  it('shows no change count with Save changes disabled when there is nothing pending', () => {
     render(
       <EditToolbar
         what="the setlist"
@@ -15,9 +15,6 @@ describe('EditToolbar', () => {
       />,
     )
 
-    expect(
-      screen.getByText('Editing the setlist — no changes yet'),
-    ).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled()
   })
 
@@ -31,9 +28,7 @@ describe('EditToolbar', () => {
         onRequestSave={vi.fn()}
       />,
     )
-    expect(
-      screen.getByText('Editing the roster — 1 unsaved change'),
-    ).toBeInTheDocument()
+    expect(screen.getByText('1 unsaved change')).toBeInTheDocument()
 
     rerender(
       <EditToolbar
@@ -44,9 +39,7 @@ describe('EditToolbar', () => {
         onRequestSave={vi.fn()}
       />,
     )
-    expect(
-      screen.getByText('Editing the roster — 3 unsaved changes'),
-    ).toBeInTheDocument()
+    expect(screen.getByText('3 unsaved changes')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled()
   })
 
