@@ -6,6 +6,7 @@ import { shortenNames } from '../../lib/names'
 import {
   buildCastGridColumns,
   classifyRole,
+  visibleCastGridColumns,
   type CastGridColumn,
 } from '../../lib/roleColumns'
 
@@ -233,8 +234,11 @@ function CastGridCell({
  * The one Song × Role cast table the Setlist and the Schedule's "Running
  * order & assignments" read view both render (issue: UI overhaul round
  * 2, item 11) — `#`, `Song`, `Length`, then whatever fixed instrument
- * columns this Semester's Roles populate (`buildCastGridColumns()`), then
- * Add Recording. Each row is itself the "Open" control, clicking anywhere
+ * columns this Semester's Roles populate (`buildCastGridColumns()`), narrowed
+ * to the ones any row in *this* table instance actually has a performer for
+ * (`visibleCastGridColumns()`, issue #436) -- a Role can still be declared
+ * band-wide yet unused by every Song this particular Rehearsal or the
+ * Setlist renders. Add Recording. Each row is itself the "Open" control, clicking anywhere
  * on it but a link or button navigates via `onOpenRow`. Performer names
  * are shortened to a first name (or `"First L."` on a collision) by
  * `shortenNames()`, scoped to whoever actually appears in `rows`.
@@ -260,7 +264,10 @@ export function CastGridTable({
   renderRecordingCell: (row: CastGridRow) => ReactNode
   isAdmin: boolean
 }) {
-  const columns = useMemo(() => buildCastGridColumns(roles), [roles])
+  const columns = useMemo(
+    () => visibleCastGridColumns(buildCastGridColumns(roles), rows),
+    [roles, rows],
+  )
   const nameFor = useMemo(() => {
     const names = rows.flatMap((row) =>
       row.cast.flatMap((entry) =>
