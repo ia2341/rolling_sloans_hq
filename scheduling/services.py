@@ -1817,6 +1817,18 @@ class StaleAssignmentSemesterError(ValueError):
     """Raised when an assignment edit Buffer's Semester changed since the Buffer was loaded (issue #210)."""
 
 
+def _requirement_pairs_for(song_ids):
+    """Return the frozenset of (song_id, role_id) pairs with a SongRoleRequirement, restricted to `song_ids`.
+
+    The bulk-query counterpart of `song_role_requirement_exists()`
+    (scheduling/models.py) — used here instead of a per-row check since
+    `apply_song_role_assignments()` validates every buffered add in one
+    pass; both the SongRoleAssignment (issue #439) and Backup (issue
+    #440) add loops below call this on their own candidate song ids.
+    """
+    return frozenset(SongRoleRequirement.objects.filter(song_id__in=song_ids).values_list('song_id', 'role_id'))
+
+
 class MissingSongRoleRequirementError(ValueError):
     """Raised when an added assignment or Backup entry names a (song, role) pair with no SongRoleRequirement.
 
@@ -1960,9 +1972,7 @@ def apply_song_role_assignments(
                     semester=semester, pk__in={song_id for song_id, _, _ in buffer.added_entries},
                 ).values_list('pk', flat=True)
             )
-            requirement_pairs = frozenset(
-                SongRoleRequirement.objects.filter(song_id__in=valid_song_ids).values_list('song_id', 'role_id')
-            )
+            requirement_pairs = _requirement_pairs_for(valid_song_ids)
             for song_id, role_id, person_id in buffer.added_entries:
                 if song_id not in valid_song_ids or person_id not in rostered_person_ids:
                     continue
@@ -1991,11 +2001,7 @@ def apply_song_role_assignments(
                     pk__in={rehearsal_song_id for rehearsal_song_id, _, _, _ in buffer.added_backup_entries},
                 ).values_list('pk', 'song_id')
             )
-            backup_requirement_pairs = frozenset(
-                SongRoleRequirement.objects.filter(
-                    song_id__in=set(song_id_by_rehearsal_song_id.values()),
-                ).values_list('song_id', 'role_id')
-            )
+            backup_requirement_pairs = _requirement_pairs_for(set(song_id_by_rehearsal_song_id.values()))
             for rehearsal_song_id, role_id, person_id, covering_for_id in buffer.added_backup_entries:
                 song_id = song_id_by_rehearsal_song_id.get(rehearsal_song_id)
                 if song_id is None or person_id not in rostered_person_ids:

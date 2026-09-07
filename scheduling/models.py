@@ -182,6 +182,18 @@ class SongRoleRequirement(models.Model):
         return f'{self.song} — {self.count} x {self.role}'
 
 
+def song_role_requirement_exists(song_id, role_id):
+    """True when `song_id` carries a SongRoleRequirement for `role_id`.
+
+    The single shared predicate behind the "a role is only writable once
+    its Song has a Requirement for it" gate — `SongRoleAssignment`
+    (issue #439) and `Backup` (issue #440) both call this from their own
+    `_has_matching_requirement()` rather than each re-querying
+    SongRoleRequirement directly.
+    """
+    return SongRoleRequirement.objects.filter(song_id=song_id, role_id=role_id).exists()
+
+
 class SongRoleAssignment(models.Model):
     """A Person filling a Role on a Song (issue #35).
 
@@ -213,7 +225,7 @@ class SongRoleAssignment(models.Model):
 
     def _has_matching_requirement(self):
         """True when this assignment's (song, role) pair carries a SongRoleRequirement (issue #439)."""
-        return SongRoleRequirement.objects.filter(song_id=self.song_id, role_id=self.role_id).exists()
+        return song_role_requirement_exists(self.song_id, self.role_id)
 
     def clean(self):
         """Surface an assignment with no matching SongRoleRequirement as a normal form error (issue #439)."""
@@ -1001,7 +1013,7 @@ class Backup(models.Model):
 
     def _has_matching_requirement(self):
         """True when this Backup's underlying Song carries a SongRoleRequirement for this Role (issue #440)."""
-        return SongRoleRequirement.objects.filter(song_id=self.rehearsal_song.song_id, role_id=self.role_id).exists()
+        return song_role_requirement_exists(self.rehearsal_song.song_id, self.role_id)
 
     def clean(self):
         """Surface a Backup with no matching SongRoleRequirement as a normal form error (issue #440)."""
