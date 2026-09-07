@@ -112,6 +112,8 @@ interface AssignmentEditorProps {
   rehearsalId: number
   /** Called after a Discard or a successful Save — returns the Schedule surface to its read-only grid, since Discard and "done editing" are the same action (issue: UI overhaul round 2, item 2). */
   onDone: () => void
+  /** Suppresses the scope card, the backup/away/role-not-declared legend, and the drag helper text — for an embedding (the `/schedule/edit` rehearsal row, issue #405) that already supplies that context itself. Defaults to showing all three, as `/schedule`'s own "Edit Rehearsal" surface does. */
+  compact?: boolean
 }
 
 /**
@@ -133,6 +135,7 @@ interface AssignmentEditorProps {
 export function AssignmentEditor({
   rehearsalId,
   onDone,
+  compact = false,
 }: AssignmentEditorProps) {
   const isPhone = useIsPhone()
   const [detail, setDetail] = useState<RehearsalDetail | null>(null)
@@ -645,22 +648,26 @@ export function AssignmentEditor({
 
   return (
     <div className="flex flex-col gap-3">
-      <div
-        role="note"
-        className="rounded border-2 border-rs-accent bg-rs-accent/10 p-3 text-sm"
-      >
-        <p className="font-semibold">Editing standing assignments.</p>
-        <p>
-          To cover one evening only, add a <strong>Backup</strong> from the same
-          picker.
-        </p>
-      </div>
+      {!compact && (
+        <div
+          role="note"
+          className="rounded border-2 border-rs-accent bg-rs-accent/10 p-3 text-sm"
+        >
+          <p className="font-semibold">Editing standing assignments.</p>
+          <p>
+            To cover one evening only, add a <strong>Backup</strong> from the
+            same picker.
+          </p>
+        </div>
+      )}
 
-      <div className="flex flex-wrap gap-3 text-xs text-rs-muted">
-        <span>backup — covers one evening only</span>
-        <span>away — a declared Conflict</span>
-        <span>◦ role not declared</span>
-      </div>
+      {!compact && (
+        <div className="flex flex-wrap gap-3 text-xs text-rs-muted">
+          <span>backup — covers one evening only</span>
+          <span>away — a declared Conflict</span>
+          <span>◦ role not declared</span>
+        </div>
+      )}
 
       {addableRoles.length > 0 && (
         <button
@@ -672,7 +679,7 @@ export function AssignmentEditor({
         </button>
       )}
 
-      {runningOrder !== null && (
+      {!compact && runningOrder !== null && (
         <p className="text-xs text-rs-muted">
           Drag a row, or use its arrows, to reorder tonight's Running Order —
           this changes when each Song happens (and which Conflict Windows

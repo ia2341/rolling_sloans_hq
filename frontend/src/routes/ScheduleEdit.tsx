@@ -6,13 +6,12 @@ import {
   useRef,
   useState,
 } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router-dom'
 
 import { apiFetch, ApiError } from '../api/client'
 import { useAppContext } from '../api/ContextProvider'
 import type {
   DealtRow,
-  EditorSetlistSong,
   RehearsalEditBufferInput,
   RehearsalEditRowInput,
   RehearsalEditFalloutPayload,
@@ -25,11 +24,6 @@ import type { ReadEnvelope, WriteEnvelope } from '../api/types'
 import { AssignmentEditor } from '../components/assignments/AssignmentEditor'
 import { GenerateDatesModal } from '../components/ui/GenerateDatesModal'
 import { PageHead } from '../components/ui/PageHead'
-import {
-  RehearsalContextBar,
-  stepRehearsalIndex,
-  type RehearsalContextMode,
-} from '../components/ui/RehearsalContextBar'
 import { SaveChangesDialog } from '../components/ui/SaveChangesDialog'
 import { usePageTitle } from '../shell/PageTitleContext'
 import { useRegisterEditSession } from '../shell/EditSessionContext'
@@ -303,7 +297,6 @@ function flagsFor(
 export function ScheduleEdit() {
   usePageTitle('Edit schedule')
   const appContext = useAppContext()
-  const navigate = useNavigate()
 
   const [payload, setPayload] = useState<ScheduleEditorPayload | null>(null)
   const [rows, setRows] = useState<DraftRehearsal[]>([])
@@ -312,7 +305,6 @@ export function ScheduleEdit() {
   )
   const [deletedIds, setDeletedIds] = useState<Set<number>>(new Set())
   const [openKey, setOpenKey] = useState('')
-  const [mode, setMode] = useState<RehearsalContextMode>('running-order')
   const [saveOpen, setSaveOpen] = useState(false)
   const [generateOpen, setGenerateOpen] = useState(false)
   const [generateModalKey, setGenerateModalKey] = useState(0)
@@ -516,18 +508,26 @@ export function ScheduleEdit() {
     })
   }, [buildBufferInput, load])
 
-  // The two edit modes are exclusive (issue #338, ADR 0009): while a row
-  // is parked in 'assignments' mode, this page's own Running Order
-  // Buffer session yields the shared toolbar to `AssignmentEditor`'s own
+  // An open row's expanded card renders `AssignmentEditor` directly
+  // (issue #405 — Running Order mode is gone, so there's no other mode to
+  // switch out of). While that's true, this page's own Buffer session
+  // yields the shared toolbar to `AssignmentEditor`'s own
   // `useRegisterEditSession` call by registering nothing at all (`null`)
   // rather than a disabled stub — a stub would still register, and since
   // child effects run before parent effects, it would stomp
   // `AssignmentEditor`'s real registration the instant both mount (see
-  // `useRegisterEditSession`'s docstring). Nothing in the Running Order
-  // Buffer itself is lost — `rows`/`deletedIds` still carry it — it just
-  // isn't what the toolbar shows until `mode` flips back.
+  // `useRegisterEditSession`'s docstring). Nothing in this page's own
+  // Buffer is lost — `rows`/`deletedIds` still carry it — it just isn't
+  // what the toolbar shows until the row collapses or a different row
+  // (or none) is open.
+  const openRow = rows.find((row) => row.rowKey === openKey)
+  const openRowShowsAssignmentEditor =
+    openRow !== undefined &&
+    !openRow.isFullSetlist &&
+    openRow.rehearsalId !== null &&
+    !deletedIds.has(openRow.rehearsalId)
   useRegisterEditSession(
-    mode === 'assignments'
+    openRowShowsAssignmentEditor
       ? null
       : {
           what: 'the rehearsal schedule',
@@ -563,83 +563,6 @@ export function ScheduleEdit() {
       setRows((previous) =>
         previous.map((row) =>
           row.rowKey === rowKey ? { ...row, ...patch } : row,
-        ),
-      )
-    },
-    [],
-  )
-
-  const moveRunningOrderRow = useCallback(
-    (rowKey: string, index: number, direction: -1 | 1) => {
-      setRows((previous) =>
-        previous.map((row) => {
-          if (row.rowKey !== rowKey) return row
-          const target = index + direction
-          if (target < 0 || target >= row.runningOrder.length) return row
-          const next = [...row.runningOrder]
-          const a = next[index]
-          const b = next[target]
-          if (a === undefined || b === undefined) return row
-          next[index] = b
-          next[target] = a
-          return { ...row, runningOrder: next }
-        }),
-      )
-    },
-    [],
-  )
-
-  const addSongToRow = useCallback(
-    (rowKey: string, song: EditorSetlistSong) => {
-      setRows((previous) =>
-        previous.map((row) =>
-          row.rowKey === rowKey
-            ? {
-                ...row,
-                runningOrder: [
-                  ...row.runningOrder,
-                  {
-                    key: nextRowKey('new-running-order'),
-                    rehearsalSongId: null,
-                    songId: song.id,
-                    songTitle: song.title,
-                    slotCount: 1,
-                    isPinned: false,
-                  },
-                ],
-              }
-            : row,
-        ),
-      )
-    },
-    [],
-  )
-
-  const removeRunningOrderRow = useCallback((rowKey: string, key: string) => {
-    setRows((previous) =>
-      previous.map((row) =>
-        row.rowKey === rowKey
-          ? {
-              ...row,
-              runningOrder: row.runningOrder.filter((r) => r.key !== key),
-            }
-          : row,
-      ),
-    )
-  }, [])
-
-  const setSlotCount = useCallback(
-    (rowKey: string, key: string, slotCount: number) => {
-      setRows((previous) =>
-        previous.map((row) =>
-          row.rowKey === rowKey
-            ? {
-                ...row,
-                runningOrder: row.runningOrder.map((r) =>
-                  r.key === key ? { ...r, slotCount } : r,
-                ),
-              }
-            : row,
         ),
       )
     },
@@ -715,26 +638,6 @@ export function ScheduleEdit() {
     (row) => row.rehearsalId !== null && deletedIds.has(row.rehearsalId),
   )
 
-  // The Assignments stepper (issue #338 user stories 27-28) walks only
-  // persisted Rehearsals, skipping the Dress Rehearsal and wrapping,
-  // mirroring `stepRehearsalIndex()`'s contract. A brand-new, unsaved row
-  // has no id to fetch an Assignments surface against, so it never
-  // appears in this list at all.
-  const steppableRows = activeRows.filter((row) => row.rehearsalId !== null)
-  const stepAssignmentRehearsal = (direction: -1 | 1) => {
-    const currentIndex = steppableRows.findIndex(
-      (row) => row.rowKey === openKey,
-    )
-    if (currentIndex === -1) return
-    const nextIndex = stepRehearsalIndex(
-      steppableRows.map((row) => ({ isDressRehearsal: row.isFullSetlist })),
-      currentIndex,
-      direction,
-    )
-    const nextRow = steppableRows[nextIndex]
-    if (nextRow !== undefined) setOpenKey(nextRow.rowKey)
-  }
-
   return (
     <div>
       <PageHead
@@ -752,47 +655,29 @@ export function ScheduleEdit() {
             row.rehearsalId !== null && deletedIds.has(row.rehearsalId)
           const flags = flagsFor(row, baselines.get(row.rowKey), isDeleted)
           const isOpen = openKey === row.rowKey
-          const canNavigate = row.rehearsalId !== null
           const stop = (event: { stopPropagation: () => void }) =>
             event.stopPropagation()
+          const toggleOpen = () => setOpenKey(isOpen ? '' : row.rowKey)
           return (
             <Fragment key={row.rowKey}>
               <div
-                role={canNavigate ? 'link' : undefined}
-                tabIndex={canNavigate ? 0 : undefined}
-                onClick={() => {
-                  if (canNavigate)
-                    navigate(`/schedule?rehearsal=${row.rehearsalId}`)
-                }}
+                role="button"
+                tabIndex={0}
+                aria-label={
+                  isOpen ? `Collapse ${row.date}` : `Expand ${row.date}`
+                }
+                onClick={toggleOpen}
                 onKeyDown={(event) => {
-                  if (
-                    canNavigate &&
-                    (event.key === 'Enter' || event.key === ' ')
-                  ) {
+                  if (event.key === 'Enter' || event.key === ' ') {
                     event.preventDefault()
-                    navigate(`/schedule?rehearsal=${row.rehearsalId}`)
+                    toggleOpen()
                   }
                 }}
-                className={`flex flex-wrap items-center gap-3 rounded border border-rs-border p-3 ${
+                className={`flex flex-wrap items-center gap-3 rounded border border-rs-border p-3 cursor-pointer hover:bg-rs-border/20 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-rs-accent ${
                   isDeleted ? 'opacity-60' : ''
-                } ${
-                  canNavigate
-                    ? 'cursor-pointer hover:bg-rs-border/20 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-rs-accent'
-                    : ''
                 }`}
               >
-                <button
-                  type="button"
-                  aria-label={
-                    isOpen ? `Collapse ${row.date}` : `Expand ${row.date}`
-                  }
-                  onClick={(event) => {
-                    stop(event)
-                    setOpenKey(isOpen ? '' : row.rowKey)
-                  }}
-                >
-                  {isOpen ? '▾' : '▸'}
-                </button>
+                <span aria-hidden="true">{isOpen ? '▾' : '▸'}</span>
 
                 <label
                   className="flex items-center gap-1 text-sm"
@@ -887,23 +772,7 @@ export function ScheduleEdit() {
                   className="rounded border border-rs-border p-3"
                   onClick={stop}
                 >
-                  <RehearsalRowEditor
-                    draft={row}
-                    mode={mode}
-                    onModeChange={setMode}
-                    setlistSongs={payload.setlist_songs}
-                    onMove={(index, direction) =>
-                      moveRunningOrderRow(row.rowKey, index, direction)
-                    }
-                    onAddSong={(song) => addSongToRow(row.rowKey, song)}
-                    onRemoveSong={(key) =>
-                      removeRunningOrderRow(row.rowKey, key)
-                    }
-                    onSlotCountChange={(key, slotCount) =>
-                      setSlotCount(row.rowKey, key, slotCount)
-                    }
-                    onStep={stepAssignmentRehearsal}
-                  />
+                  <RehearsalRowEditor draft={row} />
                 </div>
               )}
             </Fragment>
@@ -1091,145 +960,33 @@ function ScheduleEditorStatsPanel({
 
 interface RehearsalRowEditorProps {
   draft: DraftRehearsal
-  mode: RehearsalContextMode
-  onModeChange: (mode: RehearsalContextMode) => void
-  setlistSongs: EditorSetlistSong[]
-  onMove: (index: number, direction: -1 | 1) => void
-  onAddSong: (song: EditorSetlistSong) => void
-  onRemoveSong: (key: string) => void
-  onSlotCountChange: (key: string, slotCount: number) => void
-  onStep: (direction: -1 | 1) => void
 }
 
-/** The expanded content below a Rehearsal card: its Running Order sub-grid, or the Assignments surface (issue #337, #338).
+/** The expanded content below a Rehearsal card: just the Assignments table (issue #405).
  *
- * Date/Start/End are no longer rendered here (issue: UI overhaul round
- * 2) — they moved onto the card header itself, as an actual date/time
- * picker rather than plain text, so this content is Running-Order/
- * Assignments only.
+ * Date/Start/End, the Running Order vs. Assignments toggle, the
+ * prev/next stepper, and `AssignmentEditor`'s own scope card/legend/drag
+ * helper are all gone from here (issue #405) — the row's collapsed top
+ * line already states date, time range and song count, this route only
+ * ever shows one Rehearsal's Assignments at a time (nothing to step
+ * between), and Running Order mode is deprecated entirely, not hidden:
+ * `AssignmentEditor`'s own table still reorders via drag or its up/down
+ * buttons, so no reorder capability is lost.
  */
-function RehearsalRowEditor({
-  draft,
-  mode,
-  onModeChange,
-  setlistSongs,
-  onMove,
-  onAddSong,
-  onRemoveSong,
-  onSlotCountChange,
-  onStep,
-}: RehearsalRowEditorProps) {
-  const contextBarRehearsal = {
-    id: draft.rehearsalId ?? 0,
-    label: draft.date,
-    startTime: `${draft.startTime}:00`,
-    endTime: `${draft.endTime ?? draft.startTime}:00`,
-    songCount: draft.runningOrder.length,
-    isDressRehearsal: draft.isFullSetlist,
-  }
-
-  const availableSongs = setlistSongs.filter(
-    (song) => !draft.runningOrder.some((row) => row.songId === song.id),
-  )
-
+function RehearsalRowEditor({ draft }: RehearsalRowEditorProps) {
   return (
     <div className="flex flex-col gap-3 py-2">
-      {draft.isFullSetlist ? null : (
-        <>
-          <RehearsalContextBar
-            rehearsal={contextBarRehearsal}
-            mode={mode}
-            onModeChange={onModeChange}
-            onStep={onStep}
-          />
-          {mode === 'assignments' ? (
-            draft.rehearsalId === null ? (
-              <p className="text-sm text-rs-muted">
-                Save this new Rehearsal before casting it — there's nothing to
-                assign against yet.
-              </p>
-            ) : (
-              <AssignmentEditor
-                rehearsalId={draft.rehearsalId}
-                onDone={() => onModeChange('running-order')}
-              />
-            )
-          ) : (
-            <div className="flex flex-col gap-2">
-              <ul className="flex flex-col gap-1">
-                {draft.runningOrder.map((row, index) => (
-                  <li key={row.key} className="flex items-center gap-2 text-sm">
-                    <span className="flex-1">{row.songTitle}</span>
-                    <span>slots:</span>
-                    <input
-                      type="number"
-                      aria-label={`${row.songTitle} slot count`}
-                      min={1}
-                      value={row.slotCount}
-                      onChange={(event) =>
-                        onSlotCountChange(
-                          row.key,
-                          Number(event.target.value) || 1,
-                        )
-                      }
-                      className="w-12"
-                    />
-                    {row.isPinned && (
-                      <span className="rounded bg-rs-border/60 px-1.5 py-0.5 text-xs">
-                        Pinned
-                      </span>
-                    )}
-                    <button
-                      type="button"
-                      aria-label={`Move ${row.songTitle} up`}
-                      disabled={index === 0}
-                      onClick={() => onMove(index, -1)}
-                    >
-                      ↑
-                    </button>
-                    <button
-                      type="button"
-                      aria-label={`Move ${row.songTitle} down`}
-                      disabled={index === draft.runningOrder.length - 1}
-                      onClick={() => onMove(index, 1)}
-                    >
-                      ↓
-                    </button>
-                    <button
-                      type="button"
-                      aria-label={`Remove ${row.songTitle}`}
-                      onClick={() => onRemoveSong(row.key)}
-                    >
-                      ×
-                    </button>
-                  </li>
-                ))}
-              </ul>
-              <div className="flex items-center gap-2">
-                <select
-                  aria-label="Add a song"
-                  defaultValue=""
-                  onChange={(event) => {
-                    const song = availableSongs.find(
-                      (s) => String(s.id) === event.target.value,
-                    )
-                    if (song !== undefined) onAddSong(song)
-                    event.target.value = ''
-                  }}
-                >
-                  <option value="" disabled>
-                    + Add song
-                  </option>
-                  {availableSongs.map((song) => (
-                    <option key={song.id} value={song.id}>
-                      {song.title}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-          )}
-        </>
+      {draft.isFullSetlist ? null : draft.rehearsalId === null ? (
+        <p className="text-sm text-rs-muted">
+          Save this new Rehearsal before casting it — there's nothing to assign
+          against yet.
+        </p>
+      ) : (
+        <AssignmentEditor
+          rehearsalId={draft.rehearsalId}
+          onDone={() => {}}
+          compact
+        />
       )}
     </div>
   )
