@@ -153,13 +153,13 @@ function ActiveEditSessionDiscardButton() {
   )
 }
 
-function renderEditor(onDone: () => void = vi.fn()) {
+function renderEditor(onDone: () => void = vi.fn(), compact = false) {
   return render(
     <ContextProvider>
       <EditSessionProvider>
         <ActiveEditSessionSaveButton />
         <ActiveEditSessionDiscardButton />
-        <AssignmentEditor rehearsalId={1} onDone={onDone} />
+        <AssignmentEditor rehearsalId={1} onDone={onDone} compact={compact} />
       </EditSessionProvider>
     </ContextProvider>,
   )
@@ -377,6 +377,27 @@ describe('AssignmentEditor', () => {
     expect(urls.some((url) => url.includes('/running-order/preview/'))).toBe(
       true,
     )
+  })
+
+  it('compact mode (issue #405) hides the scope card, the legend, and the drag helper text, but keeps reordering', async () => {
+    mockMatchMedia(false)
+    queueFetch(twoSongSchedulePayload())
+
+    renderEditor(vi.fn(), true)
+    await screen.findByRole('button', { name: 'Move Song One up' })
+
+    expect(
+      screen.queryByText('Editing standing assignments.'),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByText('backup — covers one evening only'),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByText(/Drag a row, or use its arrows/),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Move Song One down' }),
+    ).not.toBeDisabled()
   })
 
   it('Discard reloads and calls onDone, since Discard is the only way to leave edit mode (issue: UI overhaul round 2, item 2)', async () => {
