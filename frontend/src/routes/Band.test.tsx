@@ -230,6 +230,27 @@ describe('Band', () => {
     expect(screen.getByText('Alex Kim')).toBeInTheDocument()
   })
 
+  it('keeps the grid’s fixed-size column class unchanged whether the filtered list is small or large', async () => {
+    mockFetchOnce(200, { context: memberContext(), data: bandPayload() })
+    const user = userEvent.setup()
+
+    renderShell(<Band />, ['/members'])
+
+    await screen.findByText('Sam Rivera', { exact: false })
+    const grid = screen.getByText('Sam Rivera').closest('ul')
+    const unfilteredClassName = grid?.className
+    // A fixed, non-`1fr` auto-fill track (issue #425) so card size never
+    // depends on how many cards are visible.
+    expect(unfilteredClassName).toContain('auto-fill')
+    expect(unfilteredClassName).not.toContain('1fr')
+
+    await user.click(screen.getByRole('checkbox', { name: 'Vocals' }))
+    expect(screen.getByText('Sam Rivera')).toBeInTheDocument()
+    expect(screen.queryByText('Alex Kim')).not.toBeInTheDocument()
+    const filteredGrid = screen.getByText('Sam Rivera').closest('ul')
+    expect(filteredGrid?.className).toBe(unfilteredClassName)
+  })
+
   it('gives a custom Role name matching no fixed family its own filter checkbox', async () => {
     mockFetchOnce(200, {
       context: memberContext(),
