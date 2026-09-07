@@ -71,6 +71,8 @@ Two supporting modules sit beside the services layer rather than inside it: `sch
 
 A React/TypeScript single-page app under `frontend/` — see `frontend/CLAUDE.md` for the bundler/no-CDN/testing/static-serving conventions. The one prohibition worth repeating here since it's enforced repo-wide, not just under `frontend/`: **no CDN, ever** (privacy grounds — a CDN would announce every member's IP and referer to a third party), checked by `scheduling/tests/test_static_assets.py`.
 
+Two backend pieces make the SPA work and matter even to a session that never opens `frontend/`: `config/views.py:SpaIndexView` reads Vite's `manifest.json` per request and serves the hashed script/style tags it names — never a static `index.html` — and `config/urls.py`'s catch-all routes every non-`/admin/`, non-`/accounts/`, non-`/api/` path to it. And `STATICFILES_DIRS` in `config/settings.py` has two entries, not one — the top-level `static/` and `frontend/dist` kept as its own physically separate entry, so Vite's `assets/` subdirectory can never shadow anything else's filenames.
+
 #### The `/api/` layer (issue #326, ADR 0012)
 
 Every `/api/` view inherits `config/views.py:ApiView` (or `AdminApiView`, which layers `AdminRequiredMixin` ahead of it for an admin-only endpoint) — the gate lives on the base class every endpoint already subclasses to exist, the same shape `BaseView`/`AdminRequiredMixin` used for the pre-cutover portal.
