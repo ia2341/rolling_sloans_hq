@@ -422,17 +422,32 @@ function RosterFilterBar({
 /**
  * The Roster's card grid (issue #366): one card per member, every
  * viewport, in a CSS grid that reflows continuously rather than snapping
- * at a Tailwind breakpoint. `auto-fill` with a fixed 200px track (issue
- * #425) sizes columns purely from the container's width, never from how
- * many cards are actually present -- unlike `auto-fit`/`1fr`, which
- * collapses empty tracks and stretches the remaining cards to fill the
- * freed space, so a 2-member filtered view would render much wider cards
- * than a 20-member one at the same viewport. A fixed, non-`1fr` track
- * keeps card width/height constant regardless of item count: roughly one
- * column under about 560px, up to five across a typical desktop content
- * width (roughly 900–1100px once the shell's own padding is subtracted),
- * with no `isPhone` branch.
+ * at a Tailwind breakpoint. `auto-fill` with a fixed 240px track (issue
+ * #425, widened by #435) sizes columns purely from the container's width,
+ * never from how many cards are actually present -- unlike `auto-fit`/`1fr`,
+ * which collapses empty tracks and stretches the remaining cards to fill
+ * the freed space, so a 2-member filtered view would render much wider
+ * cards than a 20-member one at the same viewport. A fixed, non-`1fr` track
+ * keeps card width constant regardless of item count; the 6-column cap
+ * (below) handles very wide viewports, where a plain `auto-fill` would
+ * otherwise keep adding tracks.
+ *
+ * Card height is fixed too (issue #435): before, height was driven purely
+ * by how long the comma-joined role list happened to be, so a semester
+ * with few members but long role lists rendered short/cramped cards next
+ * to a large semester's taller, more comfortable ones at the same
+ * viewport. `min-h` plus `line-clamp-2` on the role line pins every card
+ * to the same footprint -- the large-semester proportions, just with more
+ * overall area -- regardless of member count or role-list length.
+ *
+ * The 6-column cap is a `max-w` on the grid itself, sized to exactly six
+ * 240px tracks plus their five `gap-3` gutters -- `auto-fill` can never
+ * pack a seventh column into a container that isn't wide enough to hold
+ * one, so this holds at any viewport width with no JS and no container
+ * query.
  */
+export const BAND_GRID_MAX_WIDTH_PX = 6 * 240 + 5 * 12
+
 function BandGrid({
   members,
   viewerId,
@@ -448,10 +463,16 @@ function BandGrid({
     )
   }
   return (
-    <ul className="grid grid-cols-[repeat(auto-fill,200px)] gap-3">
+    <ul
+      className="grid grid-cols-[repeat(auto-fill,240px)] gap-3"
+      style={{ maxWidth: `${BAND_GRID_MAX_WIDTH_PX}px` }}
+    >
       {members.map((member) => (
-        <li key={member.id} className="rounded border border-rs-border">
-          <Link to={`/members/${member.id}`} className="block p-3">
+        <li
+          key={member.id}
+          className="min-h-[112px] rounded border border-rs-border"
+        >
+          <Link to={`/members/${member.id}`} className="block h-full p-3">
             <p className="font-medium">
               {member.name}
               {member.id === viewerId && (
@@ -460,7 +481,7 @@ function BandGrid({
                 </span>
               )}
             </p>
-            <p className="pt-1 text-sm text-rs-muted">
+            <p className="line-clamp-2 pt-1 text-sm text-rs-muted">
               {member.roles.length > 0 ? member.roles.join(', ') : '—'}
             </p>
           </Link>
