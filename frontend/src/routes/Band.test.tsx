@@ -8,7 +8,7 @@ import { adminContext, memberContext } from '../test/fixtures'
 import { mockFetchOnce } from '../test/mockFetch'
 import { mockMatchMedia } from '../test/mockMatchMedia'
 import { renderShell } from '../test/renderShell'
-import { Band } from './Band'
+import { BAND_GRID_MAX_WIDTH_PX, Band } from './Band'
 
 /** A minimal `/api/members/roster/` `data` payload for the editor. */
 function rosterEditPayload(overrides: Record<string, unknown> = {}) {
@@ -249,6 +249,64 @@ describe('Band', () => {
     expect(screen.queryByText('Alex Kim')).not.toBeInTheDocument()
     const filteredGrid = screen.getByText('Sam Rivera').closest('ul')
     expect(filteredGrid?.className).toBe(unfilteredClassName)
+  })
+
+  /**
+   * Issue #435: card footprint must not depend on member count or
+   * role-list length -- a small roster with long role lists used to
+   * render shorter cards than a large roster with short ones.
+   */
+  it('renders the same fixed card min-height and grid max-width whether the roster is small or large', async () => {
+    const smallRoster = bandPayload({
+      member_count: 2,
+      members: [
+        {
+          id: 1,
+          name: 'Sam Rivera',
+          roles: ['Lead Vocals', 'Backing Vocals', 'Rhythm Guitar'],
+          song_count: 3,
+        },
+        { id: 2, name: 'Alex Kim', roles: ['Drums'], song_count: 1 },
+      ],
+    })
+    mockFetchOnce(200, { context: memberContext(), data: smallRoster })
+    const { unmount } = renderShell(<Band />, ['/members'])
+    await screen.findByText('Sam Rivera')
+    const smallGrid = screen.getByText('Sam Rivera').closest('ul')
+    const smallCard = screen.getByText('Sam Rivera').closest('li')
+    const smallGridStyle = smallGrid?.getAttribute('style')
+    const smallCardClassName = smallCard?.className
+    unmount()
+
+    const largeRoster = bandPayload({
+      member_count: 12,
+      members: Array.from({ length: 12 }, (_, index) => ({
+        id: index + 1,
+        name: `Member ${index + 1}`,
+        roles: ['Vocals'],
+        song_count: 0,
+      })),
+    })
+    mockFetchOnce(200, { context: memberContext(), data: largeRoster })
+    renderShell(<Band />, ['/members'])
+    await screen.findByText('Member 1')
+    const largeGrid = screen.getByText('Member 1').closest('ul')
+    const largeCard = screen.getByText('Member 1').closest('li')
+
+    expect(largeGrid?.getAttribute('style')).toBe(smallGridStyle)
+    expect(largeCard?.className).toBe(smallCardClassName)
+    expect(smallCardClassName).toContain('min-h-')
+  })
+
+  /** Issue #435: the grid must never exceed 6 cards per row, even on very wide viewports. */
+  it('caps the grid at 6 cards per row via a max-width sized to six tracks', async () => {
+    mockFetchOnce(200, { context: memberContext(), data: bandPayload() })
+
+    renderShell(<Band />, ['/members'])
+
+    await screen.findByText('Sam Rivera')
+    const grid = screen.getByText('Sam Rivera').closest('ul')
+    expect(grid?.style.maxWidth).toBe(`${BAND_GRID_MAX_WIDTH_PX}px`)
   })
 
   it('gives a custom Role name matching no fixed family its own filter checkbox', async () => {
