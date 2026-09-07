@@ -2,7 +2,6 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 
-import type { AssignmentPickerPayload } from '../../api/assignmentEditorTypes'
 import { ContextProvider } from '../../api/ContextProvider'
 import {
   EditSessionProvider,
@@ -68,6 +67,11 @@ function schedulePayload() {
           },
         ],
         addable_roles: [],
+        roster: [
+          { person_id: 9, person_name: 'Riley Song', declared_role_ids: [5] },
+          { person_id: 12, person_name: 'Jordan Wren', declared_role_ids: [5] },
+        ],
+        conflicted_person_ids: [],
       },
     },
   }
@@ -95,38 +99,14 @@ function twoSongSchedulePayload() {
   return payload
 }
 
-function pickerPayload(): {
-  context: ReturnType<typeof adminContext>
-  data: AssignmentPickerPayload
-} {
-  return {
-    context: adminContext(),
-    data: {
-      song_id: 100,
-      song_title: 'Song One',
-      role_id: 5,
-      role_name: 'Guitar',
-      rehearsal_song_id: 200,
-      declared: [
-        {
-          person_id: 9,
-          person_name: 'Riley Song',
-          has_declared_role: true,
-          has_conflict: false,
-        },
-      ],
-      others: [],
-      backup_declared: [
-        {
-          person_id: 12,
-          person_name: 'Jordan Wren',
-          has_declared_role: true,
-          has_conflict: false,
-        },
-      ],
-      backup_others: [],
-    },
-  }
+/** A `schedulePayload()` variant adding one roster member ('Casey Undeclared') who hasn't declared the Guitar Role, for the picker's "Show all members" section. */
+function undeclaredSchedulePayload() {
+  const payload = schedulePayload()
+  payload.data.selected.roster = [
+    ...payload.data.selected.roster,
+    { person_id: 20, person_name: 'Casey Undeclared', declared_role_ids: [] },
+  ]
+  return payload
 }
 
 function queueFetch(...bodies: unknown[]) {
@@ -183,7 +163,7 @@ describe('AssignmentEditor', () => {
 
   it("the picker's two sections render with their scope lines, structural not dismissible", async () => {
     mockMatchMedia(false)
-    queueFetch(schedulePayload(), pickerPayload())
+    queueFetch(schedulePayload())
     const user = userEvent.setup()
 
     renderEditor()
@@ -207,7 +187,7 @@ describe('AssignmentEditor', () => {
 
   it('picking a declared member adds a pending pill with no further round trip', async () => {
     mockMatchMedia(false)
-    const fetchSpy = queueFetch(schedulePayload(), pickerPayload())
+    const fetchSpy = queueFetch(schedulePayload())
     const user = userEvent.setup()
 
     renderEditor()
@@ -218,7 +198,8 @@ describe('AssignmentEditor', () => {
     await screen.findByRole('heading', { name: 'Assigned' })
 
     const callsBeforePick = fetchSpy.mock.calls.length
-    await user.click(screen.getByRole('button', { name: 'Riley' }))
+    const assignedRiley = screen.getAllByRole('button', { name: 'Riley' })[0]
+    await user.click(assignedRiley as HTMLElement)
 
     expect(await screen.findByText('Riley')).toBeInTheDocument()
     expect(fetchSpy.mock.calls.length).toBe(callsBeforePick)
@@ -226,7 +207,7 @@ describe('AssignmentEditor', () => {
 
   it('opens the Save popup on Save and fires the preview endpoint exactly once', async () => {
     mockMatchMedia(false)
-    queueFetch(schedulePayload(), pickerPayload(), {
+    queueFetch(schedulePayload(), {
       context: adminContext(),
       ok: true,
       errors: {},
@@ -249,7 +230,8 @@ describe('AssignmentEditor', () => {
       screen.getByRole('button', { name: 'Assign Guitar on Song One' }),
     )
     await screen.findByRole('heading', { name: 'Assigned' })
-    await user.click(screen.getByRole('button', { name: 'Riley' }))
+    const assignedRiley = screen.getAllByRole('button', { name: 'Riley' })[0]
+    await user.click(assignedRiley as HTMLElement)
     await screen.findByText('Riley')
 
     await user.click(screen.getByRole('button', { name: /Save 1 change/ }))
@@ -261,17 +243,7 @@ describe('AssignmentEditor', () => {
 
   it('picking someone who has not declared the Role shows the mismatch marker on the pending pill', async () => {
     mockMatchMedia(false)
-    const undeclaredPickerPayload = pickerPayload()
-    undeclaredPickerPayload.data.declared = []
-    undeclaredPickerPayload.data.others = [
-      {
-        person_id: 20,
-        person_name: 'Casey Undeclared',
-        has_declared_role: false,
-        has_conflict: false,
-      },
-    ]
-    queueFetch(schedulePayload(), undeclaredPickerPayload)
+    queueFetch(undeclaredSchedulePayload())
     const user = userEvent.setup()
 
     renderEditor()
@@ -279,7 +251,10 @@ describe('AssignmentEditor', () => {
     await user.click(
       screen.getByRole('button', { name: 'Assign Guitar on Song One' }),
     )
-    await user.click(screen.getByRole('button', { name: 'Show all members' }))
+    const showAllAssigned = screen.getAllByRole('button', {
+      name: 'Show all members',
+    })[0]
+    await user.click(showAllAssigned as HTMLElement)
     await user.click(screen.getByRole('button', { name: /Casey/ }))
 
     const pill = await screen.findByText('Casey')

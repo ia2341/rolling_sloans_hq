@@ -23,6 +23,7 @@ import { shortenNames } from '../../lib/names'
 import { useRegisterEditSession } from '../../shell/EditSessionContext'
 import { ResponsiveDialog } from '../ui/ResponsiveDialog'
 import { SaveChangesDialog } from '../ui/SaveChangesDialog'
+import { buildAssignmentPicker } from './assignmentPicker'
 
 /** A standing Assignment or Backup pick that hasn't round-tripped to the server yet (issue #338). */
 interface PendingEntry {
@@ -127,8 +128,9 @@ interface AssignmentEditorProps {
  * preview → apply shape) — nothing here autosaves per click. Fetches its
  * own `GET /api/schedule/?rehearsal=<id>` — the same read the
  * member-facing grid uses (issue #331) — rather than a second endpoint,
- * per #307's "one endpoint per surface" rule; the picker is the one extra
- * fetch, and only when a cell's "+" is opened.
+ * per #307's "one endpoint per surface" rule. The "+" picker (issue #399)
+ * derives its candidates from that one read too — `detail.roster` plus
+ * the matrix's own entries — so opening it costs no further round trip.
  */
 export function AssignmentEditor({
   rehearsalId,
@@ -738,7 +740,7 @@ export function AssignmentEditor({
 
       {pickerCell !== null && (
         <AssignmentPickerDialog
-          rehearsalId={rehearsalId}
+          payload={buildAssignmentPicker(detail, pickerCell)}
           cell={pickerCell}
           onOpenChange={(open) => {
             if (!open) setPickerCell(null)
@@ -1120,20 +1122,20 @@ function PickerOptionRow({
 }
 
 /**
- * The "+" cell's picker dialog (issue #338, story 15): fetches
- * `.../assignments/picker/<song_id>/<role_id>/` for this one cell and
- * offers Assigned (declared-first) and Backup (this-evening-only)
- * sections, each with a "Show all members" expansion.
+ * The "+" cell's picker dialog (issue #338, story 15; derived client-side
+ * with no fetch since issue #399): offers Assigned (declared-first) and
+ * Backup (this-evening-only) sections for `payload`, each with a "Show all
+ * members" expansion.
  */
 function AssignmentPickerDialog({
-  rehearsalId,
+  payload,
   cell,
   onOpenChange,
   standingAssignees,
   onPickAssigned,
   onPickBackup,
 }: {
-  rehearsalId: number
+  payload: AssignmentPickerPayload
   cell: { songId: number; songTitle: string; roleId: number; roleName: string }
   onOpenChange: (open: boolean) => void
   standingAssignees: { id: number; name: string }[]
@@ -1144,24 +1146,17 @@ function AssignmentPickerDialog({
     coveringFor: { id: number; name: string } | null,
   ) => void
 }) {
-  const [payload, setPayload] = useState<AssignmentPickerPayload | null>(null)
   const [showAllAssigned, setShowAllAssigned] = useState(false)
   const [showAllBackup, setShowAllBackup] = useState(false)
   const [coveringForId, setCoveringForId] = useState<number | ''>('')
 
-  useEffect(() => {
-    void apiFetch<ReadEnvelope<AssignmentPickerPayload>>(
-      `/api/schedule/${rehearsalId}/assignments/picker/${cell.songId}/${cell.roleId}/`,
-    ).then((envelope) => setPayload(envelope.data))
-  }, [rehearsalId, cell.songId, cell.roleId])
-
   /** First-name-only display, scoped to this one dialog's candidate list (issue: UI overhaul round 2, item 3). */
   const nameFor = useMemo(() => {
     const names = [
-      ...(payload?.declared ?? []).map((option) => option.person_name),
-      ...(payload?.others ?? []).map((option) => option.person_name),
-      ...(payload?.backup_declared ?? []).map((option) => option.person_name),
-      ...(payload?.backup_others ?? []).map((option) => option.person_name),
+      ...payload.declared.map((option) => option.person_name),
+      ...payload.others.map((option) => option.person_name),
+      ...payload.backup_declared.map((option) => option.person_name),
+      ...payload.backup_others.map((option) => option.person_name),
       ...standingAssignees.map((assignee) => assignee.name),
     ]
     return shortenNames(names)
@@ -1181,154 +1176,150 @@ function AssignmentPickerDialog({
       title={`${cell.roleName} on ${cell.songTitle}`}
       wide
     >
-      {payload === null ? (
-        <p className="text-sm text-rs-muted">Loading…</p>
-      ) : (
-        <div className="flex flex-col gap-4">
-          <section>
-            <h3 className="text-sm font-semibold">Assigned</h3>
-            <p className="pb-1 text-xs text-rs-muted">
-              Every rehearsal + concert
-            </p>
-            <ul className="flex flex-col">
-              {payload.declared.map((option) => (
-                <PickerOptionRow
-                  key={option.person_id}
-                  option={option}
-                  nameFor={nameFor}
-                  onPick={() => onPickAssigned(option)}
-                />
-              ))}
-            </ul>
-            {payload.others.length > 0 && (
-              <>
-                <button
-                  type="button"
-                  onClick={() => setShowAllAssigned((previous) => !previous)}
-                  className="pt-1 text-xs text-rs-accent"
-                >
-                  {showAllAssigned ? 'Hide' : 'Show all members'}
-                </button>
-                {showAllAssigned && (
-                  <ul className="flex flex-col">
-                    {payload.others.map((option) => (
-                      <li key={option.person_id}>
-                        <button
-                          type="button"
-                          onClick={() => onPickAssigned(option)}
-                          className="flex w-full items-center justify-between rounded px-2 py-1 text-left text-sm hover:bg-rs-border/40"
-                        >
-                          <span>
-                            {nameFor.get(option.person_name) ??
-                              option.person_name}
-                          </span>
-                          <span className="text-xs text-rs-muted">
-                            Has not declared {cell.roleName}
-                            {option.has_conflict ? ' · Conflict' : ''}
-                          </span>
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </>
-            )}
-          </section>
-
-          <section>
-            <h3 className="text-sm font-semibold">Backup</h3>
-            <p className="pb-1 text-xs text-rs-muted">
-              This rehearsal only — the standing assignment above is unaffected
-            </p>
-            {payload.rehearsal_song_id === null ? null : (
-              <>
-                {standingAssignees.length > 0 && (
-                  <label className="mb-1 flex items-center gap-2 text-xs text-rs-muted">
-                    Covering for
-                    <select
-                      value={coveringForId}
-                      onChange={(event) =>
-                        setCoveringForId(
-                          event.target.value === ''
-                            ? ''
-                            : Number(event.target.value),
-                        )
-                      }
-                      className="rounded border border-rs-border px-1 py-0.5 text-xs"
-                    >
-                      <option value="">No one in particular</option>
-                      {standingAssignees.map((assignee) => (
-                        <option key={assignee.id} value={assignee.id}>
-                          {assignee.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                )}
+      <div className="flex flex-col gap-4">
+        <section>
+          <h3 className="text-sm font-semibold">Assigned</h3>
+          <p className="pb-1 text-xs text-rs-muted">
+            Every rehearsal + concert
+          </p>
+          <ul className="flex flex-col">
+            {payload.declared.map((option) => (
+              <PickerOptionRow
+                key={option.person_id}
+                option={option}
+                nameFor={nameFor}
+                onPick={() => onPickAssigned(option)}
+              />
+            ))}
+          </ul>
+          {payload.others.length > 0 && (
+            <>
+              <button
+                type="button"
+                onClick={() => setShowAllAssigned((previous) => !previous)}
+                className="pt-1 text-xs text-rs-accent"
+              >
+                {showAllAssigned ? 'Hide' : 'Show all members'}
+              </button>
+              {showAllAssigned && (
                 <ul className="flex flex-col">
-                  {payload.backup_declared.map((option) => (
-                    <PickerOptionRow
-                      key={option.person_id}
-                      option={option}
-                      nameFor={nameFor}
-                      onPick={() =>
-                        onPickBackup(
-                          option,
-                          payload.rehearsal_song_id as number,
-                          coveringFor,
-                        )
-                      }
-                    />
+                  {payload.others.map((option) => (
+                    <li key={option.person_id}>
+                      <button
+                        type="button"
+                        onClick={() => onPickAssigned(option)}
+                        className="flex w-full items-center justify-between rounded px-2 py-1 text-left text-sm hover:bg-rs-border/40"
+                      >
+                        <span>
+                          {nameFor.get(option.person_name) ??
+                            option.person_name}
+                        </span>
+                        <span className="text-xs text-rs-muted">
+                          Has not declared {cell.roleName}
+                          {option.has_conflict ? ' · Conflict' : ''}
+                        </span>
+                      </button>
+                    </li>
                   ))}
                 </ul>
-                {payload.backup_others.length > 0 && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => setShowAllBackup((previous) => !previous)}
-                      className="pt-1 text-xs text-rs-accent"
-                    >
-                      {showAllBackup ? 'Hide' : 'Show all members'}
-                    </button>
-                    {showAllBackup && (
-                      <ul className="flex flex-col">
-                        {payload.backup_others.map((option) => (
-                          <li key={option.person_id}>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                onPickBackup(
-                                  option,
-                                  payload.rehearsal_song_id as number,
-                                  coveringFor,
-                                )
-                              }
-                              className="flex w-full items-center justify-between rounded px-2 py-1 text-left text-sm hover:bg-rs-border/40"
-                            >
-                              <span>
-                                {nameFor.get(option.person_name) ??
-                                  option.person_name}
-                              </span>
-                              <span className="text-xs text-rs-muted">
-                                Has not declared {cell.roleName}
-                                {option.has_conflict ? ' · Conflict' : ''}
-                              </span>
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </>
-                )}
-              </>
-            )}
-          </section>
+              )}
+            </>
+          )}
+        </section>
 
-          <p className="text-xs text-rs-muted">
-            Who a Backup is covering for is shown to admins only.
+        <section>
+          <h3 className="text-sm font-semibold">Backup</h3>
+          <p className="pb-1 text-xs text-rs-muted">
+            This rehearsal only — the standing assignment above is unaffected
           </p>
-        </div>
-      )}
+          {payload.rehearsal_song_id === null ? null : (
+            <>
+              {standingAssignees.length > 0 && (
+                <label className="mb-1 flex items-center gap-2 text-xs text-rs-muted">
+                  Covering for
+                  <select
+                    value={coveringForId}
+                    onChange={(event) =>
+                      setCoveringForId(
+                        event.target.value === ''
+                          ? ''
+                          : Number(event.target.value),
+                      )
+                    }
+                    className="rounded border border-rs-border px-1 py-0.5 text-xs"
+                  >
+                    <option value="">No one in particular</option>
+                    {standingAssignees.map((assignee) => (
+                      <option key={assignee.id} value={assignee.id}>
+                        {assignee.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              <ul className="flex flex-col">
+                {payload.backup_declared.map((option) => (
+                  <PickerOptionRow
+                    key={option.person_id}
+                    option={option}
+                    nameFor={nameFor}
+                    onPick={() =>
+                      onPickBackup(
+                        option,
+                        payload.rehearsal_song_id as number,
+                        coveringFor,
+                      )
+                    }
+                  />
+                ))}
+              </ul>
+              {payload.backup_others.length > 0 && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setShowAllBackup((previous) => !previous)}
+                    className="pt-1 text-xs text-rs-accent"
+                  >
+                    {showAllBackup ? 'Hide' : 'Show all members'}
+                  </button>
+                  {showAllBackup && (
+                    <ul className="flex flex-col">
+                      {payload.backup_others.map((option) => (
+                        <li key={option.person_id}>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onPickBackup(
+                                option,
+                                payload.rehearsal_song_id as number,
+                                coveringFor,
+                              )
+                            }
+                            className="flex w-full items-center justify-between rounded px-2 py-1 text-left text-sm hover:bg-rs-border/40"
+                          >
+                            <span>
+                              {nameFor.get(option.person_name) ??
+                                option.person_name}
+                            </span>
+                            <span className="text-xs text-rs-muted">
+                              Has not declared {cell.roleName}
+                              {option.has_conflict ? ' · Conflict' : ''}
+                            </span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </>
+              )}
+            </>
+          )}
+        </section>
+
+        <p className="text-xs text-rs-muted">
+          Who a Backup is covering for is shown to admins only.
+        </p>
+      </div>
     </ResponsiveDialog>
   )
 }
