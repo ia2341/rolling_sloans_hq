@@ -91,15 +91,16 @@ def _build_semester():
     return SemesterFactory()
 
 
-def _get_or_create_roles():
-    """Return the fixed `ROLE_NAMES` as Role rows, creating any that don't already exist.
+def _get_or_create_roles(names=ROLE_NAMES):
+    """Return `names` as Role rows, creating any that don't already exist.
 
     Role.name is globally unique and Role is not Semester-scoped (it's a
     semester-independent catalog per CONTEXT.md), so re-running this command
-    must fetch an existing Role by name rather than re-inserting it.
+    (or `seed_example_semester`, which passes its own, larger catalog) must
+    fetch an existing Role by name rather than re-inserting it.
     """
     roles = []
-    for name in ROLE_NAMES:
+    for name in names:
         role, _ = Role.objects.get_or_create(name=name, defaults={'is_active': True})
         roles.append(role)
     return roles
