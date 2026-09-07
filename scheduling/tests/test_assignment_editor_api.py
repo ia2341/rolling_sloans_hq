@@ -17,6 +17,7 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
+from identity.factories import PersonFactory
 from scheduling.factories import (
     BackupFactory,
     ConflictFactory,
@@ -655,3 +656,50 @@ class AvailableSongsTests(TestCase):
         _response, envelope = _get_json(self, _schedule_url(self.dress))
 
         self.assertNotIn('available_songs', envelope['data']['selected'])
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class AssignableRosterTests(TestCase):
+    """`/api/schedule/`'s rehearsal detail carries `roster`/`conflicted_person_ids` for an admin, the "+" picker's client-side candidate source (issue #399), and omits both for a member."""
+
+    def setUp(self):
+        """Build a Rehearsal with a rostered declarer, a rostered non-declarer, and a Conflict on the non-declarer."""
+        self.semester = SemesterFactory()
+        self.rehearsal = RehearsalFactory(semester=self.semester)
+        self.role = RoleFactory()
+        self.declarer = PersonFactory(name='Ada')
+        MembershipFactory(person=self.declarer, semester=self.semester)
+        PersonRoleFactory(person=self.declarer, role=self.role)
+        self.conflicted = PersonFactory(name='Bea')
+        MembershipFactory(person=self.conflicted, semester=self.semester)
+        ConflictFactory(rehearsal=self.rehearsal, person=self.conflicted)
+
+    def test_admin_payload_carries_roster_with_declared_role_ids(self):
+        """An admin's rehearsal detail lists every rostered Person plus their declared Role ids."""
+        admin_client(self)
+        select(self, self.semester)
+
+        _response, envelope = _get_json(self, _schedule_url(self.rehearsal))
+
+        roster = {entry['person_id']: entry for entry in envelope['data']['selected']['roster']}
+        self.assertEqual(roster[self.declarer.pk]['declared_role_ids'], [self.role.pk])
+        self.assertEqual(roster[self.conflicted.pk]['declared_role_ids'], [])
+
+    def test_admin_payload_carries_conflicted_person_ids(self):
+        """An admin's rehearsal detail lists the Person ids with a Conflict on this Rehearsal, bare ids only (ADR 0005)."""
+        admin_client(self)
+        select(self, self.semester)
+
+        _response, envelope = _get_json(self, _schedule_url(self.rehearsal))
+
+        self.assertEqual(envelope['data']['selected']['conflicted_person_ids'], [self.conflicted.pk])
+
+    def test_member_payload_has_no_roster_or_conflicted_person_ids_keys(self):
+        """A member's rehearsal detail carries neither admin-only key — `conflicted_person_ids` would otherwise reveal an unassigned Member's Conflict (ADR 0005)."""
+        member_client(self)
+        select(self, self.semester)
+
+        _response, envelope = _get_json(self, _schedule_url(self.rehearsal))
+
+        self.assertNotIn('roster', envelope['data']['selected'])
+        self.assertNotIn('conflicted_person_ids', envelope['data']['selected'])

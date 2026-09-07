@@ -771,6 +771,15 @@ def _serialize_schedule_list_row(row, *, viewer, conflict_rows, is_admin, pendin
     return data
 
 
+def _serialize_assignable_roster_entry(entry) -> dict:
+    """Return one `AssignableRosterEntry`: the Person by name and their declared Role ids, for the "+" picker to derive candidates client-side (issue #399)."""
+    return {
+        'person_id': entry.person.pk,
+        'person_name': entry.person.name,
+        'declared_role_ids': sorted(entry.declared_role_ids),
+    }
+
+
 def _serialize_rehearsal_detail(rehearsal, *, viewer, is_admin, today) -> dict:
     """Return `/api/schedule/`'s "This rehearsal" sub-view detail for `rehearsal` (issue #331, #338).
 
@@ -784,6 +793,17 @@ def _serialize_rehearsal_detail(rehearsal, *, viewer, is_admin, today) -> dict:
     is issue #406's song-swap dropdown source: every one of the Semester's
     setlist Songs, each already carrying the cells picking it would show, so
     a swap rerenders instantly with no second read of the grid either.
+    `roster`/`conflicted_person_ids`
+    (admin-only, issue #399) are the "+" picker's candidate source: paired
+    with the matrix rows' own entries (who's already assigned/backed-up
+    per cell), the client derives the whole picker with no per-cell fetch.
+    Both are admin-only for the same reason `addable_roles` is: a
+    non-admin viewer gets no Edit-assignments affordance at all
+    (`can_edit_assignments`), and `conflicted_person_ids` — unlike the
+    per-entry `has_conflict` marker every viewer already sees for an
+    assigned/backed-up Person — would otherwise reveal which *unassigned*
+    rostered Members declared a Conflict, a disclosure ADR-0005 reserves
+    for admin-only surfaces.
     """
     matrix = services.assignment_matrix_for(rehearsal)
     roles = matrix.roles
@@ -810,6 +830,11 @@ def _serialize_rehearsal_detail(rehearsal, *, viewer, is_admin, today) -> dict:
                 _serialize_available_song_option(option, is_admin=is_admin, conflicted_person_ids=conflicted_person_ids)
                 for option in services.available_song_options_for(rehearsal)
             ]
+        data['roster'] = [
+            _serialize_assignable_roster_entry(entry)
+            for entry in services.assignable_roster_for(rehearsal.semester)
+        ]
+        data['conflicted_person_ids'] = sorted(conflicted_person_ids)
     return data
 
 

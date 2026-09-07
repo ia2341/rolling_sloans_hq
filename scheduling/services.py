@@ -1676,6 +1676,42 @@ def _matrix_entries_by_song_role(songs, roles, rehearsal_song_ids):
 
 
 @dataclass(frozen=True)
+class AssignableRosterEntry:
+    """One Person eligible for the "+" picker (issue #399): rostered in a Semester, plus every Role they've declared."""
+
+    person: Person
+    declared_role_ids: frozenset[int]
+
+
+def assignable_roster_for(semester) -> list[AssignableRosterEntry]:
+    """Return `semester`'s roster plus each Person's declared Role ids, ordered by name.
+
+    Embedded once in the per-Rehearsal detail payload so the "+" picker can
+    derive its candidate lists client-side (issue #399) instead of a
+    per-cell fetch: combined with the matrix's own `SongRoleAssignment`/
+    `Backup` entries (already on the wire), which people are already
+    assigned or backed-up for a given cell is computable with no second
+    read. Candidate population mirrors `assignment_picker_for()`'s
+    (Membership in `semester`); `declared_role_ids` reads `PersonRole`
+    (issue #380, ADR-0014) — a standing, person-level fact, so the query
+    carries no Semester filter of its own.
+    """
+    people = Person.objects.filter(membership__semester=semester).order_by('name')
+    declared_role_ids_by_person_id: dict[int, set[int]] = {}
+    for person_id, role_id in PersonRole.objects.filter(
+        person__membership__semester=semester,
+    ).values_list('person_id', 'role_id'):
+        declared_role_ids_by_person_id.setdefault(person_id, set()).add(role_id)
+    return [
+        AssignableRosterEntry(
+            person=person,
+            declared_role_ids=frozenset(declared_role_ids_by_person_id.get(person.pk, ())),
+        )
+        for person in people
+    ]
+
+
+@dataclass(frozen=True)
 class AssignmentPickerOption:
     """One selectable row in the cell picker (issue #211): a rostered Person plus whether they declared the cell's Role."""
 
