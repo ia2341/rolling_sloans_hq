@@ -21,6 +21,7 @@ from identity.factories import PersonFactory
 from scheduling import services
 from scheduling.factories import (
     MembershipFactory,
+    PersonRoleFactory,
     RehearsalFactory,
     RehearsalPatternFactory,
     RehearsalSongFactory,
@@ -31,7 +32,7 @@ from scheduling.factories import (
     SongRoleAssignmentFactory,
     SongRoleRequirementFactory,
 )
-from scheduling.models import MembershipRole, Rehearsal, RehearsalTime, Role, Song
+from scheduling.models import Rehearsal, RehearsalTime, Role, Song
 
 fake = Faker()
 
@@ -124,20 +125,23 @@ def _build_people(count=12):
 
 
 def _build_memberships(semester, people, roles):
-    """Build one Membership per Person for `semester`, each declaring one or two Roles; return {person_id: membership}.
+    """Build one Membership per Person for `semester`, each declaring one or two person-level Roles; return {person_id: membership}.
 
     Roles are spread round-robin across People plus a Faker-chosen extra
     for some, so every Role has more than one Person able to fill it.
+    Declared as `PersonRole` (ADR-0014), not the retired `MembershipRole` —
+    a person's playable Roles are a durable fact about them, not something
+    this command resets each time it builds a fresh Semester.
     """
     memberships = {}
     for i, person in enumerate(people):
         membership = MembershipFactory(person=person, semester=semester)
         primary_role = roles[i % len(roles)]
-        MembershipRole.objects.create(membership=membership, role=primary_role)
+        PersonRoleFactory(person=person, role=primary_role)
         if fake.boolean(chance_of_getting_true=35):
             secondary_role = roles[(i + 1) % len(roles)]
             if secondary_role != primary_role:
-                MembershipRole.objects.create(membership=membership, role=secondary_role)
+                PersonRoleFactory(person=person, role=secondary_role)
         memberships[person.pk] = membership
     return memberships
 

@@ -1047,7 +1047,7 @@ def serialize_roster_edit_buffer(buffer: RosterEditBuffer) -> dict:
 
 
 def _serialize_roster_import_candidate(candidate) -> dict:
-    """Return one `RosterImportPerson`: the Person's name and the Roles they held last term, copied as fresh values (ADR 0001, issue #336)."""
+    """Return one `RosterImportPerson`: the Person's name and their current, person-level declared Roles (ADR-0014, issue #336)."""
     return {
         'id': candidate.person.pk,
         'name': candidate.person.name,

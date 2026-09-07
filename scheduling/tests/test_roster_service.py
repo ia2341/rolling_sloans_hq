@@ -9,7 +9,7 @@ from scheduling.factories import (
     RoleFactory,
     SemesterFactory,
 )
-from scheduling.models import Membership, MembershipRole, Role
+from scheduling.models import Membership, PersonRole, Role
 from scheduling.services import (
     RosterImportProposal,
     create_or_reactivate_role,
@@ -93,7 +93,7 @@ class ImportRosterFromSemesterTests(TestCase):
         target = SemesterFactory()
         membership = MembershipFactory(semester=prior)
         role = RoleFactory(name='Singer')
-        MembershipRole.objects.create(membership=membership, role=role)
+        PersonRole.objects.create(person=membership.person, role=role)
 
         proposal = import_roster_from_semester(target)
 
@@ -108,12 +108,12 @@ class ImportRosterFromSemesterTests(TestCase):
         prior = SemesterFactory()
         target = SemesterFactory()
         membership = MembershipFactory(semester=prior)
-        MembershipRole.objects.create(membership=membership, role=RoleFactory())
-        membership_role_count_before = MembershipRole.objects.count()
+        PersonRole.objects.create(person=membership.person, role=RoleFactory())
+        person_role_count_before = PersonRole.objects.count()
 
         import_roster_from_semester(target)
 
-        self.assertEqual(MembershipRole.objects.count(), membership_role_count_before)
+        self.assertEqual(PersonRole.objects.count(), person_role_count_before)
         self.assertTrue(Membership.objects.filter(pk=membership.pk).exists())
 
     def test_deactivated_people_are_excluded_silently(self):
@@ -127,29 +127,21 @@ class ImportRosterFromSemesterTests(TestCase):
 
         self.assertEqual(proposal.people, [])
 
-    def test_returned_roles_are_copies_not_references(self):
-        """Saving the proposal's Roles for the target Semester leaves the prior Semester's MembershipRole rows untouched (ADR 0001)."""
+    def test_returned_roles_reflect_the_persons_current_declarations(self):
+        """The proposal's Roles are the Person's own current `PersonRole` rows, not copies scoped to either Semester (ADR-0014)."""
         prior = SemesterFactory()
         target = SemesterFactory()
         membership = MembershipFactory(semester=prior)
         role = RoleFactory()
-        prior_membership_role = MembershipRole.objects.create(membership=membership, role=role)
+        person_role = PersonRole.objects.create(person=membership.person, role=role)
 
         proposal = import_roster_from_semester(target)
         [imported] = proposal.people
-        new_membership = MembershipFactory(semester=target, person=imported.person)
-        for imported_role in imported.roles:
-            MembershipRole.objects.create(membership=new_membership, role=imported_role)
+        MembershipFactory(semester=target, person=imported.person)
 
-        self.assertTrue(MembershipRole.objects.filter(pk=prior_membership_role.pk).exists())
-        self.assertEqual(
-            MembershipRole.objects.filter(membership__semester=prior).count(),
-            1,
-        )
-        self.assertEqual(
-            MembershipRole.objects.filter(membership__semester=target).count(),
-            1,
-        )
+        self.assertEqual(imported.roles, [role])
+        self.assertTrue(PersonRole.objects.filter(pk=person_role.pk).exists())
+        self.assertEqual(PersonRole.objects.filter(person=membership.person).count(), 1)
 
     def test_no_prior_semester_returns_empty_proposal(self):
         """With no earlier Semester to import from, the read returns an empty proposal rather than raising."""

@@ -22,7 +22,6 @@ from scheduling.models import (
     Conflict,
     ConflictWindow,
     Membership,
-    MembershipRole,
     PersonRole,
     Recording,
     Rehearsal,
@@ -3304,7 +3303,7 @@ def _prior_semester(semester: Semester) -> Semester | None:
 
 @dataclass(frozen=True)
 class RosterImportPerson:
-    """One Person `import_roster_from_semester()` proposes to roster, with the Roles to declare fresh (issue #225)."""
+    """One Person `import_roster_from_semester()` proposes to roster, with their current declared Roles for display (issue #225, ADR-0014)."""
 
     person: Person
     roles: list[Role]
@@ -3312,7 +3311,7 @@ class RosterImportPerson:
 
 @dataclass(frozen=True)
 class RosterImportProposal:
-    """The prior Semester's Roster, proposed as fresh declarations for a target Semester (issue #225).
+    """The prior Semester's Roster, proposed as candidates for a target Semester's Roster (issue #225).
 
     `source_semester` is None when there is nothing to import from, in
     which case `people` is empty.
@@ -3329,10 +3328,12 @@ def import_roster_from_semester(semester: Semester) -> RosterImportProposal:
     serve both the Roster editor's import button and the setup wizard's
     roster step; the write still goes through the batch save. Deactivated
     People are excluded silently (a Person who cannot log in cannot act on
-    a Membership), and the Roles returned are values to copy into fresh
-    `MembershipRole` declarations, never references into the prior
-    Semester's rows (ADR 0001) — editing this term can never rewrite last
-    term's history.
+    a Membership), and the Roles returned are each Person's current,
+    person-level `PersonRole` declarations (ADR-0014, retargeted from the
+    retired `MembershipRole` by #378 — nothing writes `MembershipRole` rows
+    anymore, so reading it here always proposed an empty Roles list) —
+    live facts about the Person, not references into the prior Semester's
+    rows, so importing never rewrites last term's history (ADR 0001).
     """
     source = _prior_semester(semester)
     if source is None:
@@ -3341,14 +3342,14 @@ def import_roster_from_semester(semester: Semester) -> RosterImportProposal:
         semester=source, person__is_active=True,
     ).select_related('person').prefetch_related(
         models.Prefetch(
-            'membershiprole_set',
-            queryset=MembershipRole.objects.select_related('role').order_by('role__name'),
+            'person__personrole_set',
+            queryset=PersonRole.objects.select_related('role').order_by('role__name'),
         ),
     ).order_by('person__name')
     people = [
         RosterImportPerson(
             person=membership.person,
-            roles=[membership_role.role for membership_role in membership.membershiprole_set.all()],
+            roles=[person_role.role for person_role in membership.person.personrole_set.all()],
         )
         for membership in memberships
     ]
