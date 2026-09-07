@@ -13,9 +13,11 @@ irreversible-side-effect convention: a limit in a view is a limit the next
 view forgets.
 """
 
+import logging
 from datetime import timedelta
 from urllib.parse import urljoin
 
+from anymail.exceptions import AnymailError
 from django.conf import settings
 from django.contrib.auth.tokens import default_token_generator
 from django.core.mail import send_mail
@@ -27,6 +29,8 @@ from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_encode
 
 from .models import AuthEmailRequest, LoginAttempt, Person
+
+logger = logging.getLogger(__name__)
 
 # Both limits are windowed row counts, not a cache (see LoginAttempt's and
 # AuthEmailRequest's docstrings for why). Thresholds are deliberately
@@ -176,7 +180,12 @@ def send_invite_email(person):
         person: The person who will receive the invitation.
 
     Raises:
-        EmailDeliveryError: If the invitation email is not delivered.
+        EmailDeliveryError: If the invitation email is not delivered — either
+            `send_mail()` itself raised (e.g. a rejected `RESEND_API_KEY`, an
+            unverified sender domain, or a Resend outage under the
+            production `anymail.backends.resend.EmailBackend`) or it
+            returned 0, meaning the backend accepted the call but delivered
+            to no recipient.
     """
     set_password_url = build_set_password_url(person)
     subject = 'You have been invited to Rolling Sloans'
@@ -184,7 +193,11 @@ def send_invite_email(person):
         'identity/invite_email.txt',
         {'person': person, 'set_password_url': set_password_url},
     )
-    sent_count = send_mail(subject, body, settings.DEFAULT_FROM_EMAIL, [person.email])
+    try:
+        sent_count = send_mail(subject, body, settings.DEFAULT_FROM_EMAIL, [person.email])
+    except AnymailError as error:
+        logger.error('invite email to %s failed to send via %s: %s', person.email, type(error).__name__, error)
+        raise EmailDeliveryError(f'invite email to {person.email} was not delivered') from error
     if not sent_count:
         raise EmailDeliveryError(f'invite email to {person.email} was not delivered')
 

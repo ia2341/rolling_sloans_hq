@@ -153,11 +153,30 @@ class PreviewMixin:
     http_method_names: ClassVar[list[str]] = ['post']
 
     def post(self, request, *args, **kwargs):
-        """Run `self.run_preview()` inside a transaction, then always roll it back."""
+        """Run `self.run_preview()` inside a transaction, then always roll it back.
+
+        `run_preview()` builds its response (via `write_response()`) while
+        the transaction is still open, so its `context` block — including
+        any Semester's `updated_at` an `apply_*()` bumped as part of the
+        real save it just performed — reflects mid-transaction state that
+        is about to be discarded. Re-deriving `context` after the rollback
+        (issue #409) keeps every Buffer surface's Preview response honest
+        about the real, post-rollback DB state without each surface having
+        to know it's being previewed.
+        """
         with transaction.atomic():
             response = self.run_preview(request, *args, **kwargs)
             transaction.set_rollback(True)
-        return response
+        return self._with_post_rollback_context(request, response)
+
+    def _with_post_rollback_context(self, request, response):
+        """Replace `response`'s `context` block with one built after the preview's rollback, leaving everything else untouched."""
+        if not isinstance(response, JsonResponse):
+            return response
+        payload = json.loads(response.content)
+        if 'context' in payload:
+            payload['context'] = self.build_context(request)
+        return JsonResponse(payload, status=response.status_code)
 
 
 class AdminPreviewApiView(PreviewMixin, AdminApiView, View):

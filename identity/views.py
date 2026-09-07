@@ -9,6 +9,7 @@ from .forms import PersonInviteForm
 from .models import Person
 from .services import (
     AlreadyHasPasswordError,
+    EmailDeliveryError,
     client_ip,
     invite_person,
     is_auth_email_rate_limited,
@@ -147,7 +148,11 @@ class PeopleView(AdminRequiredMixin, View):
         """Validate the invite form and create a Person via `invite_person()`, or re-render with errors."""
         form = PersonInviteForm(request.POST)
         if form.is_valid():
-            invite_person(name=form.cleaned_data['name'], email=form.cleaned_data['email'])
+            try:
+                invite_person(name=form.cleaned_data['name'], email=form.cleaned_data['email'])
+            except EmailDeliveryError:
+                messages.error(request, f"Couldn't send the invite email to {form.cleaned_data['email']}.")
+                return redirect('identity:people')
             messages.success(request, f"Invited {form.cleaned_data['email']}.")
             return redirect('identity:people')
         return render(request, self.template_name, self._build_context(form))
@@ -181,12 +186,14 @@ class PersonResendInviteView(AdminRequiredMixin, View):
     """
 
     def post(self, request, pk):
-        """Re-invite the target Person, or redirect with a refusal message if they already have a password."""
+        """Re-invite the target Person, or redirect with a refusal message if they already have a password or the email fails to send."""
         person = get_object_or_404(Person, pk=pk)
         try:
             resend_invite(person)
         except AlreadyHasPasswordError:
             messages.error(request, f'{person.email} has already set a password.')
+        except EmailDeliveryError:
+            messages.error(request, f"Couldn't send the invite email to {person.email}.")
         else:
             messages.success(request, f'Re-sent invite to {person.email}.')
         return redirect('identity:people')
