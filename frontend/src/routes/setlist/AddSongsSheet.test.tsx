@@ -64,6 +64,13 @@ describe('AddSongsSheet', () => {
     await screen.findByText(/Song One/)
     expect(screen.getByText(/Song Two/)).toBeInTheDocument()
     expect(screen.getByText('Already in this setlist')).toBeInTheDocument()
+
+    expect(screen.getByRole('checkbox', { name: /Song One/ })).toBeChecked()
+    const alreadyInSetlistCheckbox = screen.getByRole('checkbox', {
+      name: /Song Two/,
+    })
+    expect(alreadyInSetlistCheckbox).not.toBeChecked()
+    expect(alreadyInSetlistCheckbox).toBeDisabled()
   })
 
   it('shows the skip note when the fetch skips items', async () => {
@@ -134,7 +141,7 @@ describe('AddSongsSheet', () => {
     )
   })
 
-  it('disables "Add to the buffer" until at least one Spotify candidate is ticked, then adds only the ticked ones', async () => {
+  it('pre-checks every fetched candidate and enables "Confirm Songs" without any manual ticking', async () => {
     mockFetchOnce(200, {
       context: memberContext(),
       data: {
@@ -168,16 +175,14 @@ describe('AddSongsSheet', () => {
     await user.click(screen.getByRole('button', { name: 'Fetch' }))
     await screen.findByText(/Song One/)
 
-    expect(
-      screen.getByRole('button', { name: 'Add to the buffer' }),
-    ).toBeDisabled()
+    expect(screen.getByRole('checkbox', { name: /Song One/ })).toBeChecked()
+    expect(screen.getByRole('checkbox', { name: /Song Two/ })).toBeChecked()
+    expect(screen.getByRole('button', { name: 'Confirm Songs' })).toBeEnabled()
 
-    await user.click(screen.getByRole('checkbox', { name: /Song One/ }))
-    expect(
-      screen.getByRole('button', { name: 'Add to the buffer' }),
-    ).toBeEnabled()
+    await user.click(screen.getByRole('checkbox', { name: /Song Two/ }))
+    expect(screen.getByRole('button', { name: 'Confirm Songs' })).toBeEnabled()
 
-    await user.click(screen.getByRole('button', { name: 'Add to the buffer' }))
+    await user.click(screen.getByRole('button', { name: 'Confirm Songs' }))
 
     expect(onAddRows).toHaveBeenCalledTimes(1)
     const rows = onAddRows.mock.calls[0]?.[0] as EditRow[]
@@ -192,7 +197,55 @@ describe('AddSongsSheet', () => {
     })
   })
 
-  it('adds a by-hand row with the typed fields once "Add to the buffer" is pressed', async () => {
+  it('never adds a candidate already in the setlist, even though its disabled checkbox cannot be ticked', async () => {
+    mockFetchOnce(200, {
+      context: memberContext(),
+      data: {
+        songs: [
+          {
+            title: 'Song One',
+            artist: 'Artist One',
+            length: '3:00',
+            already_in_setlist: false,
+          },
+          {
+            title: 'Song Two',
+            artist: 'Artist Two',
+            length: '2:30',
+            already_in_setlist: true,
+          },
+        ],
+        skipped_count: 0,
+        skipped_reasons: {},
+        message: '',
+      },
+    })
+    const onAddRows = vi.fn()
+    const user = userEvent.setup()
+    renderOpen(onAddRows)
+
+    await user.type(
+      screen.getByLabelText('Playlist link'),
+      'https://open.spotify.com/playlist/abc',
+    )
+    await user.click(screen.getByRole('button', { name: 'Fetch' }))
+    await screen.findByText(/Song One/)
+
+    const alreadyInSetlistCheckbox = screen.getByRole('checkbox', {
+      name: /Song Two/,
+    })
+    expect(alreadyInSetlistCheckbox).toBeDisabled()
+    expect(alreadyInSetlistCheckbox).not.toBeChecked()
+
+    await user.click(screen.getByRole('button', { name: 'Confirm Songs' }))
+
+    expect(onAddRows).toHaveBeenCalledTimes(1)
+    const rows = onAddRows.mock.calls[0]?.[0] as EditRow[]
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ title: 'Song One' })
+  })
+
+  it('adds a by-hand row with the typed fields once "Confirm Songs" is pressed', async () => {
     const onAddRows = vi.fn()
     const user = userEvent.setup()
     renderOpen(onAddRows)
@@ -201,7 +254,7 @@ describe('AddSongsSheet', () => {
     await user.type(screen.getByLabelText('Title'), 'Hand Song')
     await user.type(screen.getByLabelText('Artist'), 'Hand Artist')
     await user.type(screen.getByLabelText('Length (M:SS)'), '4:15')
-    await user.click(screen.getByRole('button', { name: 'Add to the buffer' }))
+    await user.click(screen.getByRole('button', { name: 'Confirm Songs' }))
 
     expect(onAddRows).toHaveBeenCalledTimes(1)
     const rows = onAddRows.mock.calls[0]?.[0] as EditRow[]
@@ -215,15 +268,13 @@ describe('AddSongsSheet', () => {
     })
   })
 
-  it('disables "Add to the buffer" for a by-hand entry with a blank title', async () => {
+  it('disables "Confirm Songs" for a by-hand entry with a blank title', async () => {
     const user = userEvent.setup()
     renderOpen()
 
     await user.click(screen.getByRole('radio', { name: 'By hand' }))
 
-    expect(
-      screen.getByRole('button', { name: 'Add to the buffer' }),
-    ).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Confirm Songs' })).toBeDisabled()
   })
 
   it('Cancel resets the form without calling onAddRows', async () => {

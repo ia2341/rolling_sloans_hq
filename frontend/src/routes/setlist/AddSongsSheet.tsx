@@ -26,7 +26,7 @@ interface AddSongsSheetProps {
  * `ResponsiveDialog`, its two sources are sections behind a
  * `SegmentedControl` rather than three stacked forms. Nothing here writes
  * anything -- ticked Spotify candidates and a typed row both become
- * ordinary Buffer rows only once "Add to the buffer" is pressed, via
+ * ordinary Buffer rows only once "Confirm Songs" is pressed, via
  * `onAddRows`; the real write is still the toolbar's Save changes ->
  * the shared Save popup (#334).
  */
@@ -77,7 +77,13 @@ export function AddSongsSheet({
           return
         }
         setCandidates(envelope.data.songs)
-        setTicked(new Set())
+        setTicked(
+          new Set(
+            envelope.data.songs.flatMap((candidate, index) =>
+              candidate.already_in_setlist ? [] : [index],
+            ),
+          ),
+        )
         setSkippedNote(
           describeSkipped(
             envelope.data.skipped_count,
@@ -149,7 +155,7 @@ export function AddSongsSheet({
             disabled={!canAdd}
             className="rounded bg-rs-accent px-3 py-1.5 text-sm font-medium text-rs-accent-fg disabled:cursor-not-allowed disabled:opacity-50"
           >
-            Add to the buffer
+            Confirm Songs
           </button>
         </>
       }
@@ -212,6 +218,7 @@ export function AddSongsSheet({
                     <input
                       type="checkbox"
                       checked={ticked.has(index)}
+                      disabled={candidate.already_in_setlist}
                       onChange={() => toggleTicked(index)}
                     />
                     <span className="flex-1">
@@ -274,7 +281,7 @@ export function AddSongsSheet({
   )
 }
 
-/** Builds one brand-new `EditRow` for the sheet's "Add to the buffer" action. */
+/** Builds one brand-new `EditRow` for the sheet's "Confirm Songs" action. */
 function newRow(
   title: string,
   artist: string,
