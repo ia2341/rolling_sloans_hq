@@ -347,6 +347,45 @@ describe('Band', () => {
     ).not.toBeInTheDocument()
   })
 
+  it('shows a not-yet-invited badge on a member card for an admin viewer (issue #455)', async () => {
+    mockFetchOnce(200, {
+      context: adminContext(),
+      data: bandPayload({
+        members: [
+          {
+            id: 1,
+            name: 'Sam Rivera',
+            roles: ['Lead Vocals'],
+            song_count: 0,
+            invite_status: 'not_yet_invited',
+          },
+        ],
+        member_count: 1,
+      }),
+    })
+
+    renderShell(<Band />, ['/members'])
+
+    expect(await screen.findByText('not yet invited')).toBeInTheDocument()
+  })
+
+  it('never shows an invite-status badge for a non-admin viewer', async () => {
+    mockFetchOnce(200, {
+      context: memberContext(),
+      data: bandPayload({
+        members: [
+          { id: 1, name: 'Sam Rivera', roles: ['Lead Vocals'], song_count: 0 },
+        ],
+        member_count: 1,
+      }),
+    })
+
+    renderShell(<Band />, ['/members'])
+
+    await screen.findByText('Sam Rivera')
+    expect(screen.queryByText('not yet invited')).not.toBeInTheDocument()
+  })
+
   it('does nothing when Edit roster is clicked with no Semester selected', async () => {
     const fetchSpy = stubFetchSequence([
       {

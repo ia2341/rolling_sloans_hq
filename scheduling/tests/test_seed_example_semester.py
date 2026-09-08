@@ -71,19 +71,21 @@ class SeedExampleSemesterTests(TestCase):
                 f'{assignment} has no matching SongRoleRequirement',
             )
 
-        # Every seeded Person has a usable password hash (so the Band page's
-        # active_roster_for() doesn't hide them as invited-but-not-active),
-        # but it's a random, never-surfaced value nobody can log in with.
+        # Every seeded Person has a usable password hash (so the demo roster
+        # reads as 'accepted' rather than badging every row "not yet
+        # invited" on the Band page and Roster editor), but it's a random,
+        # never-surfaced value nobody can log in with.
         for membership in memberships:
             self.assertTrue(membership.person.has_usable_password())
             self.assertFalse(membership.person.check_password('password'))
 
-        # The full roster actually appears through the Band page's own query,
-        # not just via a raw Membership filter (regression: seeding with
-        # set_unusable_password() previously passed every check above while
-        # leaving the Band page rendering zero members).
+        # The full roster actually appears through the Band page's own query
+        # (issue #455: every Membership is included regardless of invite
+        # state, so this is really just confirming the seeder produced real
+        # Membership rows -- but it's kept as a guard against a future
+        # reintroduction of a password-gated roster filter).
         self.assertEqual(
-            services.active_roster_for(memberships).count(), memberships.count(),
+            services.roster_for(memberships).count(), memberships.count(),
         )
 
         # No admin account is created.

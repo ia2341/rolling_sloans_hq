@@ -9,12 +9,19 @@
  * paper over that with an optional-and-nullable union.
  */
 
-/** One row of the Band page's Roster (issue #333). */
+/**
+ * One row of the Band page's Roster (issue #333). `invite_status` (issue
+ * #455) is present only for an admin viewer -- every Membership is on
+ * this list regardless of invite state, so an admin needs a way to tell
+ * a not-yet-invited row apart from an active one; a non-admin viewer has
+ * no business seeing a teammate's invite lifecycle.
+ */
 export interface RosterEntry {
   id: number
   name: string
   roles: string[]
   song_count: number
+  invite_status?: InviteStatus
 }
 
 /**

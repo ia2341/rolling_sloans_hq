@@ -39,8 +39,17 @@ function dismissedChecklistKey(semesterId: number): string {
  * keep navigating to the plain destination: dates already gets the
  * pattern modal offered by the `rehearsal_pattern` row, and there's
  * nothing single to open for casting.
+ *
+ * Only applies once the step isn't done yet (issue #455) -- once
+ * `item.is_done`, the row reads "Review", and a "Review" should land on
+ * the plain read surface rather than silently re-entering the same edit
+ * workflow "Get Started" uses. Before this, both buttons produced the
+ * identical URL, so "Review" only ever looked like a different, more
+ * correct view by coincidence of which read model an edit-mode fetch
+ * happened to use.
  */
 function checklistLinkFor(item: SetupChecklistItem): string {
+  if (item.is_done) return item.destination
   switch (item.key) {
     case 'roster':
       return `${item.destination}?intent=edit-roster`

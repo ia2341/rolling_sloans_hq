@@ -32,18 +32,21 @@ import {
 } from './band/rosterEditModel'
 
 /**
- * `/members/` (issue #366): the viewing Semester's active Roster as a
+ * `/members/` (issue #366): the viewing Semester's whole Roster as a
  * single filterable card grid, fed by one `GET /api/members/` round trip.
  * Renders nothing until that response arrives, mirroring `Setlist`/`Song`.
+ * Every Membership shows regardless of invite state (issue #455) -- an
+ * admin sees a "not yet invited"/"invited · not active yet" badge on a
+ * not-yet-active row rather than that row being hidden outright.
  *
  * For an admin, "Edit roster" (issue #374, backed by #336's Roster edit
  * surface) flips this same page into a Pending-Buffer grid rather than
  * navigating anywhere else -- exactly `Setlist`'s edit-mode shape. The
- * editor's own richer read model (`GET /api/members/roster/`, invited and
- * inactive rows included) is fetched lazily, only once editing starts,
- * since the plain read view above never needs it. A `?intent=edit-roster`
- * query param (from Home's setup checklist) starts editing automatically
- * once the plain read has landed, then strips itself.
+ * editor's own read model (`GET /api/members/roster/`) is fetched lazily,
+ * only once editing starts, since the plain read view above never needs
+ * it. A `?intent=edit-roster` query param (from Home's setup checklist)
+ * starts editing automatically once the plain read has landed, then
+ * strips itself.
  */
 export function Band() {
   usePageTitle('Band')
@@ -339,7 +342,11 @@ export function Band() {
               onToggle={toggleBucket}
             />
           )}
-          <BandGrid members={visibleMembers} viewerId={appContext?.viewer.id} />
+          <BandGrid
+            members={visibleMembers}
+            viewerId={appContext?.viewer.id}
+            isAdmin={isAdmin}
+          />
         </>
       )}
 
@@ -452,9 +459,11 @@ export const BAND_GRID_MAX_WIDTH_PX = 6 * 240 + 5 * 12
 function BandGrid({
   members,
   viewerId,
+  isAdmin,
 }: {
   members: RosterEntry[]
   viewerId?: number
+  isAdmin: boolean
 }) {
   if (members.length === 0) {
     return (
@@ -485,6 +494,16 @@ function BandGrid({
             <p className="line-clamp-2 pt-1 text-sm text-rs-muted">
               {member.roles.length > 0 ? member.roles.join(', ') : '—'}
             </p>
+            {isAdmin && member.invite_status === 'not_yet_invited' && (
+              <span className="mt-1 inline-block rounded-full border border-dashed border-rs-border px-2 py-0.5 text-xs text-rs-muted">
+                not yet invited
+              </span>
+            )}
+            {isAdmin && member.invite_status === 'invited' && (
+              <span className="mt-1 inline-block rounded-full border border-dashed border-rs-border px-2 py-0.5 text-xs text-rs-muted">
+                invited · not active yet
+              </span>
+            )}
           </Link>
         </li>
       ))}

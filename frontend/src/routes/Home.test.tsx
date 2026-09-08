@@ -358,7 +358,9 @@ describe('Home', () => {
     const rosterRow = screen.getByText('1. Roster').closest('li') as HTMLElement
     const rosterLink = within(rosterRow).getByRole('link', { name: 'Review' })
     expect(rosterLink).toBeInTheDocument()
-    expect(rosterLink).toHaveAttribute('href', '/members?intent=edit-roster')
+    // A done step's "Review" lands on the plain read surface (issue #455),
+    // never silently re-entering the edit workflow "Get Started" uses.
+    expect(rosterLink).toHaveAttribute('href', '/members')
 
     const setlistRow = screen
       .getByText('2. Setlist')

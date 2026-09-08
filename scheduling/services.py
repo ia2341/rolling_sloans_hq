@@ -9,7 +9,6 @@ from itertools import pairwise, permutations
 from uuid import uuid4
 
 from botocore.exceptions import BotoCoreError, ClientError
-from django.contrib.auth.hashers import UNUSABLE_PASSWORD_PREFIX
 from django.core.files.storage import storages
 from django.db import IntegrityError, models, transaction
 from django.db.models import Count, Q, Sum
@@ -812,18 +811,6 @@ def roster_for(memberships):
             distinct=True,
         ),
     ).order_by('person__name')
-
-
-def active_roster_for(memberships):
-    """Return `roster_for(memberships)`, excluding anyone who hasn't set a password yet (issue #333).
-
-    "Active" means `has_usable_password()` — a Person who has completed
-    their invite — never `Person.is_active` (the separate Django-auth
-    flag). An invited-but-not-yet-active Person stays off the Band page's
-    read surface; they appear only in the Roster editor (#336), which is
-    the only place that needs to offer "Invite again".
-    """
-    return roster_for(memberships).exclude(person__password__startswith=UNUSABLE_PASSWORD_PREFIX)
 
 
 @dataclass(frozen=True)
