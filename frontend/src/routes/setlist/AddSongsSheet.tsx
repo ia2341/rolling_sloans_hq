@@ -40,7 +40,7 @@ interface AddSongsSheetProps {
  * `SegmentedControl` rather than three stacked forms. Nothing here writes
  * anything -- ticked Spotify candidates and one or more typed by-hand cards
  * (issue #458, staged via the single-open `Accordion`) both become ordinary
- * Buffer rows only once the source's confirm button is pressed, via
+ * Buffer rows only once "Confirm Songs" is pressed, via
  * `onAddRows`; the real write is still the toolbar's Save changes ->
  * the shared Save popup (#334).
  */
@@ -112,7 +112,13 @@ export function AddSongsSheet({
           return
         }
         setCandidates(envelope.data.songs)
-        setTicked(new Set())
+        setTicked(
+          new Set(
+            envelope.data.songs.flatMap((candidate, index) =>
+              candidate.already_in_setlist ? [] : [index],
+            ),
+          ),
+        )
         setSkippedNote(
           describeSkipped(
             envelope.data.skipped_count,
@@ -198,7 +204,7 @@ export function AddSongsSheet({
             disabled={!canAdd}
             className="rounded bg-rs-accent px-3 py-1.5 text-sm font-medium text-rs-accent-fg disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {source === 'byhand' ? 'Confirm Songs' : 'Add to the buffer'}
+            Confirm Songs
           </button>
         </>
       }
@@ -261,6 +267,7 @@ export function AddSongsSheet({
                     <input
                       type="checkbox"
                       checked={ticked.has(index)}
+                      disabled={candidate.already_in_setlist}
                       onChange={() => toggleTicked(index)}
                     />
                     <span className="flex-1">
@@ -356,7 +363,7 @@ function handCardSummary(card: HandCard, index: number): string {
   return card.artist.trim() ? `${card.title} · ${card.artist}` : card.title
 }
 
-/** Builds one brand-new `EditRow` for the sheet's confirm action, whichever source it came from. */
+/** Builds one brand-new `EditRow` for the sheet's "Confirm Songs" action, whichever source it came from. */
 function newRow(
   title: string,
   artist: string,
