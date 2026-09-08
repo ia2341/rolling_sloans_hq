@@ -291,14 +291,8 @@ export function NewSemesterDialog({
             What happens when you create it
           </h3>
           <ul className="list-disc space-y-0.5 pl-4">
-            <li>
-              A new draft Semester is created — no member sees it until it's
-              published.
-            </li>
-            <li>
-              You'll be switched to viewing it, so the next thing you edit lands
-              on it.
-            </li>
+            <li>A new draft Semester is created, hidden until published.</li>
+            <li>You'll be switched to viewing it, so edits land there.</li>
             <li>It starts with no roster, no setlist, and no rehearsals.</li>
           </ul>
         </div>
