@@ -3848,6 +3848,21 @@ class StaleSetlistSemesterError(ValueError):
 
 
 @dataclass(frozen=True)
+class SetlistRoleGroupCount:
+    """One Role Group → target headcount entry, staged on a brand-new setlist row (issue #461).
+
+    Only meaningful on a row with `song_id=None` — an existing Song
+    already has its own Requirements editor (`RequirementsEditor`,
+    issue #339), so this is the add-songs pipeline's own, coarser input:
+    an admin picks a Role Group ("Vocals: 3") rather than one of its
+    possibly several flat Roles.
+    """
+
+    role_group_id: int
+    count: int
+
+
+@dataclass(frozen=True)
 class SetlistEditRow:
     """One setlist edit grid row's target state, in final concert-position order: an existing Song's edit, or a brand-new one (issue #321).
 
@@ -3859,6 +3874,11 @@ class SetlistEditRow:
     used to read off `song_order` by hand. Filled identically by a
     hand-edit (from a bound `SetlistEditFormSet`) and a Spotify import
     (`SetlistImportView`'s unsaved rows, appended client-side before Save).
+
+    `role_group_counts` (issue #461) names the Role Group → count entries
+    an admin staged for a brand-new row while adding it — empty for every
+    existing-Song row, which carries its own Requirements independently
+    of this Buffer.
     """
 
     song_id: int | None
@@ -3866,6 +3886,7 @@ class SetlistEditRow:
     artist: str
     length: timedelta
     notes: str
+    role_group_counts: tuple[SetlistRoleGroupCount, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -3918,6 +3939,12 @@ def apply_setlist_edits(buffer: SetlistEditBuffer, *, viewing_semester: Semester
     of its own — `delete_songs_with_recordings()` registers its Recording
     object-storage cleanup with `transaction.on_commit()` itself — so
     nothing here needs its own `on_commit()`.
+
+    A brand-new row's `role_group_counts` (issue #461) becomes one
+    `SongRoleRequirement` per entry, created against the new Song right
+    after it's saved (`_create_role_group_requirements()`) — an existing
+    row's own Requirements are left alone entirely, since this Buffer
+    carries no opinion about them.
     """
     if viewing_semester is None or buffer.semester_id != viewing_semester.pk:
         raise WrongViewingSemesterError(
@@ -3934,8 +3961,11 @@ def apply_setlist_edits(buffer: SetlistEditBuffer, *, viewing_semester: Semester
                 list(Song.objects.filter(semester=semester, pk__in=buffer.deleted_song_ids))
             )
 
-        ordered_ids = [_apply_setlist_edit_row(row, semester).pk for row in buffer.rows]
-        reorder_songs(semester, ordered_ids)
+        songs = [_apply_setlist_edit_row(row, semester) for row in buffer.rows]
+        for row, song in zip(buffer.rows, songs, strict=True):
+            if row.song_id is None and row.role_group_counts:
+                _create_role_group_requirements(song, row.role_group_counts)
+        reorder_songs(semester, [song.pk for song in songs])
 
         semester.updated_at = timezone.now()
         semester.save(update_fields=['updated_at'])
@@ -3954,6 +3984,45 @@ def _apply_setlist_edit_row(row: SetlistEditRow, semester: Semester) -> Song:
     song.position = 0
     song.save()
     return song
+
+
+def representative_role_for_group(role_group_id: int) -> Role | None:
+    """Return the one Role a Role Group's group-level count creates a SongRoleRequirement against (issue #461).
+
+    ADR-0016 named two candidate mappings from a group-level count to
+    concrete `SongRoleRequirement` rows — "one canonical/representative
+    Role per group" or "spread the count across every Role a group
+    contains" — and left the choice to this follow-up ticket. This
+    resolves it as the former: the group's active Roles ordered by name,
+    first one. Spreading the same count across every Role in a group
+    (e.g. all four seeded Vocals Roles) would multiply the admin's
+    intended headcount by the group's own size, which the Requirements
+    editor's fill-status tracking (`fill_status_for()`) would then read
+    as four separate targets rather than one; a single representative
+    Role keeps "Vocals: 3" meaning exactly one target of 3, reassignable
+    to a more specific Role later through the ordinary Requirements
+    editor. Returns `None` if the group has no active Role to stand in
+    for it (an edge case `build_setlist_buffer_from_request()` already
+    validates against, so this should not arise from the wire).
+    """
+    return Role.objects.filter(group_id=role_group_id, is_active=True).order_by('name').first()
+
+
+def _create_role_group_requirements(song: Song, role_group_counts: tuple[SetlistRoleGroupCount, ...]) -> None:
+    """Create one SongRoleRequirement per `role_group_counts` entry against `song` (issue #461).
+
+    Called only for a brand-new row, right after its Song is saved.
+    Silently skips an entry whose group resolves no active Role
+    (`representative_role_for_group()` returning `None`) rather than
+    raising — the wire-level validation this can't survive is a
+    `build_setlist_buffer_from_request()` field error, not this
+    function's problem to re-check.
+    """
+    for entry in role_group_counts:
+        role = representative_role_for_group(entry.role_group_id)
+        if role is None:
+            continue
+        SongRoleRequirement.objects.create(song=song, role=role, count=entry.count)
 
 
 @dataclass(frozen=True)
@@ -3977,6 +4046,22 @@ class SetlistSongDeletion:
 
 
 @dataclass(frozen=True)
+class SetlistRoleRequirementAddition:
+    """One brand-new SongRoleRequirement a Setlist edit Buffer's `role_group_counts` would create (issue #461).
+
+    `role_name` names the representative Role `representative_role_for_group()`
+    resolved the staged Role Group to, not the group itself — the Save
+    popup's "What changes" section should read the same concrete Role
+    the Requirements editor would show afterward, not a group name that
+    never becomes its own database row.
+    """
+
+    song_title: str
+    role_name: str
+    count: int
+
+
+@dataclass(frozen=True)
 class SetlistEditFallout:
     """Every observable consequence of a Setlist edit Buffer, computed without committing it (issue #321, ADR 0008).
 
@@ -3990,7 +4075,10 @@ class SetlistEditFallout:
     Save. `reordered` is true iff the Buffer's final concert-position
     order differs from the surviving Songs' current order — reported as a
     quiet line, since a reorder changes concert position only and never
-    touches any Rehearsal's Running Order.
+    touches any Rehearsal's Running Order. `pending_role_requirements`
+    (issue #461) names every SongRoleRequirement a new row's staged Role
+    Group counts would create — never destructive, so it never escalates
+    into `loud`.
     """
 
     is_blocked: bool
@@ -4000,6 +4088,7 @@ class SetlistEditFallout:
     pending_edits: list[str]
     reordered: bool
     pending_deletions: list[SetlistSongDeletion]
+    pending_role_requirements: list[SetlistRoleRequirementAddition]
     loud: list[str]
     quiet: list[str]
 
@@ -4014,6 +4103,7 @@ def _blocked_setlist_fallout(block_message: str, *, is_stale: bool = False) -> S
         pending_edits=[],
         reordered=False,
         pending_deletions=[],
+        pending_role_requirements=[],
         loud=[],
         quiet=[],
     )
@@ -4090,6 +4180,18 @@ def preview_setlist_edits(buffer: SetlistEditBuffer, *, viewing_semester: Semest
         if (before.title, before.artist, before.length, before.notes) != (row.title, row.artist, row.length, row.notes):
             pending_edits.append(f'{before.title} → {row.title}' if before.title != row.title else row.title)
 
+    pending_role_requirements = []
+    for row in buffer.rows:
+        if row.song_id is not None or not row.role_group_counts:
+            continue
+        for entry in row.role_group_counts:
+            role = representative_role_for_group(entry.role_group_id)
+            if role is None:
+                continue
+            pending_role_requirements.append(
+                SetlistRoleRequirementAddition(song_title=row.title, role_name=role.name, count=entry.count)
+            )
+
     final_order = [row.song_id for row in buffer.rows if row.song_id is not None]
     reordered = final_order != surviving_current_order
 
@@ -4120,6 +4222,7 @@ def preview_setlist_edits(buffer: SetlistEditBuffer, *, viewing_semester: Semest
         pending_edits=pending_edits,
         reordered=reordered,
         pending_deletions=pending_deletions,
+        pending_role_requirements=pending_role_requirements,
         loud=loud,
         quiet=quiet,
     )

@@ -8,13 +8,16 @@ from django.test import TestCase
 from scheduling.factories import (
     RecordingFactory,
     RehearsalSongFactory,
+    RoleFactory,
+    RoleGroupFactory,
     SemesterFactory,
     SongFactory,
 )
-from scheduling.models import RehearsalSong, Song
+from scheduling.models import RehearsalSong, Song, SongRoleRequirement
 from scheduling.services import (
     SetlistEditBuffer,
     SetlistEditRow,
+    SetlistRoleGroupCount,
     StaleSetlistSemesterError,
     WrongViewingSemesterError,
     apply_setlist_edits,
@@ -135,6 +138,67 @@ class ApplySetlistEditsTests(TestCase):
 
         self.first.refresh_from_db()
         self.assertEqual(self.first.title, 'First')
+
+    def test_new_song_with_role_group_counts_creates_song_role_requirements(self):
+        """A new row's role_group_counts each create a SongRoleRequirement against the representative Role (issue #461)."""
+        group = RoleGroupFactory()
+        alphabetically_first_role = RoleFactory(name='Alpha Vocalist', group=group)
+        RoleFactory(name='Zed Vocalist', group=group)
+        buffer = self._buffer([
+            self._row(self.first), self._row(self.second),
+            self._row(
+                title='Brand New', artist='New Artist', length=timedelta(minutes=2), notes='',
+                role_group_counts=(SetlistRoleGroupCount(role_group_id=group.pk, count=3),),
+            ),
+        ])
+
+        apply_setlist_edits(buffer, viewing_semester=self.semester)
+
+        added = Song.objects.get(title='Brand New')
+        requirement = SongRoleRequirement.objects.get(song=added)
+        self.assertEqual(requirement.role, alphabetically_first_role)
+        self.assertEqual(requirement.count, 3)
+
+    def test_new_song_with_no_role_group_counts_creates_no_requirements(self):
+        """A new row with an empty role_group_counts creates no SongRoleRequirement at all (issue #461)."""
+        buffer = self._buffer([
+            self._row(self.first), self._row(self.second),
+            self._row(title='Brand New', artist='New Artist', length=timedelta(minutes=2), notes=''),
+        ])
+
+        apply_setlist_edits(buffer, viewing_semester=self.semester)
+
+        added = Song.objects.get(title='Brand New')
+        self.assertFalse(SongRoleRequirement.objects.filter(song=added).exists())
+
+    def test_multiple_new_songs_each_get_their_own_role_requirements(self):
+        """Two new rows with different role_group_counts each get their own, independent SongRoleRequirements."""
+        vocals_group = RoleGroupFactory()
+        vocals_role = RoleFactory(name='Lead Vocalist', group=vocals_group)
+        guitar_group = RoleGroupFactory()
+        guitar_role = RoleFactory(name='Lead Guitarist', group=guitar_group)
+        buffer = self._buffer([
+            self._row(self.first), self._row(self.second),
+            self._row(
+                title='Song One', artist='A', length=timedelta(minutes=2), notes='',
+                role_group_counts=(SetlistRoleGroupCount(role_group_id=vocals_group.pk, count=2),),
+            ),
+            self._row(
+                title='Song Two', artist='B', length=timedelta(minutes=2), notes='',
+                role_group_counts=(SetlistRoleGroupCount(role_group_id=guitar_group.pk, count=1),),
+            ),
+        ])
+
+        apply_setlist_edits(buffer, viewing_semester=self.semester)
+
+        song_one = Song.objects.get(title='Song One')
+        song_two = Song.objects.get(title='Song Two')
+        self.assertEqual(
+            SongRoleRequirement.objects.get(song=song_one).role, vocals_role,
+        )
+        self.assertEqual(
+            SongRoleRequirement.objects.get(song=song_two).role, guitar_role,
+        )
 
     def test_stale_stamp_raises_and_writes_nothing(self):
         """A Buffer carrying an older Semester stamp than the current one is rejected, writing nothing."""
