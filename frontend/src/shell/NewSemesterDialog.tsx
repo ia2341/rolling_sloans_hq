@@ -20,12 +20,12 @@ interface NewSemesterDialogProps {
 
 /** A reasonable starting point for a brand-new install with no prior Semester to read timing defaults off of. */
 const FALLBACK_TIMING_DEFAULTS: SemesterTimingDefaults = {
-  default_rehearsal_duration_minutes: 120,
-  default_setup_grace_minutes: 15,
-  default_teardown_grace_minutes: 15,
-  default_song_slot_count: 3,
-  default_arrival_buffer_minutes: 10,
-  default_departure_buffer_minutes: 10,
+  default_rehearsal_duration_minutes: 240,
+  default_setup_grace_minutes: 10,
+  default_teardown_grace_minutes: 10,
+  default_song_slot_count: 6,
+  default_arrival_buffer_minutes: 5,
+  default_departure_buffer_minutes: 5,
 }
 
 const TIMING_FIELDS: Array<{
