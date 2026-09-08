@@ -8,6 +8,14 @@ The domain model for the Rolling Sloans band website: tracking who's in the band
 A band member's persistent identity (name, login), independent of any one semester. The same Person can span multiple semesters across their MBA tenure.
 _Avoid_: Member, User
 
+**Deactivate**:
+The reversible act of taking a Person out of active use (ADR-0017) — blocks login, immediately ends any live session, and hides them from current-facing views — without discarding anything: their historical Role Assignments, Memberships, and Recordings stay exactly as they were, and the act reverses via Reactivate. Distinct from a Semester's Delete (ADR-0011), a hard, cascading act with no way back; Deactivate discards nothing and always can be undone.
+_Avoid_: Delete, Remove, Ban *(all imply either destruction or a punitive framing this act doesn't carry)*
+
+**Reactivate**:
+The act of reversing a Deactivate — restores login and current-view visibility. Never touches anything a Deactivate didn't touch: admin status, Roles, and Memberships all remain exactly as they were throughout.
+_Avoid_: Restore, Undelete *(both imply something was destroyed and is being recovered, which never happened)*
+
 **Semester**:
 One term (e.g. "Fall 2026") that gets its own fresh roster, setlist, and rehearsal schedule — the unit at which the band "refreshes." A Semester nobody has Published is a **draft**: it exists, an admin can build it out, and no member sees it.
 _Avoid_: Term, Season
