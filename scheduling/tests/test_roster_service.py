@@ -62,6 +62,11 @@ class CreateOrReactivateRoleTests(TestCase):
 
 
 class CreateOrReactivateRoleCommitsIndependentlyTests(TransactionTestCase):
+    # Restores the seeded RoleGroup catalog (issue #457) after this test's
+    # teardown flush, which would otherwise truncate it for every test that
+    # runs after this one in the same process.
+    serialized_rollback = True
+
     def test_role_survives_a_later_batch_transaction_being_abandoned(self):
         """A Role created here is unaffected by a later, unrelated transaction that rolls back.
 

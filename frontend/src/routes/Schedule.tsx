@@ -9,6 +9,7 @@ import type {
   DeclarationType,
   MatrixRow,
   RehearsalDetail,
+  RoleLegendEntry,
   SchedulePayload,
   ScheduleListRow,
 } from '../api/scheduleTypes'
@@ -577,7 +578,7 @@ function DeclareDialog({
 /** Adapts `MatrixRow[]` into `CastGridRow[]` — the shape the Setlist table and this read-only grid now share (issue: UI overhaul round 2, item 11). */
 function matrixRowsToCastGridRows(
   rows: MatrixRow[],
-  roles: { id: number; name: string; code: string }[],
+  roles: RoleLegendEntry[],
 ): CastGridRow[] {
   const roleById = new Map(roles.map((role) => [role.id, role]))
   return rows.map((row) => ({
@@ -614,7 +615,7 @@ function AssignmentGrid({
   canEditAssignments,
   onEditRehearsal,
 }: {
-  roles: { id: number; name: string; code: string }[]
+  roles: RoleLegendEntry[]
   rows: MatrixRow[]
   isDress: boolean
   viewerId?: number

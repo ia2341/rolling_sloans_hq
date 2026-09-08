@@ -102,7 +102,9 @@ def _get_or_create_roles(names=ROLE_NAMES):
     """
     roles = []
     for name in names:
-        role, _ = Role.objects.get_or_create(name=name, defaults={'is_active': True})
+        role, _ = Role.objects.get_or_create(
+            name=name, defaults={'is_active': True, 'group': services.default_role_group_for(name)},
+        )
         roles.append(role)
     return roles
 

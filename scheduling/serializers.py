@@ -221,8 +221,24 @@ def serialize_semester_defaults_fallout(fallout: SemesterDefaultsFallout) -> dic
 
 
 def _serialize_role_legend_entry(role, codes):
-    """Return one Role as a `roles` legend entry: `id`, `name`, `code`."""
-    return {'id': role.pk, 'name': role.name, 'code': codes[role.id]}
+    """Return one Role as a `roles` legend entry: `id`, `name`, `code`, and its RoleGroup (issue #457).
+
+    `group_name`/`group_order`/`group_is_catch_all` replace the frontend's
+    retired `classifyRole()` keyword match as the Setlist/Schedule cast
+    tables' column-grouping source: `group_order` fixes column order
+    (independent of `group_name`'s alphabetical order), and
+    `group_is_catch_all` tells the client to render this Role its own
+    column rather than merging it with its groupmates, mirroring how an
+    unmatched Role name used to get its own column.
+    """
+    return {
+        'id': role.pk,
+        'name': role.name,
+        'code': codes[role.id],
+        'group_name': role.group.name,
+        'group_order': role.group.display_order,
+        'group_is_catch_all': role.group.is_catch_all,
+    }
 
 
 def _serialize_cast_performer(performer):

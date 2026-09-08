@@ -4,12 +4,104 @@ import {
   buildCastGridColumns,
   visibleCastGridColumns,
   type CastGridColumnRow,
+  type CastGridRole,
 } from './roleColumns'
+
+describe('buildCastGridColumns', () => {
+  it('merges every Role sharing a non-catch-all group into one column', () => {
+    const roles: CastGridRole[] = [
+      {
+        id: 1,
+        name: 'Male Lead Vocalist',
+        group_name: 'Vocals',
+        group_order: 0,
+        group_is_catch_all: false,
+      },
+      {
+        id: 2,
+        name: 'Female Backing Vocalist',
+        group_name: 'Vocals',
+        group_order: 0,
+        group_is_catch_all: false,
+      },
+    ]
+
+    const columns = buildCastGridColumns(roles)
+
+    expect(columns).toEqual([
+      { key: 'group-Vocals', label: 'Vocals', roleIds: [1, 2] },
+    ])
+  })
+
+  it('gives a catch-all-group Role its own column, keyed and labeled by the Role itself', () => {
+    const roles: CastGridRole[] = [
+      {
+        id: 5,
+        name: 'Tambourine',
+        group_name: 'Other',
+        group_order: 8,
+        group_is_catch_all: true,
+      },
+    ]
+
+    const columns = buildCastGridColumns(roles)
+
+    expect(columns).toEqual([
+      { key: 'role-5', label: 'Tambourine', roleIds: [5] },
+    ])
+  })
+
+  it('orders merged group columns by group_order, ahead of every catch-all Role column', () => {
+    const roles: CastGridRole[] = [
+      {
+        id: 1,
+        name: 'Tambourine',
+        group_name: 'Other',
+        group_order: 8,
+        group_is_catch_all: true,
+      },
+      {
+        id: 2,
+        name: 'Drummer',
+        group_name: 'Drums',
+        group_order: 3,
+        group_is_catch_all: false,
+      },
+      {
+        id: 3,
+        name: 'Lead Vocalist',
+        group_name: 'Vocals',
+        group_order: 0,
+        group_is_catch_all: false,
+      },
+    ]
+
+    const columns = buildCastGridColumns(roles)
+
+    expect(columns.map((column) => column.label)).toEqual([
+      'Vocals',
+      'Drums',
+      'Tambourine',
+    ])
+  })
+})
 
 describe('visibleCastGridColumns', () => {
   const roles = [
-    { id: 1, name: 'Singer' },
-    { id: 2, name: 'Drummer' },
+    {
+      id: 1,
+      name: 'Singer',
+      group_name: 'Other',
+      group_order: 8,
+      group_is_catch_all: true,
+    },
+    {
+      id: 2,
+      name: 'Drummer',
+      group_name: 'Drums',
+      group_order: 3,
+      group_is_catch_all: false,
+    },
   ]
 
   it('drops a column with zero matches across all rows', () => {

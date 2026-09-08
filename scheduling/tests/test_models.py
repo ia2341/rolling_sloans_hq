@@ -1,9 +1,10 @@
 """Semester & Role catalog (issue #30)."""
 
+from django.db import IntegrityError, transaction
 from django.test import TestCase
 
-from scheduling.factories import RoleFactory, SemesterFactory
-from scheduling.models import Role, Semester
+from scheduling.factories import RoleFactory, RoleGroupFactory, SemesterFactory
+from scheduling.models import Role, RoleGroup, Semester
 
 
 class SemesterTests(TestCase):
@@ -68,6 +69,38 @@ class RoleTests(TestCase):
 
         reloaded = Role.objects.get(pk=role.pk)
         self.assertTrue(reloaded.is_active)
+
+    def test_group_is_required(self):
+        """A Role always classifies into some RoleGroup (issue #457)."""
+        role = RoleFactory()
+
+        reloaded = Role.objects.select_related('group').get(pk=role.pk)
+        self.assertIsNotNone(reloaded.group)
+
+    def test_group_deletion_is_protected(self):
+        """A RoleGroup still classifying a Role can't be deleted out from under it (issue #457)."""
+        group = RoleGroupFactory()
+        RoleFactory(group=group)
+
+        with transaction.atomic(), self.assertRaises(IntegrityError):
+            group.delete()
+
+
+class RoleGroupTests(TestCase):
+    def test_ordered_by_display_order_then_name(self):
+        """RoleGroup's default ordering is by display_order, name breaking ties (issue #457)."""
+        third = RoleGroupFactory(name='Zzz', display_order=2)
+        first = RoleGroupFactory(name='Bbb', display_order=1)
+        second = RoleGroupFactory(name='Aaa', display_order=1)
+
+        ordered = list(RoleGroup.objects.filter(pk__in=[first.pk, second.pk, third.pk]))
+        self.assertEqual(ordered, [second, first, third])
+
+    def test_is_catch_all_defaults_to_false(self):
+        """A newly created RoleGroup is not the catch-all group by default (issue #457)."""
+        group = RoleGroupFactory()
+
+        self.assertFalse(group.is_catch_all)
 
     def test_not_scoped_to_a_semester(self):
         """The Role catalog is global: Role carries no semester field or FK."""

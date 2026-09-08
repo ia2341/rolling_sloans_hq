@@ -87,7 +87,16 @@ function schedulePayload(
         is_dress: false,
         is_editable: true,
       },
-      roles: [{ id: 1, name: 'Singer', code: 'SIN' }],
+      roles: [
+        {
+          id: 1,
+          name: 'Singer',
+          code: 'SIN',
+          group_name: 'Other',
+          group_order: 8,
+          group_is_catch_all: true,
+        },
+      ],
       rows: [
         {
           song_id: 1,
@@ -134,8 +143,22 @@ describe('Schedule', () => {
     // must not render as a column at all, even though it's declared roles.
     const payload = schedulePayload()
     payload.selected!.roles = [
-      { id: 1, name: 'Singer', code: 'SIN' },
-      { id: 2, name: 'Drummer', code: 'DRU' },
+      {
+        id: 1,
+        name: 'Singer',
+        code: 'SIN',
+        group_name: 'Other',
+        group_order: 8,
+        group_is_catch_all: true,
+      },
+      {
+        id: 2,
+        name: 'Drummer',
+        code: 'DRU',
+        group_name: 'Drums',
+        group_order: 3,
+        group_is_catch_all: false,
+      },
     ]
     payload.selected!.rows[0]!.cells.push({ role_id: 2, entries: [] })
     mockFetchOnce(200, { context: memberContext(), data: payload })
@@ -154,8 +177,22 @@ describe('Schedule', () => {
   it('keeps a Role column visible when only one Song in this Rehearsal has a performer for it', async () => {
     const payload = schedulePayload()
     payload.selected!.roles = [
-      { id: 1, name: 'Singer', code: 'SIN' },
-      { id: 2, name: 'Drummer', code: 'DRU' },
+      {
+        id: 1,
+        name: 'Singer',
+        code: 'SIN',
+        group_name: 'Other',
+        group_order: 8,
+        group_is_catch_all: true,
+      },
+      {
+        id: 2,
+        name: 'Drummer',
+        code: 'DRU',
+        group_name: 'Drums',
+        group_order: 3,
+        group_is_catch_all: false,
+      },
     ]
     payload.selected!.rows[0]!.cells.push({ role_id: 2, entries: [] })
     payload.selected!.rows.push({

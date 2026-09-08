@@ -5,9 +5,9 @@ import type { CastEntry } from '../../api/setlistTypes'
 import { shortenNames } from '../../lib/names'
 import {
   buildCastGridColumns,
-  classifyRole,
   visibleCastGridColumns,
   type CastGridColumn,
+  type CastGridRole,
 } from '../../lib/roleColumns'
 
 /**
@@ -150,6 +150,23 @@ interface MergedPerformer {
   tag: 'lead' | 'acoustic' | null
 }
 
+/**
+ * Tags a Role name "lead" or "acoustic" for a merged cell's per-performer
+ * label — "Female Leading Vocals" tags `lead`, "Rhythm Guitar" tags
+ * nothing (only Lead and Acoustic are called out, per the band's own
+ * naming). A display nuance within a merged column, independent of which
+ * RoleGroup (issue #457) the Role belongs to.
+ */
+function tagForRoleName(roleName: string): 'lead' | 'acoustic' | null {
+  const name = roleName.toLowerCase()
+  if (name.includes('vocal')) return name.includes('lead') ? 'lead' : null
+  if (name.includes('guitar')) {
+    if (name.includes('lead')) return 'lead'
+    if (name.includes('acoustic')) return 'acoustic'
+  }
+  return null
+}
+
 /** Collects every performer under `column`'s Roles into one list, lead-tagged performers first (stable otherwise) — the merged-cell shape item 11 of the UI overhaul round 2 asks for. */
 function mergedPerformersFor(
   column: CastGridColumn,
@@ -158,7 +175,7 @@ function mergedPerformersFor(
   const merged: MergedPerformer[] = []
   for (const entry of cast) {
     if (!column.roleIds.includes(entry.role_id)) continue
-    const { tag } = classifyRole(entry.role_name)
+    const tag = tagForRoleName(entry.role_name)
     for (const performer of entry.performers) {
       merged.push({
         key: `${entry.role_id}-${performer.kind ?? 'assignment'}-${performer.id}`,
@@ -257,7 +274,7 @@ export function CastGridTable({
   renderRecordingCell,
   isAdmin,
 }: {
-  roles: { id: number; name: string }[]
+  roles: CastGridRole[]
   rows: CastGridRow[]
   viewerId?: number
   onOpenRow: (songId: number) => void

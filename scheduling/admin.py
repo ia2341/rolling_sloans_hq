@@ -11,6 +11,7 @@ from .models import (
     RehearsalSong,
     RehearsalTime,
     Role,
+    RoleGroup,
     Semester,
     SkipDate,
     Song,
@@ -39,12 +40,25 @@ class SemesterAdmin(admin.ModelAdmin):
     readonly_fields = ('created_at',)
 
 
+@admin.register(RoleGroup)
+class RoleGroupAdmin(admin.ModelAdmin):
+    """No delete action (issue #457): a Role's `group` FK is `on_delete=PROTECT`, so removing a group out from under a Role it classifies must never be possible."""
+
+    list_display = ('name', 'display_order', 'is_catch_all')
+    search_fields = ('name',)
+    actions = None
+
+    def has_delete_permission(self, request, obj=None):
+        """Disable delete entirely: a RoleGroup a Role still classifies must never be removable."""
+        return False
+
+
 @admin.register(Role)
 class RoleAdmin(admin.ModelAdmin):
     """No delete action: a Role is retired via is_active, never removed (issue #30)."""
 
-    list_display = ('name', 'is_active')
-    list_filter = ('is_active',)
+    list_display = ('name', 'group', 'is_active')
+    list_filter = ('is_active', 'group')
     search_fields = ('name',)
     actions = None
 

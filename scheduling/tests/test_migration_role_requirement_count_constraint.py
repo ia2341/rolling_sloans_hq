@@ -12,6 +12,10 @@ class DeleteZeroCountRequirementsMigrationTests(TransactionTestCase):
 
     migrate_from = ('scheduling', '0018_conflict_adjudication')
     migrate_to = ('scheduling', '0019_alter_songrolerequirement_count_and_more')
+    # Restores the seeded RoleGroup catalog (issue #457) after this test's
+    # teardown flush, which would otherwise truncate it for every test that
+    # runs after this one in the same process.
+    serialized_rollback = True
 
     def setUp(self):
         """Roll the scheduling app's schema back to just before the count constraint lands."""

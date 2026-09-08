@@ -22,8 +22,22 @@ function setlistPayload(overrides: Record<string, unknown> = {}) {
     song_count: 1,
     total_running_time: '3:30',
     roles: [
-      { id: 1, name: 'Singer', code: 'SIN' },
-      { id: 2, name: 'Drummer', code: 'DRU' },
+      {
+        id: 1,
+        name: 'Singer',
+        code: 'SIN',
+        group_name: 'Other',
+        group_order: 8,
+        group_is_catch_all: true,
+      },
+      {
+        id: 2,
+        name: 'Drummer',
+        code: 'DRU',
+        group_name: 'Drums',
+        group_order: 3,
+        group_is_catch_all: false,
+      },
     ],
     songs: [
       {
@@ -98,9 +112,9 @@ describe('Setlist', () => {
     renderShell(<Setlist />, ['/setlist'])
 
     await screen.findByText('Test Song')
-    // Singer matches no fixed instrument family, so it keeps its own column
-    // (buildCastGridColumns()); Drummer matches "drum" and becomes the
-    // fixed Drums column. Both are filled/unfilled independently.
+    // Singer's group is the catch-all, so it keeps its own column
+    // (buildCastGridColumns()); Drummer's group is Drums, so it becomes the
+    // merged Drums column. Both are filled/unfilled independently.
     expect(
       screen.getByRole('columnheader', { name: 'Singer' }),
     ).toBeInTheDocument()
