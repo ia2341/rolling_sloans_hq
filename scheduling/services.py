@@ -3283,14 +3283,14 @@ class RoleCreationResult:
 
 
 _ROLE_GROUP_KEYWORDS: tuple[tuple[str, str], ...] = (
-    ('vocal', 'Vocals'),
-    ('guitar', 'Guitars'),
-    ('bass', 'Bass'),
-    ('drum', 'Drums'),
-    ('key', 'Keyboards'),
-    ('sax', 'Saxophone'),
-    ('trumpet', 'Trumpet'),
-    ('violin', 'Violin'),
+    ('vocal', 'vocals'),
+    ('guitar', 'guitars'),
+    ('bass', 'bass'),
+    ('drum', 'drums'),
+    ('key', 'keyboards'),
+    ('sax', 'saxophone'),
+    ('trumpet', 'trumpet'),
+    ('violin', 'violin'),
 )
 
 
@@ -3300,12 +3300,14 @@ def default_role_group_for(name: str) -> RoleGroup:
     Mirrors the keyword match `scheduling/migrations/0025_backfill_role_group.py`
     used to seed existing Roles, kept as this module's own copy rather than
     a shared import — migrations are historical snapshots that must not
-    depend on code this module can freely change later.
+    depend on code this module can freely change later. Looks a seeded group
+    up by its stable `key`, never its admin-editable `name`, so renaming a
+    group in admin can't break this lookup.
     """
     lowered = name.lower()
-    for keyword, group_name in _ROLE_GROUP_KEYWORDS:
+    for keyword, group_key in _ROLE_GROUP_KEYWORDS:
         if keyword in lowered:
-            return RoleGroup.objects.get(name=group_name)
+            return RoleGroup.objects.get(key=group_key)
     return RoleGroup.objects.get(is_catch_all=True)
 
 

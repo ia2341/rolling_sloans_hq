@@ -102,6 +102,15 @@ class RoleGroupTests(TestCase):
 
         self.assertFalse(group.is_catch_all)
 
+    def test_only_one_catch_all_group_is_allowed(self):
+        """A second `is_catch_all=True` RoleGroup is rejected, since the classifier's fallback assumes exactly one (issue #457).
+
+        The migration-seeded 'Other' group is already the catch-all, so
+        creating any further one is the second.
+        """
+        with transaction.atomic(), self.assertRaises(IntegrityError):
+            RoleGroupFactory(is_catch_all=True)
+
     def test_not_scoped_to_a_semester(self):
         """The Role catalog is global: Role carries no semester field or FK."""
         field_names = {field.name for field in Role._meta.get_fields()}

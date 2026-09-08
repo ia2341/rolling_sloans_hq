@@ -84,6 +84,32 @@ describe('buildCastGridColumns', () => {
       'Tambourine',
     ])
   })
+
+  it('breaks a group_order tie by group name, since display_order is not unique', () => {
+    const roles: CastGridRole[] = [
+      {
+        id: 1,
+        name: 'Drummer',
+        group_name: 'Zzz Percussion',
+        group_order: 1,
+        group_is_catch_all: false,
+      },
+      {
+        id: 2,
+        name: 'Guitarist',
+        group_name: 'Aaa Strings',
+        group_order: 1,
+        group_is_catch_all: false,
+      },
+    ]
+
+    const columns = buildCastGridColumns(roles)
+
+    expect(columns.map((column) => column.label)).toEqual([
+      'Aaa Strings',
+      'Zzz Percussion',
+    ])
+  })
 })
 
 describe('visibleCastGridColumns', () => {

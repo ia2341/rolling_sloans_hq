@@ -44,8 +44,8 @@ class SemesterAdmin(admin.ModelAdmin):
 class RoleGroupAdmin(admin.ModelAdmin):
     """No delete action (issue #457): a Role's `group` FK is `on_delete=PROTECT`, so removing a group out from under a Role it classifies must never be possible."""
 
-    list_display = ('name', 'display_order', 'is_catch_all')
-    search_fields = ('name',)
+    list_display = ('name', 'key', 'display_order', 'is_catch_all')
+    search_fields = ('name', 'key')
     actions = None
 
     def has_delete_permission(self, request, obj=None):

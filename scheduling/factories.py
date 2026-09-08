@@ -71,6 +71,7 @@ class RoleGroupFactory(factory.django.DjangoModelFactory):
         model = RoleGroup
 
     name = factory.Sequence(lambda n: f'Role Group {n}')
+    key = factory.Sequence(lambda n: f'role-group-{n}')
     display_order = factory.Sequence(lambda n: n)
     is_catch_all = False
 

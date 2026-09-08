@@ -92,7 +92,10 @@ export function buildCastGridColumns(roles: CastGridRole[]): CastGridColumn[] {
   }
 
   const groupColumns = [...groupBuckets.entries()]
-    .sort(([, a], [, b]) => a.order - b.order)
+    .sort(
+      ([nameA, a], [nameB, b]) =>
+        a.order - b.order || nameA.localeCompare(nameB),
+    )
     .map(([name, bucket]) => ({
       key: `group-${name}`,
       label: name,

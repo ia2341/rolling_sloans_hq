@@ -64,14 +64,30 @@ class RoleGroup(models.Model):
     returns `False`), matching `Role`'s own soft-update convention, since a
     Role's `group` FK is `on_delete=PROTECT` — deleting a group out from
     under a Role it still classifies would leave that Role unclassified.
+
+    `key` is a stable, non-editable machine identifier the seeded groups'
+    keyword classifier (`services.default_role_group_for()`) looks up by,
+    so renaming a group's display `name` in admin can never break a newly
+    declared Role's classification. A `constraints` entry additionally
+    guarantees at most one `is_catch_all=True` row, since the classifier's
+    fallback (`RoleGroup.objects.get(is_catch_all=True)`) would raise
+    `MultipleObjectsReturned` against a second one.
     """
 
     name = models.CharField(max_length=255, unique=True)
+    key = models.SlugField(max_length=255, unique=True, editable=False)
     display_order = models.PositiveIntegerField(default=0)
     is_catch_all = models.BooleanField(default=False)
 
     class Meta:
         ordering: ClassVar[list[str]] = ['display_order', 'name']
+        constraints: ClassVar[list] = [
+            models.UniqueConstraint(
+                fields=['is_catch_all'],
+                condition=models.Q(is_catch_all=True),
+                name='at_most_one_catch_all_role_group',
+            ),
+        ]
 
     def __str__(self):
         return self.name
