@@ -526,6 +526,7 @@ describe('Setlist edit mode', () => {
     await user.click(screen.getByRole('radio', { name: 'By hand' }))
     await user.type(screen.getByLabelText('Title'), 'Hand-Added Song')
     await user.click(screen.getByRole('button', { name: 'Confirm Songs' }))
+    await user.click(screen.getByRole('button', { name: 'Confirm Roles' }))
 
     expect(screen.getByLabelText('Title for row 2')).toHaveValue(
       'Hand-Added Song',
@@ -763,6 +764,7 @@ describe('Setlist edit mode', () => {
     await user.click(screen.getByRole('radio', { name: 'By hand' }))
     await user.type(screen.getByLabelText('Title'), 'Hand-Added Song')
     await user.click(screen.getByRole('button', { name: 'Confirm Songs' }))
+    await user.click(screen.getByRole('button', { name: 'Confirm Roles' }))
 
     await user.click(screen.getByRole('button', { name: 'toolbar save' }))
     await waitFor(() =>

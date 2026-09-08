@@ -2,6 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import type { RoleLegendEntry } from '../../api/setlistTypes'
 import { memberContext } from '../../test/fixtures'
 import { mockFetchOnce } from '../../test/mockFetch'
 import { AddSongsSheet } from './AddSongsSheet'
@@ -12,10 +13,70 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
+/** A role legend covering the five named-default Role Groups plus one extra (Saxophone), for the role-count step. */
+const ROLE_GROUPS_FIXTURE: RoleLegendEntry[] = [
+  {
+    id: 1,
+    name: 'Lead Vocalist',
+    code: 'LV',
+    group_name: 'Vocals',
+    group_order: 0,
+    group_is_catch_all: false,
+  },
+  {
+    id: 2,
+    name: 'Guitarist',
+    code: 'G',
+    group_name: 'Guitars',
+    group_order: 1,
+    group_is_catch_all: false,
+  },
+  {
+    id: 3,
+    name: 'Keyboardist',
+    code: 'K',
+    group_name: 'Keyboards',
+    group_order: 2,
+    group_is_catch_all: false,
+  },
+  {
+    id: 4,
+    name: 'Drummer',
+    code: 'D',
+    group_name: 'Drums',
+    group_order: 3,
+    group_is_catch_all: false,
+  },
+  {
+    id: 5,
+    name: 'Bassist',
+    code: 'B',
+    group_name: 'Bass',
+    group_order: 4,
+    group_is_catch_all: false,
+  },
+  {
+    id: 6,
+    name: 'Saxophonist',
+    code: 'S',
+    group_name: 'Saxophone',
+    group_order: 5,
+    group_is_catch_all: false,
+  },
+]
+
 /** Renders the sheet already open, with a spy for `onAddRows`. */
-function renderOpen(onAddRows: (rows: EditRow[]) => void = () => {}) {
+function renderOpen(
+  onAddRows: (rows: EditRow[]) => void = () => {},
+  roles: RoleLegendEntry[] = ROLE_GROUPS_FIXTURE,
+) {
   return render(
-    <AddSongsSheet open onOpenChange={() => {}} onAddRows={onAddRows} />,
+    <AddSongsSheet
+      open
+      onOpenChange={() => {}}
+      onAddRows={onAddRows}
+      roles={roles}
+    />,
   )
 }
 
@@ -183,6 +244,7 @@ describe('AddSongsSheet', () => {
     expect(screen.getByRole('button', { name: 'Confirm Songs' })).toBeEnabled()
 
     await user.click(screen.getByRole('button', { name: 'Confirm Songs' }))
+    await user.click(screen.getByRole('button', { name: 'Confirm Roles' }))
 
     expect(onAddRows).toHaveBeenCalledTimes(1)
     const rows = onAddRows.mock.calls[0]?.[0] as EditRow[]
@@ -238,6 +300,7 @@ describe('AddSongsSheet', () => {
     expect(alreadyInSetlistCheckbox).not.toBeChecked()
 
     await user.click(screen.getByRole('button', { name: 'Confirm Songs' }))
+    await user.click(screen.getByRole('button', { name: 'Confirm Roles' }))
 
     expect(onAddRows).toHaveBeenCalledTimes(1)
     const rows = onAddRows.mock.calls[0]?.[0] as EditRow[]
@@ -255,6 +318,7 @@ describe('AddSongsSheet', () => {
     await user.type(screen.getByLabelText('Artist'), 'Hand Artist')
     await user.type(screen.getByLabelText('Length (M:SS)'), '4:15')
     await user.click(screen.getByRole('button', { name: 'Confirm Songs' }))
+    await user.click(screen.getByRole('button', { name: 'Confirm Roles' }))
 
     expect(onAddRows).toHaveBeenCalledTimes(1)
     const rows = onAddRows.mock.calls[0]?.[0] as EditRow[]
@@ -328,6 +392,7 @@ describe('AddSongsSheet', () => {
     await user.type(screen.getByLabelText('Length (M:SS)'), '2:00')
 
     await user.click(screen.getByRole('button', { name: 'Confirm Songs' }))
+    await user.click(screen.getByRole('button', { name: 'Confirm Roles' }))
 
     expect(onAddRows).toHaveBeenCalledTimes(1)
     const rows = onAddRows.mock.calls[0]?.[0] as EditRow[]
@@ -357,6 +422,7 @@ describe('AddSongsSheet', () => {
     // Second card left entirely blank.
 
     await user.click(screen.getByRole('button', { name: 'Confirm Songs' }))
+    await user.click(screen.getByRole('button', { name: 'Confirm Roles' }))
 
     expect(onAddRows).toHaveBeenCalledTimes(1)
     const rows = onAddRows.mock.calls[0]?.[0] as EditRow[]
@@ -364,12 +430,143 @@ describe('AddSongsSheet', () => {
     expect(rows[0]).toMatchObject({ title: 'Only Song' })
   })
 
+  it('the role-count step shows the named default counts and hides all-zero groups', async () => {
+    const user = userEvent.setup()
+    renderOpen()
+
+    await user.click(screen.getByRole('radio', { name: 'By hand' }))
+    await user.type(screen.getByLabelText('Title'), 'Only Song')
+    await user.click(screen.getByRole('button', { name: 'Confirm Songs' }))
+
+    expect(
+      screen.getByRole('columnheader', { name: 'Vocals' }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('columnheader', { name: 'Guitars' }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('columnheader', { name: 'Keyboards' }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('columnheader', { name: 'Drums' }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('columnheader', { name: 'Bass' }),
+    ).toBeInTheDocument()
+    // Saxophone has no named default (0), so it starts hidden.
+    expect(
+      screen.queryByRole('columnheader', { name: 'Saxophone' }),
+    ).not.toBeInTheDocument()
+
+    expect(
+      screen.getByLabelText('Decrease Vocals for Only Song').parentElement,
+    ).toHaveTextContent('3')
+    expect(
+      screen.getByLabelText('Decrease Guitars for Only Song').parentElement,
+    ).toHaveTextContent('2')
+  })
+
+  it('a stepper never drops a count below 0, and zeroing every row hides a named-default column', async () => {
+    const user = userEvent.setup()
+    renderOpen()
+
+    await user.click(screen.getByRole('radio', { name: 'By hand' }))
+    await user.type(screen.getByLabelText('Title'), 'Only Song')
+    await user.click(screen.getByRole('button', { name: 'Confirm Songs' }))
+
+    // Bass defaults to 1 -- one decrement reaches 0, hiding the column entirely.
+    const decreaseBass = screen.getByLabelText('Decrease Bass for Only Song')
+    await user.click(decreaseBass)
+    expect(
+      screen.queryByRole('columnheader', { name: 'Bass' }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByLabelText('Decrease Bass for Only Song'),
+    ).not.toBeInTheDocument()
+  })
+
+  it('"Add Role" reveals a hidden group prefilled with its logical default, and it stays visible even at 0', async () => {
+    const user = userEvent.setup()
+    renderOpen()
+
+    await user.click(screen.getByRole('radio', { name: 'By hand' }))
+    await user.type(screen.getByLabelText('Title'), 'Only Song')
+    await user.click(screen.getByRole('button', { name: 'Confirm Songs' }))
+
+    expect(screen.queryByText('Saxophone')).not.toBeInTheDocument()
+
+    await user.selectOptions(screen.getByLabelText('Add Role'), 'Saxophone')
+
+    expect(screen.getByText('Saxophone')).toBeInTheDocument()
+    const saxCount = screen.getByLabelText(
+      'Decrease Saxophone for Only Song',
+    ).parentElement
+    expect(saxCount).toHaveTextContent('0')
+
+    // A group explicitly added stays visible at 0, unlike a named default.
+    expect(
+      screen.getByLabelText('Decrease Saxophone for Only Song'),
+    ).toBeDisabled()
+    expect(screen.getByText('Saxophone')).toBeInTheDocument()
+
+    await user.click(screen.getByLabelText('Increase Saxophone for Only Song'))
+    expect(saxCount).toHaveTextContent('1')
+  })
+
+  it('"Confirm Roles" writes the staged rows to the buffer and closes the popup', async () => {
+    const onAddRows = vi.fn()
+    const onOpenChange = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <AddSongsSheet
+        open
+        onOpenChange={onOpenChange}
+        onAddRows={onAddRows}
+        roles={ROLE_GROUPS_FIXTURE}
+      />,
+    )
+
+    await user.click(screen.getByRole('radio', { name: 'By hand' }))
+    await user.type(screen.getByLabelText('Title'), 'Only Song')
+    await user.click(screen.getByRole('button', { name: 'Confirm Songs' }))
+
+    expect(onAddRows).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole('button', { name: 'Confirm Roles' }))
+
+    expect(onAddRows).toHaveBeenCalledTimes(1)
+    const rows = onAddRows.mock.calls[0]?.[0] as EditRow[]
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ title: 'Only Song' })
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false))
+  })
+
+  it('"Back" from the role-count step returns to the songs step without adding rows', async () => {
+    const onAddRows = vi.fn()
+    const user = userEvent.setup()
+    renderOpen(onAddRows)
+
+    await user.click(screen.getByRole('radio', { name: 'By hand' }))
+    await user.type(screen.getByLabelText('Title'), 'Only Song')
+    await user.click(screen.getByRole('button', { name: 'Confirm Songs' }))
+
+    await user.click(screen.getByRole('button', { name: 'Back' }))
+
+    expect(screen.getByLabelText('Title')).toBeInTheDocument()
+    expect(onAddRows).not.toHaveBeenCalled()
+  })
+
   it('Cancel resets the form without calling onAddRows', async () => {
     const onOpenChange = vi.fn()
     const onAddRows = vi.fn()
     const user = userEvent.setup()
     render(
-      <AddSongsSheet open onOpenChange={onOpenChange} onAddRows={onAddRows} />,
+      <AddSongsSheet
+        open
+        onOpenChange={onOpenChange}
+        onAddRows={onAddRows}
+        roles={ROLE_GROUPS_FIXTURE}
+      />,
     )
 
     await user.click(screen.getByRole('radio', { name: 'By hand' }))

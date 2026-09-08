@@ -2,6 +2,7 @@ import { useState } from 'react'
 
 import { apiFetch } from '../../api/client'
 import type {
+  RoleLegendEntry,
   SpotifyImportCandidate,
   SpotifyImportPayload,
 } from '../../api/setlistTypes'
@@ -9,10 +10,18 @@ import type { ReadEnvelope } from '../../api/types'
 import { Accordion } from '../../components/ui/Accordion'
 import { ResponsiveDialog } from '../../components/ui/ResponsiveDialog'
 import { SegmentedControl } from '../../components/ui/SegmentedControl'
+import { RoleCountStepTable } from './RoleCountStepTable'
+import {
+  defaultCountFor,
+  initialRoleCounts,
+  roleGroupsFromRoles,
+} from './roleCountStepModel'
+import type { RoleCountRow } from './roleCountStepModel'
 import type { EditRow } from './setlistEditModel'
 import { nextRowKey } from './setlistEditModel'
 
 type Source = 'spotify' | 'byhand'
+type Step = 'songs' | 'roles'
 
 interface HandCard {
   key: string
@@ -31,6 +40,8 @@ interface AddSongsSheetProps {
   onOpenChange: (open: boolean) => void
   /** Appends staged rows to the same Pending Buffer a hand-edit fills -- nothing about them is special afterwards (issue #335, #310). */
   onAddRows: (rows: EditRow[]) => void
+  /** The Setlist payload's role legend -- `active_roles_for()`'s full active-Role catalog, from which the role-count step's Role Groups are derived (issue #460). */
+  roles: RoleLegendEntry[]
 }
 
 /**
@@ -48,8 +59,14 @@ export function AddSongsSheet({
   open,
   onOpenChange,
   onAddRows,
+  roles,
 }: AddSongsSheetProps) {
+  const [step, setStep] = useState<Step>('songs')
   const [source, setSource] = useState<Source>('spotify')
+  const [stagedRows, setStagedRows] = useState<EditRow[]>([])
+  const [roleCounts, setRoleCounts] = useState<Record<string, RoleCountRow>>({})
+  const [addedGroupNames, setAddedGroupNames] = useState<Set<string>>(new Set())
+  const roleGroups = roleGroupsFromRoles(roles)
 
   const [playlistUrl, setPlaylistUrl] = useState('')
   const [fetching, setFetching] = useState(false)
@@ -64,6 +81,7 @@ export function AddSongsSheet({
   )
 
   function resetAndClose() {
+    setStep('songs')
     setPlaylistUrl('')
     setFetching(false)
     setFetchMessage(null)
@@ -73,6 +91,9 @@ export function AddSongsSheet({
     const firstCard = newHandCard()
     setHandCards([firstCard])
     setOpenHandCardKey(firstCard.key)
+    setStagedRows([])
+    setRoleCounts({})
+    setAddedGroupNames(new Set())
     onOpenChange(false)
   }
 
@@ -142,7 +163,8 @@ export function AddSongsSheet({
     })
   }
 
-  function addToBuffer() {
+  /** "Confirm Songs": stages the confirmed selection and advances to the role-count step, rather than writing to the Buffer directly (issue #460). */
+  function confirmSongs() {
     const rows: EditRow[] = []
     if (source === 'spotify') {
       candidates.forEach((candidate, index) => {
@@ -162,8 +184,41 @@ export function AddSongsSheet({
         rows.push(newRow(card.title, card.artist, card.length, 'byhand'))
       })
     }
-    if (rows.length > 0) onAddRows(rows)
+    if (rows.length === 0) return
+    setStagedRows(rows)
+    setRoleCounts(
+      Object.fromEntries(
+        rows.map((row) => [row.rowKey, initialRoleCounts(roleGroups)]),
+      ),
+    )
+    setAddedGroupNames(new Set())
+    setStep('roles')
+  }
+
+  /** "Confirm Roles": the actual write to the Buffer -- role counts are held only for review for now, per issue #460 (saving them is the following ticket). */
+  function confirmRoles() {
+    onAddRows(stagedRows)
     resetAndClose()
+  }
+
+  function updateRoleCount(rowKey: string, groupName: string, next: number) {
+    setRoleCounts((current) => ({
+      ...current,
+      [rowKey]: { ...current[rowKey], [groupName]: next },
+    }))
+  }
+
+  /** Reveals a currently-hidden Role Group, prefilled with its logical default across every staged song. */
+  function addRoleGroup(groupName: string) {
+    setAddedGroupNames((current) => new Set(current).add(groupName))
+    setRoleCounts((current) =>
+      Object.fromEntries(
+        stagedRows.map((row) => [
+          row.rowKey,
+          { ...current[row.rowKey], [groupName]: defaultCountFor(groupName) },
+        ]),
+      ),
+    )
   }
 
   const canAdd =
@@ -178,180 +233,235 @@ export function AddSongsSheet({
         if (!next) resetAndClose()
         else onOpenChange(next)
       }}
-      title="Add songs"
+      title={step === 'songs' ? 'Add songs' : 'Set role counts'}
       wide
       footer={
-        <>
-          <button
-            type="button"
-            onClick={resetAndClose}
-            className="rounded border border-rs-border px-3 py-1.5 text-sm font-medium hover:bg-rs-border/40"
-          >
-            Cancel
-          </button>
-          {source === 'byhand' && (
+        step === 'songs' ? (
+          <>
             <button
               type="button"
-              onClick={addAnotherHandCard}
+              onClick={resetAndClose}
               className="rounded border border-rs-border px-3 py-1.5 text-sm font-medium hover:bg-rs-border/40"
             >
-              Add Another Song
+              Cancel
             </button>
-          )}
-          <button
-            type="button"
-            onClick={addToBuffer}
-            disabled={!canAdd}
-            className="rounded bg-rs-accent px-3 py-1.5 text-sm font-medium text-rs-accent-fg disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            Confirm Songs
-          </button>
-        </>
-      }
-    >
-      <SegmentedControl
-        ariaLabel="Add songs from"
-        options={[
-          { value: 'spotify', label: 'From a Spotify playlist' },
-          { value: 'byhand', label: 'By hand' },
-        ]}
-        value={source}
-        onChange={(next) => setSource(next as Source)}
-      />
-
-      {source === 'spotify' ? (
-        <div className="pt-3">
-          <label className="text-sm" htmlFor="spotify-playlist-url">
-            Playlist link
-          </label>
-          <div className="mt-1 flex gap-2">
-            <input
-              id="spotify-playlist-url"
-              type="text"
-              value={playlistUrl}
-              onChange={(event) => setPlaylistUrl(event.target.value)}
-              placeholder="https://open.spotify.com/playlist/..."
-              className="flex-1 rounded border border-rs-border px-2 py-1 text-sm"
-            />
+            {source === 'byhand' && (
+              <button
+                type="button"
+                onClick={addAnotherHandCard}
+                className="rounded border border-rs-border px-3 py-1.5 text-sm font-medium hover:bg-rs-border/40"
+              >
+                Add Another Song
+              </button>
+            )}
             <button
               type="button"
-              onClick={fetchPlaylist}
-              disabled={fetching || playlistUrl.trim() === ''}
-              className="rounded border border-rs-border px-3 py-1.5 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50"
+              onClick={confirmSongs}
+              disabled={!canAdd}
+              className="rounded bg-rs-accent px-3 py-1.5 text-sm font-medium text-rs-accent-fg disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {fetching ? 'Fetching…' : 'Fetch'}
+              Confirm Songs
             </button>
-          </div>
-
-          {fetchMessage && (
-            <p role="alert" className="pt-3 text-sm text-rs-muted">
-              {fetchMessage}
-            </p>
-          )}
-
-          {skippedNote && (
-            <p className="pt-2 text-xs text-rs-muted">{skippedNote}</p>
-          )}
-
-          {candidates.length > 0 && (
-            <ul className="mt-3 max-h-64 space-y-1 overflow-y-auto">
-              {candidates.map((candidate, index) => (
-                <li key={`${candidate.title}-${index}`}>
-                  <label
-                    className={
-                      candidate.already_in_setlist
-                        ? 'flex items-center gap-2 rounded p-1.5 text-sm text-rs-muted'
-                        : 'flex items-center gap-2 rounded p-1.5 text-sm'
-                    }
-                  >
-                    <input
-                      type="checkbox"
-                      checked={ticked.has(index)}
-                      disabled={candidate.already_in_setlist}
-                      onChange={() => toggleTicked(index)}
-                    />
-                    <span className="flex-1">
-                      {candidate.title} · {candidate.artist} ·{' '}
-                      {candidate.length}
-                      {candidate.already_in_setlist && (
-                        <span className="block text-xs italic">
-                          Already in this setlist
-                        </span>
-                      )}
-                    </span>
-                  </label>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+          </>
+        ) : (
+          <>
+            <button
+              type="button"
+              onClick={resetAndClose}
+              className="rounded border border-rs-border px-3 py-1.5 text-sm font-medium hover:bg-rs-border/40"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => setStep('songs')}
+              className="rounded border border-rs-border px-3 py-1.5 text-sm font-medium hover:bg-rs-border/40"
+            >
+              Back
+            </button>
+            <button
+              type="button"
+              onClick={confirmRoles}
+              className="rounded bg-rs-accent px-3 py-1.5 text-sm font-medium text-rs-accent-fg"
+            >
+              Confirm Roles
+            </button>
+          </>
+        )
+      }
+    >
+      {step === 'roles' ? (
+        <RoleCountStepTable
+          songs={stagedRows.map((row) => ({
+            rowKey: row.rowKey,
+            title: row.title,
+            artist: row.artist,
+          }))}
+          groups={roleGroups}
+          counts={roleCounts}
+          addedGroupNames={addedGroupNames}
+          onChangeCount={updateRoleCount}
+          onAddGroup={addRoleGroup}
+        />
       ) : (
-        <div className="pt-3">
-          <Accordion
-            openKey={openHandCardKey}
-            onOpenKeyChange={setOpenHandCardKey}
-            items={handCards.map((card, index) => ({
-              key: card.key,
-              summary: handCardSummary(card, index),
-              content: (
-                <div className="flex flex-col gap-2">
-                  <div>
-                    <label
-                      className="text-sm"
-                      htmlFor={`byhand-title-${card.key}`}
-                    >
-                      Title
-                    </label>
-                    <input
-                      id={`byhand-title-${card.key}`}
-                      type="text"
-                      value={card.title}
-                      onChange={(event) =>
-                        updateHandCard(card.key, 'title', event.target.value)
-                      }
-                      className="mt-1 block w-full rounded border border-rs-border px-2 py-1 text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label
-                      className="text-sm"
-                      htmlFor={`byhand-artist-${card.key}`}
-                    >
-                      Artist
-                    </label>
-                    <input
-                      id={`byhand-artist-${card.key}`}
-                      type="text"
-                      value={card.artist}
-                      onChange={(event) =>
-                        updateHandCard(card.key, 'artist', event.target.value)
-                      }
-                      className="mt-1 block w-full rounded border border-rs-border px-2 py-1 text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label
-                      className="text-sm"
-                      htmlFor={`byhand-length-${card.key}`}
-                    >
-                      Length (M:SS)
-                    </label>
-                    <input
-                      id={`byhand-length-${card.key}`}
-                      type="text"
-                      value={card.length}
-                      onChange={(event) =>
-                        updateHandCard(card.key, 'length', event.target.value)
-                      }
-                      placeholder="3:45"
-                      className="mt-1 block w-full rounded border border-rs-border px-2 py-1 text-sm"
-                    />
-                  </div>
-                </div>
-              ),
-            }))}
+        <>
+          <SegmentedControl
+            ariaLabel="Add songs from"
+            options={[
+              { value: 'spotify', label: 'From a Spotify playlist' },
+              { value: 'byhand', label: 'By hand' },
+            ]}
+            value={source}
+            onChange={(next) => setSource(next as Source)}
           />
-        </div>
+
+          {source === 'spotify' ? (
+            <div className="pt-3">
+              <label className="text-sm" htmlFor="spotify-playlist-url">
+                Playlist link
+              </label>
+              <div className="mt-1 flex gap-2">
+                <input
+                  id="spotify-playlist-url"
+                  type="text"
+                  value={playlistUrl}
+                  onChange={(event) => setPlaylistUrl(event.target.value)}
+                  placeholder="https://open.spotify.com/playlist/..."
+                  className="flex-1 rounded border border-rs-border px-2 py-1 text-sm"
+                />
+                <button
+                  type="button"
+                  onClick={fetchPlaylist}
+                  disabled={fetching || playlistUrl.trim() === ''}
+                  className="rounded border border-rs-border px-3 py-1.5 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {fetching ? 'Fetching…' : 'Fetch'}
+                </button>
+              </div>
+
+              {fetchMessage && (
+                <p role="alert" className="pt-3 text-sm text-rs-muted">
+                  {fetchMessage}
+                </p>
+              )}
+
+              {skippedNote && (
+                <p className="pt-2 text-xs text-rs-muted">{skippedNote}</p>
+              )}
+
+              {candidates.length > 0 && (
+                <ul className="mt-3 max-h-64 space-y-1 overflow-y-auto">
+                  {candidates.map((candidate, index) => (
+                    <li key={`${candidate.title}-${index}`}>
+                      <label
+                        className={
+                          candidate.already_in_setlist
+                            ? 'flex items-center gap-2 rounded p-1.5 text-sm text-rs-muted'
+                            : 'flex items-center gap-2 rounded p-1.5 text-sm'
+                        }
+                      >
+                        <input
+                          type="checkbox"
+                          checked={ticked.has(index)}
+                          disabled={candidate.already_in_setlist}
+                          onChange={() => toggleTicked(index)}
+                        />
+                        <span className="flex-1">
+                          {candidate.title} · {candidate.artist} ·{' '}
+                          {candidate.length}
+                          {candidate.already_in_setlist && (
+                            <span className="block text-xs italic">
+                              Already in this setlist
+                            </span>
+                          )}
+                        </span>
+                      </label>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          ) : (
+            <div className="pt-3">
+              <Accordion
+                openKey={openHandCardKey}
+                onOpenKeyChange={setOpenHandCardKey}
+                items={handCards.map((card, index) => ({
+                  key: card.key,
+                  summary: handCardSummary(card, index),
+                  content: (
+                    <div className="flex flex-col gap-2">
+                      <div>
+                        <label
+                          className="text-sm"
+                          htmlFor={`byhand-title-${card.key}`}
+                        >
+                          Title
+                        </label>
+                        <input
+                          id={`byhand-title-${card.key}`}
+                          type="text"
+                          value={card.title}
+                          onChange={(event) =>
+                            updateHandCard(
+                              card.key,
+                              'title',
+                              event.target.value,
+                            )
+                          }
+                          className="mt-1 block w-full rounded border border-rs-border px-2 py-1 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label
+                          className="text-sm"
+                          htmlFor={`byhand-artist-${card.key}`}
+                        >
+                          Artist
+                        </label>
+                        <input
+                          id={`byhand-artist-${card.key}`}
+                          type="text"
+                          value={card.artist}
+                          onChange={(event) =>
+                            updateHandCard(
+                              card.key,
+                              'artist',
+                              event.target.value,
+                            )
+                          }
+                          className="mt-1 block w-full rounded border border-rs-border px-2 py-1 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label
+                          className="text-sm"
+                          htmlFor={`byhand-length-${card.key}`}
+                        >
+                          Length (M:SS)
+                        </label>
+                        <input
+                          id={`byhand-length-${card.key}`}
+                          type="text"
+                          value={card.length}
+                          onChange={(event) =>
+                            updateHandCard(
+                              card.key,
+                              'length',
+                              event.target.value,
+                            )
+                          }
+                          placeholder="3:45"
+                          className="mt-1 block w-full rounded border border-rs-border px-2 py-1 text-sm"
+                        />
+                      </div>
+                    </div>
+                  ),
+                }))}
+              />
+            </div>
+          )}
+        </>
       )}
     </ResponsiveDialog>
   )
