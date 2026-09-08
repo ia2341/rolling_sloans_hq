@@ -198,13 +198,13 @@ describe('NewSemesterDialog', () => {
       expect(screen.getByDisplayValue('Spring 2026')).toBeInTheDocument(),
     )
     const durationInput = screen.getByLabelText('Rehearsal duration (minutes)')
-    expect(durationInput).toHaveValue(120)
+    expect(durationInput).toHaveValue(240)
 
     await user.clear(durationInput)
     expect(durationInput).toHaveValue(null)
 
-    await user.type(durationInput, '240')
-    expect(durationInput).toHaveValue(240)
+    await user.type(durationInput, '360')
+    expect(durationInput).toHaveValue(360)
   })
 
   it('normalizes an empty timing-defaults field back to 0 on blur', async () => {
