@@ -236,6 +236,11 @@ class ApplyRosterEditsInviteTests(TransactionTestCase):
     the wrong reason.
     """
 
+    # Restores the seeded RoleGroup catalog (issue #457) after this test's
+    # teardown flush, which would otherwise truncate it for every test that
+    # runs after this one in the same process.
+    serialized_rollback = True
+
     def setUp(self):
         """Build a Semester and one admin Person to submit Buffers as."""
         self.semester = SemesterFactory()

@@ -49,15 +49,63 @@ class Semester(models.Model):
         return self.name
 
 
+class RoleGroup(models.Model):
+    """An instrument-family bucket (e.g. Vocals, Guitars) that display surfaces merge several Roles under (issue #457, ADR-0016).
+
+    Admin-editable rather than a fixed enum, per ADR-0016 — a new Role an
+    admin adds later needs a group to land in without a code change.
+    `display_order` fixes the column order display surfaces render groups
+    in, independent of `name`'s alphabetical order (Vocals before Guitars,
+    say). `is_catch_all` marks the one group standing in for "matched
+    nothing else" — a display surface renders each catch-all-group Role
+    as its own column rather than merging them together, since a Role
+    landing there shares nothing with its groupmates but the absence of a
+    better fit. There is no delete path (`RoleGroupAdmin.has_delete_permission`
+    returns `False`), matching `Role`'s own soft-update convention, since a
+    Role's `group` FK is `on_delete=PROTECT` — deleting a group out from
+    under a Role it still classifies would leave that Role unclassified.
+
+    `key` is a stable, non-editable machine identifier the seeded groups'
+    keyword classifier (`services.default_role_group_for()`) looks up by,
+    so renaming a group's display `name` in admin can never break a newly
+    declared Role's classification. A `constraints` entry additionally
+    guarantees at most one `is_catch_all=True` row, since the classifier's
+    fallback (`RoleGroup.objects.get(is_catch_all=True)`) would raise
+    `MultipleObjectsReturned` against a second one.
+    """
+
+    name = models.CharField(max_length=255, unique=True)
+    key = models.SlugField(max_length=255, unique=True, editable=False)
+    display_order = models.PositiveIntegerField(default=0)
+    is_catch_all = models.BooleanField(default=False)
+
+    class Meta:
+        ordering: ClassVar[list[str]] = ['display_order', 'name']
+        constraints: ClassVar[list] = [
+            models.UniqueConstraint(
+                fields=['is_catch_all'],
+                condition=models.Q(is_catch_all=True),
+                name='at_most_one_catch_all_role_group',
+            ),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
 class Role(models.Model):
     """A global, semester-independent catalog entry (e.g. singer, guitarist, drummer).
 
     Deactivating a Role is a soft update (is_active=False); there is no
-    deletion path, so historical references to it stay intact.
+    deletion path, so historical references to it stay intact. `group`
+    (issue #457, ADR-0016) is the persisted instrument-family bucket a
+    display surface merges this Role's performers into — `on_delete=PROTECT`
+    since a Role must always classify into some group.
     """
 
     name = models.CharField(max_length=255, unique=True)
     is_active = models.BooleanField(default=True)
+    group = models.ForeignKey(RoleGroup, on_delete=models.PROTECT, related_name='roles')
 
     def __str__(self):
         return self.name

@@ -568,6 +568,11 @@ class SaveCommitsTests(TransactionTestCase):
     fire here.
     """
 
+    # Restores the seeded RoleGroup catalog (issue #457) after this test's
+    # teardown flush, which would otherwise truncate it for every test that
+    # runs after this one in the same process.
+    serialized_rollback = True
+
     def setUp(self):
         """Log in a synthetic admin against a fresh Semester."""
         admin_client(self)
@@ -633,6 +638,11 @@ class PreviewThenSaveRoundTripTests(TransactionTestCase):
     value that no longer equals the full-precision DB stamp once
     round-tripped through `parse_datetime()` (Cause B).
     """
+
+    # Restores the seeded RoleGroup catalog (issue #457) after this test's
+    # teardown flush, which would otherwise truncate it for every test that
+    # runs after this one in the same process.
+    serialized_rollback = True
 
     def setUp(self):
         """Log in a synthetic admin against a fresh Semester with one existing member."""

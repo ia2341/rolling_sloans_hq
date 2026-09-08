@@ -18,6 +18,7 @@ from scheduling.models import (
     RehearsalSong,
     RehearsalTime,
     Role,
+    RoleGroup,
     Semester,
     SkipDate,
     Song,
@@ -65,12 +66,25 @@ class SemesterFactory(factory.django.DjangoModelFactory):
     default_departure_buffer_minutes = 5
 
 
+class RoleGroupFactory(factory.django.DjangoModelFactory):
+    class Meta:
+        model = RoleGroup
+
+    name = factory.Sequence(lambda n: f'Role Group {n}')
+    key = factory.Sequence(lambda n: f'role-group-{n}')
+    display_order = factory.Sequence(lambda n: n)
+    is_catch_all = False
+
+
 class RoleFactory(factory.django.DjangoModelFactory):
+    """A Role, with its own throwaway RoleGroup by default — pass `group=` for a test that cares about grouping."""
+
     class Meta:
         model = Role
 
     name = factory.Sequence(lambda n: f'Role {n}')
     is_active = True
+    group = factory.SubFactory(RoleGroupFactory)
 
 
 class MembershipFactory(factory.django.DjangoModelFactory):

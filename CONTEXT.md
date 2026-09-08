@@ -32,6 +32,10 @@ _Avoid_: Roster entry *(that's a Membership — see above)*
 A specific instrument or function a person can fill on a song (e.g. singer, guitarist, drummer). One global catalog shared across all semesters — a semester doesn't redefine roles, it just uses whichever subset applies.
 _Avoid_: Part, Instrument
 
+**Role Group**:
+The instrument-family bucket a Role belongs to (e.g. Vocals, Guitars) — a display grouping the Setlist and Schedule cast tables merge several Roles' performers under one column for, not a scheduling concept of its own (ADR-0016). Admin-editable, not fixed: a new Role always lands in a group, falling back to a catch-all group when none of the existing ones fit.
+_Avoid_: Family, Category
+
 **Song**:
 A piece belonging to one specific Semester's setlist. If the same title is performed again in a later semester, that's a distinct Song — titles can repeat, Songs don't carry over.
 _Avoid_: Track, Number

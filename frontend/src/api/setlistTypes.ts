@@ -20,6 +20,12 @@ export interface RoleLegendEntry {
   id: number
   name: string
   code: string
+  /** The instrument-family bucket this Role's group merges into on the cast tables (issue #457). */
+  group_name: string
+  /** Fixes this Role's group's column order, independent of `group_name`'s alphabetical order. */
+  group_order: number
+  /** True for the one catch-all group — a Role in it gets its own column rather than merging with groupmates. */
+  group_is_catch_all: boolean
 }
 
 export interface SetlistSong {

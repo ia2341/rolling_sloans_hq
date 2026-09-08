@@ -456,6 +456,11 @@ class SaveTests(TransactionTestCase):
     rest of this surface's Save coverage costs nothing.
     """
 
+    # Restores the seeded RoleGroup catalog (issue #457) after this test's
+    # teardown flush, which would otherwise truncate it for every test that
+    # runs after this one in the same process.
+    serialized_rollback = True
+
     def setUp(self):
         """Log in a synthetic admin against a fresh Semester with one future Rehearsal and one Conflict."""
         admin_client(self)

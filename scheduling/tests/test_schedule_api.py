@@ -213,6 +213,22 @@ class SerializeScheduleExactKeySetTests(TestCase):
             {'id', 'kind', 'person_id', 'person_name', 'is_role_mismatch', 'has_conflict', 'covering_for_name'},
         )
 
+    def test_role_legend_entry_keys(self):
+        """A `roles` legend entry carries exactly `id`, `name`, `code`, and its RoleGroup fields (issue #457)."""
+        person = PersonFactory()
+        rehearsal = RehearsalFactory()
+        role = RoleFactory()
+        song = SongFactory(semester=rehearsal.semester)
+        RehearsalSongFactory(rehearsal=rehearsal, song=song, order=1)
+        SongRoleAssignmentFactory(song=song, role=role, person=person)
+
+        data = serialize_schedule(_RequestStub(person), rehearsal.semester, rehearsal_id=rehearsal.pk)
+
+        self.assertEqual(
+            set(data['selected']['roles'][0].keys()),
+            {'id', 'name', 'code', 'group_name', 'group_order', 'group_is_catch_all'},
+        )
+
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class ScheduleApiViewTests(TestCase):

@@ -28,6 +28,7 @@ from scheduling.models import (
     RehearsalSong,
     RehearsalTime,
     Role,
+    RoleGroup,
     Semester,
     SkipDate,
     Song,
@@ -1197,7 +1198,7 @@ def active_roles_for(semester) -> list[Role]:
     hue and position shift row to row, the exact property the Setlist's
     constant cast line exists to avoid.
     """
-    return list(Role.objects.filter(is_active=True).order_by('name'))
+    return list(Role.objects.filter(is_active=True).select_related('group').order_by('name'))
 
 
 def _derive_role_code(name: str) -> str:
@@ -1488,7 +1489,10 @@ def assignment_matrix_for(rehearsal) -> AssignmentMatrix:
     """
     songs, start_times, rehearsal_song_ids = _matrix_songs(rehearsal)
     roles = list(
-        Role.objects.filter(songrolerequirement__song__in=songs).distinct().order_by('name')
+        Role.objects.filter(songrolerequirement__song__in=songs)
+        .select_related('group')
+        .distinct()
+        .order_by('name')
     )
     entries_by_song_role = _matrix_entries_by_song_role(songs, roles, rehearsal_song_ids)
     rows = [
@@ -3278,6 +3282,35 @@ class RoleCreationResult:
     reactivated: bool
 
 
+_ROLE_GROUP_KEYWORDS: tuple[tuple[str, str], ...] = (
+    ('vocal', 'vocals'),
+    ('guitar', 'guitars'),
+    ('bass', 'bass'),
+    ('drum', 'drums'),
+    ('key', 'keyboards'),
+    ('sax', 'saxophone'),
+    ('trumpet', 'trumpet'),
+    ('violin', 'violin'),
+)
+
+
+def default_role_group_for(name: str) -> RoleGroup:
+    """Classify a newly-declared Role's name into its RoleGroup (issue #457), falling back to the catch-all group.
+
+    Mirrors the keyword match `scheduling/migrations/0025_backfill_role_group.py`
+    used to seed existing Roles, kept as this module's own copy rather than
+    a shared import — migrations are historical snapshots that must not
+    depend on code this module can freely change later. Looks a seeded group
+    up by its stable `key`, never its admin-editable `name`, so renaming a
+    group in admin can't break this lookup.
+    """
+    lowered = name.lower()
+    for keyword, group_key in _ROLE_GROUP_KEYWORDS:
+        if keyword in lowered:
+            return RoleGroup.objects.get(key=group_key)
+    return RoleGroup.objects.get(is_catch_all=True)
+
+
 def create_or_reactivate_role(name: str) -> RoleCreationResult:
     """Get-or-create a Role by name, case-insensitively, and commit immediately (issue #225).
 
@@ -3305,7 +3338,7 @@ def create_or_reactivate_role(name: str) -> RoleCreationResult:
             existing.is_active = True
             existing.save(update_fields=['is_active'])
         return RoleCreationResult(role=existing, created=False, reactivated=reactivated)
-    role = Role.objects.create(name=name)
+    role = Role.objects.create(name=name, group=default_role_group_for(name))
     return RoleCreationResult(role=role, created=True, reactivated=False)
 
 

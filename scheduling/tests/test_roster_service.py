@@ -9,7 +9,7 @@ from scheduling.factories import (
     RoleFactory,
     SemesterFactory,
 )
-from scheduling.models import Membership, PersonRole, Role
+from scheduling.models import Membership, PersonRole, Role, RoleGroup
 from scheduling.services import (
     RosterImportProposal,
     create_or_reactivate_role,
@@ -60,8 +60,21 @@ class CreateOrReactivateRoleTests(TestCase):
 
         self.assertFalse(result.reactivated)
 
+    def test_classification_survives_an_admin_renaming_the_seeded_group(self):
+        """Renaming a seeded RoleGroup's display name doesn't break new-Role classification, since the lookup keys on `key`, not `name` (issue #457)."""
+        RoleGroup.objects.filter(key='guitars').update(name='Guitar Family')
+
+        result = create_or_reactivate_role('Lead Guitar')
+
+        self.assertEqual(result.role.group.key, 'guitars')
+
 
 class CreateOrReactivateRoleCommitsIndependentlyTests(TransactionTestCase):
+    # Restores the seeded RoleGroup catalog (issue #457) after this test's
+    # teardown flush, which would otherwise truncate it for every test that
+    # runs after this one in the same process.
+    serialized_rollback = True
+
     def test_role_survives_a_later_batch_transaction_being_abandoned(self):
         """A Role created here is unaffected by a later, unrelated transaction that rolls back.
 
