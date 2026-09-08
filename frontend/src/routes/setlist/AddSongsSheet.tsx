@@ -201,6 +201,7 @@ export function AddSongsSheet({
     resetAndClose()
   }
 
+  /** Sets one staged song's count for one Role Group, from a stepper click. */
   function updateRoleCount(rowKey: string, groupName: string, next: number) {
     setRoleCounts((current) => ({
       ...current,

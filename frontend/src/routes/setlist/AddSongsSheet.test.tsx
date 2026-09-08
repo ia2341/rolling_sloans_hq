@@ -5,12 +5,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RoleLegendEntry } from '../../api/setlistTypes'
 import { memberContext } from '../../test/fixtures'
 import { mockFetchOnce } from '../../test/mockFetch'
+import { mockMatchMedia } from '../../test/mockMatchMedia'
 import { AddSongsSheet } from './AddSongsSheet'
 import type { EditRow } from './setlistEditModel'
 
 afterEach(() => {
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
+  mockMatchMedia(false)
 })
 
 /** A role legend covering the five named-default Role Groups plus one extra (Saxophone), for the role-count step. */
@@ -539,6 +541,32 @@ describe('AddSongsSheet', () => {
     expect(rows).toHaveLength(1)
     expect(rows[0]).toMatchObject({ title: 'Only Song' })
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false))
+  })
+
+  it('the role-count step renders as a bottom sheet with working steppers below the phone breakpoint', async () => {
+    mockMatchMedia(true)
+    const onAddRows = vi.fn()
+    const user = userEvent.setup()
+    renderOpen(onAddRows)
+
+    expect(screen.getByRole('dialog')).toHaveClass('bottom-0')
+
+    await user.click(screen.getByRole('radio', { name: 'By hand' }))
+    await user.type(screen.getByLabelText('Title'), 'Only Song')
+    await user.click(screen.getByRole('button', { name: 'Confirm Songs' }))
+
+    expect(screen.getByRole('dialog')).toHaveClass('bottom-0')
+    expect(
+      screen.getByRole('columnheader', { name: 'Vocals' }),
+    ).toBeInTheDocument()
+
+    await user.click(screen.getByLabelText('Increase Vocals for Only Song'))
+    expect(
+      screen.getByLabelText('Decrease Vocals for Only Song').parentElement,
+    ).toHaveTextContent('4')
+
+    await user.click(screen.getByRole('button', { name: 'Confirm Roles' }))
+    expect(onAddRows).toHaveBeenCalledTimes(1)
   })
 
   it('"Back" from the role-count step returns to the songs step without adding rows', async () => {

@@ -9,6 +9,7 @@ import {
   visibleRoleGroups,
 } from './roleCountStepModel'
 
+/** Builds a `RoleLegendEntry` fixture (defaulting to a Vocals-group role), overriding just the fields a test cares about. */
 function role(overrides: Partial<RoleLegendEntry>): RoleLegendEntry {
   return {
     id: 1,
