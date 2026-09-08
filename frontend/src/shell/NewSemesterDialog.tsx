@@ -77,7 +77,9 @@ function parseTimingDefaultsInput(raw: string): number {
 
 /**
  * `+ New semester`'s dialog (issue #329): names the new draft Semester,
- * offers a collapsed "Timing defaults" disclosure prefilled from the
+ * offers a "Timing defaults" disclosure (expanded by default — issue #449
+ * — since admins commonly want to check or adjust these on creation)
+ * prefilled from the
  * currently-viewing Semester (the closest reachable stand-in for "the most
  * recent Semester" — no endpoint exposes another Semester's `default_*`
  * fields, only the viewing one's, via `/api/schedule/editor/`), and states
@@ -239,6 +241,7 @@ export function NewSemesterDialog({
         )}
 
         <Accordion
+          defaultOpenKey="timing-defaults"
           items={[
             {
               key: 'timing-defaults',

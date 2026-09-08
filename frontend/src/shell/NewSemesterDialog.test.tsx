@@ -158,6 +158,28 @@ describe('NewSemesterDialog', () => {
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false))
   })
 
+  it('shows Timing defaults expanded on initial render (issue #449)', async () => {
+    setContext(adminContext({ semester_options: options }))
+    stubFetchSequence([
+      {
+        status: 200,
+        body: {
+          context: adminContext({ semester_options: options }),
+          data: { semester_defaults: null },
+        },
+      },
+    ])
+    renderShell(<NewSemesterDialog open onOpenChange={() => {}} />)
+
+    await waitFor(() =>
+      expect(screen.getByDisplayValue('Spring 2026')).toBeInTheDocument(),
+    )
+    expect(screen.getByLabelText('Rehearsal duration (minutes)')).toBeVisible()
+    expect(
+      screen.getByRole('button', { name: 'Timing defaults' }),
+    ).toHaveAttribute('aria-expanded', 'true')
+  })
+
   it('lets a timing-defaults field be cleared and retyped without a stray leading 0 (issue #403)', async () => {
     setContext(adminContext({ semester_options: options }))
     stubFetchSequence([
@@ -175,7 +197,6 @@ describe('NewSemesterDialog', () => {
     await waitFor(() =>
       expect(screen.getByDisplayValue('Spring 2026')).toBeInTheDocument(),
     )
-    await user.click(screen.getByRole('button', { name: 'Timing defaults' }))
     const durationInput = screen.getByLabelText('Rehearsal duration (minutes)')
     expect(durationInput).toHaveValue(120)
 
@@ -203,7 +224,6 @@ describe('NewSemesterDialog', () => {
     await waitFor(() =>
       expect(screen.getByDisplayValue('Spring 2026')).toBeInTheDocument(),
     )
-    await user.click(screen.getByRole('button', { name: 'Timing defaults' }))
     const durationInput = screen.getByLabelText('Rehearsal duration (minutes)')
 
     await user.clear(durationInput)
