@@ -6,12 +6,25 @@ import type {
   SpotifyImportPayload,
 } from '../../api/setlistTypes'
 import type { ReadEnvelope } from '../../api/types'
+import { Accordion } from '../../components/ui/Accordion'
 import { ResponsiveDialog } from '../../components/ui/ResponsiveDialog'
 import { SegmentedControl } from '../../components/ui/SegmentedControl'
 import type { EditRow } from './setlistEditModel'
 import { nextRowKey } from './setlistEditModel'
 
 type Source = 'spotify' | 'byhand'
+
+interface HandCard {
+  key: string
+  title: string
+  artist: string
+  length: string
+}
+
+/** Builds one empty, freshly-keyed by-hand card for the Accordion. */
+function newHandCard(): HandCard {
+  return { key: nextRowKey('byhand-card'), title: '', artist: '', length: '' }
+}
 
 interface AddSongsSheetProps {
   open: boolean
@@ -25,8 +38,9 @@ interface AddSongsSheetProps {
  * through. A modal on desktop and a bottom sheet on phone via
  * `ResponsiveDialog`, its two sources are sections behind a
  * `SegmentedControl` rather than three stacked forms. Nothing here writes
- * anything -- ticked Spotify candidates and a typed row both become
- * ordinary Buffer rows only once "Add to the buffer" is pressed, via
+ * anything -- ticked Spotify candidates and one or more typed by-hand cards
+ * (issue #458, staged via the single-open `Accordion`) both become ordinary
+ * Buffer rows only once the source's confirm button is pressed, via
  * `onAddRows`; the real write is still the toolbar's Save changes ->
  * the shared Save popup (#334).
  */
@@ -44,9 +58,10 @@ export function AddSongsSheet({
   const [ticked, setTicked] = useState<Set<number>>(new Set())
   const [skippedNote, setSkippedNote] = useState('')
 
-  const [handTitle, setHandTitle] = useState('')
-  const [handArtist, setHandArtist] = useState('')
-  const [handLength, setHandLength] = useState('')
+  const [handCards, setHandCards] = useState<HandCard[]>(() => [newHandCard()])
+  const [openHandCardKey, setOpenHandCardKey] = useState(
+    () => handCards[0]?.key ?? '',
+  )
 
   function resetAndClose() {
     setPlaylistUrl('')
@@ -55,10 +70,30 @@ export function AddSongsSheet({
     setCandidates([])
     setTicked(new Set())
     setSkippedNote('')
-    setHandTitle('')
-    setHandArtist('')
-    setHandLength('')
+    const firstCard = newHandCard()
+    setHandCards([firstCard])
+    setOpenHandCardKey(firstCard.key)
     onOpenChange(false)
+  }
+
+  /** Edits one field of one staged by-hand card by key. */
+  function updateHandCard(
+    key: string,
+    field: keyof Omit<HandCard, 'key'>,
+    value: string,
+  ) {
+    setHandCards((cards) =>
+      cards.map((card) =>
+        card.key === key ? { ...card, [field]: value } : card,
+      ),
+    )
+  }
+
+  /** Stages a new empty card, collapsing the rest by opening only this one. */
+  function addAnotherHandCard() {
+    const card = newHandCard()
+    setHandCards((cards) => [...cards, card])
+    setOpenHandCardKey(card.key)
   }
 
   function fetchPlaylist() {
@@ -115,15 +150,20 @@ export function AddSongsSheet({
           ),
         )
       })
-    } else if (handTitle.trim()) {
-      rows.push(newRow(handTitle, handArtist, handLength, 'byhand'))
+    } else {
+      handCards.forEach((card) => {
+        if (!card.title.trim()) return
+        rows.push(newRow(card.title, card.artist, card.length, 'byhand'))
+      })
     }
     if (rows.length > 0) onAddRows(rows)
     resetAndClose()
   }
 
   const canAdd =
-    source === 'spotify' ? ticked.size > 0 : handTitle.trim() !== ''
+    source === 'spotify'
+      ? ticked.size > 0
+      : handCards.some((card) => card.title.trim() !== '')
 
   return (
     <ResponsiveDialog
@@ -143,13 +183,22 @@ export function AddSongsSheet({
           >
             Cancel
           </button>
+          {source === 'byhand' && (
+            <button
+              type="button"
+              onClick={addAnotherHandCard}
+              className="rounded border border-rs-border px-3 py-1.5 text-sm font-medium hover:bg-rs-border/40"
+            >
+              Add Another Song
+            </button>
+          )}
           <button
             type="button"
             onClick={addToBuffer}
             disabled={!canAdd}
             className="rounded bg-rs-accent px-3 py-1.5 text-sm font-medium text-rs-accent-fg disabled:cursor-not-allowed disabled:opacity-50"
           >
-            Add to the buffer
+            {source === 'byhand' ? 'Confirm Songs' : 'Add to the buffer'}
           </button>
         </>
       }
@@ -230,51 +279,84 @@ export function AddSongsSheet({
           )}
         </div>
       ) : (
-        <div className="flex flex-col gap-2 pt-3">
-          <div>
-            <label className="text-sm" htmlFor="byhand-title">
-              Title
-            </label>
-            <input
-              id="byhand-title"
-              type="text"
-              value={handTitle}
-              onChange={(event) => setHandTitle(event.target.value)}
-              className="mt-1 block w-full rounded border border-rs-border px-2 py-1 text-sm"
-            />
-          </div>
-          <div>
-            <label className="text-sm" htmlFor="byhand-artist">
-              Artist
-            </label>
-            <input
-              id="byhand-artist"
-              type="text"
-              value={handArtist}
-              onChange={(event) => setHandArtist(event.target.value)}
-              className="mt-1 block w-full rounded border border-rs-border px-2 py-1 text-sm"
-            />
-          </div>
-          <div>
-            <label className="text-sm" htmlFor="byhand-length">
-              Length (M:SS)
-            </label>
-            <input
-              id="byhand-length"
-              type="text"
-              value={handLength}
-              onChange={(event) => setHandLength(event.target.value)}
-              placeholder="3:45"
-              className="mt-1 block w-full rounded border border-rs-border px-2 py-1 text-sm"
-            />
-          </div>
+        <div className="pt-3">
+          <Accordion
+            openKey={openHandCardKey}
+            onOpenKeyChange={setOpenHandCardKey}
+            items={handCards.map((card, index) => ({
+              key: card.key,
+              summary: handCardSummary(card, index),
+              content: (
+                <div className="flex flex-col gap-2">
+                  <div>
+                    <label
+                      className="text-sm"
+                      htmlFor={`byhand-title-${card.key}`}
+                    >
+                      Title
+                    </label>
+                    <input
+                      id={`byhand-title-${card.key}`}
+                      type="text"
+                      value={card.title}
+                      onChange={(event) =>
+                        updateHandCard(card.key, 'title', event.target.value)
+                      }
+                      className="mt-1 block w-full rounded border border-rs-border px-2 py-1 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label
+                      className="text-sm"
+                      htmlFor={`byhand-artist-${card.key}`}
+                    >
+                      Artist
+                    </label>
+                    <input
+                      id={`byhand-artist-${card.key}`}
+                      type="text"
+                      value={card.artist}
+                      onChange={(event) =>
+                        updateHandCard(card.key, 'artist', event.target.value)
+                      }
+                      className="mt-1 block w-full rounded border border-rs-border px-2 py-1 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label
+                      className="text-sm"
+                      htmlFor={`byhand-length-${card.key}`}
+                    >
+                      Length (M:SS)
+                    </label>
+                    <input
+                      id={`byhand-length-${card.key}`}
+                      type="text"
+                      value={card.length}
+                      onChange={(event) =>
+                        updateHandCard(card.key, 'length', event.target.value)
+                      }
+                      placeholder="3:45"
+                      className="mt-1 block w-full rounded border border-rs-border px-2 py-1 text-sm"
+                    />
+                  </div>
+                </div>
+              ),
+            }))}
+          />
         </div>
       )}
     </ResponsiveDialog>
   )
 }
 
-/** Builds one brand-new `EditRow` for the sheet's "Add to the buffer" action. */
+/** Collapsed-trigger summary for a by-hand card, so a collapsed card still identifies which song it holds. */
+function handCardSummary(card: HandCard, index: number): string {
+  if (!card.title.trim()) return `Song ${index + 1}`
+  return card.artist.trim() ? `${card.title} · ${card.artist}` : card.title
+}
+
+/** Builds one brand-new `EditRow` for the sheet's confirm action, whichever source it came from. */
 function newRow(
   title: string,
   artist: string,

@@ -192,7 +192,7 @@ describe('AddSongsSheet', () => {
     })
   })
 
-  it('adds a by-hand row with the typed fields once "Add to the buffer" is pressed', async () => {
+  it('adds a by-hand row with the typed fields once "Confirm Songs" is pressed', async () => {
     const onAddRows = vi.fn()
     const user = userEvent.setup()
     renderOpen(onAddRows)
@@ -201,7 +201,7 @@ describe('AddSongsSheet', () => {
     await user.type(screen.getByLabelText('Title'), 'Hand Song')
     await user.type(screen.getByLabelText('Artist'), 'Hand Artist')
     await user.type(screen.getByLabelText('Length (M:SS)'), '4:15')
-    await user.click(screen.getByRole('button', { name: 'Add to the buffer' }))
+    await user.click(screen.getByRole('button', { name: 'Confirm Songs' }))
 
     expect(onAddRows).toHaveBeenCalledTimes(1)
     const rows = onAddRows.mock.calls[0]?.[0] as EditRow[]
@@ -215,15 +215,100 @@ describe('AddSongsSheet', () => {
     })
   })
 
-  it('disables "Add to the buffer" for a by-hand entry with a blank title', async () => {
+  it('disables "Confirm Songs" for a by-hand entry with a blank title', async () => {
     const user = userEvent.setup()
     renderOpen()
 
     await user.click(screen.getByRole('radio', { name: 'By hand' }))
 
-    expect(
-      screen.getByRole('button', { name: 'Add to the buffer' }),
-    ).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Confirm Songs' })).toBeDisabled()
+  })
+
+  it('the first by-hand card is expanded by default, showing its fields', async () => {
+    const user = userEvent.setup()
+    renderOpen()
+
+    await user.click(screen.getByRole('radio', { name: 'By hand' }))
+
+    expect(screen.getByLabelText('Title')).toBeVisible()
+    expect(screen.getByLabelText('Artist')).toBeVisible()
+    expect(screen.getByLabelText('Length (M:SS)')).toBeVisible()
+  })
+
+  it('"Add Another Song" collapses the current card and opens a new expanded one, showing a re-expandable summary', async () => {
+    const user = userEvent.setup()
+    renderOpen()
+
+    await user.click(screen.getByRole('radio', { name: 'By hand' }))
+    await user.type(screen.getByLabelText('Title'), 'First Song')
+    await user.type(screen.getByLabelText('Artist'), 'First Artist')
+
+    await user.click(screen.getByRole('button', { name: 'Add Another Song' }))
+
+    // The first card's fields are gone from the DOM (collapsed), but its
+    // summary line still identifies it.
+    expect(screen.getByText('First Song · First Artist')).toBeInTheDocument()
+
+    // The second card is expanded and empty, ready for the next song.
+    expect(screen.getByLabelText('Title')).toHaveValue('')
+    expect(screen.getByLabelText('Artist')).toHaveValue('')
+
+    await user.type(screen.getByLabelText('Title'), 'Second Song')
+
+    // Re-expanding the first card shows its own fields again.
+    await user.click(screen.getByText('First Song · First Artist'))
+    expect(screen.getByLabelText('Title')).toHaveValue('First Song')
+  })
+
+  it('confirming with multiple staged by-hand cards adds all of them to the buffer', async () => {
+    const onAddRows = vi.fn()
+    const user = userEvent.setup()
+    renderOpen(onAddRows)
+
+    await user.click(screen.getByRole('radio', { name: 'By hand' }))
+    await user.type(screen.getByLabelText('Title'), 'First Song')
+    await user.type(screen.getByLabelText('Artist'), 'First Artist')
+
+    await user.click(screen.getByRole('button', { name: 'Add Another Song' }))
+    await user.type(screen.getByLabelText('Title'), 'Second Song')
+    await user.type(screen.getByLabelText('Artist'), 'Second Artist')
+    await user.type(screen.getByLabelText('Length (M:SS)'), '2:00')
+
+    await user.click(screen.getByRole('button', { name: 'Confirm Songs' }))
+
+    expect(onAddRows).toHaveBeenCalledTimes(1)
+    const rows = onAddRows.mock.calls[0]?.[0] as EditRow[]
+    expect(rows).toHaveLength(2)
+    expect(rows[0]).toMatchObject({
+      title: 'First Song',
+      artist: 'First Artist',
+      origin: 'byhand',
+    })
+    expect(rows[1]).toMatchObject({
+      title: 'Second Song',
+      artist: 'Second Artist',
+      length: '2:00',
+      origin: 'byhand',
+    })
+  })
+
+  it('a staged card left blank is skipped when confirming', async () => {
+    const onAddRows = vi.fn()
+    const user = userEvent.setup()
+    renderOpen(onAddRows)
+
+    await user.click(screen.getByRole('radio', { name: 'By hand' }))
+    await user.type(screen.getByLabelText('Title'), 'Only Song')
+
+    await user.click(screen.getByRole('button', { name: 'Add Another Song' }))
+    // Second card left entirely blank.
+
+    await user.click(screen.getByRole('button', { name: 'Confirm Songs' }))
+
+    expect(onAddRows).toHaveBeenCalledTimes(1)
+    const rows = onAddRows.mock.calls[0]?.[0] as EditRow[]
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ title: 'Only Song' })
   })
 
   it('Cancel resets the form without calling onAddRows', async () => {
