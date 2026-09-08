@@ -5,7 +5,6 @@ from .models import (
     Conflict,
     ConflictWindow,
     Membership,
-    MembershipRole,
     PersonRole,
     Rehearsal,
     RehearsalPattern,
@@ -53,29 +52,19 @@ class RoleAdmin(admin.ModelAdmin):
         return False
 
 
-class MembershipRoleInline(admin.TabularInline):
-    """Edit a Membership's declared Roles inline on the Membership admin page."""
-
-    model = MembershipRole
-    extra = 1
-
-
 @admin.register(Membership)
 class MembershipAdmin(admin.ModelAdmin):
-    """Admin for a Person's roster entry in one Semester, with declared Roles inline."""
+    """Admin for a Person's roster entry in one Semester.
+
+    No declared-Roles inline: Role declarations are a person-level fact
+    (`PersonRole`, ADR-0014) with their own admin below, not scoped to a
+    Membership — the retired `MembershipRole` model this inline used to
+    edit is written by nothing in the live app.
+    """
 
     list_display = ('person', 'semester')
     list_filter = ('semester',)
     search_fields = ('person__name', 'person__email')
-    inlines = (MembershipRoleInline,)
-
-
-@admin.register(MembershipRole)
-class MembershipRoleAdmin(admin.ModelAdmin):
-    """Admin for a single declared Role on a Membership, for direct lookup/filtering."""
-
-    list_display = ('membership', 'role')
-    list_filter = ('role',)
 
 
 @admin.register(PersonRole)
