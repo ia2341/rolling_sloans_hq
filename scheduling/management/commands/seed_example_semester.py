@@ -198,10 +198,10 @@ def _assign_person_roles(people, roles):
 def _build_song_requirements_and_assignments(songs, roles, people_by_role):
     """Build one SongRoleRequirement per catalog Role with a declared Person, casting a Person who declared it.
 
-    Every cast Person actually declared the Role they're assigned, unlike
-    `seed_dev_data`'s deliberate mismatches — issue #396 asks a demo
-    Semester's roster to read as fully matched, with no `is_role_mismatch`
-    flags to explain away.
+    Every cast Person actually declared the Role they're assigned — issue
+    #396 asks a demo Semester's roster to read as fully matched, with no
+    `is_role_mismatch` flags to explain away. (`seed_dev_data` now casts
+    the same way for the same reason.)
     """
     castable_roles = [role for role in roles if people_by_role.get(role.pk)]
     for song in songs:
