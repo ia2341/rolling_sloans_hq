@@ -891,18 +891,33 @@ def serialize_schedule(request, semester, *, rehearsal_id=None) -> dict:
     }
 
 
-def _serialize_roster_entry(membership):
-    """Return one Band-page row: `Person.name` (never the object, per `.name`-not-`Person` rule), declared Role names, and the annotated Song count (issue #333)."""
-    return {
+def _serialize_roster_entry(membership, *, is_admin: bool):
+    """Return one Band-page row: `Person.name` (never the object, per `.name`-not-`Person` rule), declared Role names, and the annotated Song count (issue #333).
+
+    Carries `invite_status` (issue #455) only for an admin viewer — every
+    Membership is on this list regardless of invite state, so an admin
+    needs a way to tell a not-yet-invited row apart from an active one;
+    a non-admin viewer has no business seeing a teammate's invite
+    lifecycle, per the "absent, not null" wire contract.
+    """
+    entry = {
         'id': membership.person_id,
         'name': membership.person.name,
         'roles': [person_role.role.name for person_role in membership.person.personrole_set.all()],
         'song_count': membership.songs_count,
     }
+    if is_admin:
+        entry['invite_status'] = invite_status_for(membership.person)
+    return entry
 
 
-def serialize_band(memberships, semester, *, unassigned_role_holders=None) -> dict:
-    """Return the `/api/members/` `data` shape (issue #333): the viewing Semester's active Roster, or the empty/no-Semester shape.
+def serialize_band(memberships, semester, *, unassigned_role_holders=None, is_admin: bool = False) -> dict:
+    """Return the `/api/members/` `data` shape (issue #333): the viewing Semester's whole Roster, or the empty/no-Semester shape.
+
+    Every Membership is included regardless of invite/password state
+    (issue #455) — see `BandApiView`'s docstring for why. `is_admin` gates
+    only the per-row `invite_status` key (see `_serialize_roster_entry`),
+    not which rows appear.
 
     Carries one admin-only key, `unassigned_role_holders` — the count and
     names of people with a `SongRoleAssignment` this Semester but no
@@ -925,7 +940,7 @@ def serialize_band(memberships, semester, *, unassigned_role_holders=None) -> di
     data = {
         'semester_name': semester.name,
         'member_count': len(entries),
-        'members': [_serialize_roster_entry(membership) for membership in entries],
+        'members': [_serialize_roster_entry(membership, is_admin=is_admin) for membership in entries],
     }
     if unassigned_role_holders is not None:
         holders = list(unassigned_role_holders)
@@ -965,13 +980,12 @@ def _serialize_roster_edit_member(membership, *, mismatched_person_ids: frozense
 def serialize_roster_edit(semester, memberships, *, mismatched_person_ids: frozenset[int]) -> dict:
     """Return the `/api/members/roster/` `data` shape (issue #336): every Membership in the viewing Semester, invited-but-inactive included.
 
-    Unlike `serialize_band()` (active only), this is the editor's read
-    model, so it uses `roster_for()` rather than `active_roster_for()` — an
-    admin needs to see, rename and offer "Invite again" on a Person who
-    hasn't set a password yet, which is exactly the row `serialize_band()`
-    deliberately excludes. Carries no `available_roles` (issue #379): the
-    editor no longer offers any Role-editing control, so there is no Role
-    catalog for it to pick from.
+    Like `serialize_band()` (issue #455), every Membership is included
+    regardless of invite state — this view additionally needs to rename
+    and offer "Invite again" on a not-yet-active Person, which
+    `serialize_band()` doesn't need since it's read-only. Carries no
+    `available_roles` (issue #379): the editor no longer offers any
+    Role-editing control, so there is no Role catalog for it to pick from.
     """
     entries = list(memberships)
     active_count = sum(1 for membership in entries if membership.person.has_usable_password())

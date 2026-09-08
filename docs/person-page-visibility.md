@@ -13,7 +13,7 @@ Both routes are member-facing surfaces for every logged-in Person, admins includ
 
 ## `/members/` — the list row
 
-**Admin (edit mode)** is the third verdict column added by issue #227's Roster editor: an admin-only mode on this same route, entered via "Edit roster", holding one Pending Buffer committed by `apply_roster_edits()` under a single Save Changes. It never changes the Teammate/Self verdicts for a non-admin viewer, or for an admin who hasn't pressed the button (read mode stays byte-identical).
+**Admin (edit mode)** is the third verdict column added by issue #227's Roster editor: an admin-only mode on this same route, entered via "Edit roster", holding one Pending Buffer committed by `apply_roster_edits()` under a single Save Changes. It never changes the Teammate/Self verdicts for a non-admin viewer. Read mode is **not** byte-identical across viewers, though: since issue #455, an admin's `GET /api/members/` payload carries `invite_status` per row even before "Edit roster" is ever pressed, the one exception to that claim — see the `invite_status` row below.
 
 | Field | Teammate | Self | Admin (edit mode) | Notes |
 | --- | --- | --- | --- | --- |
@@ -26,6 +26,7 @@ Both routes are member-facing surfaces for every logged-in Person, admins includ
 | Remove-from-Roster control | ❌ never | ❌ never | ✅, except the requesting admin's own row | Absent (with a short reason in its place) from the row belonging to the admin submitting the request — `apply_roster_edits()`'s `SelfRemovalError` backstops a hand-crafted POST |
 | `Conflict`, `ConflictWindow` (any field, `reason` above all) | ❌ never | ❌ never | ❌ never | ADR 0005's boundary is drawn around the surface, not the viewer — nothing about Roster editing needs Conflict data |
 | `Person.email` | ❌ never | ❌ never | ✅, "Invite someone new" form input and removal confirmation only | Issue #230: the invite form is a blank input an admin types into, never a rendering of an existing Person's address; the removal confirmation shows a to-be-removed Person's email so two similarly-named people can be told apart. Nowhere else on this page |
+| `invited_at`, derived as `invite_status` (`'not_yet_invited'`/`'invited'`/`'accepted'`) | ❌ never | ❌ never | ✅ read, in **read mode too** — a "not yet invited" / "invited · not active yet" badge on the row | Issue #455: every Membership now shows on this list regardless of invite/password state, so an admin needs a way to tell a not-yet-invited row apart from an active one; the derived status is never a raw timestamp, and is absent from the payload entirely for a Teammate or Self viewer, per the "absent, not null" wire contract |
 | everything else | ❌ never | ❌ never | ❌ never | Every admin-status field — cross-semester identity stays on the admin-only people-management page, since admin status is not semester-scoped |
 
 ## `/members/<int:pk>/` — the person page

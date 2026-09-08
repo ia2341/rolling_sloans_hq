@@ -489,10 +489,16 @@ class ConflictWithdrawApiView(ApiView, View):
 
 
 class BandApiView(ApiView, View):
-    """`GET /api/members/`: the Band page's whole read model — the viewing Semester's active Roster, in one round trip (issue #333).
+    """`GET /api/members/`: the Band page's whole read model — the viewing Semester's whole Roster, in one round trip (issue #333).
 
-    Active only: an invited-but-not-yet-active Person (no password set
-    yet) stays off this list, reappearing only in the Roster editor (#336).
+    Every Membership row is included regardless of invite/password state
+    (issue #455) — Membership alone is "who's in the band this semester"
+    (per `CONTEXT.md`'s own definition), and invite status is an
+    orthogonal, admin-only display fact surfaced via `invite_status` on
+    each row rather than a reason to hide the row outright. Previously
+    this excluded anyone without a usable password, which meant a person
+    an admin added-without-inviting during roster setup was a real
+    Membership row invisible on their own Band page.
     """
 
     def get(self, request):
@@ -507,10 +513,10 @@ class BandApiView(ApiView, View):
         if semester is None:
             memberships = Membership.objects.none()
         else:
-            memberships = services.active_roster_for(Membership.objects.filter(semester=semester))
+            memberships = services.roster_for(Membership.objects.filter(semester=semester))
         is_admin = bool(getattr(request.user, 'is_admin', False))
         gap_holders = services.unassigned_role_holders_for(semester) if is_admin else None
-        data = serializers.serialize_band(memberships, semester, unassigned_role_holders=gap_holders)
+        data = serializers.serialize_band(memberships, semester, unassigned_role_holders=gap_holders, is_admin=is_admin)
         return self.read_response(request, data)
 
 

@@ -3,7 +3,7 @@
 Follows `test_setlist_song_api.py`'s shape (#330's designated template):
 serializer exact-key-set tests pin the wire shape for `serialize_band()`,
 `serialize_person()` and `serialize_person_recordings()`, and view-level
-tests cover the envelope, the roster's active-only filter, ordering, and
+tests cover the envelope, the admin-only `invite_status` key, ordering, and
 the `PersonRolesApiView` write path. Privacy verdicts (ADR 0005/0002/0007)
 live in `test_person_page_visibility.py`, not here.
 """
@@ -33,8 +33,8 @@ from scheduling.serializers import (
     serialize_person_recordings,
 )
 from scheduling.services import (
-    active_roster_for,
     recording_slot_options_for,
+    roster_for,
     unassigned_role_holders_for,
 )
 from scheduling.tests.api_test_helpers import admin_client, select
@@ -64,15 +64,26 @@ class SerializeBandExactKeySetTests(TestCase):
         self.assertEqual(set(data.keys()), {'semester_name', 'member_count', 'members'})
 
     def test_member_row_keys(self):
-        """A `members` row carries exactly `id`, `name`, `roles`, `song_count`."""
+        """A `members` row carries exactly `id`, `name`, `roles`, `song_count` for a non-admin viewer."""
         semester = SemesterFactory()
         person = PersonFactory(password=PASSWORD)
         MembershipFactory(person=person, semester=semester)
-        memberships = active_roster_for(Membership.objects.filter(semester=semester))
+        memberships = roster_for(Membership.objects.filter(semester=semester))
 
         data = serialize_band(memberships, semester)
 
         self.assertEqual(set(data['members'][0].keys()), {'id', 'name', 'roles', 'song_count'})
+
+    def test_member_row_keys_for_admin_viewer_add_invite_status(self):
+        """An admin viewer's `members` row additionally carries `invite_status` (issue #455)."""
+        semester = SemesterFactory()
+        person = PersonFactory(password=PASSWORD)
+        MembershipFactory(person=person, semester=semester)
+        memberships = roster_for(Membership.objects.filter(semester=semester))
+
+        data = serialize_band(memberships, semester, is_admin=True)
+
+        self.assertEqual(set(data['members'][0].keys()), {'id', 'name', 'roles', 'song_count', 'invite_status'})
 
     def test_no_semester_yields_the_empty_shape_with_the_same_keys(self):
         """`None` (no Semester at all) still returns the documented top-level keys, empty rather than absent."""
@@ -336,8 +347,8 @@ class BandApiViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()['data']['members'], [])
 
-    def test_invited_but_not_yet_active_person_is_excluded(self):
-        """A Person with no usable password (invited, not yet active) stays off the Band list."""
+    def test_invited_but_not_yet_active_person_still_shows_on_the_band_list(self):
+        """A Person with no usable password (not yet invited, or invited-but-inactive) still shows on the Band list (issue #455) -- Membership alone gates the roster, not invite state."""
         semester = SemesterFactory()
         MembershipFactory(person=self.person, semester=semester)
         not_yet_active = PersonFactory(name='Not Yet Active Placeholder')  # unusable password by default
@@ -347,7 +358,32 @@ class BandApiViewTests(TestCase):
 
         names = [row['name'] for row in response.json()['data']['members']]
         self.assertIn(self.person.name, names)
-        self.assertNotIn(not_yet_active.name, names)
+        self.assertIn(not_yet_active.name, names)
+        self.assertEqual(response.json()['data']['member_count'], 2)
+
+    def test_invite_status_is_absent_for_a_non_admin_viewer(self):
+        """A plain member viewer's rows never carry `invite_status` (issue #455) -- that's an admin-only fact."""
+        semester = SemesterFactory()
+        not_yet_active = PersonFactory(name='Not Yet Active Placeholder')
+        MembershipFactory(person=not_yet_active, semester=semester)
+
+        response = self.client.get(band_api_url())
+
+        row = response.json()['data']['members'][0]
+        self.assertNotIn('invite_status', row)
+
+    def test_invite_status_is_present_for_an_admin_viewer(self):
+        """An admin viewer's row for a not-yet-invited Person carries `invite_status: 'not_yet_invited'` (issue #455)."""
+        semester = SemesterFactory()
+        not_yet_active = PersonFactory(name='Not Yet Active Placeholder')
+        MembershipFactory(person=not_yet_active, semester=semester)
+        admin_client(self)
+        select(self, semester)
+
+        response = self.client.get(band_api_url())
+
+        row = response.json()['data']['members'][0]
+        self.assertEqual(row['invite_status'], 'not_yet_invited')
 
     def test_members_ordered_by_name(self):
         """The roster is ordered by the Person's name."""
