@@ -308,6 +308,7 @@ export function Setlist() {
       <AddSongsSheet
         open={addSheetOpen}
         onOpenChange={setAddSheetOpen}
+        roles={data.roles}
         onAddRows={addRows}
       />
 
