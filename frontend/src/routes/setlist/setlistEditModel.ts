@@ -54,6 +54,8 @@ export interface EditRow {
   } | null
   /** This row's 1-based concert position at load time -- `null` for a brand-new row. */
   originalPosition: number | null
+  /** Role Group -> target count entries staged while adding this row (issue #461) -- always empty for an `origin: 'existing'` row. */
+  roleGroupCounts?: { roleGroupId: number; count: number }[]
 }
 
 let rowKeySequence = 0
@@ -227,6 +229,10 @@ export function buildBufferWire(
       artist: row.artist,
       length: row.length,
       notes: row.notes,
+      role_group_counts: (row.roleGroupCounts ?? []).map((entry) => ({
+        role_group_id: entry.roleGroupId,
+        count: entry.count,
+      })),
     })),
     deleted_song_ids: rows
       .filter((row) => row.deleted && row.songId !== null)
@@ -282,6 +288,11 @@ export function mapSetlistPreviewToResult(
     ...fallout.pending_deletions.map((deletion): PreviewChange => ({
       op: 'Delete',
       object: deletion.title,
+    })),
+    ...fallout.pending_role_requirements.map((addition): PreviewChange => ({
+      op: 'Roles',
+      object: `${addition.role_name}, ${addition.count}`,
+      why: addition.song_title,
     })),
   ]
   if (fallout.reordered) {

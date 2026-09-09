@@ -48,6 +48,12 @@ export interface SetlistPayload {
   songs: SetlistSong[]
 }
 
+/** One Role Group -> target count entry staged on a brand-new setlist row (issue #461). */
+export interface SetlistRoleGroupCountWire {
+  role_group_id: number
+  count: number
+}
+
 /** One `/api/setlist/{preview,save}/` request body row (issue #335, mirroring `scheduling/api_builders.py`'s wire shape). */
 export interface SetlistEditRowWire {
   row_key: string
@@ -57,6 +63,8 @@ export interface SetlistEditRowWire {
   /** `M:SS`/`H:MM:SS`, exactly what was typed -- never seconds, never a client-side parse. */
   length: string
   notes: string
+  /** Only meaningful when `song_id` is null -- an existing Song's Requirements are edited elsewhere (issue #461). */
+  role_group_counts: SetlistRoleGroupCountWire[]
 }
 
 /** `/api/setlist/{preview,save}/` request body (issue #335, mirroring `scheduling/services.py`'s `SetlistEditBuffer`). */
@@ -75,6 +83,13 @@ export interface SetlistSongDeletionWire {
   running_order_count: number
 }
 
+/** One `SetlistRoleRequirementAddition`, as `serialize_setlist_edit_fallout()` emits it (issue #461). */
+export interface SetlistRoleRequirementAdditionWire {
+  song_title: string
+  role_name: string
+  count: number
+}
+
 /** `SetlistEditFallout`, as `serialize_setlist_edit_fallout()` emits it -- the `/api/setlist/preview/` response's `fallout` value. */
 export interface SetlistEditFalloutWire {
   is_blocked: boolean
@@ -84,6 +99,7 @@ export interface SetlistEditFalloutWire {
   pending_edits: string[]
   reordered: boolean
   pending_deletions: SetlistSongDeletionWire[]
+  pending_role_requirements: SetlistRoleRequirementAdditionWire[]
   loud: string[]
   quiet: string[]
 }

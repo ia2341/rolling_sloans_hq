@@ -13,6 +13,8 @@ from scheduling.services import (
     SetlistEditBuffer,
     SetlistEditFallout,
     SetlistEditRow,
+    SetlistRoleGroupCount,
+    SetlistRoleRequirementAddition,
     SetlistSongDeletion,
     SpotifyImportCandidate,
 )
@@ -33,6 +35,9 @@ class SerializeSetlistEditFalloutTests(SimpleTestCase):
             pending_deletions=[
                 SetlistSongDeletion(title='Doomed', recording_count=2, uploader_count=1, running_order_count=3),
             ],
+            pending_role_requirements=[
+                SetlistRoleRequirementAddition(song_title='New Song', role_name='Bassist', count=1),
+            ],
             loud=['Deleting Doomed destroys 2 recordings.'],
             quiet=['Reordering the setlist changes concert position only.'],
         )
@@ -43,12 +48,16 @@ class SerializeSetlistEditFalloutTests(SimpleTestCase):
             set(payload.keys()),
             {
                 'is_blocked', 'block_message', 'is_stale', 'pending_adds', 'pending_edits',
-                'reordered', 'pending_deletions', 'loud', 'quiet',
+                'reordered', 'pending_deletions', 'pending_role_requirements', 'loud', 'quiet',
             },
         )
         self.assertEqual(
             set(payload['pending_deletions'][0].keys()),
             {'title', 'recording_count', 'uploader_count', 'running_order_count'},
+        )
+        self.assertEqual(
+            set(payload['pending_role_requirements'][0].keys()),
+            {'song_title', 'role_name', 'count'},
         )
 
 
@@ -66,7 +75,10 @@ class SerializeSetlistEditBufferTests(SimpleTestCase):
             semester_updated_at=timezone.now(),
             rows=[
                 SetlistEditRow(song_id=7, title='T', artist='A', length=timedelta(minutes=3, seconds=30), notes='n'),
-                SetlistEditRow(song_id=None, title='New', artist='B', length=timedelta(minutes=2), notes=''),
+                SetlistEditRow(
+                    song_id=None, title='New', artist='B', length=timedelta(minutes=2), notes='',
+                    role_group_counts=(SetlistRoleGroupCount(role_group_id=4, count=2),),
+                ),
             ],
             deleted_song_ids=frozenset({9, 10}),
         )
@@ -76,11 +88,13 @@ class SerializeSetlistEditBufferTests(SimpleTestCase):
         self.assertEqual(set(payload.keys()), {'semester_id', 'semester_updated_at', 'rows', 'deleted_song_ids'})
         self.assertEqual(
             set(payload['rows'][0].keys()),
-            {'row_key', 'song_id', 'title', 'artist', 'length', 'notes'},
+            {'row_key', 'song_id', 'title', 'artist', 'length', 'notes', 'role_group_counts'},
         )
         self.assertEqual(payload['deleted_song_ids'], [9, 10])
         self.assertEqual(payload['rows'][0]['length'], '3:30')
+        self.assertEqual(payload['rows'][0]['role_group_counts'], [])
         self.assertEqual(payload['rows'][1]['song_id'], None)
+        self.assertEqual(payload['rows'][1]['role_group_counts'], [{'role_group_id': 4, 'count': 2}])
 
 
 class SerializeSpotifyImportTests(SimpleTestCase):

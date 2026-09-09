@@ -419,6 +419,15 @@ def _serialize_setlist_song_deletion(deletion: SetlistSongDeletion) -> dict:
     }
 
 
+def _serialize_setlist_role_requirement_addition(addition) -> dict:
+    """Return one `SetlistRoleRequirementAddition`: the new Song's title, the resolved Role's name, and the target count."""
+    return {
+        'song_title': addition.song_title,
+        'role_name': addition.role_name,
+        'count': addition.count,
+    }
+
+
 def serialize_setlist_edit_fallout(fallout: SetlistEditFallout) -> dict:
     """Return a `SetlistEditFallout` as the `/api/setlist/preview/` response's `fallout` value (issue #334).
 
@@ -438,6 +447,10 @@ def serialize_setlist_edit_fallout(fallout: SetlistEditFallout) -> dict:
         'pending_edits': list(fallout.pending_edits),
         'reordered': fallout.reordered,
         'pending_deletions': [_serialize_setlist_song_deletion(deletion) for deletion in fallout.pending_deletions],
+        'pending_role_requirements': [
+            _serialize_setlist_role_requirement_addition(addition)
+            for addition in fallout.pending_role_requirements
+        ],
         'loud': list(fallout.loud),
         'quiet': list(fallout.quiet),
     }
@@ -461,6 +474,9 @@ def _serialize_setlist_edit_row_echo(row, index: int) -> dict:
         'artist': row.artist,
         'length': format_song_length(row.length),
         'notes': row.notes,
+        'role_group_counts': [
+            {'role_group_id': entry.role_group_id, 'count': entry.count} for entry in row.role_group_counts
+        ],
     }
 
 

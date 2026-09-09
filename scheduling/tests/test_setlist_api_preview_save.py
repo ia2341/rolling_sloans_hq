@@ -5,8 +5,13 @@ import json
 from django.test import TestCase, override_settings
 from django.urls import reverse
 
-from scheduling.factories import SemesterFactory, SongFactory
-from scheduling.models import Song
+from scheduling.factories import (
+    RoleFactory,
+    RoleGroupFactory,
+    SemesterFactory,
+    SongFactory,
+)
+from scheduling.models import Song, SongRoleRequirement
 from scheduling.tests.api_test_helpers import (
     admin_client,
     member_client,
@@ -314,3 +319,142 @@ class SaveCommitsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertFalse(envelope['ok'])
         self.assertIsNone(envelope['values'])
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class RoleGroupCountsTests(TestCase):
+    """A new row's `role_group_counts` (issue #461): previews, saves, and validates."""
+
+    def setUp(self):
+        """Log in a synthetic admin against a Semester, with a Role Group carrying two active Roles."""
+        admin_client(self)
+        self.semester = SemesterFactory()
+        select(self, self.semester)
+        self.group = RoleGroupFactory()
+        self.first_role = RoleFactory(name='Alpha Vocalist', group=self.group)
+        RoleFactory(name='Zed Vocalist', group=self.group)
+
+    def test_preview_reports_the_pending_role_requirement_and_writes_nothing(self):
+        """Preview's fallout names the representative Role and count, and creates no SongRoleRequirement row."""
+        body = _valid_body(self.semester, rows=[
+            {
+                'row_key': 'new', 'song_id': None, 'title': 'New Song', 'artist': 'New Artist',
+                'length': '3:00', 'notes': '',
+                'role_group_counts': [{'role_group_id': self.group.pk, 'count': 3}],
+            },
+        ])
+        response = assert_preview_writes_nothing(
+            self, _preview_url(), models_to_check=[Song, SongRoleRequirement], semester=self.semester, json_body=body,
+        )
+        envelope = json.loads(response.content)
+
+        self.assertTrue(envelope['ok'])
+        self.assertEqual(
+            envelope['fallout']['pending_role_requirements'],
+            [{'song_title': 'New Song', 'role_name': self.first_role.name, 'count': 3}],
+        )
+        self.assertEqual(
+            envelope['values']['rows'][0]['role_group_counts'],
+            [{'role_group_id': self.group.pk, 'count': 3}],
+        )
+
+    def test_save_creates_the_song_role_requirement(self):
+        """Save actually creates the SongRoleRequirement against the representative Role."""
+        body = _valid_body(self.semester, rows=[
+            {
+                'row_key': 'new', 'song_id': None, 'title': 'New Song', 'artist': 'New Artist',
+                'length': '3:00', 'notes': '',
+                'role_group_counts': [{'role_group_id': self.group.pk, 'count': 2}],
+            },
+        ])
+
+        response, envelope = _post_json(self, _save_url(), body)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(envelope['ok'])
+        song = Song.objects.get(title='New Song')
+        requirement = SongRoleRequirement.objects.get(song=song)
+        self.assertEqual(requirement.role, self.first_role)
+        self.assertEqual(requirement.count, 2)
+
+    def test_role_group_counts_on_an_existing_song_row_is_rejected(self):
+        """`role_group_counts` on a row naming an existing Song is a Validation Error, not silently ignored."""
+        song = SongFactory(semester=self.semester, position=1)
+        body = _valid_body(self.semester, rows=[
+            {
+                'row_key': 'existing', 'song_id': song.pk, 'title': song.title, 'artist': song.artist,
+                'length': '3:00', 'notes': '',
+                'role_group_counts': [{'role_group_id': self.group.pk, 'count': 1}],
+            },
+        ])
+
+        response, envelope = _post_json(self, _preview_url(), body)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(envelope['ok'])
+        self.assertIn('role_group_counts', envelope['errors']['existing'])
+
+    def test_unknown_role_group_id_is_rejected(self):
+        """A `role_group_id` naming no RoleGroup is a Validation Error."""
+        body = _valid_body(self.semester, rows=[
+            {
+                'row_key': 'new', 'song_id': None, 'title': 'New Song', 'artist': 'New Artist',
+                'length': '3:00', 'notes': '',
+                'role_group_counts': [{'role_group_id': 999999, 'count': 1}],
+            },
+        ])
+
+        _response, envelope = _post_json(self, _preview_url(), body)
+
+        self.assertFalse(envelope['ok'])
+        self.assertIn('role_group_counts.0.role_group_id', envelope['errors']['new'])
+
+    def test_duplicate_role_group_id_on_one_row_is_rejected(self):
+        """The same `role_group_id` staged twice on one row is a Validation Error."""
+        body = _valid_body(self.semester, rows=[
+            {
+                'row_key': 'new', 'song_id': None, 'title': 'New Song', 'artist': 'New Artist',
+                'length': '3:00', 'notes': '',
+                'role_group_counts': [
+                    {'role_group_id': self.group.pk, 'count': 1},
+                    {'role_group_id': self.group.pk, 'count': 2},
+                ],
+            },
+        ])
+
+        _response, envelope = _post_json(self, _preview_url(), body)
+
+        self.assertFalse(envelope['ok'])
+        self.assertIn('role_group_counts.1.role_group_id', envelope['errors']['new'])
+
+    def test_non_list_role_group_counts_is_rejected_not_a_500(self):
+        """A truthy non-iterable `role_group_counts` (e.g. an int) is a Validation Error, not an unhandled TypeError."""
+        body = _valid_body(self.semester, rows=[
+            {
+                'row_key': 'new', 'song_id': None, 'title': 'New Song', 'artist': 'New Artist',
+                'length': '3:00', 'notes': '', 'role_group_counts': 5,
+            },
+        ])
+
+        response, envelope = _post_json(self, _preview_url(), body)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(envelope['ok'])
+        self.assertIn('role_group_counts', envelope['errors']['new'])
+
+    def test_role_group_with_no_active_role_is_rejected(self):
+        """A Role Group whose only Role is deactivated has nothing to create a Requirement against."""
+        empty_group = RoleGroupFactory()
+        RoleFactory(group=empty_group, is_active=False)
+        body = _valid_body(self.semester, rows=[
+            {
+                'row_key': 'new', 'song_id': None, 'title': 'New Song', 'artist': 'New Artist',
+                'length': '3:00', 'notes': '',
+                'role_group_counts': [{'role_group_id': empty_group.pk, 'count': 1}],
+            },
+        ])
+
+        _response, envelope = _post_json(self, _preview_url(), body)
+
+        self.assertFalse(envelope['ok'])
+        self.assertIn('role_group_counts.0.role_group_id', envelope['errors']['new'])

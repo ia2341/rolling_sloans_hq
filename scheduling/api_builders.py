@@ -23,7 +23,11 @@ Wire shape (the API contract, not merely an implementation detail)::
                 "title": "...",
                 "artist": "...",
                 "length": "3:45",       # M:SS / H:MM:SS, exactly what a musician types
-                "notes": "..."
+                "notes": "...",
+                "role_group_counts": [  # issue #461; only for a brand-new row (song_id: null)
+                    {"role_group_id": 3, "count": 2},
+                    ...
+                ]
             },
             ...
         ],
@@ -47,7 +51,7 @@ from django.utils.dateparse import parse_date, parse_datetime, parse_time
 
 from identity.models import Person
 from scheduling.fields import parse_song_length
-from scheduling.models import Conflict, RehearsalSong, Role, Song
+from scheduling.models import Conflict, RehearsalSong, Role, RoleGroup, Song
 from scheduling.services import (
     AdjudicationBuffer,
     AdjudicationEntry,
@@ -63,6 +67,7 @@ from scheduling.services import (
     SemesterDefaultsReapplyBuffer,
     SetlistEditBuffer,
     SetlistEditRow,
+    SetlistRoleGroupCount,
     SkipDateInput,
     SongRoleRequirementBuffer,
     SongRoleRequirementEntry,
@@ -87,6 +92,12 @@ _NOTE_MAX_LENGTH = 255
 _NOTE_TOO_LONG_MESSAGE = f'Ensure this note has at most {_NOTE_MAX_LENGTH} characters.'
 _COUNT_TOO_LOW_MESSAGE = 'A Requirement must target at least 1 person.'
 _DUPLICATE_ROLE_MESSAGE = 'This Role already has a Requirement on this row — remove the duplicate.'
+_UNKNOWN_ROLE_GROUP_MESSAGE = 'This Role Group no longer exists.'
+_DUPLICATE_ROLE_GROUP_MESSAGE = 'This Role Group is already staged on this row — remove the duplicate.'
+_ROLE_GROUP_NO_ACTIVE_ROLE_MESSAGE = 'This Role Group has no active Role to create a Requirement for.'
+_ROLE_GROUP_COUNTS_ON_EXISTING_SONG_MESSAGE = (
+    'Role Group counts can only be staged on a brand-new song — edit its Requirements instead.'
+)
 
 
 class SetlistBufferValidationError(ValidationError):
@@ -219,6 +230,27 @@ def build_setlist_buffer_from_request(request, *, viewing_semester) -> SetlistEd
         Song.objects.filter(semester=viewing_semester, pk__in=candidate_song_ids).values_list('pk', flat=True)
     ) if candidate_song_ids else set()
 
+    candidate_role_group_ids = set()
+    for raw_row in rows_raw:
+        if not isinstance(raw_row, dict):
+            continue
+        role_group_counts_raw = raw_row.get('role_group_counts') or []
+        if not isinstance(role_group_counts_raw, list):
+            continue
+        for raw_count in role_group_counts_raw:
+            if isinstance(raw_count, dict):
+                candidate_role_group_id = _expect_int(raw_count.get('role_group_id'))
+                if candidate_role_group_id is not None:
+                    candidate_role_group_ids.add(candidate_role_group_id)
+    existing_role_group_ids = set(
+        RoleGroup.objects.filter(pk__in=candidate_role_group_ids).values_list('pk', flat=True)
+    ) if candidate_role_group_ids else set()
+    role_group_ids_with_an_active_role = set(
+        Role.objects.filter(
+            group_id__in=existing_role_group_ids, is_active=True,
+        ).values_list('group_id', flat=True).distinct()
+    ) if existing_role_group_ids else set()
+
     row_errors = {}
     seen_row_keys = set()
     rows = []
@@ -273,6 +305,42 @@ def build_setlist_buffer_from_request(request, *, viewing_semester) -> SetlistEd
             except ValidationError as error:
                 field_errors.setdefault('length', []).extend(error.messages)
 
+        role_group_counts_raw = raw_row.get('role_group_counts') or []
+        role_group_counts = []
+        if not isinstance(role_group_counts_raw, list):
+            field_errors.setdefault('role_group_counts', []).append(_MUST_BE_LIST_MESSAGE)
+        elif role_group_counts_raw and song_id is not None:
+            field_errors.setdefault('role_group_counts', []).append(_ROLE_GROUP_COUNTS_ON_EXISTING_SONG_MESSAGE)
+        else:
+            seen_role_group_ids = set()
+            for count_index, raw_count in enumerate(role_group_counts_raw):
+                count_key = f'role_group_counts.{count_index}'
+                if not isinstance(raw_count, dict):
+                    field_errors.setdefault(count_key, []).append(_MUST_BE_OBJECT_MESSAGE)
+                    continue
+
+                role_group_id = _expect_int(raw_count.get('role_group_id'))
+                if role_group_id is None:
+                    field_errors.setdefault(f'{count_key}.role_group_id', []).append(_MUST_BE_INTEGER_MESSAGE)
+                elif role_group_id not in existing_role_group_ids:
+                    field_errors.setdefault(f'{count_key}.role_group_id', []).append(_UNKNOWN_ROLE_GROUP_MESSAGE)
+                elif role_group_id in seen_role_group_ids:
+                    field_errors.setdefault(f'{count_key}.role_group_id', []).append(_DUPLICATE_ROLE_GROUP_MESSAGE)
+                elif role_group_id not in role_group_ids_with_an_active_role:
+                    field_errors.setdefault(f'{count_key}.role_group_id', []).append(_ROLE_GROUP_NO_ACTIVE_ROLE_MESSAGE)
+
+                group_count = _expect_int(raw_count.get('count'))
+                if group_count is None:
+                    field_errors.setdefault(f'{count_key}.count', []).append(_MUST_BE_INTEGER_MESSAGE)
+                elif group_count < 1:
+                    field_errors.setdefault(f'{count_key}.count', []).append(_COUNT_TOO_LOW_MESSAGE)
+
+                if role_group_id is not None and group_count is not None:
+                    seen_role_group_ids.add(role_group_id)
+                    role_group_counts.append(
+                        SetlistRoleGroupCount(role_group_id=role_group_id, count=group_count)
+                    )
+
         if field_errors:
             row_errors[row_key] = field_errors
             continue
@@ -283,6 +351,7 @@ def build_setlist_buffer_from_request(request, *, viewing_semester) -> SetlistEd
             artist=artist.strip(),
             length=length,
             notes=notes,
+            role_group_counts=tuple(role_group_counts),
         ))
 
     if row_errors or non_field_errors:
