@@ -101,6 +101,12 @@ class SaveRehearsalPatternTests(TestCase):
 _earliest = timezone.localdate() + timedelta(days=1)
 TOMORROW = _earliest + timedelta(days=(RehearsalTime.WEDNESDAY - _earliest.weekday()) % 7)
 
+# A past Wednesday, likewise computed relative to today rather than hardcoded -- and computed from
+# yesterday, not from TOMORROW - 7 days, so it stays strictly before today even when today itself is a
+# Wednesday (the one day of the week TOMORROW - 7 would otherwise land back on today, not the past).
+_latest_past = timezone.localdate() - timedelta(days=1)
+PAST_WEDNESDAY = _latest_past - timedelta(days=(_latest_past.weekday() - RehearsalTime.WEDNESDAY) % 7)
+
 
 class PreviewRehearsalGenerationTests(TestCase):
     def _pattern(self, **overrides):
@@ -128,7 +134,7 @@ class PreviewRehearsalGenerationTests(TestCase):
     def test_a_range_starting_before_today_is_clamped_to_today(self):
         """A Pattern/range whose start_date is in the past never produces a Create, Re-time, or Orphan the Pending Buffer would refuse to save (issue #222 review)."""
         semester = SemesterFactory()
-        past_wednesday = TOMORROW - timedelta(days=7)
+        past_wednesday = PAST_WEDNESDAY
         stale_rehearsal = RehearsalFactory(semester=semester, date=past_wednesday, start_time=time(18, 0), end_time=time(20, 0))
 
         diff = preview_rehearsal_generation(semester, self._pattern(start_date=past_wednesday))
@@ -142,7 +148,7 @@ class PreviewRehearsalGenerationTests(TestCase):
         semester = SemesterFactory()
 
         diff = preview_rehearsal_generation(
-            semester, self._pattern(), date_range=(TOMORROW - timedelta(days=14), TOMORROW - timedelta(days=7)),
+            semester, self._pattern(), date_range=(PAST_WEDNESDAY - timedelta(days=7), PAST_WEDNESDAY),
         )
 
         self.assertEqual(diff.creates, [])
