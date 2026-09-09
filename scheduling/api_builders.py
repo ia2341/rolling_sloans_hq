@@ -234,7 +234,10 @@ def build_setlist_buffer_from_request(request, *, viewing_semester) -> SetlistEd
     for raw_row in rows_raw:
         if not isinstance(raw_row, dict):
             continue
-        for raw_count in raw_row.get('role_group_counts') or []:
+        role_group_counts_raw = raw_row.get('role_group_counts') or []
+        if not isinstance(role_group_counts_raw, list):
+            continue
+        for raw_count in role_group_counts_raw:
             if isinstance(raw_count, dict):
                 candidate_role_group_id = _expect_int(raw_count.get('role_group_id'))
                 if candidate_role_group_id is not None:

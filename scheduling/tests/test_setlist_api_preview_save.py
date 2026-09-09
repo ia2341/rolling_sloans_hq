@@ -427,6 +427,21 @@ class RoleGroupCountsTests(TestCase):
         self.assertFalse(envelope['ok'])
         self.assertIn('role_group_counts.1.role_group_id', envelope['errors']['new'])
 
+    def test_non_list_role_group_counts_is_rejected_not_a_500(self):
+        """A truthy non-iterable `role_group_counts` (e.g. an int) is a Validation Error, not an unhandled TypeError."""
+        body = _valid_body(self.semester, rows=[
+            {
+                'row_key': 'new', 'song_id': None, 'title': 'New Song', 'artist': 'New Artist',
+                'length': '3:00', 'notes': '', 'role_group_counts': 5,
+            },
+        ])
+
+        response, envelope = _post_json(self, _preview_url(), body)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(envelope['ok'])
+        self.assertIn('role_group_counts', envelope['errors']['new'])
+
     def test_role_group_with_no_active_role_is_rejected(self):
         """A Role Group whose only Role is deactivated has nothing to create a Requirement against."""
         empty_group = RoleGroupFactory()
