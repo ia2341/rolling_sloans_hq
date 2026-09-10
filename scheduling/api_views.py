@@ -32,6 +32,7 @@ from identity.services import (
     CannotRevokeLastActiveAdminError,
     CannotRevokeOwnAdminStatusError,
     EmailDeliveryError,
+    PersonIsDeactivatedError,
     apply_admin_status_change,
     apply_person_deactivation,
     apply_person_reactivation,
@@ -614,7 +615,7 @@ class RosterResendInviteApiView(AdminApiView, View):
         person = get_object_or_404(Person, pk=pk)
         try:
             resend_invite(person)
-        except AlreadyHasPasswordError as error:
+        except (AlreadyHasPasswordError, PersonIsDeactivatedError) as error:
             return self.write_response(request, ok=False, non_field_errors=[str(error)])
         except EmailDeliveryError:
             return self.write_response(

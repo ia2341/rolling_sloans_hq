@@ -181,7 +181,8 @@ function DetailsSection({
       </dl>
       {data.is_self && <ChangePasswordRow />}
       {data.invite_status !== undefined &&
-        data.invite_status !== 'accepted' && (
+        data.invite_status !== 'accepted' &&
+        data.is_active !== false && (
           <InviteRow
             personId={data.id}
             inviteStatus={data.invite_status}

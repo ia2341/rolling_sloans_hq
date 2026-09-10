@@ -292,6 +292,29 @@ describe('Person', () => {
     ).not.toBeInTheDocument()
   })
 
+  it('renders no Invite action for a deactivated teammate, even with a pending invite status (issue #469 review)', async () => {
+    mockFetchByUrl({
+      '/api/members/2/': () => ({
+        status: 200,
+        body: {
+          context: memberContext({
+            viewer: { ...memberContext().viewer, is_admin: true },
+          }),
+          data: adminViewingTeammatePayload({
+            invite_status: 'invited',
+            is_active: false,
+          }),
+        },
+      }),
+    })
+    renderPerson('/members/2')
+
+    await screen.findByRole('heading', { name: 'Alex Kim' })
+    expect(
+      screen.queryByRole('button', { name: /^Invite/ }),
+    ).not.toBeInTheDocument()
+  })
+
   it('does not render a "Deliberately absent" card, for any viewer state (issue #363)', async () => {
     mockFetchByUrl({
       '/api/members/2/': () => ({
