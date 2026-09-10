@@ -51,6 +51,14 @@ class AlreadyHasPasswordError(Exception):
     """Raised by `resend_invite` when the target Person already has a usable password."""
 
 
+class CannotRevokeOwnAdminStatusError(Exception):
+    """Raised by `apply_admin_status_change` when an admin attempts to revoke their own admin access."""
+
+
+class CannotRevokeLastActiveAdminError(Exception):
+    """Raised by `apply_admin_status_change` when revoking would leave no Person who is both `is_admin` and `is_active`."""
+
+
 def invite_person(*, name, email, send_via_on_commit=False):
     """Create an allowlisted Person with no usable password and email them an invite.
 
@@ -135,6 +143,53 @@ def resend_invite(person):
     person.invited_at = timezone.now()
     person.save(update_fields=['invited_at'])
     return person
+
+
+def other_active_admins(person):
+    """Return every Person other than `person` who is both `is_admin=True` and `is_active=True`.
+
+    A standalone helper, not inlined into `apply_admin_status_change()`'s
+    guard, because it answers a question a second lifecycle act needs
+    unchanged: Deactivate (ADR 0017, the sibling issue in this line of
+    work) refuses to deactivate the last Person who can still log in and
+    administer, which is the identical "who else can" check this function
+    already answers.
+    """
+    return Person.objects.filter(is_admin=True, is_active=True).exclude(pk=person.pk)
+
+
+def apply_admin_status_change(*, target, is_admin, requesting_admin):
+    """Set `target.is_admin` to `is_admin`, refusing to leave the band with no one who can administer it.
+
+    Only a revoke (`is_admin=False` on a currently-admin `target`) is ever
+    refused — granting admin access, and reapplying the status `target`
+    already holds, carry neither risk this guards against, so both are a
+    plain, unconditional write.
+
+    Raises:
+        CannotRevokeOwnAdminStatusError: `target` is `requesting_admin`
+            themselves — an admin must have another admin revoke them,
+            never themselves, so a mistake is always recoverable by
+            someone.
+        CannotRevokeLastActiveAdminError: `target` is the last remaining
+            Person who is both `is_admin=True` and `is_active=True` —
+            revoking them would leave no one able to log in and
+            administer the band. Only checked when `target` is itself
+            currently active: a deactivated admin isn't part of that
+            count today, so clearing their flag can't be the revoke that
+            empties it. This is `other_active_admins(target)` coming back
+            empty, not "the last `is_admin=True` row".
+    """
+    if not is_admin and target.is_admin:
+        if target.pk == requesting_admin.pk:
+            raise CannotRevokeOwnAdminStatusError('You cannot revoke your own admin access.')
+        if target.is_active and not other_active_admins(target).exists():
+            raise CannotRevokeLastActiveAdminError(
+                f'{target.name} is the last active admin and cannot be revoked.'
+            )
+    target.is_admin = is_admin
+    target.save(update_fields=['is_admin'])
+    return target
 
 
 def invite_status_for(person):

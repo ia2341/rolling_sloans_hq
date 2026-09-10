@@ -711,4 +711,118 @@ describe('Person', () => {
       within(rehearsalSelect).queryByText('2026-03-01'),
     ).not.toBeInTheDocument()
   })
+
+  it('renders no admin-status control for a plain teammate viewer (issue #467)', async () => {
+    mockFetchByUrl({
+      '/api/members/2/': () => ({
+        status: 200,
+        body: { context: memberContext(), data: teammatePayload() },
+      }),
+    })
+    renderPerson('/members/2')
+
+    await screen.findByRole('heading', { name: 'Alex Kim' })
+    expect(
+      screen.queryByRole('button', { name: /admin access/ }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('renders no admin-status control on the self viewer’s own page (issue #467)', async () => {
+    mockFetchByUrl({
+      '/api/members/1/': () => ({
+        status: 200,
+        body: { context: memberContext(), data: selfPayload() },
+      }),
+    })
+    renderPerson('/members/1')
+
+    await screen.findByRole('heading', { name: 'Sam Rivera' })
+    expect(
+      screen.queryByRole('button', { name: /admin access/ }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('lets an admin grant admin access to a non-admin teammate (issue #467)', async () => {
+    const adminStatusFetch = vi.fn()
+    mockFetchByUrl({
+      '/api/members/2/admin-status/': () => {
+        adminStatusFetch()
+        return {
+          status: 200,
+          body: {
+            context: memberContext({
+              viewer: { ...memberContext().viewer, is_admin: true },
+            }),
+            ok: true,
+            errors: {},
+            non_field_errors: [],
+            fallout: null,
+            values: null,
+            data: adminViewingTeammatePayload({ is_admin: true }),
+          },
+        }
+      },
+      '/api/members/2/': () => ({
+        status: 200,
+        body: {
+          context: memberContext({
+            viewer: { ...memberContext().viewer, is_admin: true },
+          }),
+          data: adminViewingTeammatePayload({ is_admin: false }),
+        },
+      }),
+    })
+
+    const user = (await import('@testing-library/user-event')).default.setup()
+    renderPerson('/members/2')
+
+    const grantButton = await screen.findByRole('button', {
+      name: 'Grant admin access',
+    })
+    await user.click(grantButton)
+
+    await waitFor(() => expect(adminStatusFetch).toHaveBeenCalledTimes(1))
+    await screen.findByRole('button', { name: 'Revoke admin access' })
+  })
+
+  it('surfaces a refusal from the API inline, without touching the toggled state (issue #467)', async () => {
+    mockFetchByUrl({
+      '/api/members/2/admin-status/': () => ({
+        status: 200,
+        body: {
+          context: memberContext({
+            viewer: { ...memberContext().viewer, is_admin: true },
+          }),
+          ok: false,
+          errors: {},
+          non_field_errors: ['You cannot revoke your own admin access.'],
+          fallout: null,
+          values: null,
+          data: null,
+        },
+      }),
+      '/api/members/2/': () => ({
+        status: 200,
+        body: {
+          context: memberContext({
+            viewer: { ...memberContext().viewer, is_admin: true },
+          }),
+          data: adminViewingTeammatePayload({ is_admin: true }),
+        },
+      }),
+    })
+
+    const user = (await import('@testing-library/user-event')).default.setup()
+    renderPerson('/members/2')
+
+    const revokeButton = await screen.findByRole('button', {
+      name: 'Revoke admin access',
+    })
+    await user.click(revokeButton)
+
+    await screen.findByText('You cannot revoke your own admin access.')
+    expect(
+      screen.getByRole('button', { name: 'Revoke admin access' }),
+    ).toBeInTheDocument()
+  })
 })

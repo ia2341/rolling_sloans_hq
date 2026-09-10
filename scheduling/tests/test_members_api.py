@@ -9,12 +9,15 @@ live in `test_person_page_visibility.py`, not here.
 """
 
 from datetime import timedelta
+from unittest.mock import patch
 
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
 from identity.factories import PersonFactory
+from identity.models import Person
+from identity.services import CannotRevokeLastActiveAdminError
 from scheduling.factories import (
     MembershipFactory,
     PersonRoleFactory,
@@ -37,7 +40,7 @@ from scheduling.services import (
     roster_for,
     unassigned_role_holders_for,
 )
-from scheduling.tests.api_test_helpers import admin_client, select
+from scheduling.tests.api_test_helpers import admin_client, member_client, select
 
 PASSWORD = 'a-strong-test-password-123'
 
@@ -151,7 +154,7 @@ class SerializePersonExactKeySetTests(TestCase):
         )
 
     def test_admin_viewing_a_teammate_adds_only_available_roles(self):
-        """An admin viewing a teammate (can_edit_roles True, is_self False) adds `available_roles` and `invite_status`, never email/recordings (#397)."""
+        """An admin viewing a teammate (can_edit_roles True, is_self False) adds `available_roles`, `invite_status` and `is_admin` (#397, #467), never email/recordings."""
         semester = SemesterFactory()
         person = PersonFactory(name='Teammate Placeholder')
         membership = MembershipFactory(person=person, semester=semester)
@@ -162,11 +165,32 @@ class SerializePersonExactKeySetTests(TestCase):
             set(data.keys()),
             {
                 'id', 'name', 'is_self', 'can_edit_roles', 'has_membership', 'semester_name',
-                'roles', 'songs', 'available_roles', 'invite_status',
+                'roles', 'songs', 'available_roles', 'invite_status', 'is_admin',
             },
         )
         self.assertNotIn('email', data)
         self.assertNotIn('recordings', data)
+
+    def test_is_admin_reflects_the_targets_actual_admin_flag(self):
+        """`is_admin` (admin-viewing-a-teammate only) reads the target Person's real flag, not the viewer's (issue #467)."""
+        semester = SemesterFactory()
+        admin_target = PersonFactory(name='Admin Placeholder', is_admin=True)
+        non_admin_target = PersonFactory(name='Non-admin Placeholder', is_admin=False)
+        for person in (admin_target, non_admin_target):
+            MembershipFactory(person=person, semester=semester)
+
+        self.assertTrue(
+            serialize_person(
+                admin_target, semester=semester, is_self=False, can_edit_roles=True,
+                membership=Membership.objects.get(person=admin_target),
+            )['is_admin'],
+        )
+        self.assertFalse(
+            serialize_person(
+                non_admin_target, semester=semester, is_self=False, can_edit_roles=True,
+                membership=Membership.objects.get(person=non_admin_target),
+            )['is_admin'],
+        )
 
     def test_invite_status_reflects_the_persons_lifecycle(self):
         """`invite_status` (admin-viewing-a-teammate only) reads the Person's actual lifecycle state (#397)."""
@@ -681,3 +705,109 @@ class PersonRolesApiViewTests(TestCase):
         self.assertFalse(body['ok'])
         self.assertTrue(body['non_field_errors'])
         self.assertFalse(PersonRole.objects.filter(person=self.person).exists())
+
+
+def admin_status_api_url(person):
+    """Return `/api/members/<pk>/admin-status/` for `person`."""
+    return reverse('api-member-admin-status', args=[person.pk])
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class PersonAdminStatusApiViewTests(TestCase):
+    """`POST /api/members/<pk>/admin-status/` (issue #467): grant/revoke, gated by `AdminApiView`."""
+
+    def setUp(self):
+        """Log in as a synthetic admin before each test."""
+        self.admin = admin_client(self)
+
+    def test_anonymous_request_401s_not_302s(self):
+        """An unauthenticated POST gets a JSON 401, never a redirect (ApiView's contract)."""
+        self.client.logout()
+        target = PersonFactory()
+
+        response = self.client.post(
+            admin_status_api_url(target), data={'is_admin': True}, content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_non_admin_request_403s(self):
+        """A logged-in non-admin gets a JSON 403 (AdminApiView's contract), never a redirect."""
+        self.client.logout()
+        member_client(self)
+        target = PersonFactory()
+
+        response = self.client.post(
+            admin_status_api_url(target), data={'is_admin': True}, content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_grants_admin_status_and_returns_the_fresh_person_payload(self):
+        """A successful grant flips the flag and returns `data` with `is_admin: true`."""
+        target = PersonFactory(is_admin=False)
+
+        response = self.client.post(
+            admin_status_api_url(target), data={'is_admin': True}, content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body['ok'])
+        self.assertTrue(body['data']['is_admin'])
+        self.assertTrue(Person.objects.get(pk=target.pk).is_admin)
+
+    def test_revokes_admin_status_when_another_active_admin_remains(self):
+        """A successful revoke flips the flag and returns `data` with `is_admin: false`."""
+        target = PersonFactory(is_admin=True, is_active=True)
+
+        response = self.client.post(
+            admin_status_api_url(target), data={'is_admin': False}, content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body['ok'])
+        self.assertFalse(body['data']['is_admin'])
+        self.assertFalse(Person.objects.get(pk=target.pk).is_admin)
+
+    def test_self_revoke_is_refused_as_ok_false_not_a_4xx(self):
+        """Revoking your own admin status is a 200 with `ok: false`, not a 4xx -- a well-formed request refused, not malformed."""
+        PersonFactory(is_admin=True, is_active=True)
+
+        response = self.client.post(
+            admin_status_api_url(self.admin), data={'is_admin': False}, content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertFalse(body['ok'])
+        self.assertTrue(body['non_field_errors'])
+        self.assertTrue(Person.objects.get(pk=self.admin.pk).is_admin)
+
+    def test_revoking_the_last_active_admin_is_refused_as_ok_false(self):
+        """The view reports `CannotRevokeLastActiveAdminError` as `ok: false`, never a 4xx.
+
+        A live authenticated admin session can never itself trigger this
+        guard through this endpoint -- the requesting admin, being active
+        by dint of holding the session, always counts as "another active
+        admin" for any target other than themselves (self-revoke has its
+        own, earlier-checked guard). `apply_admin_status_change()` is
+        patched to raise it directly so this test pins the view's own
+        error-handling branch; `identity.tests.test_admin_status` covers
+        the guard's real logic.
+        """
+        target = PersonFactory(is_admin=True, is_active=True)
+
+        with patch(
+            'scheduling.api_views.apply_admin_status_change',
+            side_effect=CannotRevokeLastActiveAdminError(f'{target.name} is the last active admin and cannot be revoked.'),
+        ):
+            response = self.client.post(
+                admin_status_api_url(target), data={'is_admin': False}, content_type='application/json',
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertFalse(body['ok'])
+        self.assertTrue(body['non_field_errors'])
