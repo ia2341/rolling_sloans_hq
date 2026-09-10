@@ -17,15 +17,4 @@ urlpatterns = [
         views.SetPasswordConfirmView.as_view(),
         name='set-password-confirm',
     ),
-    path('manage/people/', views.PeopleView.as_view(), name='people'),
-    path(
-        'manage/people/<int:pk>/toggle-admin/',
-        views.PersonToggleAdminView.as_view(),
-        name='people-toggle-admin',
-    ),
-    path(
-        'manage/people/<int:pk>/resend-invite/',
-        views.PersonResendInviteView.as_view(),
-        name='people-resend-invite',
-    ),
 ]
