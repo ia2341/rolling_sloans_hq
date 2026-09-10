@@ -25,7 +25,14 @@ from django.views import View
 
 from config.views import AdminApiView, AdminPreviewApiView, ApiView
 from identity.models import Person
-from identity.services import AlreadyHasPasswordError, EmailDeliveryError, resend_invite
+from identity.services import (
+    AlreadyHasPasswordError,
+    CannotRevokeLastActiveAdminError,
+    CannotRevokeOwnAdminStatusError,
+    EmailDeliveryError,
+    apply_admin_status_change,
+    resend_invite,
+)
 from scheduling import serializers, services, spotify
 from scheduling.api_builders import (
     AdjudicationBufferValidationError,
@@ -783,6 +790,40 @@ class PersonRolesApiView(ApiView, View):
         data = serializers.serialize_person(
             person, semester=semester, is_self=(person.pk == request.user.pk), can_edit_roles=True,
             membership=membership,
+        )
+        return self.write_response(request, ok=True, data=data)
+
+
+class PersonAdminStatusApiView(AdminApiView, View):
+    """`POST /api/members/<pk>/admin-status/`: an admin grants or revokes another Person's admin access (issue #467).
+
+    Replaces the legacy `identity.views.PersonToggleAdminView` (no
+    self-check, no last-admin check) as `/accounts/manage/people/`
+    retires (issue #342, ADR 0017). A direct `apply_admin_status_change()`
+    call, not a Pending Buffer: ADR 0008's Buffer -> preview -> apply shape
+    is for a multi-field edit with derived Fallout, and flipping one flag
+    has neither.
+    """
+
+    def post(self, request, pk):
+        """Set `pk`'s `is_admin` to the submitted value, or report the guard that refused it.
+
+        A refusal (self-revoke, or revoking the last active admin) is
+        rendered as `ok: false` with a `non_field_errors` message, never a
+        4xx — a hand-crafted or stale-UI POST hitting either guard must be
+        *refused*, not merely rejected as malformed.
+        """
+        target = get_object_or_404(Person, pk=pk)
+        payload = self.parse_json_body(request)
+        is_admin = bool(payload.get('is_admin'))
+        try:
+            apply_admin_status_change(target=target, is_admin=is_admin, requesting_admin=request.user)
+        except (CannotRevokeOwnAdminStatusError, CannotRevokeLastActiveAdminError) as error:
+            return self.write_response(request, ok=False, non_field_errors=[str(error)])
+        semester = services.get_viewing_semester(request)
+        membership = Membership.objects.filter(person=target, semester=semester).first() if semester is not None else None
+        data = serializers.serialize_person(
+            target, semester=semester, is_self=False, can_edit_roles=True, membership=membership,
         )
         return self.write_response(request, ok=True, data=data)
 

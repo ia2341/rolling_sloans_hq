@@ -186,6 +186,13 @@ function DetailsSection({
             onDataChange={onDataChange}
           />
         )}
+      {data.is_admin !== undefined && (
+        <AdminStatusRow
+          personId={data.id}
+          isAdmin={data.is_admin}
+          onDataChange={onDataChange}
+        />
+      )}
     </div>
   )
 }
@@ -236,6 +243,66 @@ function InviteRow({
           ? 'Invite'
           : 'Invite again'}
     </button>
+  )
+}
+
+/**
+ * The admin grant/revoke control (issue #467): renders for a teammate
+ * whose payload carries `is_admin` (an admin viewer, never `is_self` —
+ * an admin can't act on their own row, per
+ * `apply_admin_status_change()`'s self-revoke guard). Posts to
+ * `PersonAdminStatusApiView`, mounted at `/api/members/<pk>/admin-status/`,
+ * and surfaces its refusal (self-revoke or last-active-admin) inline via
+ * `non_field_errors` rather than a toast, matching `RolesSection`'s error
+ * handling on this same page.
+ */
+function AdminStatusRow({
+  personId,
+  isAdmin,
+  onDataChange,
+}: {
+  personId: number
+  isAdmin: boolean
+  onDataChange: (next: PersonPayload) => void
+}) {
+  const [isSaving, setIsSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  /** Flips this Person's admin status via the API, or surfaces the guard's refusal message inline. */
+  async function handleToggle() {
+    setIsSaving(true)
+    setError(null)
+    const envelope = await apiFetch<WriteEnvelope<PersonPayload>>(
+      `/api/members/${personId}/admin-status/`,
+      { method: 'POST', body: JSON.stringify({ is_admin: !isAdmin }) },
+    )
+    setIsSaving(false)
+    if (envelope.ok && envelope.data !== null) {
+      onDataChange(envelope.data)
+    } else {
+      setError(envelope.non_field_errors[0] ?? 'Could not update admin access.')
+    }
+  }
+
+  return (
+    <div className="mt-3 flex flex-col gap-1">
+      <div className="flex items-center gap-2">
+        <span className="text-sm text-rs-muted">
+          {isAdmin ? 'Admin' : 'Not an admin'}
+        </span>
+        <button
+          type="button"
+          onClick={() => void handleToggle()}
+          disabled={isSaving}
+          className="rounded border border-rs-border px-3 py-1.5 text-sm font-medium text-rs-accent disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {isAdmin ? 'Revoke admin access' : 'Grant admin access'}
+        </button>
+      </div>
+      {error !== null && (
+        <span className="text-sm text-rs-danger">{error}</span>
+      )}
+    </div>
   )
 }
 
