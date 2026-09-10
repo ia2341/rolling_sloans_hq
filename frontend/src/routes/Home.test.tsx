@@ -461,17 +461,6 @@ describe('Home', () => {
       'fetch',
       vi.fn().mockImplementation((input: RequestInfo | URL) => {
         const url = typeof input === 'string' ? input : input.toString()
-        if (url.includes('/api/schedule/editor/')) {
-          return Promise.resolve({
-            status: 200,
-            ok: true,
-            json: () =>
-              Promise.resolve({
-                context: adminContext(),
-                data: { semester_defaults: null },
-              }),
-          })
-        }
         if (url.includes('/api/semesters/create/')) {
           return Promise.resolve({
             status: 200,
