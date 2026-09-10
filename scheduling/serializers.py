@@ -1205,6 +1205,15 @@ def serialize_person(person, *, semester, is_self: bool, can_edit_roles: bool, m
     teammate, never for `is_self` (a session implies a usable password, so
     it's always `'accepted'` with nothing useful to show or do) and never
     for a non-admin teammate viewer, per this same "absent, not null" rule.
+
+    `is_admin` (issue #467, reversing `docs/person-page-visibility.md`'s
+    old "never" verdict) is present under that identical condition —
+    an admin viewing a teammate — so the same grant/revoke control this
+    payload feeds can read the target's current status and never for
+    `is_self` (an admin can't act on their own row, per
+    `identity.services.apply_admin_status_change`'s self-revoke guard) or a
+    non-admin teammate viewer, who has no business seeing anyone's admin
+    status at all.
     """
     has_membership = membership is not None and membership.pk is not None
     data = {
@@ -1222,6 +1231,7 @@ def serialize_person(person, *, semester, is_self: bool, can_edit_roles: bool, m
         data['available_roles'] = [_serialize_role(role) for role in services.active_roles_for(semester)]
     if not is_self and can_edit_roles:
         data['invite_status'] = invite_status_for(person)
+        data['is_admin'] = person.is_admin
     if has_membership:
         data['songs'] = [_serialize_person_song(assignment) for assignment in services.assigned_songs_for(person, semester)]
     if is_self and has_membership:

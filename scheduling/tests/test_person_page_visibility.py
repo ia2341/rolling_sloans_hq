@@ -176,7 +176,9 @@ class PersonApiViewerStateTests(TestCase):
         admin; `available_roles` is gated by that same flag (it's the
         editable Role catalog the write needs), so its presence is a
         consequence of `can_edit_roles` being True, not a second, separate
-        divergence — every other key must match byte-for-byte.
+        divergence — every other key must match byte-for-byte. `is_admin`
+        (issue #467) joins `invite_status` under this exact same gate, for
+        the same grant/revoke reason.
         """
         self.client.login(username=self.teammate.email, password=PASSWORD)
         teammate_response = self.client.get(person_api_url(self.self_person))
@@ -191,12 +193,13 @@ class PersonApiViewerStateTests(TestCase):
         self.assertNotIn('available_roles', teammate_data)
         self.assertIn('available_roles', admin_data)
         self.assertIn('invite_status', admin_data)
+        self.assertIn('is_admin', admin_data)
         self.assertEqual(
-            set(teammate_data.keys()) | {'can_edit_roles', 'available_roles', 'invite_status'},
+            set(teammate_data.keys()) | {'can_edit_roles', 'available_roles', 'invite_status', 'is_admin'},
             set(admin_data.keys()) | {'can_edit_roles'},
         )
         for key in teammate_data:
-            if key in ('can_edit_roles', 'available_roles', 'invite_status'):
+            if key in ('can_edit_roles', 'available_roles', 'invite_status', 'is_admin'):
                 continue
             self.assertEqual(teammate_data[key], admin_data[key], f'{key} differed between teammate and admin viewer')
 

@@ -78,6 +78,10 @@ urlpatterns = [
     path('members/<int:pk>/', api_views.PersonApiView.as_view(), name='api-member-detail'),
     path('members/<int:pk>/roles/', api_views.PersonRolesApiView.as_view(), name='api-member-roles'),
     path('members/<int:pk>/invite/', api_views.RosterResendInviteApiView.as_view(), name='api-member-invite'),
+    path(
+        'members/<int:pk>/admin-status/',
+        api_views.PersonAdminStatusApiView.as_view(), name='api-member-admin-status',
+    ),
     path('schedule/editor/', api_views.ScheduleEditorApiView.as_view(), name='api-schedule-editor'),
     path(
         'schedule/editor/preview/',

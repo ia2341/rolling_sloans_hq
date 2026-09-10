@@ -101,7 +101,10 @@ export type InviteStatus = 'not_yet_invited' | 'invited' | 'accepted'
  * Membership to exist, so it's never gated by `has_membership` the way
  * `songs` is. `invite_status` (issue #397) is present only for an admin
  * viewing a teammate — never for `is_self` (a session implies
- * `'accepted'`) and never for a plain teammate viewer.
+ * `'accepted'`) and never for a plain teammate viewer. `is_admin` (issue
+ * #467) is present under that identical condition, feeding the
+ * grant/revoke control — never for `is_self` (an admin can't act on
+ * their own row) or a plain teammate viewer.
  */
 export interface PersonPayload {
   id: number
@@ -114,6 +117,7 @@ export interface PersonPayload {
   email?: string
   available_roles?: MemberRole[]
   invite_status?: InviteStatus
+  is_admin?: boolean
   songs?: PersonSong[]
   recordings?: PersonRecordingsBlock
 }
