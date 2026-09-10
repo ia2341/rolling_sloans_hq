@@ -1272,6 +1272,7 @@ def _serialize_future_rehearsal_appearance(row) -> dict:
         'song_title': row.song_title,
         'role_name': row.role_name,
         'kind': row.kind,
+        'is_dress_rehearsal': row.is_dress_rehearsal,
     }
 
 

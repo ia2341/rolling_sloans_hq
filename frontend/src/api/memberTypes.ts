@@ -111,7 +111,11 @@ export interface FutureRoleAssignment {
  * of (issue #468). `kind` is `'assignment'` for a Standing Role Assignment
  * on the Rehearsal's Song (ADR 0009) or `'backup'` for a `Backup` row
  * naming `person` directly (ADR 0007) — the two independent ways onto a
- * future Running Order.
+ * future Running Order. `is_dress_rehearsal` is true for the Semester's
+ * Dress Rehearsal (ADR 0003: it carries no persisted `RehearsalSong` row
+ * for any Song, so this row is synthesized from a Standing Assignment
+ * rather than found via one) — always false for a `'backup'` row, since a
+ * Dress Rehearsal can never carry a `Backup` (ADR 0007).
  */
 export interface FutureRehearsalAppearance {
   rehearsal_id: number
@@ -122,6 +126,7 @@ export interface FutureRehearsalAppearance {
   song_title: string
   role_name: string
   kind: 'assignment' | 'backup'
+  is_dress_rehearsal: boolean
 }
 
 /**
@@ -129,9 +134,10 @@ export interface FutureRehearsalAppearance {
  * Deactivate confirmation dialog's dependency, admin-only per
  * `docs/person-page-visibility.md`. `future_memberships`/
  * `future_role_assignments` are scoped to Semesters other than the one
- * being viewed (that one's own Membership/assignments already render as
- * `has_membership`/`songs`); `future_rehearsal_appearances` is scoped by
- * date instead, so it includes the Semester being viewed too.
+ * being viewed, and to Semesters that aren't already concluded (every
+ * Rehearsal in the past — see `future_scheduling_footprint_for()`'s
+ * docstring); `future_rehearsal_appearances` is scoped by date instead, so
+ * it includes the Semester being viewed too.
  */
 export interface FutureSchedulingFootprint {
   future_memberships: FutureMembership[]

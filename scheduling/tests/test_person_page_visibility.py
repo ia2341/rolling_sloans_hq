@@ -356,7 +356,17 @@ class PersonApiFutureSchedulingFootprintTests(TestCase):
         self.assertEqual(footprint['future_rehearsal_appearances'], [])
 
     def test_carries_future_memberships_role_assignments_and_rehearsal_appearances(self):
-        """An admin viewing a teammate sees their other-Semester Membership, other-Semester Assignment, and future Rehearsal appearance."""
+        """An admin viewing a teammate sees their other-Semester Membership, other-Semester Assignment, and future Rehearsal appearance.
+
+        `other_semester` is given a `published_at` far in the past only so
+        it never outranks `self.semester` as the Live/viewing Semester
+        (ADR-0010) — it deliberately carries no Rehearsal at all, so it's
+        still a live (not concluded) Semester per
+        `future_scheduling_footprint_for()`'s own rule, and correctly shows
+        up here. `test_a_concluded_semester_never_appears_as_a_future_membership_or_assignment`
+        below covers the genuinely-past case, where a Semester's
+        Rehearsals have already happened.
+        """
         other_semester = SemesterFactory(name='Other Semester', published_at=timezone.now() - timedelta(days=365))
         MembershipFactory(person=self.teammate, semester=other_semester)
         other_song = SongFactory(semester=other_semester, title='Other Semester Song')
@@ -386,6 +396,43 @@ class PersonApiFutureSchedulingFootprintTests(TestCase):
         self.assertEqual(appearance['song_id'], upcoming_song.pk)
         self.assertEqual(appearance['role_name'], 'Vocals')
         self.assertEqual(appearance['kind'], 'assignment')
+        self.assertFalse(appearance['is_dress_rehearsal'])
+
+    def test_a_concluded_semester_never_appears_as_a_future_membership_or_assignment(self):
+        """A Semester whose only Rehearsal is already past is genuinely concluded, and never surfaces as a future commitment."""
+        concluded_semester = SemesterFactory(name='Concluded Semester', published_at=timezone.now() - timedelta(days=365))
+        RehearsalFactory(semester=concluded_semester, date=timezone.localdate() - timedelta(days=30))
+        MembershipFactory(person=self.teammate, semester=concluded_semester)
+        SongRoleAssignmentFactory(
+            song=SongFactory(semester=concluded_semester), person=self.teammate, role=RoleFactory(),
+        )
+
+        self.client.login(username=self.admin.email, password=PASSWORD)
+        data = self.client.get(person_api_url(self.teammate)).json()['data']
+        footprint = data['future_scheduling_footprint']
+
+        self.assertEqual(footprint['future_memberships'], [])
+        self.assertEqual(footprint['future_role_assignments'], [])
+
+    def test_a_future_dress_rehearsal_appears_as_an_appearance(self):
+        """A future Dress Rehearsal shows up for a Standing Assignment even though it carries no persisted RehearsalSong row (ADR-0003)."""
+        song = SongFactory(semester=self.semester, title='Dress Rehearsal Song')
+        SongRoleAssignmentFactory(song=song, person=self.teammate, role=RoleFactory(name='Bass'))
+        dress_rehearsal = RehearsalFactory(
+            semester=self.semester, date=timezone.localdate() + timedelta(days=10), is_full_setlist=True,
+        )
+
+        self.client.login(username=self.admin.email, password=PASSWORD)
+        data = self.client.get(person_api_url(self.teammate)).json()['data']
+        footprint = data['future_scheduling_footprint']
+
+        self.assertEqual(len(footprint['future_rehearsal_appearances']), 1)
+        appearance = footprint['future_rehearsal_appearances'][0]
+        self.assertEqual(appearance['rehearsal_id'], dress_rehearsal.pk)
+        self.assertEqual(appearance['song_id'], song.pk)
+        self.assertEqual(appearance['role_name'], 'Bass')
+        self.assertEqual(appearance['kind'], 'assignment')
+        self.assertTrue(appearance['is_dress_rehearsal'])
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)

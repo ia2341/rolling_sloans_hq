@@ -1641,3 +1641,87 @@ class FutureSchedulingFootprintForTests(TestCase):
         self.assertEqual(
             {row.semester_id for row in footprint.future_memberships}, {semester_a.pk, semester_b.pk},
         )
+
+    def test_a_semester_whose_every_rehearsal_is_past_is_excluded_from_memberships_and_assignments(self):
+        """A genuinely concluded Semester — one whose only Rehearsals are already past — is never reported as a future commitment."""
+        person = PersonFactory()
+        concluded_semester = SemesterFactory(name='Concluded Semester')
+        RehearsalFactory(semester=concluded_semester, date=timezone.localdate() - timedelta(days=30))
+        MembershipFactory(person=person, semester=concluded_semester)
+        SongRoleAssignmentFactory(song=SongFactory(semester=concluded_semester), person=person, role=RoleFactory())
+
+        footprint = future_scheduling_footprint_for(person, excluding_semester=None)
+
+        self.assertEqual(footprint.future_memberships, [])
+        self.assertEqual(footprint.future_role_assignments, [])
+
+    def test_a_semester_with_a_future_rehearsal_is_not_treated_as_concluded(self):
+        """A Semester with at least one future-dated Rehearsal (alongside past ones) still counts as a live commitment."""
+        person = PersonFactory()
+        semester = SemesterFactory(name='Still Live Semester')
+        RehearsalFactory(semester=semester, date=timezone.localdate() - timedelta(days=30))
+        RehearsalFactory(semester=semester, date=timezone.localdate() + timedelta(days=30))
+        MembershipFactory(person=person, semester=semester)
+
+        footprint = future_scheduling_footprint_for(person, excluding_semester=None)
+
+        self.assertEqual(len(footprint.future_memberships), 1)
+        self.assertEqual(footprint.future_memberships[0].semester_id, semester.pk)
+
+    def test_a_semester_with_no_rehearsals_at_all_is_not_treated_as_concluded(self):
+        """A brand-new Semester with no Rehearsals scheduled yet has no evidence it's over, so it still counts as future."""
+        person = PersonFactory()
+        semester = SemesterFactory(name='Not Yet Scheduled Semester')
+        MembershipFactory(person=person, semester=semester)
+
+        footprint = future_scheduling_footprint_for(person, excluding_semester=None)
+
+        self.assertEqual(len(footprint.future_memberships), 1)
+        self.assertEqual(footprint.future_memberships[0].semester_id, semester.pk)
+
+    def test_a_future_dress_rehearsal_is_synthesized_as_an_appearance_for_every_standing_assignment(self):
+        """ADR-0003: the Dress Rehearsal carries no RehearsalSong row, so it's synthesized from each Standing Assignment in its Semester."""
+        person = PersonFactory()
+        semester = SemesterFactory()
+        song = SongFactory(semester=semester, title='Dress Rehearsal Song')
+        role = RoleFactory(name='Bass')
+        SongRoleAssignmentFactory(song=song, person=person, role=role)
+        dress_rehearsal = RehearsalFactory(
+            semester=semester, date=timezone.localdate() + timedelta(days=7), is_full_setlist=True,
+        )
+
+        footprint = future_scheduling_footprint_for(person, excluding_semester=None)
+
+        self.assertEqual(len(footprint.future_rehearsal_appearances), 1)
+        row = footprint.future_rehearsal_appearances[0]
+        self.assertEqual(row.rehearsal_id, dress_rehearsal.pk)
+        self.assertEqual(row.song_id, song.pk)
+        self.assertEqual(row.role_name, 'Bass')
+        self.assertEqual(row.kind, 'assignment')
+        self.assertTrue(row.is_dress_rehearsal)
+
+    def test_a_past_dress_rehearsal_is_not_synthesized(self):
+        """A Dress Rehearsal dated in the past never contributes an appearance, same as any other past Rehearsal."""
+        person = PersonFactory()
+        semester = SemesterFactory()
+        song = SongFactory(semester=semester)
+        SongRoleAssignmentFactory(song=song, person=person, role=RoleFactory())
+        RehearsalFactory(semester=semester, date=timezone.localdate() - timedelta(days=7), is_full_setlist=True)
+
+        footprint = future_scheduling_footprint_for(person, excluding_semester=None)
+
+        self.assertEqual(footprint.future_rehearsal_appearances, [])
+
+    def test_ordinary_rehearsal_song_appearances_are_not_flagged_as_dress_rehearsal(self):
+        """A normal `RehearsalSong`-derived appearance (not the Dress Rehearsal) reports `is_dress_rehearsal=False`."""
+        person = PersonFactory()
+        semester = SemesterFactory()
+        song = SongFactory(semester=semester)
+        SongRoleAssignmentFactory(song=song, person=person, role=RoleFactory())
+        rehearsal = RehearsalFactory(semester=semester, date=timezone.localdate() + timedelta(days=2))
+        RehearsalSongFactory(rehearsal=rehearsal, song=song, order=1)
+
+        footprint = future_scheduling_footprint_for(person, excluding_semester=None)
+
+        self.assertEqual(len(footprint.future_rehearsal_appearances), 1)
+        self.assertFalse(footprint.future_rehearsal_appearances[0].is_dress_rehearsal)
