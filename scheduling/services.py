@@ -11,7 +11,7 @@ from uuid import uuid4
 from botocore.exceptions import BotoCoreError, ClientError
 from django.core.files.storage import storages
 from django.db import IntegrityError, models, transaction
-from django.db.models import Count, Q, Sum
+from django.db.models import Count, Max, Prefetch, Q, Sum
 from django.utils import timezone
 
 from identity.models import Person
@@ -1004,6 +1004,222 @@ def assigned_songs_for(person, semester):
     return SongRoleAssignment.objects.filter(
         person=person, song__semester=semester,
     ).select_related('song', 'role').order_by('song__position')
+
+
+@dataclass(frozen=True)
+class FutureMembershipRow:
+    """One Membership `person` holds in a Semester other than the one being viewed (issue #468)."""
+
+    semester_id: int
+    semester_name: str
+
+
+@dataclass(frozen=True)
+class FutureRoleAssignmentRow:
+    """One Standing Role Assignment `person` holds on a Song outside the Semester being viewed (issue #468, ADR-0009)."""
+
+    semester_id: int
+    semester_name: str
+    song_id: int
+    song_title: str
+    role_name: str
+
+
+@dataclass(frozen=True)
+class FutureRehearsalAppearanceRow:
+    """One future-dated Rehearsal `person` still appears on the Running Order of (issue #468).
+
+    `kind` is `'assignment'` when the row comes from a Standing Role
+    Assignment on the Rehearsal's Song (ADR-0009), or `'backup'` when
+    `person` is named directly on a `Backup` row (ADR-0007) — the two
+    independent ways a Person can be on a future Running Order.
+    `is_dress_rehearsal` is True for the Semester's Dress Rehearsal itself,
+    which carries no persisted `RehearsalSong` row for any Song (ADR-0003):
+    every Song "rehearses" there by definition, so an `'assignment'` row
+    for it is synthesized rather than found via a `RehearsalSong` query —
+    mirroring `rehearsed_at_for()`'s same live-appended row. A Dress
+    Rehearsal never has a `Backup` row (ADR-0007 §"anchor"), so
+    `is_dress_rehearsal` is only ever True on a `'assignment'` row.
+    """
+
+    rehearsal_id: int
+    semester_id: int
+    semester_name: str
+    date: date
+    song_id: int
+    song_title: str
+    role_name: str
+    kind: str
+    is_dress_rehearsal: bool
+
+
+@dataclass(frozen=True)
+class FutureSchedulingFootprint:
+    """`person`'s future-facing scheduling state (issue #468, ADR-0017), for the Deactivate confirmation dialog.
+
+    Deliberately not a rendering of what `serialize_person()` already
+    shows: `future_memberships` and `future_role_assignments` are scoped to
+    Semesters other than the one being viewed (that Semester's own
+    Membership/assignments already render as `has_membership`/`songs`) and
+    to Semesters that aren't already concluded (see
+    `future_scheduling_footprint_for()`'s docstring for how "concluded" is
+    derived, since `Semester` itself carries no date fields — ADR-0010),
+    while `future_rehearsal_appearances` is scoped by date instead — it
+    carries every Rehearsal dated today or later regardless of Semester,
+    including the one being viewed, since an upcoming Rehearsal there is
+    exactly the kind of commitment a deactivation would cut short and
+    today's payload never names a Rehearsal date at all.
+    """
+
+    future_memberships: list[FutureMembershipRow]
+    future_role_assignments: list[FutureRoleAssignmentRow]
+    future_rehearsal_appearances: list[FutureRehearsalAppearanceRow]
+
+
+def future_scheduling_footprint_for(person, *, excluding_semester) -> FutureSchedulingFootprint:
+    """Return `person`'s future-facing scheduling footprint, for the Deactivate confirmation dialog (issue #468, ADR-0017).
+
+    `excluding_semester` is the viewing Semester (or `None`): Memberships
+    and Standing Role Assignments already rendered for it by
+    `serialize_person()` are left out here so the two payloads never
+    disagree about what's "already shown" versus "new here".
+
+    `Semester` itself carries no date fields (ADR-0010), so "future" for
+    `future_memberships`/`future_role_assignments` can't be read off the
+    Semester directly. A Semester counts as **concluded** — and is
+    excluded — only when it has at least one Rehearsal and every one of
+    them is already in the past; a Semester with no Rehearsals at all
+    (e.g. a brand-new one whose schedule hasn't been generated yet) has no
+    evidence it's over, so it's treated as still-future, same as one with
+    an upcoming Rehearsal.
+
+    Rehearsal Running Order appearances aren't excluded by Semester at
+    all — only by date, via `timezone.localdate()`, mirroring
+    `future_rehearsals_for()` — and include the Semester's Dress Rehearsal
+    (ADR-0003: no persisted `RehearsalSong` row exists for it, so it's
+    synthesized from each Standing Assignment in that Semester, mirroring
+    `rehearsed_at_for()`).
+    """
+    excluding_semester_id = excluding_semester.pk if excluding_semester is not None else None
+    today = timezone.localdate()
+
+    concluded_semester_ids = frozenset(
+        Semester.objects.annotate(latest_rehearsal_date=Max('rehearsal__date'))
+        .filter(latest_rehearsal_date__lt=today)
+        .values_list('pk', flat=True)
+    )
+
+    membership_qs = (
+        Membership.objects.filter(person=person)
+        .exclude(semester_id__in=concluded_semester_ids)
+        .select_related('semester')
+    )
+    if excluding_semester_id is not None:
+        membership_qs = membership_qs.exclude(semester_id=excluding_semester_id)
+    future_memberships = [
+        FutureMembershipRow(semester_id=membership.semester_id, semester_name=membership.semester.name)
+        for membership in membership_qs.order_by('semester__name')
+    ]
+
+    assignment_qs = (
+        SongRoleAssignment.objects.filter(person=person)
+        .exclude(song__semester_id__in=concluded_semester_ids)
+        .select_related('song__semester', 'role')
+    )
+    if excluding_semester_id is not None:
+        assignment_qs = assignment_qs.exclude(song__semester_id=excluding_semester_id)
+    future_role_assignments = [
+        FutureRoleAssignmentRow(
+            semester_id=assignment.song.semester_id,
+            semester_name=assignment.song.semester.name,
+            song_id=assignment.song_id,
+            song_title=assignment.song.title,
+            role_name=assignment.role.name,
+        )
+        for assignment in assignment_qs.order_by('song__semester__name', 'song__position')
+    ]
+
+    appearances: list[FutureRehearsalAppearanceRow] = []
+
+    person_assignments = list(
+        SongRoleAssignment.objects.filter(person=person).select_related('role', 'song__semester'),
+    )
+
+    future_assigned_rehearsal_songs = (
+        RehearsalSong.objects.filter(rehearsal__date__gte=today, song__songroleassignment__person=person)
+        .select_related('song', 'rehearsal__semester')
+        .prefetch_related(
+            Prefetch(
+                'song__songroleassignment_set',
+                queryset=SongRoleAssignment.objects.filter(person=person).select_related('role'),
+                to_attr='matching_assignments',
+            ),
+        )
+        .order_by('rehearsal__date', 'song__position')
+        .distinct()
+    )
+    for rehearsal_song in future_assigned_rehearsal_songs:
+        for assignment in rehearsal_song.song.matching_assignments:
+            appearances.append(FutureRehearsalAppearanceRow(
+                rehearsal_id=rehearsal_song.rehearsal_id,
+                semester_id=rehearsal_song.rehearsal.semester_id,
+                semester_name=rehearsal_song.rehearsal.semester.name,
+                date=rehearsal_song.rehearsal.date,
+                song_id=rehearsal_song.song_id,
+                song_title=rehearsal_song.song.title,
+                role_name=assignment.role.name,
+                kind='assignment',
+                is_dress_rehearsal=False,
+            ))
+
+    assigned_semester_ids = {assignment.song.semester_id for assignment in person_assignments}
+    future_dress_rehearsals_by_semester_id = {
+        rehearsal.semester_id: rehearsal
+        for rehearsal in Rehearsal.objects.filter(
+            semester_id__in=assigned_semester_ids, is_full_setlist=True, date__gte=today,
+        ).select_related('semester')
+    }
+    for assignment in person_assignments:
+        dress_rehearsal = future_dress_rehearsals_by_semester_id.get(assignment.song.semester_id)
+        if dress_rehearsal is None:
+            continue
+        appearances.append(FutureRehearsalAppearanceRow(
+            rehearsal_id=dress_rehearsal.pk,
+            semester_id=dress_rehearsal.semester_id,
+            semester_name=dress_rehearsal.semester.name,
+            date=dress_rehearsal.date,
+            song_id=assignment.song_id,
+            song_title=assignment.song.title,
+            role_name=assignment.role.name,
+            kind='assignment',
+            is_dress_rehearsal=True,
+        ))
+
+    future_backups = (
+        Backup.objects.filter(person=person, rehearsal_song__rehearsal__date__gte=today)
+        .select_related('role', 'rehearsal_song__song', 'rehearsal_song__rehearsal__semester')
+        .order_by('rehearsal_song__rehearsal__date', 'rehearsal_song__song__position')
+    )
+    for backup in future_backups:
+        appearances.append(FutureRehearsalAppearanceRow(
+            rehearsal_id=backup.rehearsal_song.rehearsal_id,
+            semester_id=backup.rehearsal_song.rehearsal.semester_id,
+            semester_name=backup.rehearsal_song.rehearsal.semester.name,
+            date=backup.rehearsal_song.rehearsal.date,
+            song_id=backup.rehearsal_song.song_id,
+            song_title=backup.rehearsal_song.song.title,
+            role_name=backup.role.name,
+            kind='backup',
+            is_dress_rehearsal=False,
+        ))
+
+    appearances.sort(key=lambda row: (row.date, row.song_id, row.kind))
+
+    return FutureSchedulingFootprint(
+        future_memberships=future_memberships,
+        future_role_assignments=future_role_assignments,
+        future_rehearsal_appearances=appearances,
+    )
 
 
 @dataclass(frozen=True)

@@ -1209,6 +1209,12 @@ def serialize_person(person, *, semester, is_self: bool, can_edit_roles: bool, m
     `identity.services.apply_admin_status_change`'s self-revoke guard) or a
     non-admin teammate viewer, who has no business seeing anyone's admin
     status at all.
+
+    `future_scheduling_footprint` (issue #468, ADR-0017) is present under
+    that same "admin viewing a teammate" condition, for the same reason
+    `invite_status` is: it's a Deactivate-dialog dependency an admin needs
+    on someone else's page, never on their own (self-deactivation is
+    refused outright) and never for a plain teammate viewer.
     """
     has_membership = membership is not None and membership.pk is not None
     data = {
@@ -1227,11 +1233,65 @@ def serialize_person(person, *, semester, is_self: bool, can_edit_roles: bool, m
     if not is_self and can_edit_roles:
         data['invite_status'] = invite_status_for(person)
         data['is_admin'] = person.is_admin
+        footprint = services.future_scheduling_footprint_for(person, excluding_semester=semester)
+        data['future_scheduling_footprint'] = serialize_future_scheduling_footprint(footprint)
     if has_membership:
         data['songs'] = [_serialize_person_song(assignment) for assignment in services.assigned_songs_for(person, semester)]
     if is_self and has_membership:
         data['recordings'] = serialize_person_recordings(person, semester)
     return data
+
+
+def _serialize_future_membership(row) -> dict:
+    """Return one `FutureMembershipRow` (issue #468): the other Semester's identity only."""
+    return {
+        'semester_id': row.semester_id,
+        'semester_name': row.semester_name,
+    }
+
+
+def _serialize_future_role_assignment(row) -> dict:
+    """Return one `FutureRoleAssignmentRow` (issue #468): naming the other Semester, Song and Role, never `is_role_mismatch` (ADR 0002)."""
+    return {
+        'semester_id': row.semester_id,
+        'semester_name': row.semester_name,
+        'song_id': row.song_id,
+        'song_title': row.song_title,
+        'role_name': row.role_name,
+    }
+
+
+def _serialize_future_rehearsal_appearance(row) -> dict:
+    """Return one `FutureRehearsalAppearanceRow` (issue #468): a dated future Rehearsal this Person still appears on the Running Order of."""
+    return {
+        'rehearsal_id': row.rehearsal_id,
+        'semester_id': row.semester_id,
+        'semester_name': row.semester_name,
+        'date': row.date.isoformat(),
+        'song_id': row.song_id,
+        'song_title': row.song_title,
+        'role_name': row.role_name,
+        'kind': row.kind,
+        'is_dress_rehearsal': row.is_dress_rehearsal,
+    }
+
+
+def serialize_future_scheduling_footprint(footprint) -> dict:
+    """Return `person`'s `FutureSchedulingFootprint` (issue #468, ADR-0017) for the Deactivate confirmation dialog.
+
+    Admin-only, per `docs/person-page-visibility.md`: never rendered for a
+    Teammate or Self viewer, only for an admin viewing a teammate — see
+    `serialize_person()`'s call site.
+    """
+    return {
+        'future_memberships': [_serialize_future_membership(row) for row in footprint.future_memberships],
+        'future_role_assignments': [
+            _serialize_future_role_assignment(row) for row in footprint.future_role_assignments
+        ],
+        'future_rehearsal_appearances': [
+            _serialize_future_rehearsal_appearance(row) for row in footprint.future_rehearsal_appearances
+        ],
+    }
 
 
 def serialize_person_recordings(person, semester) -> dict:

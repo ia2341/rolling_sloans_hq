@@ -40,6 +40,7 @@ from scheduling.services import (
     declare_conflict,
     fill_status_for,
     future_rehearsals_for,
+    future_scheduling_footprint_for,
     performers_for,
     recording_count_for,
     recording_counts_for_semester,
@@ -1506,3 +1507,221 @@ class RehearsedAtForTests(TestCase):
 
         self.assertEqual(len(rows), 1)
         self.assertFalse(rows[0].is_dress_rehearsal)
+
+
+class FutureSchedulingFootprintForTests(TestCase):
+    """`future_scheduling_footprint_for()` (issue #468, ADR-0017): the Deactivate confirmation dialog's dependency."""
+
+    def test_empty_for_a_person_with_no_future_facing_state(self):
+        """A Person with only a Membership in the excluded (viewing) Semester and nothing else gets three empty lists."""
+        person = PersonFactory()
+        viewing_semester = SemesterFactory()
+        MembershipFactory(person=person, semester=viewing_semester)
+
+        footprint = future_scheduling_footprint_for(person, excluding_semester=viewing_semester)
+
+        self.assertEqual(footprint.future_memberships, [])
+        self.assertEqual(footprint.future_role_assignments, [])
+        self.assertEqual(footprint.future_rehearsal_appearances, [])
+
+    def test_future_memberships_exclude_the_viewing_semester(self):
+        """A Membership in the viewing Semester is excluded; Memberships in other Semesters are listed by name."""
+        person = PersonFactory()
+        viewing_semester = SemesterFactory(name='Viewing Semester')
+        other_semester = SemesterFactory(name='Other Semester')
+        MembershipFactory(person=person, semester=viewing_semester)
+        MembershipFactory(person=person, semester=other_semester)
+
+        footprint = future_scheduling_footprint_for(person, excluding_semester=viewing_semester)
+
+        self.assertEqual(len(footprint.future_memberships), 1)
+        self.assertEqual(footprint.future_memberships[0].semester_id, other_semester.pk)
+        self.assertEqual(footprint.future_memberships[0].semester_name, 'Other Semester')
+
+    def test_future_role_assignments_exclude_the_viewing_semesters_songs(self):
+        """A SongRoleAssignment on the viewing Semester's own Song is excluded; one on another Semester's Song is listed."""
+        person = PersonFactory()
+        viewing_semester = SemesterFactory()
+        other_semester = SemesterFactory(name='Other Semester')
+        viewing_song = SongFactory(semester=viewing_semester, title='Viewing Song')
+        other_song = SongFactory(semester=other_semester, title='Other Song')
+        role = RoleFactory(name='Guitar')
+        SongRoleAssignmentFactory(song=viewing_song, person=person, role=RoleFactory(name='Bass'))
+        SongRoleAssignmentFactory(song=other_song, person=person, role=role)
+
+        footprint = future_scheduling_footprint_for(person, excluding_semester=viewing_semester)
+
+        self.assertEqual(len(footprint.future_role_assignments), 1)
+        row = footprint.future_role_assignments[0]
+        self.assertEqual(row.semester_id, other_semester.pk)
+        self.assertEqual(row.song_id, other_song.pk)
+        self.assertEqual(row.song_title, 'Other Song')
+        self.assertEqual(row.role_name, 'Guitar')
+
+    def test_future_rehearsal_appearances_include_the_viewing_semesters_own_future_rehearsals(self):
+        """Unlike Memberships/Assignments, a future-dated Rehearsal in the viewing Semester itself is still included."""
+        person = PersonFactory()
+        viewing_semester = SemesterFactory()
+        today = timezone.localdate()
+        song = SongFactory(semester=viewing_semester, title='Upcoming Song')
+        role = RoleFactory(name='Drums')
+        SongRoleAssignmentFactory(song=song, person=person, role=role)
+        rehearsal = RehearsalFactory(semester=viewing_semester, date=today + timedelta(days=3))
+        RehearsalSongFactory(rehearsal=rehearsal, song=song, order=1)
+
+        footprint = future_scheduling_footprint_for(person, excluding_semester=viewing_semester)
+
+        self.assertEqual(len(footprint.future_rehearsal_appearances), 1)
+        row = footprint.future_rehearsal_appearances[0]
+        self.assertEqual(row.rehearsal_id, rehearsal.pk)
+        self.assertEqual(row.semester_id, viewing_semester.pk)
+        self.assertEqual(row.date, rehearsal.date)
+        self.assertEqual(row.song_id, song.pk)
+        self.assertEqual(row.role_name, 'Drums')
+        self.assertEqual(row.kind, 'assignment')
+
+    def test_a_past_rehearsal_appearance_is_excluded(self):
+        """A RehearsalSong on a past-dated Rehearsal is never counted as a future appearance."""
+        person = PersonFactory()
+        semester = SemesterFactory()
+        song = SongFactory(semester=semester)
+        SongRoleAssignmentFactory(song=song, person=person, role=RoleFactory())
+        past_rehearsal = RehearsalFactory(semester=semester, date=timezone.localdate() - timedelta(days=1))
+        RehearsalSongFactory(rehearsal=past_rehearsal, song=song, order=1)
+
+        footprint = future_scheduling_footprint_for(person, excluding_semester=None)
+
+        self.assertEqual(footprint.future_rehearsal_appearances, [])
+
+    def test_a_future_backup_appearance_is_included_with_kind_backup(self):
+        """A Backup row on a future Rehearsal names `person` regardless of whether they hold the underlying Song's Standing Assignment."""
+        person = PersonFactory()
+        semester = SemesterFactory()
+        song = SongFactory(semester=semester, title='Backed-up Song')
+        role = RoleFactory(name='Keys')
+        rehearsal = RehearsalFactory(semester=semester, date=timezone.localdate() + timedelta(days=1))
+        rehearsal_song = RehearsalSongFactory(rehearsal=rehearsal, song=song, order=1)
+        BackupFactory(rehearsal_song=rehearsal_song, person=person, role=role)
+
+        footprint = future_scheduling_footprint_for(person, excluding_semester=None)
+
+        self.assertEqual(len(footprint.future_rehearsal_appearances), 1)
+        row = footprint.future_rehearsal_appearances[0]
+        self.assertEqual(row.kind, 'backup')
+        self.assertEqual(row.role_name, 'Keys')
+        self.assertEqual(row.song_id, song.pk)
+
+    def test_excluding_semester_none_includes_every_membership_and_assignment(self):
+        """With no viewing Semester (`excluding_semester=None`), nothing is excluded from Memberships or Assignments."""
+        person = PersonFactory()
+        semester = SemesterFactory()
+        MembershipFactory(person=person, semester=semester)
+        SongRoleAssignmentFactory(song=SongFactory(semester=semester), person=person, role=RoleFactory())
+
+        footprint = future_scheduling_footprint_for(person, excluding_semester=None)
+
+        self.assertEqual(len(footprint.future_memberships), 1)
+        self.assertEqual(len(footprint.future_role_assignments), 1)
+
+    def test_spans_multiple_other_semesters(self):
+        """Future-facing state accumulates correctly across more than one other Semester."""
+        person = PersonFactory()
+        viewing_semester = SemesterFactory()
+        semester_a = SemesterFactory(name='Semester A')
+        semester_b = SemesterFactory(name='Semester B')
+        MembershipFactory(person=person, semester=semester_a)
+        MembershipFactory(person=person, semester=semester_b)
+        SongRoleAssignmentFactory(song=SongFactory(semester=semester_a), person=person, role=RoleFactory())
+        SongRoleAssignmentFactory(song=SongFactory(semester=semester_b), person=person, role=RoleFactory())
+
+        footprint = future_scheduling_footprint_for(person, excluding_semester=viewing_semester)
+
+        self.assertEqual(len(footprint.future_memberships), 2)
+        self.assertEqual(len(footprint.future_role_assignments), 2)
+        self.assertEqual(
+            {row.semester_id for row in footprint.future_memberships}, {semester_a.pk, semester_b.pk},
+        )
+
+    def test_a_semester_whose_every_rehearsal_is_past_is_excluded_from_memberships_and_assignments(self):
+        """A genuinely concluded Semester — one whose only Rehearsals are already past — is never reported as a future commitment."""
+        person = PersonFactory()
+        concluded_semester = SemesterFactory(name='Concluded Semester')
+        RehearsalFactory(semester=concluded_semester, date=timezone.localdate() - timedelta(days=30))
+        MembershipFactory(person=person, semester=concluded_semester)
+        SongRoleAssignmentFactory(song=SongFactory(semester=concluded_semester), person=person, role=RoleFactory())
+
+        footprint = future_scheduling_footprint_for(person, excluding_semester=None)
+
+        self.assertEqual(footprint.future_memberships, [])
+        self.assertEqual(footprint.future_role_assignments, [])
+
+    def test_a_semester_with_a_future_rehearsal_is_not_treated_as_concluded(self):
+        """A Semester with at least one future-dated Rehearsal (alongside past ones) still counts as a live commitment."""
+        person = PersonFactory()
+        semester = SemesterFactory(name='Still Live Semester')
+        RehearsalFactory(semester=semester, date=timezone.localdate() - timedelta(days=30))
+        RehearsalFactory(semester=semester, date=timezone.localdate() + timedelta(days=30))
+        MembershipFactory(person=person, semester=semester)
+
+        footprint = future_scheduling_footprint_for(person, excluding_semester=None)
+
+        self.assertEqual(len(footprint.future_memberships), 1)
+        self.assertEqual(footprint.future_memberships[0].semester_id, semester.pk)
+
+    def test_a_semester_with_no_rehearsals_at_all_is_not_treated_as_concluded(self):
+        """A brand-new Semester with no Rehearsals scheduled yet has no evidence it's over, so it still counts as future."""
+        person = PersonFactory()
+        semester = SemesterFactory(name='Not Yet Scheduled Semester')
+        MembershipFactory(person=person, semester=semester)
+
+        footprint = future_scheduling_footprint_for(person, excluding_semester=None)
+
+        self.assertEqual(len(footprint.future_memberships), 1)
+        self.assertEqual(footprint.future_memberships[0].semester_id, semester.pk)
+
+    def test_a_future_dress_rehearsal_is_synthesized_as_an_appearance_for_every_standing_assignment(self):
+        """ADR-0003: the Dress Rehearsal carries no RehearsalSong row, so it's synthesized from each Standing Assignment in its Semester."""
+        person = PersonFactory()
+        semester = SemesterFactory()
+        song = SongFactory(semester=semester, title='Dress Rehearsal Song')
+        role = RoleFactory(name='Bass')
+        SongRoleAssignmentFactory(song=song, person=person, role=role)
+        dress_rehearsal = RehearsalFactory(
+            semester=semester, date=timezone.localdate() + timedelta(days=7), is_full_setlist=True,
+        )
+
+        footprint = future_scheduling_footprint_for(person, excluding_semester=None)
+
+        self.assertEqual(len(footprint.future_rehearsal_appearances), 1)
+        row = footprint.future_rehearsal_appearances[0]
+        self.assertEqual(row.rehearsal_id, dress_rehearsal.pk)
+        self.assertEqual(row.song_id, song.pk)
+        self.assertEqual(row.role_name, 'Bass')
+        self.assertEqual(row.kind, 'assignment')
+        self.assertTrue(row.is_dress_rehearsal)
+
+    def test_a_past_dress_rehearsal_is_not_synthesized(self):
+        """A Dress Rehearsal dated in the past never contributes an appearance, same as any other past Rehearsal."""
+        person = PersonFactory()
+        semester = SemesterFactory()
+        song = SongFactory(semester=semester)
+        SongRoleAssignmentFactory(song=song, person=person, role=RoleFactory())
+        RehearsalFactory(semester=semester, date=timezone.localdate() - timedelta(days=7), is_full_setlist=True)
+
+        footprint = future_scheduling_footprint_for(person, excluding_semester=None)
+
+        self.assertEqual(footprint.future_rehearsal_appearances, [])
+
+    def test_ordinary_rehearsal_song_appearances_are_not_flagged_as_dress_rehearsal(self):
+        """A normal `RehearsalSong`-derived appearance (not the Dress Rehearsal) reports `is_dress_rehearsal=False`."""
+        person = PersonFactory()
+        semester = SemesterFactory()
+        song = SongFactory(semester=semester)
+        SongRoleAssignmentFactory(song=song, person=person, role=RoleFactory())
+        rehearsal = RehearsalFactory(semester=semester, date=timezone.localdate() + timedelta(days=2))
+        RehearsalSongFactory(rehearsal=rehearsal, song=song, order=1)
+
+        footprint = future_scheduling_footprint_for(person, excluding_semester=None)
+
+        self.assertEqual(len(footprint.future_rehearsal_appearances), 1)
+        self.assertFalse(footprint.future_rehearsal_appearances[0].is_dress_rehearsal)
