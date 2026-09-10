@@ -1,23 +1,11 @@
-from django.contrib import messages
 from django.contrib.auth import views as auth_views
-from django.shortcuts import get_object_or_404, redirect, render
-from django.views import View
 
-from config.views import AdminRequiredMixin
-
-from .forms import PersonInviteForm
-from .models import Person
 from .services import (
-    AlreadyHasPasswordError,
-    EmailDeliveryError,
     client_ip,
-    invite_person,
     is_auth_email_rate_limited,
     is_login_rate_limited,
-    people_with_invite_status,
     record_auth_email_request,
     record_login_attempt,
-    resend_invite,
 )
 
 
@@ -133,67 +121,3 @@ class PasswordResetRequestView(auth_views.PasswordResetView):
             request=self.request,
         )
         return self.render_to_response(self.get_context_data(form=form, sent=True))
-
-
-class PeopleView(AdminRequiredMixin, View):
-    """`/manage/people/`: an admin lists Persons, invites new ones, and re-invites pending ones (#327, issue #59)."""
-
-    template_name = 'identity/people.html'
-
-    def get(self, request):
-        """Render the roster of existing Persons alongside an empty invite form."""
-        return render(request, self.template_name, self._build_context())
-
-    def post(self, request):
-        """Validate the invite form and create a Person via `invite_person()`, or re-render with errors."""
-        form = PersonInviteForm(request.POST)
-        if form.is_valid():
-            try:
-                invite_person(name=form.cleaned_data['name'], email=form.cleaned_data['email'])
-            except EmailDeliveryError:
-                messages.error(request, f"Couldn't send the invite email to {form.cleaned_data['email']}.")
-                return redirect('identity:people')
-            messages.success(request, f"Invited {form.cleaned_data['email']}.")
-            return redirect('identity:people')
-        return render(request, self.template_name, self._build_context(form))
-
-    def _build_context(self, form=None):
-        """Build context: the Person roster (with pending-invite status) plus the invite form."""
-        return {
-            'people': people_with_invite_status(),
-            'form': form or PersonInviteForm(),
-        }
-
-
-class PersonToggleAdminView(AdminRequiredMixin, View):
-    """`/manage/people/<id>/toggle-admin/`: an admin flips a Person's `is_admin` flag (issue #59, issue #17 user story 13)."""
-
-    def post(self, request, pk):
-        """Flip the target Person's is_admin flag and redirect back to the roster with a success message."""
-        person = get_object_or_404(Person, pk=pk)
-        person.is_admin = not person.is_admin
-        person.save(update_fields=['is_admin'])
-        messages.success(request, f'Updated admin access for {person.email}.')
-        return redirect('identity:people')
-
-
-class PersonResendInviteView(AdminRequiredMixin, View):
-    """`/manage/people/<id>/resend-invite/`: an admin re-sends a dead invite link (#327).
-
-    Refused for a Person who has already set a password — that member's
-    recovery route is the self-serve forgot-password flow, not an admin
-    reset from the roster.
-    """
-
-    def post(self, request, pk):
-        """Re-invite the target Person, or redirect with a refusal message if they already have a password or the email fails to send."""
-        person = get_object_or_404(Person, pk=pk)
-        try:
-            resend_invite(person)
-        except AlreadyHasPasswordError:
-            messages.error(request, f'{person.email} has already set a password.')
-        except EmailDeliveryError:
-            messages.error(request, f"Couldn't send the invite email to {person.email}.")
-        else:
-            messages.success(request, f'Re-sent invite to {person.email}.')
-        return redirect('identity:people')

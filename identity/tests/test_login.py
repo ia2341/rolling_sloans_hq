@@ -204,28 +204,6 @@ class LoginRedirectTests(TestCase):
         override.enable()
         self.addCleanup(override.disable)
 
-    def test_bounce_then_login_still_honours_next(self):
-        """LoginRequiredMixin's bounce carries ?next=, and a login through it still lands there.
-
-        `identity:people` (`/accounts/manage/people/`) is the one surviving
-        page-shaped route gated by `AdminRequiredMixin`/`BaseView` rather
-        than `ApiView` (issue #341: every other Django page moved under
-        `/api/`, which answers an anonymous request with a JSON 401, never
-        a redirect bounce) — so it's the only route left that can still
-        demonstrate this mechanism.
-        """
-        person = PersonFactory(password=PASSWORD, is_admin=True)
-        bounce = self.client.get(reverse('identity:people'), follow=True)
-        login_path = bounce.redirect_chain[-1][0]
-        self.assertIn(f'next={reverse("identity:people")}', login_path)
-
-        response = self.client.post(
-            login_path,
-            {'username': person.email, 'password': PASSWORD},
-        )
-
-        self.assertRedirects(response, reverse('identity:people'))
-
     def test_direct_login_visit_then_login_lands_on_a_real_page(self):
         """Visiting /accounts/login/ directly (no ?next=), then logging in, must not 404."""
         person = PersonFactory(password=PASSWORD)

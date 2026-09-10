@@ -297,18 +297,6 @@ def invite_status_for(person):
     return 'not_yet_invited'
 
 
-def people_with_invite_status():
-    """Return every Person ordered by name, each annotated with `invite_status` (issue #397).
-
-    A derived read, computed here rather than in the roster template, per
-    the project's "derived reads live in services" convention.
-    """
-    people = list(Person.objects.order_by('name'))
-    for person in people:
-        person.invite_status = invite_status_for(person)
-    return people
-
-
 def build_set_password_url(person):
     """Build the absolute, single-use set-password link for a Person (invite or forgot-password)."""
     uidb64 = urlsafe_base64_encode(force_bytes(person.pk))
