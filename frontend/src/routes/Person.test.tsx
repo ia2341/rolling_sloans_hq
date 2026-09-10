@@ -825,4 +825,191 @@ describe('Person', () => {
       screen.getByRole('button', { name: 'Revoke admin access' }),
     ).toBeInTheDocument()
   })
+
+  it('renders no Deactivate/Reactivate control for a plain teammate viewer (issue #469)', async () => {
+    mockFetchByUrl({
+      '/api/members/2/': () => ({
+        status: 200,
+        body: { context: memberContext(), data: teammatePayload() },
+      }),
+    })
+    renderPerson('/members/2')
+
+    await screen.findByRole('heading', { name: 'Alex Kim' })
+    expect(
+      screen.queryByRole('button', { name: /^Deactivate$/ }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Reactivate' }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('renders no Deactivate/Reactivate control on the self viewer’s own page (issue #469)', async () => {
+    mockFetchByUrl({
+      '/api/members/1/': () => ({
+        status: 200,
+        body: { context: memberContext(), data: selfPayload() },
+      }),
+    })
+    renderPerson('/members/1')
+
+    await screen.findByRole('heading', { name: 'Sam Rivera' })
+    expect(
+      screen.queryByRole('button', { name: /^Deactivate$/ }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Reactivate' }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('opens a confirmation dialog listing the future scheduling footprint before deactivating (issue #469)', async () => {
+    const deactivateFetch = vi.fn()
+    mockFetchByUrl({
+      '/api/members/2/deactivate/': () => {
+        deactivateFetch()
+        return {
+          status: 200,
+          body: {
+            context: memberContext({
+              viewer: { ...memberContext().viewer, is_admin: true },
+            }),
+            ok: true,
+            errors: {},
+            non_field_errors: [],
+            fallout: null,
+            values: null,
+            data: adminViewingTeammatePayload({ is_active: false }),
+          },
+        }
+      },
+      '/api/members/2/': () => ({
+        status: 200,
+        body: {
+          context: memberContext({
+            viewer: { ...memberContext().viewer, is_admin: true },
+          }),
+          data: adminViewingTeammatePayload({
+            is_active: true,
+            future_scheduling_footprint: {
+              future_memberships: [
+                { semester_id: 9, semester_name: 'Fall 2026' },
+              ],
+              future_role_assignments: [],
+              future_rehearsal_appearances: [],
+            },
+          }),
+        },
+      }),
+    })
+
+    const user = (await import('@testing-library/user-event')).default.setup()
+    renderPerson('/members/2')
+
+    const deactivateButton = await screen.findByRole('button', {
+      name: 'Deactivate',
+    })
+    await user.click(deactivateButton)
+
+    await screen.findByText('Fall 2026')
+    expect(deactivateFetch).not.toHaveBeenCalled()
+
+    const dialog = screen.getByRole('dialog')
+    await user.click(within(dialog).getByRole('button', { name: 'Deactivate' }))
+
+    await waitFor(() => expect(deactivateFetch).toHaveBeenCalledTimes(1))
+    await screen.findByRole('button', { name: 'Reactivate' })
+  })
+
+  it('lets an admin reactivate a deactivated teammate with no confirmation dialog (issue #469)', async () => {
+    const reactivateFetch = vi.fn()
+    mockFetchByUrl({
+      '/api/members/2/reactivate/': () => {
+        reactivateFetch()
+        return {
+          status: 200,
+          body: {
+            context: memberContext({
+              viewer: { ...memberContext().viewer, is_admin: true },
+            }),
+            ok: true,
+            errors: {},
+            non_field_errors: [],
+            fallout: null,
+            values: null,
+            data: adminViewingTeammatePayload({ is_active: true }),
+          },
+        }
+      },
+      '/api/members/2/': () => ({
+        status: 200,
+        body: {
+          context: memberContext({
+            viewer: { ...memberContext().viewer, is_admin: true },
+          }),
+          data: adminViewingTeammatePayload({ is_active: false }),
+        },
+      }),
+    })
+
+    const user = (await import('@testing-library/user-event')).default.setup()
+    renderPerson('/members/2')
+
+    const reactivateButton = await screen.findByRole('button', {
+      name: 'Reactivate',
+    })
+    await user.click(reactivateButton)
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    await waitFor(() => expect(reactivateFetch).toHaveBeenCalledTimes(1))
+    await screen.findByRole('button', { name: 'Deactivate' })
+  })
+
+  it('surfaces a deactivate refusal from the API inline, without closing the dialog or changing state (issue #469)', async () => {
+    mockFetchByUrl({
+      '/api/members/2/deactivate/': () => ({
+        status: 200,
+        body: {
+          context: memberContext({
+            viewer: { ...memberContext().viewer, is_admin: true },
+          }),
+          ok: false,
+          errors: {},
+          non_field_errors: ['You cannot deactivate yourself.'],
+          fallout: null,
+          values: null,
+          data: null,
+        },
+      }),
+      '/api/members/2/': () => ({
+        status: 200,
+        body: {
+          context: memberContext({
+            viewer: { ...memberContext().viewer, is_admin: true },
+          }),
+          data: adminViewingTeammatePayload({
+            is_active: true,
+            future_scheduling_footprint: {
+              future_memberships: [],
+              future_role_assignments: [],
+              future_rehearsal_appearances: [],
+            },
+          }),
+        },
+      }),
+    })
+
+    const user = (await import('@testing-library/user-event')).default.setup()
+    renderPerson('/members/2')
+
+    const deactivateButton = await screen.findByRole('button', {
+      name: 'Deactivate',
+    })
+    await user.click(deactivateButton)
+
+    const dialog = await screen.findByRole('dialog')
+    await user.click(within(dialog).getByRole('button', { name: 'Deactivate' }))
+
+    await screen.findByText('You cannot deactivate yourself.')
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+  })
 })

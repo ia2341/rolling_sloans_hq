@@ -17,7 +17,10 @@ from django.utils import timezone
 
 from identity.factories import PersonFactory
 from identity.models import Person
-from identity.services import CannotRevokeLastActiveAdminError
+from identity.services import (
+    CannotDeactivateLastActiveAdminError,
+    CannotRevokeLastActiveAdminError,
+)
 from scheduling.factories import (
     MembershipFactory,
     PersonRoleFactory,
@@ -154,7 +157,7 @@ class SerializePersonExactKeySetTests(TestCase):
         )
 
     def test_admin_viewing_a_teammate_adds_only_available_roles(self):
-        """An admin viewing a teammate (can_edit_roles True, is_self False) adds `available_roles`, `invite_status`, `is_admin` and `future_scheduling_footprint` (#397, #467, #468), never email/recordings."""
+        """An admin viewing a teammate (can_edit_roles True, is_self False) adds `available_roles`, `invite_status`, `is_admin`, `is_active` and `future_scheduling_footprint` (#397, #467, #468, #469), never email/recordings."""
         semester = SemesterFactory()
         person = PersonFactory(name='Teammate Placeholder')
         membership = MembershipFactory(person=person, semester=semester)
@@ -165,7 +168,8 @@ class SerializePersonExactKeySetTests(TestCase):
             set(data.keys()),
             {
                 'id', 'name', 'is_self', 'can_edit_roles', 'has_membership', 'semester_name',
-                'roles', 'songs', 'available_roles', 'invite_status', 'is_admin', 'future_scheduling_footprint',
+                'roles', 'songs', 'available_roles', 'invite_status', 'is_admin', 'is_active',
+                'future_scheduling_footprint',
             },
         )
         self.assertNotIn('email', data)
@@ -190,6 +194,27 @@ class SerializePersonExactKeySetTests(TestCase):
                 non_admin_target, semester=semester, is_self=False, can_edit_roles=True,
                 membership=Membership.objects.get(person=non_admin_target),
             )['is_admin'],
+        )
+
+    def test_is_active_reflects_the_targets_actual_active_flag(self):
+        """`is_active` (admin-viewing-a-teammate only) reads the target Person's real flag, not the viewer's (issue #469)."""
+        semester = SemesterFactory()
+        active_target = PersonFactory(name='Active Placeholder', is_active=True)
+        inactive_target = PersonFactory(name='Inactive Placeholder', is_active=False)
+        for person in (active_target, inactive_target):
+            MembershipFactory(person=person, semester=semester)
+
+        self.assertTrue(
+            serialize_person(
+                active_target, semester=semester, is_self=False, can_edit_roles=True,
+                membership=Membership.objects.get(person=active_target),
+            )['is_active'],
+        )
+        self.assertFalse(
+            serialize_person(
+                inactive_target, semester=semester, is_self=False, can_edit_roles=True,
+                membership=Membership.objects.get(person=inactive_target),
+            )['is_active'],
         )
 
     def test_invite_status_reflects_the_persons_lifecycle(self):
@@ -811,3 +836,150 @@ class PersonAdminStatusApiViewTests(TestCase):
         body = response.json()
         self.assertFalse(body['ok'])
         self.assertTrue(body['non_field_errors'])
+
+
+def deactivate_api_url(person):
+    """Return `/api/members/<pk>/deactivate/` for `person`."""
+    return reverse('api-member-deactivate', args=[person.pk])
+
+
+def reactivate_api_url(person):
+    """Return `/api/members/<pk>/reactivate/` for `person`."""
+    return reverse('api-member-reactivate', args=[person.pk])
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class PersonDeactivationApiViewTests(TestCase):
+    """`POST /api/members/<pk>/deactivate/` (issue #469): deactivate, gated by `AdminApiView`."""
+
+    def setUp(self):
+        """Log in as a synthetic admin before each test."""
+        self.admin = admin_client(self)
+
+    def test_anonymous_request_401s_not_302s(self):
+        """An unauthenticated POST gets a JSON 401, never a redirect (ApiView's contract)."""
+        self.client.logout()
+        target = PersonFactory()
+
+        response = self.client.post(deactivate_api_url(target))
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_non_admin_request_403s(self):
+        """A logged-in non-admin gets a JSON 403 (AdminApiView's contract), never a redirect."""
+        self.client.logout()
+        member_client(self)
+        target = PersonFactory()
+
+        response = self.client.post(deactivate_api_url(target))
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_deactivates_and_returns_the_fresh_person_payload(self):
+        """A successful deactivate flips `is_active` and returns `data` with `is_active: false`."""
+        target = PersonFactory(is_active=True)
+
+        response = self.client.post(deactivate_api_url(target))
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body['ok'])
+        self.assertFalse(body['data']['is_active'])
+        self.assertFalse(Person.objects.get(pk=target.pk).is_active)
+
+    def test_self_deactivation_is_refused_as_ok_false_not_a_4xx(self):
+        """Deactivating yourself is a 200 with `ok: false`, not a 4xx -- a well-formed request refused, not malformed."""
+        response = self.client.post(deactivate_api_url(self.admin))
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertFalse(body['ok'])
+        self.assertTrue(body['non_field_errors'])
+        self.assertTrue(Person.objects.get(pk=self.admin.pk).is_active)
+
+    def test_deactivating_the_last_active_admin_is_refused_as_ok_false(self):
+        """The view reports `CannotDeactivateLastActiveAdminError` as `ok: false`, never a 4xx.
+
+        Patched the same way `test_revoking_the_last_active_admin_is_refused_as_ok_false`
+        pins `PersonAdminStatusApiView`'s error-handling branch:
+        `identity.tests.test_deactivation` covers the guard's real logic.
+        """
+        target = PersonFactory(is_admin=True, is_active=True)
+
+        with patch(
+            'scheduling.api_views.apply_person_deactivation',
+            side_effect=CannotDeactivateLastActiveAdminError(
+                f'{target.name} is the last active admin and cannot be deactivated.'
+            ),
+        ):
+            response = self.client.post(deactivate_api_url(target))
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertFalse(body['ok'])
+        self.assertTrue(body['non_field_errors'])
+
+    def test_deactivate_terminates_the_target_persons_live_session(self):
+        """A logged-in target's session is destroyed the moment they're deactivated (ADR 0017)."""
+        target = PersonFactory(password=PASSWORD, is_active=True)
+        target_client = self.client_class()
+        target_client.login(username=target.email, password=PASSWORD)
+        self.assertIn('_auth_user_id', target_client.session)
+
+        self.client.post(deactivate_api_url(target))
+
+        from django.contrib.sessions.models import Session
+        self.assertFalse(
+            any(
+                session.get_decoded().get('_auth_user_id') == str(target.pk)
+                for session in Session.objects.all()
+            )
+        )
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class PersonReactivationApiViewTests(TestCase):
+    """`POST /api/members/<pk>/reactivate/` (issue #469): reactivate, gated by `AdminApiView`."""
+
+    def setUp(self):
+        """Log in as a synthetic admin before each test."""
+        self.admin = admin_client(self)
+
+    def test_anonymous_request_401s_not_302s(self):
+        """An unauthenticated POST gets a JSON 401, never a redirect (ApiView's contract)."""
+        self.client.logout()
+        target = PersonFactory(is_active=False)
+
+        response = self.client.post(reactivate_api_url(target))
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_non_admin_request_403s(self):
+        """A logged-in non-admin gets a JSON 403 (AdminApiView's contract), never a redirect."""
+        self.client.logout()
+        member_client(self)
+        target = PersonFactory(is_active=False)
+
+        response = self.client.post(reactivate_api_url(target))
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_reactivates_with_no_guard_and_returns_the_fresh_person_payload(self):
+        """A successful reactivate flips `is_active` back and returns `data` with `is_active: true`."""
+        target = PersonFactory(is_active=False)
+
+        response = self.client.post(reactivate_api_url(target))
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body['ok'])
+        self.assertTrue(body['data']['is_active'])
+        self.assertTrue(Person.objects.get(pk=target.pk).is_active)
+
+    def test_reactivate_leaves_admin_status_untouched(self):
+        """Reactivating a deactivated admin leaves `is_admin` exactly as it was (ADR 0017)."""
+        target = PersonFactory(is_active=False, is_admin=True)
+
+        self.client.post(reactivate_api_url(target))
+
+        self.assertTrue(Person.objects.get(pk=target.pk).is_admin)

@@ -82,6 +82,14 @@ urlpatterns = [
         'members/<int:pk>/admin-status/',
         api_views.PersonAdminStatusApiView.as_view(), name='api-member-admin-status',
     ),
+    path(
+        'members/<int:pk>/deactivate/',
+        api_views.PersonDeactivationApiView.as_view(), name='api-member-deactivate',
+    ),
+    path(
+        'members/<int:pk>/reactivate/',
+        api_views.PersonReactivationApiView.as_view(), name='api-member-reactivate',
+    ),
     path('schedule/editor/', api_views.ScheduleEditorApiView.as_view(), name='api-schedule-editor'),
     path(
         'schedule/editor/preview/',
