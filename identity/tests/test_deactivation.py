@@ -1,7 +1,10 @@
 """`apply_person_deactivation()`, `apply_person_reactivation()`, and `resend_invite()`'s new refusal (issue #469, ADR 0017)."""
 
+import threading
+
 from django.contrib.sessions.backends.db import SessionStore
-from django.test import TestCase
+from django.db import connection
+from django.test import TestCase, TransactionTestCase
 
 from identity.factories import PersonFactory
 from identity.models import Person
@@ -103,6 +106,38 @@ class ApplyPersonDeactivationTests(TestCase):
         apply_person_deactivation(target=target, requesting_admin=requesting_admin)
 
         self.assertFalse(Person.objects.get(pk=target.pk).is_active)
+
+
+class ApplyPersonDeactivationConcurrencyTests(TransactionTestCase):
+    """Row-locking regression test (issue #469 review) — needs `TransactionTestCase` for real cross-thread commits."""
+
+    serialized_rollback = True
+
+    def test_two_admins_deactivating_each_other_at_once_leaves_one_active_admin(self):
+        """Two concurrent mutual deactivations must serialize on the locked admin rows, not both slip past the guard."""
+        admin_a = PersonFactory(is_admin=True, is_active=True)
+        admin_b = PersonFactory(is_admin=True, is_active=True)
+        barrier = threading.Barrier(2)
+        errors = []
+
+        def deactivate(target, requesting_admin):
+            barrier.wait()
+            try:
+                apply_person_deactivation(target=target, requesting_admin=requesting_admin)
+            except CannotDeactivateLastActiveAdminError as error:
+                errors.append(error)
+            finally:
+                connection.close()
+
+        thread_a = threading.Thread(target=deactivate, args=(admin_b, admin_a))
+        thread_b = threading.Thread(target=deactivate, args=(admin_a, admin_b))
+        thread_a.start()
+        thread_b.start()
+        thread_a.join()
+        thread_b.join()
+
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(Person.objects.filter(is_admin=True, is_active=True).count(), 1)
 
 
 class ApplyPersonReactivationTests(TestCase):

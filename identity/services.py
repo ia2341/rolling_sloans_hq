@@ -240,6 +240,13 @@ def apply_person_deactivation(*, target, requesting_admin):
     Admin status, Roles, and Memberships are left untouched — Deactivate is
     reversible and discards nothing.
 
+    Two admins deactivating each other at the same instant could otherwise
+    both pass the guard before either write lands, emptying the active-admin
+    set — so the whole check-then-write runs inside one transaction that
+    row-locks every currently-active-admin row (in a stable `pk` order, so
+    two overlapping calls can't deadlock on each other) before re-reading
+    `target` and evaluating the guard against that locked, up-to-date state.
+
     Raises:
         CannotDeactivateSelfError: `target` is `requesting_admin`
             themselves — an admin must have another admin deactivate them.
@@ -250,13 +257,16 @@ def apply_person_deactivation(*, target, requesting_admin):
     """
     if target.pk == requesting_admin.pk:
         raise CannotDeactivateSelfError('You cannot deactivate yourself.')
-    if target.is_admin and target.is_active and not other_active_admins(target).exists():
-        raise CannotDeactivateLastActiveAdminError(
-            f'{target.name} is the last active admin and cannot be deactivated.'
-        )
-    target.is_active = False
-    target.save(update_fields=['is_active'])
-    _terminate_sessions_for(target)
+    with transaction.atomic():
+        list(Person.objects.filter(is_admin=True, is_active=True).order_by('pk').select_for_update())
+        target = Person.objects.select_for_update().get(pk=target.pk)
+        if target.is_admin and target.is_active and not other_active_admins(target).exists():
+            raise CannotDeactivateLastActiveAdminError(
+                f'{target.name} is the last active admin and cannot be deactivated.'
+            )
+        target.is_active = False
+        target.save(update_fields=['is_active'])
+        _terminate_sessions_for(target)
     return target
 
 

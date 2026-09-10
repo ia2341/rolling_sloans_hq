@@ -850,7 +850,7 @@ class PersonDeactivationApiView(AdminApiView, View):
         """
         target = get_object_or_404(Person, pk=pk)
         try:
-            apply_person_deactivation(target=target, requesting_admin=request.user)
+            target = apply_person_deactivation(target=target, requesting_admin=request.user)
         except (CannotDeactivateSelfError, CannotDeactivateLastActiveAdminError) as error:
             return self.write_response(request, ok=False, non_field_errors=[str(error)])
         semester = services.get_viewing_semester(request)

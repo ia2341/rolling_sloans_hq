@@ -1012,4 +1012,45 @@ describe('Person', () => {
     await screen.findByText('You cannot deactivate yourself.')
     expect(screen.getByRole('dialog')).toBeInTheDocument()
   })
+
+  it('resets the saving state and shows a fallback error when the deactivate request itself fails (issue #469 review)', async () => {
+    mockFetchByUrl({
+      '/api/members/2/deactivate/': () => {
+        throw new Error('network error')
+      },
+      '/api/members/2/': () => ({
+        status: 200,
+        body: {
+          context: memberContext({
+            viewer: { ...memberContext().viewer, is_admin: true },
+          }),
+          data: adminViewingTeammatePayload({
+            is_active: true,
+            future_scheduling_footprint: {
+              future_memberships: [],
+              future_role_assignments: [],
+              future_rehearsal_appearances: [],
+            },
+          }),
+        },
+      }),
+    })
+
+    const user = (await import('@testing-library/user-event')).default.setup()
+    renderPerson('/members/2')
+
+    const deactivateButton = await screen.findByRole('button', {
+      name: 'Deactivate',
+    })
+    await user.click(deactivateButton)
+
+    const dialog = await screen.findByRole('dialog')
+    const confirmButton = within(dialog).getByRole('button', {
+      name: 'Deactivate',
+    })
+    await user.click(confirmButton)
+
+    await screen.findByText('Could not deactivate this member.')
+    expect(confirmButton).not.toBeDisabled()
+  })
 })

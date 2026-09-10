@@ -344,18 +344,23 @@ function DeactivationRow({
   async function handleSubmit(action: 'deactivate' | 'reactivate') {
     setIsSaving(true)
     setError(null)
-    const envelope = await apiFetch<WriteEnvelope<PersonPayload>>(
-      `/api/members/${personId}/${action}/`,
-      { method: 'POST' },
-    )
-    setIsSaving(false)
-    if (envelope.ok && envelope.data !== null) {
-      onDataChange(envelope.data)
-      setIsDialogOpen(false)
-    } else {
-      setError(
-        envelope.non_field_errors[0] ?? `Could not ${action} this member.`,
+    try {
+      const envelope = await apiFetch<WriteEnvelope<PersonPayload>>(
+        `/api/members/${personId}/${action}/`,
+        { method: 'POST' },
       )
+      if (envelope.ok && envelope.data !== null) {
+        onDataChange(envelope.data)
+        setIsDialogOpen(false)
+      } else {
+        setError(
+          envelope.non_field_errors[0] ?? `Could not ${action} this member.`,
+        )
+      }
+    } catch {
+      setError(`Could not ${action} this member.`)
+    } finally {
+      setIsSaving(false)
     }
   }
 
