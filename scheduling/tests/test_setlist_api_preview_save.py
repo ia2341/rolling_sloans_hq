@@ -458,3 +458,97 @@ class RoleGroupCountsTests(TestCase):
 
         self.assertFalse(envelope['ok'])
         self.assertIn('role_group_counts.0.role_group_id', envelope['errors']['new'])
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class AddSongsRoleCountsEndToEndTests(TestCase):
+    """The full Add Songs pipeline (issue #462): by-hand and Spotify-sourced rows, multiple Role Groups per song, and a zero-count song, through preview and save.
+
+    This is deliberately shaped like the request `AddSongsSheet.tsx`'s
+    "Confirm Roles" now builds -- `roleGroupCountsWireFor()` drops every
+    all-zero entry before it reaches the wire, so a well-formed request
+    from that client never carries a `count: 0` entry at all. `origin`
+    ('spotify' vs. 'byhand') is a frontend-only concept `EditRow` tracks
+    for badging; the wire body itself makes no distinction between the
+    two sources, so this test's "by-hand" and "Spotify" rows differ only
+    in name, matching what actually crosses the wire.
+    """
+
+    def setUp(self):
+        """Log in a synthetic admin against a Semester, with two named Role Groups (one with two active Roles, one with one)."""
+        admin_client(self)
+        self.semester = SemesterFactory()
+        select(self, self.semester)
+        self.vocals_group = RoleGroupFactory(name='Test Vocals Group', display_order=0)
+        self.first_vocal_role = RoleFactory(name='Alto', group=self.vocals_group)
+        RoleFactory(name='Tenor', group=self.vocals_group)
+        self.saxophone_group = RoleGroupFactory(name='Test Saxophone Group', display_order=1)
+        self.sax_role = RoleFactory(name='Alto Sax', group=self.saxophone_group)
+
+    def _body(self):
+        """Build the request body an admin's "Confirm Roles" would send for this scenario's three staged rows."""
+        return _valid_body(self.semester, rows=[
+            {
+                'row_key': 'byhand-1', 'song_id': None, 'title': 'Hand Song', 'artist': 'Hand Artist',
+                'length': '3:00', 'notes': '',
+                'role_group_counts': [
+                    {'role_group_id': self.vocals_group.pk, 'count': 3},
+                    {'role_group_id': self.saxophone_group.pk, 'count': 1},
+                ],
+            },
+            {
+                'row_key': 'spotify-1', 'song_id': None, 'title': 'Spotify Song', 'artist': 'Spotify Artist',
+                'length': '4:00', 'notes': '',
+                'role_group_counts': [{'role_group_id': self.vocals_group.pk, 'count': 2}],
+            },
+            {
+                # Every count zeroed out client-side, so no entries are sent at all --
+                # this must behave exactly like "add with no role step" (acceptance criteria).
+                'row_key': 'byhand-2', 'song_id': None, 'title': 'Zero Song', 'artist': 'Zero Artist',
+                'length': '2:30', 'notes': '', 'role_group_counts': [],
+            },
+        ])
+
+    def test_preview_reports_every_pending_requirement_and_writes_nothing(self):
+        """Preview's fallout names every pending Requirement across all three rows, and creates none of them."""
+        response = assert_preview_writes_nothing(
+            self, _preview_url(), models_to_check=[Song, SongRoleRequirement],
+            semester=self.semester, json_body=self._body(),
+        )
+        envelope = json.loads(response.content)
+
+        self.assertTrue(envelope['ok'])
+        self.assertEqual(
+            envelope['fallout']['pending_role_requirements'],
+            [
+                {'song_title': 'Hand Song', 'role_name': self.first_vocal_role.name, 'count': 3},
+                {'song_title': 'Hand Song', 'role_name': self.sax_role.name, 'count': 1},
+                {'song_title': 'Spotify Song', 'role_name': self.first_vocal_role.name, 'count': 2},
+            ],
+        )
+
+    def test_save_creates_the_expected_songs_and_role_requirements(self):
+        """Save creates all three Songs, with SongRoleRequirement rows only for the two non-zero rows."""
+        response, envelope = _post_json(self, _save_url(), self._body())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(envelope['ok'])
+
+        hand_song = Song.objects.get(title='Hand Song')
+        spotify_song = Song.objects.get(title='Spotify Song')
+        zero_song = Song.objects.get(title='Zero Song')
+
+        hand_requirements = {
+            requirement.role: requirement.count
+            for requirement in SongRoleRequirement.objects.filter(song=hand_song)
+        }
+        self.assertEqual(hand_requirements, {self.first_vocal_role: 3, self.sax_role: 1})
+
+        spotify_requirements = {
+            requirement.role: requirement.count
+            for requirement in SongRoleRequirement.objects.filter(song=spotify_song)
+        }
+        self.assertEqual(spotify_requirements, {self.first_vocal_role: 2})
+
+        self.assertFalse(SongRoleRequirement.objects.filter(song=zero_song).exists())
+        self.assertEqual(SongRoleRequirement.objects.count(), 3)
