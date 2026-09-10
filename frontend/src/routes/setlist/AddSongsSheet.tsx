@@ -14,6 +14,7 @@ import { RoleCountStepTable } from './RoleCountStepTable'
 import {
   defaultCountFor,
   initialRoleCounts,
+  roleGroupCountsWireFor,
   roleGroupsFromRoles,
 } from './roleCountStepModel'
 import type { RoleCountRow } from './roleCountStepModel'
@@ -195,9 +196,25 @@ export function AddSongsSheet({
     setStep('roles')
   }
 
-  /** "Confirm Roles": the actual write to the Buffer -- role counts are held only for review for now, per issue #460 (saving them is the following ticket). */
+  /**
+   * "Confirm Roles": the actual write to the Buffer (issue #462). Merges
+   * the role-count step's per-song, per-Role-Group state into each
+   * staged row's `roleGroupCounts` -- via `roleGroupCountsWireFor()`,
+   * which drops any group left at 0 -- before handing the rows to
+   * `onAddRows`, so a plain "add songs with no role step" outcome (every
+   * count still at its stepped-down-to-0 or never-raised default)
+   * carries an empty `roleGroupCounts` and changes nothing about what
+   * used to happen before this step existed.
+   */
   function confirmRoles() {
-    onAddRows(stagedRows)
+    const rows = stagedRows.map((row) => ({
+      ...row,
+      roleGroupCounts: roleGroupCountsWireFor(
+        roleGroups,
+        roleCounts[row.rowKey],
+      ),
+    }))
+    onAddRows(rows)
     resetAndClose()
   }
 

@@ -21,6 +21,7 @@ const ROLE_GROUPS_FIXTURE: RoleLegendEntry[] = [
     id: 1,
     name: 'Lead Vocalist',
     code: 'LV',
+    group_id: 10,
     group_name: 'Vocals',
     group_order: 0,
     group_is_catch_all: false,
@@ -29,6 +30,7 @@ const ROLE_GROUPS_FIXTURE: RoleLegendEntry[] = [
     id: 2,
     name: 'Guitarist',
     code: 'G',
+    group_id: 11,
     group_name: 'Guitars',
     group_order: 1,
     group_is_catch_all: false,
@@ -37,6 +39,7 @@ const ROLE_GROUPS_FIXTURE: RoleLegendEntry[] = [
     id: 3,
     name: 'Keyboardist',
     code: 'K',
+    group_id: 12,
     group_name: 'Keyboards',
     group_order: 2,
     group_is_catch_all: false,
@@ -45,6 +48,7 @@ const ROLE_GROUPS_FIXTURE: RoleLegendEntry[] = [
     id: 4,
     name: 'Drummer',
     code: 'D',
+    group_id: 13,
     group_name: 'Drums',
     group_order: 3,
     group_is_catch_all: false,
@@ -53,6 +57,7 @@ const ROLE_GROUPS_FIXTURE: RoleLegendEntry[] = [
     id: 5,
     name: 'Bassist',
     code: 'B',
+    group_id: 14,
     group_name: 'Bass',
     group_order: 4,
     group_is_catch_all: false,
@@ -61,6 +66,7 @@ const ROLE_GROUPS_FIXTURE: RoleLegendEntry[] = [
     id: 6,
     name: 'Saxophonist',
     code: 'S',
+    group_id: 16,
     group_name: 'Saxophone',
     group_order: 5,
     group_is_catch_all: false,
@@ -541,6 +547,122 @@ describe('AddSongsSheet', () => {
     expect(rows).toHaveLength(1)
     expect(rows[0]).toMatchObject({ title: 'Only Song' })
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false))
+  })
+
+  it('"Confirm Roles" merges the named default counts into a by-hand row\'s roleGroupCounts (issue #462)', async () => {
+    const onAddRows = vi.fn()
+    const user = userEvent.setup()
+    renderOpen(onAddRows)
+
+    await user.click(screen.getByRole('radio', { name: 'By hand' }))
+    await user.type(screen.getByLabelText('Title'), 'Hand Song')
+    await user.click(screen.getByRole('button', { name: 'Confirm Songs' }))
+    await user.click(screen.getByRole('button', { name: 'Confirm Roles' }))
+
+    const rows = onAddRows.mock.calls[0]?.[0] as EditRow[]
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.roleGroupCounts).toEqual(
+      expect.arrayContaining([
+        { roleGroupId: 10, count: 3 }, // Vocals
+        { roleGroupId: 11, count: 2 }, // Guitars
+        { roleGroupId: 12, count: 1 }, // Keyboards
+        { roleGroupId: 13, count: 1 }, // Drums
+        { roleGroupId: 14, count: 1 }, // Bass
+      ]),
+    )
+    expect(rows[0]?.roleGroupCounts).toHaveLength(5)
+  })
+
+  it('"Confirm Roles" merges role counts into a Spotify-sourced row\'s roleGroupCounts (issue #462)', async () => {
+    mockFetchOnce(200, {
+      context: memberContext(),
+      data: {
+        songs: [
+          {
+            title: 'Spotify Song',
+            artist: 'Spotify Artist',
+            length: '3:00',
+            already_in_setlist: false,
+          },
+        ],
+        skipped_count: 0,
+        skipped_reasons: {},
+        message: '',
+      },
+    })
+    const onAddRows = vi.fn()
+    const user = userEvent.setup()
+    renderOpen(onAddRows)
+
+    await user.type(
+      screen.getByLabelText('Playlist link'),
+      'https://open.spotify.com/playlist/abc',
+    )
+    await user.click(screen.getByRole('button', { name: 'Fetch' }))
+    await screen.findByText(/Spotify Song/)
+
+    await user.click(screen.getByRole('button', { name: 'Confirm Songs' }))
+    // Zero out one named default and increase another before confirming.
+    await user.click(screen.getByLabelText('Decrease Bass for Spotify Song'))
+    await user.click(screen.getByLabelText('Increase Vocals for Spotify Song'))
+    await user.click(screen.getByRole('button', { name: 'Confirm Roles' }))
+
+    const rows = onAddRows.mock.calls[0]?.[0] as EditRow[]
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ origin: 'spotify', songId: null })
+    expect(rows[0]?.roleGroupCounts).toEqual(
+      expect.arrayContaining([
+        { roleGroupId: 10, count: 4 }, // Vocals, bumped from 3
+        { roleGroupId: 11, count: 2 }, // Guitars
+        { roleGroupId: 12, count: 1 }, // Keyboards
+        { roleGroupId: 13, count: 1 }, // Drums
+      ]),
+    )
+    // Bass was zeroed out, so it carries no entry at all.
+    expect(rows[0]?.roleGroupCounts).toHaveLength(4)
+  })
+
+  it('adding a non-default Role Group column and setting a count includes it in roleGroupCounts (issue #462)', async () => {
+    const onAddRows = vi.fn()
+    const user = userEvent.setup()
+    renderOpen(onAddRows)
+
+    await user.click(screen.getByRole('radio', { name: 'By hand' }))
+    await user.type(screen.getByLabelText('Title'), 'Only Song')
+    await user.click(screen.getByRole('button', { name: 'Confirm Songs' }))
+
+    await user.selectOptions(screen.getByLabelText('Add Role'), 'Saxophone')
+    await user.click(screen.getByLabelText('Increase Saxophone for Only Song'))
+    await user.click(screen.getByRole('button', { name: 'Confirm Roles' }))
+
+    const rows = onAddRows.mock.calls[0]?.[0] as EditRow[]
+    expect(rows[0]?.roleGroupCounts).toEqual(
+      expect.arrayContaining([{ roleGroupId: 16, count: 1 }]),
+    )
+  })
+
+  it("an all-zero-count song sends no roleGroupCounts entries at all, matching today's no-role-step behavior (issue #462)", async () => {
+    const onAddRows = vi.fn()
+    const user = userEvent.setup()
+    renderOpen(onAddRows)
+
+    await user.click(screen.getByRole('radio', { name: 'By hand' }))
+    await user.type(screen.getByLabelText('Title'), 'Only Song')
+    await user.click(screen.getByRole('button', { name: 'Confirm Songs' }))
+
+    // Zero out every named default.
+    await user.click(screen.getByLabelText('Decrease Vocals for Only Song'))
+    await user.click(screen.getByLabelText('Decrease Vocals for Only Song'))
+    await user.click(screen.getByLabelText('Decrease Vocals for Only Song'))
+    await user.click(screen.getByLabelText('Decrease Guitars for Only Song'))
+    await user.click(screen.getByLabelText('Decrease Guitars for Only Song'))
+    await user.click(screen.getByLabelText('Decrease Keyboards for Only Song'))
+    await user.click(screen.getByLabelText('Decrease Drums for Only Song'))
+    await user.click(screen.getByLabelText('Decrease Bass for Only Song'))
+    await user.click(screen.getByRole('button', { name: 'Confirm Roles' }))
+
+    const rows = onAddRows.mock.calls[0]?.[0] as EditRow[]
+    expect(rows[0]?.roleGroupCounts).toEqual([])
   })
 
   it('the role-count step renders as a bottom sheet with working steppers below the phone breakpoint', async () => {

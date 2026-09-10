@@ -44,7 +44,7 @@ class SerializeSetlistExactKeySetTests(TestCase):
         )
 
     def test_role_legend_entry_keys(self):
-        """A `roles` legend entry carries exactly `id`, `name`, `code`, and its RoleGroup fields (issue #457)."""
+        """A `roles` legend entry carries exactly `id`, `name`, `code`, and its RoleGroup fields (issue #457, #462)."""
         semester = SemesterFactory()
         RoleFactory()
 
@@ -52,7 +52,7 @@ class SerializeSetlistExactKeySetTests(TestCase):
 
         self.assertEqual(
             set(data['roles'][0].keys()),
-            {'id', 'name', 'code', 'group_name', 'group_order', 'group_is_catch_all'},
+            {'id', 'name', 'code', 'group_id', 'group_name', 'group_order', 'group_is_catch_all'},
         )
 
     def test_song_row_keys(self):

@@ -20,6 +20,8 @@ export interface RoleLegendEntry {
   id: number
   name: string
   code: string
+  /** This Role's RoleGroup id -- lets the Add Songs role-count step build a `role_group_counts` wire entry without a second request (issue #462). */
+  group_id: number
   /** The instrument-family bucket this Role's group merges into on the cast tables (issue #457). */
   group_name: string
   /** Fixes this Role's group's column order, independent of `group_name`'s alphabetical order. */

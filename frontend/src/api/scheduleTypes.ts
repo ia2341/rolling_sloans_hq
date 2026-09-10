@@ -68,6 +68,8 @@ export interface RoleLegendEntry {
   id: number
   name: string
   code: string
+  /** This Role's RoleGroup id (issue #462; mirrors `setlistTypes.ts`'s copy of this same wire shape). */
+  group_id: number
   /** The instrument-family bucket this Role's group merges into on the cast tables (issue #457). */
   group_name: string
   /** Fixes this Role's group's column order, independent of `group_name`'s alphabetical order. */

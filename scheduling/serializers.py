@@ -221,7 +221,7 @@ def serialize_semester_defaults_fallout(fallout: SemesterDefaultsFallout) -> dic
 
 
 def _serialize_role_legend_entry(role, codes):
-    """Return one Role as a `roles` legend entry: `id`, `name`, `code`, and its RoleGroup (issue #457).
+    """Return one Role as a `roles` legend entry: `id`, `name`, `code`, and its RoleGroup (issue #457, #462).
 
     `group_name`/`group_order`/`group_is_catch_all` replace the frontend's
     retired `classifyRole()` keyword match as the Setlist/Schedule cast
@@ -229,12 +229,17 @@ def _serialize_role_legend_entry(role, codes):
     (independent of `group_name`'s alphabetical order), and
     `group_is_catch_all` tells the client to render this Role its own
     column rather than merging it with its groupmates, mirroring how an
-    unmatched Role name used to get its own column.
+    unmatched Role name used to get its own column. `group_id` (issue
+    #462) lets the Add Songs role-count step build a `role_group_counts`
+    wire entry (`SetlistRoleGroupCount.role_group_id`) straight from this
+    already-loaded legend, with no second request needed to learn a
+    RoleGroup's id.
     """
     return {
         'id': role.pk,
         'name': role.name,
         'code': codes[role.id],
+        'group_id': role.group_id,
         'group_name': role.group.name,
         'group_order': role.group.display_order,
         'group_is_catch_all': role.group.is_catch_all,
