@@ -27,10 +27,15 @@ from config.views import AdminApiView, AdminPreviewApiView, ApiView
 from identity.models import Person
 from identity.services import (
     AlreadyHasPasswordError,
+    CannotDeactivateLastActiveAdminError,
+    CannotDeactivateSelfError,
     CannotRevokeLastActiveAdminError,
     CannotRevokeOwnAdminStatusError,
     EmailDeliveryError,
+    PersonIsDeactivatedError,
     apply_admin_status_change,
+    apply_person_deactivation,
+    apply_person_reactivation,
     resend_invite,
 )
 from scheduling import serializers, services, spotify
@@ -610,7 +615,7 @@ class RosterResendInviteApiView(AdminApiView, View):
         person = get_object_or_404(Person, pk=pk)
         try:
             resend_invite(person)
-        except AlreadyHasPasswordError as error:
+        except (AlreadyHasPasswordError, PersonIsDeactivatedError) as error:
             return self.write_response(request, ok=False, non_field_errors=[str(error)])
         except EmailDeliveryError:
             return self.write_response(
@@ -820,6 +825,55 @@ class PersonAdminStatusApiView(AdminApiView, View):
             apply_admin_status_change(target=target, is_admin=is_admin, requesting_admin=request.user)
         except (CannotRevokeOwnAdminStatusError, CannotRevokeLastActiveAdminError) as error:
             return self.write_response(request, ok=False, non_field_errors=[str(error)])
+        semester = services.get_viewing_semester(request)
+        membership = Membership.objects.filter(person=target, semester=semester).first() if semester is not None else None
+        data = serializers.serialize_person(
+            target, semester=semester, is_self=False, can_edit_roles=True, membership=membership,
+        )
+        return self.write_response(request, ok=True, data=data)
+
+
+class PersonDeactivationApiView(AdminApiView, View):
+    """`POST /api/members/<pk>/deactivate/`: an admin deactivates another Person (issue #469, ADR 0017).
+
+    A direct `apply_person_deactivation()` call, not a Pending Buffer:
+    there is no server-computed derivation to preview, only a write plus a
+    client-side confirmation dialog built from the person page's
+    already-loaded future scheduling footprint (issue #468).
+    """
+
+    def post(self, request, pk):
+        """Deactivate `pk`, or report the guard that refused it.
+
+        A refusal (self-deactivation, or deactivating the last active
+        admin) is rendered as `ok: false` with a `non_field_errors`
+        message, never a 4xx, matching `PersonAdminStatusApiView`.
+        """
+        target = get_object_or_404(Person, pk=pk)
+        try:
+            target = apply_person_deactivation(target=target, requesting_admin=request.user)
+        except (CannotDeactivateSelfError, CannotDeactivateLastActiveAdminError) as error:
+            return self.write_response(request, ok=False, non_field_errors=[str(error)])
+        semester = services.get_viewing_semester(request)
+        membership = Membership.objects.filter(person=target, semester=semester).first() if semester is not None else None
+        data = serializers.serialize_person(
+            target, semester=semester, is_self=False, can_edit_roles=True, membership=membership,
+        )
+        return self.write_response(request, ok=True, data=data)
+
+
+class PersonReactivationApiView(AdminApiView, View):
+    """`POST /api/members/<pk>/reactivate/`: an admin reactivates a deactivated Person (issue #469, ADR 0017).
+
+    The pure inverse of `PersonDeactivationApiView`: no guard, no
+    confirmation dialog needed client-side, since there is nothing to warn
+    about.
+    """
+
+    def post(self, request, pk):
+        """Reactivate `pk`."""
+        target = get_object_or_404(Person, pk=pk)
+        apply_person_reactivation(target)
         semester = services.get_viewing_semester(request)
         membership = Membership.objects.filter(person=target, semester=semester).first() if semester is not None else None
         data = serializers.serialize_person(

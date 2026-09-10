@@ -179,9 +179,10 @@ class PersonApiViewerStateTests(TestCase):
         consequence of `can_edit_roles` being True, not a second, separate
         divergence — every other key must match byte-for-byte. `is_admin`
         (issue #467) joins `invite_status` under this exact same gate, for
-        the same grant/revoke reason, and so does `future_scheduling_footprint`
-        (issue #468): present for an admin viewing a teammate, absent for
-        the teammate viewing themself.
+        the same grant/revoke reason, `is_active` (issue #469) joins them
+        for the same deactivate/reactivate reason, and so does
+        `future_scheduling_footprint` (issue #468): present for an admin
+        viewing a teammate, absent for the teammate viewing themself.
         """
         self.client.login(username=self.teammate.email, password=PASSWORD)
         teammate_response = self.client.get(person_api_url(self.self_person))
@@ -197,16 +198,18 @@ class PersonApiViewerStateTests(TestCase):
         self.assertIn('available_roles', admin_data)
         self.assertIn('invite_status', admin_data)
         self.assertIn('is_admin', admin_data)
+        self.assertIn('is_active', admin_data)
         self.assertIn('future_scheduling_footprint', admin_data)
+        gated_keys = {
+            'can_edit_roles', 'available_roles', 'invite_status', 'is_admin', 'is_active',
+            'future_scheduling_footprint',
+        }
         self.assertEqual(
-            set(teammate_data.keys())
-            | {'can_edit_roles', 'available_roles', 'invite_status', 'is_admin', 'future_scheduling_footprint'},
+            set(teammate_data.keys()) | gated_keys,
             set(admin_data.keys()) | {'can_edit_roles'},
         )
         for key in teammate_data:
-            if key in (
-                'can_edit_roles', 'available_roles', 'invite_status', 'is_admin', 'future_scheduling_footprint',
-            ):
+            if key in gated_keys:
                 continue
             self.assertEqual(teammate_data[key], admin_data[key], f'{key} differed between teammate and admin viewer')
 

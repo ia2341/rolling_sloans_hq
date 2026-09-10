@@ -153,11 +153,12 @@ export interface FutureSchedulingFootprint {
  * that section rather than rendering it empty). `roles` (issue #378,
  * ADR-0014) is unconditional — a standing `PersonRole` declaration needs no
  * Membership to exist, so it's never gated by `has_membership` the way
- * `songs` is. `invite_status`, `is_admin` and `future_scheduling_footprint`
- * (issues #397, #467, #468) are present only for an admin viewing a
- * teammate — never for `is_self` (a session implies `'accepted'`, an admin
- * can't act on their own row, and self-deactivation is refused outright)
- * and never for a plain teammate viewer.
+ * `songs` is. `invite_status`, `is_admin`, `is_active` and
+ * `future_scheduling_footprint` (issues #397, #467, #468, #469) are
+ * present only for an admin viewing a teammate — never for `is_self` (a
+ * session implies `'accepted'`, an admin can't act on their own row, and
+ * self-deactivation is refused outright) and never for a plain teammate
+ * viewer.
  */
 export interface PersonPayload {
   id: number
@@ -171,6 +172,7 @@ export interface PersonPayload {
   available_roles?: MemberRole[]
   invite_status?: InviteStatus
   is_admin?: boolean
+  is_active?: boolean
   future_scheduling_footprint?: FutureSchedulingFootprint
   songs?: PersonSong[]
   recordings?: PersonRecordingsBlock

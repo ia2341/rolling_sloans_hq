@@ -1215,6 +1215,12 @@ def serialize_person(person, *, semester, is_self: bool, can_edit_roles: bool, m
     non-admin teammate viewer, who has no business seeing anyone's admin
     status at all.
 
+    `is_active` (issue #469, ADR-0017) is present under that identical
+    condition — an admin viewing a teammate — feeding the Deactivate/
+    Reactivate control the same way `is_admin` feeds grant/revoke, and
+    never for `is_self` (self-deactivation is refused outright) or a
+    non-admin teammate viewer.
+
     `future_scheduling_footprint` (issue #468, ADR-0017) is present under
     that same "admin viewing a teammate" condition, for the same reason
     `invite_status` is: it's a Deactivate-dialog dependency an admin needs
@@ -1238,6 +1244,7 @@ def serialize_person(person, *, semester, is_self: bool, can_edit_roles: bool, m
     if not is_self and can_edit_roles:
         data['invite_status'] = invite_status_for(person)
         data['is_admin'] = person.is_admin
+        data['is_active'] = person.is_active
         footprint = services.future_scheduling_footprint_for(person, excluding_semester=semester)
         data['future_scheduling_footprint'] = serialize_future_scheduling_footprint(footprint)
     if has_membership:

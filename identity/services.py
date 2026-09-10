@@ -20,6 +20,7 @@ from urllib.parse import urljoin
 from anymail.exceptions import AnymailError
 from django.conf import settings
 from django.contrib.auth.tokens import default_token_generator
+from django.contrib.sessions.models import Session
 from django.core.mail import send_mail
 from django.db import transaction
 from django.template.loader import render_to_string
@@ -57,6 +58,18 @@ class CannotRevokeOwnAdminStatusError(Exception):
 
 class CannotRevokeLastActiveAdminError(Exception):
     """Raised by `apply_admin_status_change` when revoking would leave no Person who is both `is_admin` and `is_active`."""
+
+
+class CannotDeactivateSelfError(Exception):
+    """Raised by `apply_person_deactivation` when an admin attempts to deactivate themself."""
+
+
+class CannotDeactivateLastActiveAdminError(Exception):
+    """Raised by `apply_person_deactivation` when deactivating would leave no Person who is both `is_admin` and `is_active`."""
+
+
+class PersonIsDeactivatedError(Exception):
+    """Raised by `resend_invite` when the target Person is deactivated (`is_active=False`)."""
 
 
 def invite_person(*, name, email, send_via_on_commit=False):
@@ -128,6 +141,11 @@ def resend_invite(person):
     the self-serve forgot-password flow, and an admin must not be able to
     reset a working account from the roster.
 
+    Refuses a deactivated Person (issue #469): without this check, a
+    deactivated-but-never-accepted invite could still get a working
+    set-password email sent to it, letting someone set a password on an
+    account that's supposed to be locked out.
+
     Because `default_token_generator` incorporates `password` and
     `last_login`, a newly issued token does not invalidate the previous one
     by itself — the previous link stays live until it expires on its own.
@@ -139,6 +157,8 @@ def resend_invite(person):
     """
     if person.has_usable_password():
         raise AlreadyHasPasswordError(f'{person.email} has already set a password')
+    if not person.is_active:
+        raise PersonIsDeactivatedError(f'{person.email} is deactivated and cannot be invited')
     send_invite_email(person)
     person.invited_at = timezone.now()
     person.save(update_fields=['invited_at'])
@@ -189,6 +209,76 @@ def apply_admin_status_change(*, target, is_admin, requesting_admin):
             )
     target.is_admin = is_admin
     target.save(update_fields=['is_admin'])
+    return target
+
+
+def _terminate_sessions_for(person):
+    """Delete every live `Session` row belonging to `person` (ADR 0017).
+
+    `SESSION_SAVE_EVERY_REQUEST=True` gives 30-day sliding sessions with no
+    per-request `is_active` check, so a deactivated Person with an open tab
+    would otherwise keep acting for up to 30 more days. `Session` stores an
+    opaque encoded blob keyed by session key with no FK to `Person`, so
+    finding this Person's sessions means decoding each still-live row and
+    comparing `_auth_user_id` (the stock key `django.contrib.auth.login()`
+    sets, stored as a string) against `person.pk`.
+    """
+    for session in Session.objects.filter(expire_date__gte=timezone.now()):
+        if session.get_decoded().get('_auth_user_id') == str(person.pk):
+            session.delete()
+
+
+def apply_person_deactivation(*, target, requesting_admin):
+    """Set `target.is_active = False`, block login, and end any live session immediately.
+
+    Reuses `other_active_admins()` (built for `apply_admin_status_change()`)
+    for the identical "who else can administer" guard, per ADR 0017.
+    Deliberately not a Pending Buffer/Preview/Fallout surface: there is no
+    server-computed derivation to preview, only a direct write plus a
+    client-side confirmation dialog built from already-loaded data.
+
+    Admin status, Roles, and Memberships are left untouched — Deactivate is
+    reversible and discards nothing.
+
+    Two admins deactivating each other at the same instant could otherwise
+    both pass the guard before either write lands, emptying the active-admin
+    set — so the whole check-then-write runs inside one transaction that
+    row-locks every currently-active-admin row (in a stable `pk` order, so
+    two overlapping calls can't deadlock on each other) before re-reading
+    `target` and evaluating the guard against that locked, up-to-date state.
+
+    Raises:
+        CannotDeactivateSelfError: `target` is `requesting_admin`
+            themselves — an admin must have another admin deactivate them.
+        CannotDeactivateLastActiveAdminError: `target` is the last
+            remaining Person who is both `is_admin=True` and
+            `is_active=True` — deactivating them would leave no one able
+            to log in and administer the band.
+    """
+    if target.pk == requesting_admin.pk:
+        raise CannotDeactivateSelfError('You cannot deactivate yourself.')
+    with transaction.atomic():
+        list(Person.objects.filter(is_admin=True, is_active=True).order_by('pk').select_for_update())
+        target = Person.objects.select_for_update().get(pk=target.pk)
+        if target.is_admin and target.is_active and not other_active_admins(target).exists():
+            raise CannotDeactivateLastActiveAdminError(
+                f'{target.name} is the last active admin and cannot be deactivated.'
+            )
+        target.is_active = False
+        target.save(update_fields=['is_active'])
+        _terminate_sessions_for(target)
+    return target
+
+
+def apply_person_reactivation(target):
+    """Set `target.is_active = True` and touch nothing else (ADR 0017).
+
+    The pure inverse of `apply_person_deactivation()`: no fallout to
+    compute, no guard to check, a plain apply-only call. Admin status,
+    Roles, and Memberships are exactly as they were left by Deactivate.
+    """
+    target.is_active = True
+    target.save(update_fields=['is_active'])
     return target
 
 

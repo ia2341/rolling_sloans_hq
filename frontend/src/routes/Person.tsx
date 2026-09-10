@@ -3,6 +3,7 @@ import { Link, useParams, useSearchParams } from 'react-router-dom'
 
 import { ApiError, apiFetch } from '../api/client'
 import type {
+  FutureSchedulingFootprint,
   MemberRole,
   PersonPayload,
   PersonRecordingsBlock,
@@ -10,6 +11,7 @@ import type {
 import type { ReadEnvelope, WriteEnvelope } from '../api/types'
 import { RecordingUploadDialog } from '../components/recordings/RecordingUploadDialog'
 import { PageHead } from '../components/ui/PageHead'
+import { ResponsiveDialog } from '../components/ui/ResponsiveDialog'
 import { useIsPhone } from '../hooks/useIsPhone'
 import { formatClockTime } from '../lib/formatDate'
 import { usePageTitle } from '../shell/PageTitleContext'
@@ -179,7 +181,8 @@ function DetailsSection({
       </dl>
       {data.is_self && <ChangePasswordRow />}
       {data.invite_status !== undefined &&
-        data.invite_status !== 'accepted' && (
+        data.invite_status !== 'accepted' &&
+        data.is_active !== false && (
           <InviteRow
             personId={data.id}
             inviteStatus={data.invite_status}
@@ -190,6 +193,14 @@ function DetailsSection({
         <AdminStatusRow
           personId={data.id}
           isAdmin={data.is_admin}
+          onDataChange={onDataChange}
+        />
+      )}
+      {data.is_active !== undefined && (
+        <DeactivationRow
+          personId={data.id}
+          isActive={data.is_active}
+          footprint={data.future_scheduling_footprint ?? null}
           onDataChange={onDataChange}
         />
       )}
@@ -301,6 +312,196 @@ function AdminStatusRow({
       </div>
       {error !== null && (
         <span className="text-sm text-rs-danger">{error}</span>
+      )}
+    </div>
+  )
+}
+
+/**
+ * The Deactivate/Reactivate lifecycle control (issue #469, ADR 0017):
+ * renders for a teammate whose payload carries `is_active` (an admin
+ * viewer, never `is_self` — self-deactivation is refused outright).
+ * Deactivate opens a confirmation dialog listing this Person's actual
+ * future-facing scheduling state, sourced from `future_scheduling_footprint`
+ * (issue #468) rather than a generic "are you sure" warning. Reactivate
+ * needs no dialog — the pure inverse, nothing to warn about.
+ */
+function DeactivationRow({
+  personId,
+  isActive,
+  footprint,
+  onDataChange,
+}: {
+  personId: number
+  isActive: boolean
+  footprint: FutureSchedulingFootprint | null
+  onDataChange: (next: PersonPayload) => void
+}) {
+  const [isDialogOpen, setIsDialogOpen] = useState(false)
+  const [isSaving, setIsSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  /** Posts to the deactivate or reactivate endpoint, or surfaces the guard's refusal message inline. */
+  async function handleSubmit(action: 'deactivate' | 'reactivate') {
+    setIsSaving(true)
+    setError(null)
+    try {
+      const envelope = await apiFetch<WriteEnvelope<PersonPayload>>(
+        `/api/members/${personId}/${action}/`,
+        { method: 'POST' },
+      )
+      if (envelope.ok && envelope.data !== null) {
+        onDataChange(envelope.data)
+        setIsDialogOpen(false)
+      } else {
+        setError(
+          envelope.non_field_errors[0] ?? `Could not ${action} this member.`,
+        )
+      }
+    } catch {
+      setError(`Could not ${action} this member.`)
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  if (!isActive) {
+    return (
+      <div className="mt-3 flex flex-col gap-1">
+        <button
+          type="button"
+          onClick={() => void handleSubmit('reactivate')}
+          disabled={isSaving}
+          className="rounded border border-rs-border px-3 py-1.5 text-sm font-medium text-rs-accent disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          Reactivate
+        </button>
+        {error !== null && (
+          <span className="text-sm text-rs-danger">{error}</span>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div className="mt-3 flex flex-col gap-1">
+      <button
+        type="button"
+        onClick={() => setIsDialogOpen(true)}
+        className="rounded border border-rs-border px-3 py-1.5 text-sm font-medium text-rs-danger"
+      >
+        Deactivate
+      </button>
+      {error !== null && (
+        <span className="text-sm text-rs-danger">{error}</span>
+      )}
+      {isDialogOpen && (
+        <ResponsiveDialog
+          open
+          onOpenChange={setIsDialogOpen}
+          title="Deactivate this member?"
+          footer={
+            <>
+              <button
+                type="button"
+                onClick={() => setIsDialogOpen(false)}
+                disabled={isSaving}
+                className="rounded border border-rs-border px-3 py-1.5 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleSubmit('deactivate')}
+                disabled={isSaving}
+                className="rounded bg-rs-danger px-3 py-1.5 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Deactivate
+              </button>
+            </>
+          }
+        >
+          <DeactivationFootprintSummary footprint={footprint} />
+        </ResponsiveDialog>
+      )}
+    </div>
+  )
+}
+
+/**
+ * The Deactivate dialog's body (issue #469): this Person's future-facing
+ * scheduling footprint (issue #468) — future Memberships, Standing Role
+ * Assignments and Rehearsal appearances — none of which Deactivate
+ * actually touches (ADR 0017), so this is a warning about state that will
+ * go stale, not a preview of a change about to happen.
+ */
+function DeactivationFootprintSummary({
+  footprint,
+}: {
+  footprint: FutureSchedulingFootprint | null
+}) {
+  if (footprint === null) return null
+  const {
+    future_memberships: memberships,
+    future_role_assignments: roleAssignments,
+    future_rehearsal_appearances: rehearsalAppearances,
+  } = footprint
+  const isEmpty =
+    memberships.length === 0 &&
+    roleAssignments.length === 0 &&
+    rehearsalAppearances.length === 0
+
+  if (isEmpty) {
+    return (
+      <p className="text-sm text-rs-muted">
+        This member has no future-facing scheduling state. Deactivating them
+        blocks login and ends any active session immediately.
+      </p>
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-3 text-sm">
+      <p className="text-rs-muted">
+        Deactivating blocks login and ends any active session immediately. It
+        does not remove this member from the following:
+      </p>
+      {memberships.length > 0 && (
+        <div>
+          <h3 className="font-semibold">Future memberships</h3>
+          <ul className="mt-1 list-disc pl-5">
+            {memberships.map((membership) => (
+              <li key={membership.semester_id}>{membership.semester_name}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {roleAssignments.length > 0 && (
+        <div>
+          <h3 className="font-semibold">Future role assignments</h3>
+          <ul className="mt-1 list-disc pl-5">
+            {roleAssignments.map((assignment, index) => (
+              <li key={index}>
+                {assignment.role_name} on "{assignment.song_title}" (
+                {assignment.semester_name})
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {rehearsalAppearances.length > 0 && (
+        <div>
+          <h3 className="font-semibold">Upcoming rehearsal appearances</h3>
+          <ul className="mt-1 list-disc pl-5">
+            {rehearsalAppearances.map((appearance, index) => (
+              <li key={index}>
+                {appearance.date} — {appearance.role_name} on "
+                {appearance.song_title}"
+                {appearance.is_dress_rehearsal ? ' (Dress Rehearsal)' : ''}
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
     </div>
   )

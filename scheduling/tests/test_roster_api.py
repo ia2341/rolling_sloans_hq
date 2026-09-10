@@ -321,6 +321,19 @@ class ResendInviteTests(TestCase):
         self.assertFalse(envelope['ok'])
         self.assertTrue(envelope['non_field_errors'])
 
+    def test_resend_invite_to_a_deactivated_person_is_refused(self):
+        """Resending to a deactivated Person is refused with ok: false, never an unhandled 500 (issue #469 review)."""
+        from identity.factories import PersonFactory
+
+        deactivated = PersonFactory(name='Deactivated Person', password=None, is_active=False)
+
+        response, envelope = _post_json(self, _resend_invite_url(deactivated.pk), {})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(envelope['ok'])
+        self.assertTrue(envelope['non_field_errors'])
+        self.assertEqual(len(mail.outbox), 0)
+
     def test_resend_invite_reports_a_clean_failure_when_the_email_backend_raises(self):
         """A production-shaped `AnymailError` (e.g. a rejected API key) from `send_mail()` surfaces as `ok: false`, never a 500 (issue #409)."""
         from unittest import mock
@@ -368,6 +381,18 @@ class PersonPageInviteTests(TestCase):
         active = PersonFactory(name='Active Person', password='a-strong-test-password-123')
 
         response, envelope = _post_json(self, reverse('api-member-invite', args=[active.pk]), {})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(envelope['ok'])
+        self.assertTrue(envelope['non_field_errors'])
+
+    def test_inviting_a_deactivated_person_is_refused(self):
+        """Inviting a deactivated Person is refused with ok: false, never an unhandled 500 (issue #469 review)."""
+        from identity.factories import PersonFactory
+
+        deactivated = PersonFactory(name='Deactivated Person', password=None, is_active=False)
+
+        response, envelope = _post_json(self, reverse('api-member-invite', args=[deactivated.pk]), {})
 
         self.assertEqual(response.status_code, 200)
         self.assertFalse(envelope['ok'])
