@@ -154,7 +154,7 @@ class SerializePersonExactKeySetTests(TestCase):
         )
 
     def test_admin_viewing_a_teammate_adds_only_available_roles(self):
-        """An admin viewing a teammate (can_edit_roles True, is_self False) adds `available_roles`, `invite_status` and `is_admin` (#397, #467), never email/recordings."""
+        """An admin viewing a teammate (can_edit_roles True, is_self False) adds `available_roles`, `invite_status`, `is_admin` and `future_scheduling_footprint` (#397, #467, #468), never email/recordings."""
         semester = SemesterFactory()
         person = PersonFactory(name='Teammate Placeholder')
         membership = MembershipFactory(person=person, semester=semester)
@@ -165,7 +165,7 @@ class SerializePersonExactKeySetTests(TestCase):
             set(data.keys()),
             {
                 'id', 'name', 'is_self', 'can_edit_roles', 'has_membership', 'semester_name',
-                'roles', 'songs', 'available_roles', 'invite_status', 'is_admin',
+                'roles', 'songs', 'available_roles', 'invite_status', 'is_admin', 'future_scheduling_footprint',
             },
         )
         self.assertNotIn('email', data)

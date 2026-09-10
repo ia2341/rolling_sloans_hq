@@ -15,10 +15,11 @@ this viewer, which is exactly the kind of disclosure ADR 0005 exists to
 prevent.
 """
 
-from datetime import time
+from datetime import time, timedelta
 
 from django.test import TestCase, override_settings
 from django.urls import reverse
+from django.utils import timezone
 
 from identity.factories import PersonFactory
 from scheduling.factories import (
@@ -178,7 +179,9 @@ class PersonApiViewerStateTests(TestCase):
         consequence of `can_edit_roles` being True, not a second, separate
         divergence — every other key must match byte-for-byte. `is_admin`
         (issue #467) joins `invite_status` under this exact same gate, for
-        the same grant/revoke reason.
+        the same grant/revoke reason, and so does `future_scheduling_footprint`
+        (issue #468): present for an admin viewing a teammate, absent for
+        the teammate viewing themself.
         """
         self.client.login(username=self.teammate.email, password=PASSWORD)
         teammate_response = self.client.get(person_api_url(self.self_person))
@@ -194,12 +197,16 @@ class PersonApiViewerStateTests(TestCase):
         self.assertIn('available_roles', admin_data)
         self.assertIn('invite_status', admin_data)
         self.assertIn('is_admin', admin_data)
+        self.assertIn('future_scheduling_footprint', admin_data)
         self.assertEqual(
-            set(teammate_data.keys()) | {'can_edit_roles', 'available_roles', 'invite_status', 'is_admin'},
+            set(teammate_data.keys())
+            | {'can_edit_roles', 'available_roles', 'invite_status', 'is_admin', 'future_scheduling_footprint'},
             set(admin_data.keys()) | {'can_edit_roles'},
         )
         for key in teammate_data:
-            if key in ('can_edit_roles', 'available_roles', 'invite_status', 'is_admin'):
+            if key in (
+                'can_edit_roles', 'available_roles', 'invite_status', 'is_admin', 'future_scheduling_footprint',
+            ):
                 continue
             self.assertEqual(teammate_data[key], admin_data[key], f'{key} differed between teammate and admin viewer')
 
@@ -311,6 +318,74 @@ class PersonApiViewerStateTests(TestCase):
             'id', 'song_title', 'rehearsal_date', 'start_time', 'end_time',
             'note', 'file_size', 'uploaded_at', 'playback_url',
         })
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class PersonApiFutureSchedulingFootprintTests(TestCase):
+    """`future_scheduling_footprint` (issue #468, ADR-0017): admin-only, and carries `person`'s future-facing state."""
+
+    @classmethod
+    def setUpTestData(cls):
+        """Build a viewing Semester with an admin and a teammate rostered on it."""
+        cls.semester = SemesterFactory()
+        cls.admin = PersonFactory(password=PASSWORD, name='Admin Placeholder', is_admin=True)
+        MembershipFactory(person=cls.admin, semester=cls.semester)
+        cls.teammate = PersonFactory(password=PASSWORD, name='Teammate Placeholder')
+        MembershipFactory(person=cls.teammate, semester=cls.semester)
+
+    def test_absent_for_a_plain_teammate_and_for_self(self):
+        """A plain Teammate viewer and the Person viewing themself never get this key at all."""
+        self.client.login(username=self.teammate.email, password=PASSWORD)
+        self_data = self.client.get(person_api_url(self.teammate)).json()['data']
+        self.assertNotIn('future_scheduling_footprint', self_data)
+
+        other_teammate = PersonFactory(password=PASSWORD)
+        MembershipFactory(person=other_teammate, semester=self.semester)
+        self.client.login(username=other_teammate.email, password=PASSWORD)
+        teammate_data = self.client.get(person_api_url(self.teammate)).json()['data']
+        self.assertNotIn('future_scheduling_footprint', teammate_data)
+
+    def test_empty_for_an_admin_viewing_a_teammate_with_no_future_facing_state(self):
+        """An admin viewing a teammate rostered only in the viewing Semester gets three empty lists, not an absent key."""
+        self.client.login(username=self.admin.email, password=PASSWORD)
+        data = self.client.get(person_api_url(self.teammate)).json()['data']
+        footprint = data['future_scheduling_footprint']
+
+        self.assertEqual(footprint['future_memberships'], [])
+        self.assertEqual(footprint['future_role_assignments'], [])
+        self.assertEqual(footprint['future_rehearsal_appearances'], [])
+
+    def test_carries_future_memberships_role_assignments_and_rehearsal_appearances(self):
+        """An admin viewing a teammate sees their other-Semester Membership, other-Semester Assignment, and future Rehearsal appearance."""
+        other_semester = SemesterFactory(name='Other Semester', published_at=timezone.now() - timedelta(days=365))
+        MembershipFactory(person=self.teammate, semester=other_semester)
+        other_song = SongFactory(semester=other_semester, title='Other Semester Song')
+        SongRoleAssignmentFactory(song=other_song, person=self.teammate, role=RoleFactory(name='Bass'))
+
+        upcoming_song = SongFactory(semester=self.semester, title='Upcoming Song')
+        SongRoleAssignmentFactory(song=upcoming_song, person=self.teammate, role=RoleFactory(name='Vocals'))
+        upcoming_rehearsal = RehearsalFactory(semester=self.semester, date=timezone.localdate() + timedelta(days=5))
+        RehearsalSongFactory(rehearsal=upcoming_rehearsal, song=upcoming_song, order=1)
+
+        self.client.login(username=self.admin.email, password=PASSWORD)
+        data = self.client.get(person_api_url(self.teammate)).json()['data']
+        footprint = data['future_scheduling_footprint']
+
+        self.assertEqual(footprint['future_memberships'], [
+            {'semester_id': other_semester.pk, 'semester_name': 'Other Semester'},
+        ])
+        self.assertEqual(footprint['future_role_assignments'], [
+            {
+                'semester_id': other_semester.pk, 'semester_name': 'Other Semester',
+                'song_id': other_song.pk, 'song_title': 'Other Semester Song', 'role_name': 'Bass',
+            },
+        ])
+        self.assertEqual(len(footprint['future_rehearsal_appearances']), 1)
+        appearance = footprint['future_rehearsal_appearances'][0]
+        self.assertEqual(appearance['rehearsal_id'], upcoming_rehearsal.pk)
+        self.assertEqual(appearance['song_id'], upcoming_song.pk)
+        self.assertEqual(appearance['role_name'], 'Vocals')
+        self.assertEqual(appearance['kind'], 'assignment')
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)

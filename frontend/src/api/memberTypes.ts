@@ -91,6 +91,54 @@ export interface PersonRecordingsBlock {
 /** A Person's invite lifecycle status (issue #397), mirroring `identity.services.invite_status_for()` exactly. */
 export type InviteStatus = 'not_yet_invited' | 'invited' | 'accepted'
 
+/** One other Semester `person` holds a Membership in (issue #468), outside the one being viewed. */
+export interface FutureMembership {
+  semester_id: number
+  semester_name: string
+}
+
+/** One Standing Role Assignment `person` holds on a Song outside the Semester being viewed (issue #468, ADR 0009). Never `is_role_mismatch` (ADR 0002). */
+export interface FutureRoleAssignment {
+  semester_id: number
+  semester_name: string
+  song_id: number
+  song_title: string
+  role_name: string
+}
+
+/**
+ * One future-dated Rehearsal `person` still appears on the Running Order
+ * of (issue #468). `kind` is `'assignment'` for a Standing Role Assignment
+ * on the Rehearsal's Song (ADR 0009) or `'backup'` for a `Backup` row
+ * naming `person` directly (ADR 0007) — the two independent ways onto a
+ * future Running Order.
+ */
+export interface FutureRehearsalAppearance {
+  rehearsal_id: number
+  semester_id: number
+  semester_name: string
+  date: string
+  song_id: number
+  song_title: string
+  role_name: string
+  kind: 'assignment' | 'backup'
+}
+
+/**
+ * `person`'s future-facing scheduling footprint (issue #468, ADR-0017): a
+ * Deactivate confirmation dialog's dependency, admin-only per
+ * `docs/person-page-visibility.md`. `future_memberships`/
+ * `future_role_assignments` are scoped to Semesters other than the one
+ * being viewed (that one's own Membership/assignments already render as
+ * `has_membership`/`songs`); `future_rehearsal_appearances` is scoped by
+ * date instead, so it includes the Semester being viewed too.
+ */
+export interface FutureSchedulingFootprint {
+  future_memberships: FutureMembership[]
+  future_role_assignments: FutureRoleAssignment[]
+  future_rehearsal_appearances: FutureRehearsalAppearance[]
+}
+
 /**
  * `data` shape of `GET /api/members/<pk>/`, computed for exactly one of
  * the three viewer states. `email` and `recordings` are present only in
@@ -99,12 +147,11 @@ export type InviteStatus = 'not_yet_invited' | 'invited' | 'accepted'
  * that section rather than rendering it empty). `roles` (issue #378,
  * ADR-0014) is unconditional — a standing `PersonRole` declaration needs no
  * Membership to exist, so it's never gated by `has_membership` the way
- * `songs` is. `invite_status` (issue #397) is present only for an admin
- * viewing a teammate — never for `is_self` (a session implies
- * `'accepted'`) and never for a plain teammate viewer. `is_admin` (issue
- * #467) is present under that identical condition, feeding the
- * grant/revoke control — never for `is_self` (an admin can't act on
- * their own row) or a plain teammate viewer.
+ * `songs` is. `invite_status`, `is_admin` and `future_scheduling_footprint`
+ * (issues #397, #467, #468) are present only for an admin viewing a
+ * teammate — never for `is_self` (a session implies `'accepted'`, an admin
+ * can't act on their own row, and self-deactivation is refused outright)
+ * and never for a plain teammate viewer.
  */
 export interface PersonPayload {
   id: number
@@ -118,6 +165,7 @@ export interface PersonPayload {
   available_roles?: MemberRole[]
   invite_status?: InviteStatus
   is_admin?: boolean
+  future_scheduling_footprint?: FutureSchedulingFootprint
   songs?: PersonSong[]
   recordings?: PersonRecordingsBlock
 }
