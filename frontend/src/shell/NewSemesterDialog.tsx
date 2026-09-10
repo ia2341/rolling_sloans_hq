@@ -4,12 +4,11 @@ import { useNavigate } from 'react-router-dom'
 import { apiFetch, ApiError } from '../api/client'
 import { useAppContext } from '../api/ContextProvider'
 import { notifyViewingSemesterChanged } from '../api/viewingSemesterChangeStore'
-import type { ScheduleEditorPayload } from '../api/scheduleEditorTypes'
 import type {
   CreateSemesterBody,
   SemesterTimingDefaults,
 } from '../api/semesterTypes'
-import type { ReadEnvelope, WriteEnvelope } from '../api/types'
+import type { WriteEnvelope } from '../api/types'
 import { Accordion } from '../components/ui/Accordion'
 import { ResponsiveDialog } from '../components/ui/ResponsiveDialog'
 
@@ -18,8 +17,8 @@ interface NewSemesterDialogProps {
   onOpenChange: (open: boolean) => void
 }
 
-/** A reasonable starting point for a brand-new install with no prior Semester to read timing defaults off of. */
-const FALLBACK_TIMING_DEFAULTS: SemesterTimingDefaults = {
+/** The starting timing defaults offered for every new Semester, regardless of any prior Semester's values. */
+const DEFAULT_TIMING_DEFAULTS: SemesterTimingDefaults = {
   default_rehearsal_duration_minutes: 240,
   default_setup_grace_minutes: 10,
   default_teardown_grace_minutes: 10,
@@ -79,11 +78,9 @@ function parseTimingDefaultsInput(raw: string): number {
  * `+ New semester`'s dialog (issue #329): names the new draft Semester,
  * offers a "Timing defaults" disclosure (expanded by default — issue #449
  * — since admins commonly want to check or adjust these on creation)
- * prefilled from the
- * currently-viewing Semester (the closest reachable stand-in for "the most
- * recent Semester" — no endpoint exposes another Semester's `default_*`
- * fields, only the viewing one's, via `/api/schedule/editor/`), and states
- * what creating it does before the admin commits. `POST`s to
+ * prefilled from `DEFAULT_TIMING_DEFAULTS`, deliberately never read from any
+ * prior Semester's values, and states what creating it does before the
+ * admin commits. `POST`s to
  * `/api/semesters/create/`, which both creates the draft and switches the
  * session's Viewing Semester to it in one call, then navigates to `/` on
  * success (issue #374) so the admin lands on Home's setup checklist for
@@ -109,7 +106,7 @@ export function NewSemesterDialog({
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [timingDefaultsInputs, setTimingDefaultsInputs] =
     useState<TimingDefaultsInputs>(
-      toTimingDefaultsInputs(FALLBACK_TIMING_DEFAULTS),
+      toTimingDefaultsInputs(DEFAULT_TIMING_DEFAULTS),
     )
   const [submitting, setSubmitting] = useState(false)
 
@@ -118,27 +115,7 @@ export function NewSemesterDialog({
     setName(mostRecentNameRef.current)
     setNameError(null)
     setSubmitError(null)
-    void apiFetch<ReadEnvelope<ScheduleEditorPayload>>(
-      '/api/schedule/editor/',
-    ).then((envelope) => {
-      const defaults = envelope.data.semester_defaults
-      if (defaults !== null) {
-        setTimingDefaultsInputs(
-          toTimingDefaultsInputs({
-            default_rehearsal_duration_minutes:
-              defaults.default_rehearsal_duration_minutes,
-            default_setup_grace_minutes: defaults.default_setup_grace_minutes,
-            default_teardown_grace_minutes:
-              defaults.default_teardown_grace_minutes,
-            default_song_slot_count: defaults.default_song_slot_count,
-            default_arrival_buffer_minutes:
-              defaults.default_arrival_buffer_minutes,
-            default_departure_buffer_minutes:
-              defaults.default_departure_buffer_minutes,
-          }),
-        )
-      }
-    })
+    setTimingDefaultsInputs(toTimingDefaultsInputs(DEFAULT_TIMING_DEFAULTS))
   }, [open])
 
   const submit = async () => {

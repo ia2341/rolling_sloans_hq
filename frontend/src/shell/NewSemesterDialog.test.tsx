@@ -41,15 +41,6 @@ afterEach(() => {
 describe('NewSemesterDialog', () => {
   it('prefills the name from the most recent Semester', async () => {
     setContext(adminContext({ semester_options: options }))
-    stubFetchSequence([
-      {
-        status: 200,
-        body: {
-          context: adminContext({ semester_options: options }),
-          data: { semester_defaults: null },
-        },
-      },
-    ])
     renderShell(<NewSemesterDialog open onOpenChange={() => {}} />)
 
     await waitFor(() =>
@@ -60,13 +51,6 @@ describe('NewSemesterDialog', () => {
   it('keeps the dialog open and shows the per-field error on a duplicate name', async () => {
     setContext(adminContext({ semester_options: options }))
     stubFetchSequence([
-      {
-        status: 200,
-        body: {
-          context: adminContext({ semester_options: options }),
-          data: { semester_defaults: null },
-        },
-      },
       {
         status: 200,
         body: {
@@ -104,13 +88,6 @@ describe('NewSemesterDialog', () => {
   it('closes on success, after which the Viewing control names the new semester', async () => {
     setContext(adminContext({ semester_options: options }))
     stubFetchSequence([
-      {
-        status: 200,
-        body: {
-          context: adminContext({ semester_options: options }),
-          data: { semester_defaults: null },
-        },
-      },
       {
         status: 200,
         body: {
@@ -160,15 +137,6 @@ describe('NewSemesterDialog', () => {
 
   it('shows Timing defaults expanded on initial render (issue #449)', async () => {
     setContext(adminContext({ semester_options: options }))
-    stubFetchSequence([
-      {
-        status: 200,
-        body: {
-          context: adminContext({ semester_options: options }),
-          data: { semester_defaults: null },
-        },
-      },
-    ])
     renderShell(<NewSemesterDialog open onOpenChange={() => {}} />)
 
     await waitFor(() =>
@@ -182,15 +150,6 @@ describe('NewSemesterDialog', () => {
 
   it('lets a timing-defaults field be cleared and retyped without a stray leading 0 (issue #403)', async () => {
     setContext(adminContext({ semester_options: options }))
-    stubFetchSequence([
-      {
-        status: 200,
-        body: {
-          context: adminContext({ semester_options: options }),
-          data: { semester_defaults: null },
-        },
-      },
-    ])
     const user = userEvent.setup()
     renderShell(<NewSemesterDialog open onOpenChange={() => {}} />)
 
@@ -209,15 +168,6 @@ describe('NewSemesterDialog', () => {
 
   it('normalizes an empty timing-defaults field back to 0 on blur', async () => {
     setContext(adminContext({ semester_options: options }))
-    stubFetchSequence([
-      {
-        status: 200,
-        body: {
-          context: adminContext({ semester_options: options }),
-          data: { semester_defaults: null },
-        },
-      },
-    ])
     const user = userEvent.setup()
     renderShell(<NewSemesterDialog open onOpenChange={() => {}} />)
 
@@ -235,13 +185,6 @@ describe('NewSemesterDialog', () => {
   it('navigates to Home on success, so the admin lands on the setup checklist for the new Semester (issue #374)', async () => {
     setContext(adminContext({ semester_options: options }))
     stubFetchSequence([
-      {
-        status: 200,
-        body: {
-          context: adminContext({ semester_options: options }),
-          data: { semester_defaults: null },
-        },
-      },
       {
         status: 200,
         body: {
@@ -278,13 +221,6 @@ describe('NewSemesterDialog', () => {
   it('bumps the viewing-semester-change signal on success, so Home refetches even when the navigate-to-/ is a same-route no-op (issue #402)', async () => {
     setContext(adminContext({ semester_options: options }))
     stubFetchSequence([
-      {
-        status: 200,
-        body: {
-          context: adminContext({ semester_options: options }),
-          data: { semester_defaults: null },
-        },
-      },
       {
         status: 200,
         body: {
