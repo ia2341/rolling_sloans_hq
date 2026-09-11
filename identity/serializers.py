@@ -17,9 +17,13 @@ def serialize_viewer(person):
     function is only ever called with `request.user` — so it never
     violates `docs/person-page-visibility.md`'s "self only" verdict on a
     teammate's email; there is no path here that serializes anyone else's
-    `Person` row. `must_change_password` (issue #484) is the SPA's signal
-    to nag the viewer about a still-unreplaced admin-generated password;
-    it's the viewer's own flag by the same self-only reasoning.
+    `Person` row.
+
+    `must_change_password` (issue #487, ADR 0018) lets the SPA recognize
+    its own forced-change state immediately after login or on page load,
+    without waiting for some other gated endpoint to 403 first — the
+    request-level gate itself (`config.views.BaseView`) is what actually
+    enforces it; this is only ever the client's cue to route there.
     """
     return {
         'id': person.pk,

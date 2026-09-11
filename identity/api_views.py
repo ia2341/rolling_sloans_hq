@@ -107,13 +107,27 @@ class PasswordChangeApiView(ApiView, View):
     password signs out the session you just used to change it.
 
     Also the single place that clears `Person.must_change_password`
-    (issue #484): any successful change here, temp password or not,
-    retires the SPA's post-login nag, since the flag's only meaning is
-    "hasn't replaced the admin-generated password yet".
+    (issue #484, via `clear_must_change_password()`): any successful
+    change here, temp password or not, satisfies the flag's only meaning
+    ("hasn't replaced the admin-generated password yet").
+    `password_change_gate_exempt = True` (issue #487, ADR 0018) is the one
+    place that flag is ever flipped on: this is the single route a Person
+    with `must_change_password=True` must still be able to reach, since
+    it's the only way `must_change_password` — which the request-level
+    gate (`config.views.BaseView`) keys off — ever clears.
     """
 
+    password_change_gate_exempt = True
+
     def post(self, request):
-        """Validate the submitted password fields and change `request.user`'s password, or return per-field errors."""
+        """Validate the submitted password fields and change `request.user`'s password, or return per-field errors.
+
+        Clears `must_change_password` on success (issue #487): the flag
+        only ever means "the *next* sign-in must replace this password",
+        so a real, validated change through this endpoint is exactly the
+        event that satisfies it, whether the caller arrived here forced
+        (still flagged) or voluntarily (already clear, so this is a no-op).
+        """
         payload = self.parse_json_body(request)
         form = PasswordChangeForm(user=request.user, data={
             'old_password': payload.get('old_password', ''),

@@ -26,10 +26,10 @@ from config.views import AdminApiView, AdminPreviewApiView, ApiView, BaseView
 ALLOWLISTED_VIEW_NAMES = {
     'LoginView',
     'LogoutView',
-    # The single token route serving both the invite and forgot-password
-    # flows (issue #327) — collapsed from the previous SetPasswordConfirmView
-    # + PasswordResetConfirmView pair.
-    'SetPasswordConfirmView',
+    # A static, dead-end "contact an admin" page (issue #487, ADR 0018):
+    # the emailed set-password link it used to gate recovery behind
+    # (`identity:set-password-confirm`) is retired, so this route now
+    # renders with no form and gates nothing.
     'PasswordResetRequestView',
     # Serves the React SPA's shell document (issue #325). Deliberately not
     # login-gated: the document carries no member data — everything the SPA

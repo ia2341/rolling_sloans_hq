@@ -1,6 +1,7 @@
 import type { RouteObject } from 'react-router-dom'
 
 import { Band } from './routes/Band'
+import { ChangePassword } from './routes/ChangePassword'
 import { ConflictAdjudicationDetail } from './routes/ConflictAdjudicationDetail'
 import { ConflictAdjudicationIndex } from './routes/ConflictAdjudicationIndex'
 import { Home } from './routes/Home'
@@ -26,13 +27,17 @@ import { AppShell } from './shell/AppShell'
  * below is a different, admin-only surface (#340): the adjudication index
  * and detail, unrelated to that member-facing absorption.
  *
- * `/login` (issue #362) is the one route deliberately **not** nested under
- * `AppShell`: it renders before there is a session, so there is no
- * `context` for the sidebar/nav chrome `AppShell` wraps every other route
- * with to read.
+ * `/login` (issue #362) and `/change-password` (issue #487, ADR 0018) are
+ * the two routes deliberately **not** nested under `AppShell`: `/login`
+ * renders before there is a session, and `/change-password` is the one
+ * route a Person with `must_change_password=True` can still reach — every
+ * route under `AppShell` is gated server-side and would just bounce back
+ * here (`apiFetch()`'s 403 handling). Neither has a `context` for the
+ * sidebar/nav chrome `AppShell` wraps every other route with to read.
  */
 export const routes: RouteObject[] = [
   { path: '/login', element: <Login /> },
+  { path: '/change-password', element: <ChangePassword /> },
   {
     element: <AppShell />,
     children: [

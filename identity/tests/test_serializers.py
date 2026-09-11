@@ -15,10 +15,7 @@ class SerializeViewerTests(TestCase):
 
         payload = serialize_viewer(person)
 
-        self.assertEqual(
-            set(payload),
-            {'id', 'name', 'email', 'is_admin', 'must_change_password'},
-        )
+        self.assertEqual(set(payload), {'id', 'name', 'email', 'is_admin', 'must_change_password'})
 
     def test_values(self):
         """Each key carries the matching field off the Person, with is_admin as the #307 admin flag."""

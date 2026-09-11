@@ -67,6 +67,36 @@ describe('Login', () => {
     ).not.toBeInTheDocument()
   })
 
+  it('redirects an already-authenticated must-change-password visitor to /change-password, not Home (issue #487)', async () => {
+    mockFetchByUrl({
+      '/api/login/': () => ({
+        status: 200,
+        body: {
+          authenticated: true,
+          context: memberContext({
+            viewer: { ...memberContext().viewer, must_change_password: true },
+          }),
+        },
+      }),
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/login']}>
+        <Routes>
+          <Route path="/login" element={<Login />} />
+          <Route path="/" element={<div>Home stub</div>} />
+          <Route
+            path="/change-password"
+            element={<div>Change password stub</div>}
+          />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    await screen.findByText('Change password stub')
+    expect(screen.queryByText('Home stub')).not.toBeInTheDocument()
+  })
+
   it('submits credentials and redirects to Home on success', async () => {
     const user = userEvent.setup()
     let postedBody: unknown = null

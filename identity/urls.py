@@ -12,9 +12,4 @@ urlpatterns = [
         views.PasswordResetRequestView.as_view(),
         name='password-reset',
     ),
-    path(
-        'set-password/<uidb64>/<token>/',
-        views.SetPasswordConfirmView.as_view(),
-        name='set-password-confirm',
-    ),
 ]

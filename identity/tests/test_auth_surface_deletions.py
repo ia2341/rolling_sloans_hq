@@ -17,6 +17,10 @@ REMOVED_ROUTE_NAMES = (
     'identity:password-reset-complete',
     'identity:password-change',
     'identity:password-change-done',
+    # The merged invite/forgot-password token route (issue #487, ADR 0018):
+    # retired along with `invite_person()`'s emailed link and the
+    # self-serve forgot-password flow it served.
+    'identity:set-password-confirm',
 )
 
 REMOVED_TEMPLATES = (
@@ -26,6 +30,11 @@ REMOVED_TEMPLATES = (
     'identity/password_reset_confirm.html',
     'identity/password_change_form.html',
     'identity/password_change_done.html',
+    # The email-based invite/reset templates (issue #487, ADR 0018).
+    'identity/invite_email.txt',
+    'identity/password_reset_email.txt',
+    'identity/password_reset_subject.txt',
+    'identity/set_password_form.html',
 )
 
 

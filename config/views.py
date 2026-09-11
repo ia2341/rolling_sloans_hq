@@ -21,7 +21,40 @@ class BaseView(LoginRequiredMixin):
     Every view except the auth views themselves (login, logout, password
     reset) should mix this in ahead of its Django generic view class
     (issue #17 user story 17).
+
+    Also owns the `must_change_password` gate (issue #487, ADR 0018): a
+    `Person` carrying a still-unreplaced admin-generated temp password is
+    refused every route this mixin gates, not just told about the flag and
+    trusted to comply — the gate is a request-level check precisely so the
+    SPA can't be the only thing standing between that account and the rest
+    of the app. `password_change_gate_exempt` is the one escape hatch,
+    flipped on only by the view that lets the flag clear
+    (`identity.api_views.PasswordChangeApiView`); every other `BaseView`
+    subclass is gated by default.
     """
+
+    password_change_gate_exempt: ClassVar[bool] = False
+
+    def dispatch(self, request, *args, **kwargs):
+        """Refuse a signed-in Person who must still change their password, before any further dispatch; otherwise defer to the login gate."""
+        if (
+            request.user.is_authenticated
+            and getattr(request.user, 'must_change_password', False)
+            and not self.password_change_gate_exempt
+        ):
+            return self.handle_password_change_required()
+        return super().dispatch(request, *args, **kwargs)
+
+    def handle_password_change_required(self):
+        """Return the refusal for a signed-in Person who must change their password (issue #487).
+
+        Overridden by `ApiView` to answer JSON instead of this bare 403 —
+        every route this project actually serves outside `/api/` is one of
+        the small, explicitly-allowlisted auth views that never mixes
+        `BaseView` in at all, so this default only exists to keep the
+        mixin meaningful on its own.
+        """
+        return HttpResponseForbidden()
 
 
 class AdminRequiredMixin(BaseView):
@@ -65,6 +98,15 @@ class ApiView(BaseView):
     def handle_no_permission(self):
         """Answer an unauthenticated request with the documented JSON 401, never a redirect."""
         return JsonResponse({'error': 'authentication_required'}, status=401)
+
+    def handle_password_change_required(self):
+        """Answer a signed-in Person who must change their password with a documented JSON 403 (issue #487, ADR 0018).
+
+        The SPA's `apiFetch()` treats this the same way it treats a 401 —
+        a full-page navigation, here to `/change-password` instead of
+        `/login` — rather than a body every caller has to guard against.
+        """
+        return JsonResponse({'error': 'password_change_required'}, status=403)
 
     def dispatch(self, request, *args, **kwargs):
         """Run the normal dispatch chain, turning a `MalformedPayloadError` into the documented JSON 400."""

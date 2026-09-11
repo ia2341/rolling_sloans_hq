@@ -12,6 +12,7 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from identity.factories import PersonFactory
+from identity.models import Person
 
 OLD_PASSWORD = 'a-strong-old-password-123'
 NEW_PASSWORD = 'a-strong-new-password-456'
@@ -131,3 +132,41 @@ class PasswordChangeApiViewTests(TestCase):
 
         self.assertEqual(response.status_code, 401)
         self.assertNotIn('Location', response)
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class MustChangePasswordClearingTests(TestCase):
+    """A successful change through this endpoint clears `must_change_password` (issue #487, ADR 0018)."""
+
+    def setUp(self):
+        """Log in as a synthetic Person who still carries an admin-generated temp password."""
+        self.person = PersonFactory(password=OLD_PASSWORD, must_change_password=True)
+        self.client.login(username=self.person.email, password=OLD_PASSWORD)
+
+    def _post(self, old_password, new_password1, new_password2):
+        """Return the response for a change-password POST with the given field values."""
+        return self.client.post(
+            password_change_url(),
+            data={
+                'old_password': old_password,
+                'new_password1': new_password1,
+                'new_password2': new_password2,
+            },
+            content_type='application/json',
+        )
+
+    def test_valid_change_clears_the_flag(self):
+        """A valid change flips `must_change_password` to False -- the forced-change condition is satisfied."""
+        response = self._post(OLD_PASSWORD, NEW_PASSWORD, NEW_PASSWORD)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()['ok'])
+        self.assertFalse(Person.objects.get(pk=self.person.pk).must_change_password)
+
+    def test_a_rejected_change_leaves_the_flag_set(self):
+        """A validation failure changes nothing, including the flag -- the gate should keep applying."""
+        response = self._post('not-the-real-password', NEW_PASSWORD, NEW_PASSWORD)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()['ok'])
+        self.assertTrue(Person.objects.get(pk=self.person.pk).must_change_password)

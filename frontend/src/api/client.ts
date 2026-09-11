@@ -2,6 +2,7 @@ import { setContext } from './contextStore'
 import type { AppContext } from './types'
 
 const LOGIN_URL = '/login'
+const CHANGE_PASSWORD_URL = '/change-password'
 const CSRF_COOKIE_NAME = 'csrftoken'
 const CSRF_HEADER_NAME = 'X-CSRFToken'
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
@@ -38,6 +39,16 @@ export function csrfHeader(): Record<string, string> {
   return csrfToken === null ? {} : { [CSRF_HEADER_NAME]: csrfToken }
 }
 
+/** True for the documented `{"error": "password_change_required"}` body a gated route answers with (issue #487, ADR 0018). */
+function isPasswordChangeRequiredBody(body: unknown): boolean {
+  return (
+    typeof body === 'object' &&
+    body !== null &&
+    'error' in body &&
+    (body as { error: unknown }).error === 'password_change_required'
+  )
+}
+
 /**
  * The one fetch wrapper every `/api/` call in the SPA goes through (issue
  * #326, consumed by #328's `ContextProvider`).
@@ -49,6 +60,12 @@ export function csrfHeader(): Record<string, string> {
  *   SPA's own sign-in route, issue #362) and returns a promise that never
  *   resolves, so no caller has to guard every call site against a session
  *   that died mid-request.
+ * - A 403 carrying `{"error": "password_change_required"}` (issue #487,
+ *   ADR 0018) means this signed-in Person still carries an admin-generated
+ *   temp password: the same "navigate away and never resolve" treatment
+ *   as a 401, but to `/change-password` instead of `/login` — the
+ *   request-level gate (`config.views.BaseView`) is what actually enforces
+ *   this, so the client can't be talked out of it by skipping a check.
  * - Every other non-2xx status rejects with `ApiError`, carrying the
  *   parsed body so a caller can read `errors`/`non_field_errors` off a
  *   write envelope's failure shape.
@@ -78,6 +95,11 @@ export async function apiFetch<TEnvelope extends { context: AppContext }>(
   }
 
   const body = (await response.json()) as unknown
+
+  if (response.status === 403 && isPasswordChangeRequiredBody(body)) {
+    window.location.assign(CHANGE_PASSWORD_URL)
+    return new Promise<TEnvelope>(() => {})
+  }
 
   if (!response.ok) {
     throw new ApiError(response.status, body)

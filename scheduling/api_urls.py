@@ -7,8 +7,11 @@ endpoints. Issue #334 adds the Setlist edit surface's Preview and Save —
 the shared Pending-Buffer-over-HTTP mechanism's one proven concrete
 surface; the other five admin edit surfaces (#335-#340) each add their
 own `preview/`/`save/` pair later, following this one's shape. Issue #336
-adds the Roster edit surface's own read/preview/save/candidates/roles/
-resend-invite endpoints, the second full surface to follow that shape.
+adds the Roster edit surface's own read/preview/save/candidates/roles
+endpoints, the second full surface to follow that shape. (Its
+resend-invite endpoint, and the Person page's `invite/` sibling, were
+retired by issue #487, ADR 0018, along with the email-based invite flow
+they served.)
 Issue #335 adds no new `preview/`/`save/` pair of its own — it reuses
 #334's — only the read-only Spotify-fetch endpoint the setlist editor's
 `+ Add songs` sheet calls before a track ever joins the Buffer. Issue
@@ -64,10 +67,6 @@ urlpatterns = [
     path('members/roster/save/', api_views.RosterSaveApiView.as_view(), name='api-roster-save'),
     path('members/roster/candidates/', api_views.RosterCandidatesApiView.as_view(), name='api-roster-candidates'),
     path('members/roster/roles/', api_views.RoleDeclareApiView.as_view(), name='api-roster-declare-role'),
-    path(
-        'members/roster/<int:pk>/resend-invite/',
-        api_views.RosterResendInviteApiView.as_view(), name='api-roster-resend-invite',
-    ),
     path('members/recordings/slots/', api_views.RecordingSlotsApiView.as_view(), name='api-recordings-slots'),
     path('members/recordings/presign/', api_views.RecordingPresignApiView.as_view(), name='api-recordings-presign'),
     path('members/recordings/confirm/', api_views.RecordingConfirmApiView.as_view(), name='api-recordings-confirm'),
@@ -77,7 +76,6 @@ urlpatterns = [
     ),
     path('members/<int:pk>/', api_views.PersonApiView.as_view(), name='api-member-detail'),
     path('members/<int:pk>/roles/', api_views.PersonRolesApiView.as_view(), name='api-member-roles'),
-    path('members/<int:pk>/invite/', api_views.RosterResendInviteApiView.as_view(), name='api-member-invite'),
     path(
         'members/<int:pk>/admin-status/',
         api_views.PersonAdminStatusApiView.as_view(), name='api-member-admin-status',

@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom'
 import { fetchLoginStatus, submitLogin } from '../api/auth'
 import type { LoginFailureReason } from '../api/authTypes'
 import { setContext } from '../api/contextStore'
+import type { AppContext } from '../api/types'
 
 /** Copy for each `LoginFailureReason` (#327/ADR 0013: never say which of email/password was wrong). */
 const FAILURE_MESSAGES: Record<LoginFailureReason, string> = {
@@ -27,6 +28,11 @@ const FAILURE_MESSAGES: Record<LoginFailureReason, string> = {
  * link (there is no self-registration — `identity/services.py`'s
  * `invite_person()` is the only path to an account).
  */
+/** Where a just-authenticated (or already-authenticated) viewer should land: `/change-password` if they still must change their password (issue #487, ADR 0018), Home otherwise. */
+function landingRouteFor(context: AppContext): string {
+  return context.viewer.must_change_password ? '/change-password' : '/'
+}
+
 export function Login() {
   const navigate = useNavigate()
   const [checkingStatus, setCheckingStatus] = useState(true)
@@ -41,7 +47,7 @@ export function Login() {
       if (cancelled) return
       if (status.authenticated) {
         setContext(status.context)
-        navigate('/', { replace: true })
+        navigate(landingRouteFor(status.context), { replace: true })
         return
       }
       setCheckingStatus(false)
@@ -51,7 +57,7 @@ export function Login() {
     }
   }, [navigate])
 
-  /** Submits the form: posts credentials, and on success seeds the context store before navigating to Home. */
+  /** Submits the form: posts credentials, and on success seeds the context store before navigating to Home (or the forced change-password page). */
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setSubmitting(true)
@@ -59,7 +65,7 @@ export function Login() {
     void submitLogin(email, password).then((result) => {
       if (result.ok) {
         setContext(result.context)
-        navigate('/', { replace: true })
+        navigate(landingRouteFor(result.context), { replace: true })
         return
       }
       setSubmitting(false)

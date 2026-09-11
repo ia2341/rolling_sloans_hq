@@ -1,4 +1,4 @@
-"""`apply_person_deactivation()`, `apply_person_reactivation()`, and `resend_invite()`'s new refusal (issue #469, ADR 0017)."""
+"""`apply_person_deactivation()` and `apply_person_reactivation()` (issue #469, ADR 0017)."""
 
 import threading
 
@@ -11,10 +11,8 @@ from identity.models import Person
 from identity.services import (
     CannotDeactivateLastActiveAdminError,
     CannotDeactivateSelfError,
-    PersonIsDeactivatedError,
     apply_person_deactivation,
     apply_person_reactivation,
-    resend_invite,
 )
 
 
@@ -156,12 +154,3 @@ class ApplyPersonReactivationTests(TestCase):
         apply_person_reactivation(target)
 
         self.assertTrue(Person.objects.get(pk=target.pk).is_admin)
-
-
-class ResendInviteDeactivatedRefusalTests(TestCase):
-    def test_refuses_a_deactivated_person(self):
-        """A deactivated-but-never-accepted invite must not still be able to get a working set-password email (issue #469)."""
-        target = PersonFactory(is_active=False)
-
-        with self.assertRaises(PersonIsDeactivatedError):
-            resend_invite(target)
