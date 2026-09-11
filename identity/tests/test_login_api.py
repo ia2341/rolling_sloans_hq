@@ -69,6 +69,16 @@ class LoginApiViewPostTests(TestCase):
         self.assertEqual(body['context']['viewer']['id'], person.pk)
         self.assertTrue(response.wsgi_request.user.is_authenticated)
 
+    def test_temp_password_login_surfaces_must_change_password_in_context(self):
+        """Signing in as a Person still flagged must_change_password (issue #484) echoes that in the viewer context, so the SPA's nag can react to it immediately after login."""
+        person = PersonFactory(password=PASSWORD, must_change_password=True)
+
+        response = self._post(person.email, PASSWORD)
+
+        body = response.json()
+        self.assertTrue(body['ok'])
+        self.assertTrue(body['context']['viewer']['must_change_password'])
+
     def test_wrong_password_reports_a_generic_invalid_credentials_failure(self):
         """A wrong password reports the same generic reason a nonexistent email would (#327: never say which was wrong)."""
         person = PersonFactory(password=PASSWORD)
