@@ -213,7 +213,10 @@ function DetailsSection({
  * `invite_status` isn't `'accepted'` yet — "Invite" for `'not_yet_invited'`,
  * "Invite again" for `'invited'`. Calls the same
  * `RosterResendInviteApiView` the Roster editor's "Invite again" control
- * calls, mounted here at `/api/members/<pk>/invite/`.
+ * calls, mounted here at `/api/members/<pk>/invite/`, and surfaces its
+ * refusal (already has a password, deactivated, or the send itself failed)
+ * inline via `non_field_errors` rather than silently resetting the button,
+ * matching `AdminStatusRow`'s error handling on this same page.
  */
 function InviteRow({
   personId,
@@ -225,10 +228,12 @@ function InviteRow({
   onDataChange: (next: PersonPayload) => void
 }) {
   const [status, setStatus] = useState<'idle' | 'sending' | 'sent'>('idle')
+  const [error, setError] = useState<string | null>(null)
 
-  /** Sends (or re-sends) the invite and refreshes the page with the server's fresh Person payload. */
+  /** Sends (or re-sends) the invite and refreshes the page with the server's fresh Person payload, or surfaces the guard's refusal message inline. */
   async function handleInvite() {
     setStatus('sending')
+    setError(null)
     const envelope = await apiFetch<WriteEnvelope<PersonPayload>>(
       `/api/members/${personId}/invite/`,
       { method: 'POST' },
@@ -238,22 +243,28 @@ function InviteRow({
       setStatus('sent')
     } else {
       setStatus('idle')
+      setError(envelope.non_field_errors[0] ?? 'Could not send the invite.')
     }
   }
 
   return (
-    <button
-      type="button"
-      onClick={() => void handleInvite()}
-      disabled={status !== 'idle'}
-      className="mt-3 rounded border border-rs-border px-3 py-1.5 text-sm font-medium text-rs-accent disabled:cursor-not-allowed disabled:opacity-50"
-    >
-      {status === 'sent'
-        ? 'Invite sent'
-        : inviteStatus === 'not_yet_invited'
-          ? 'Invite'
-          : 'Invite again'}
-    </button>
+    <div className="mt-3 flex flex-col gap-1">
+      <button
+        type="button"
+        onClick={() => void handleInvite()}
+        disabled={status !== 'idle'}
+        className="w-fit rounded border border-rs-border px-3 py-1.5 text-sm font-medium text-rs-accent disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {status === 'sent'
+          ? 'Invite sent'
+          : inviteStatus === 'not_yet_invited'
+            ? 'Invite'
+            : 'Invite again'}
+      </button>
+      {error !== null && (
+        <span className="text-sm text-rs-danger">{error}</span>
+      )}
+    </div>
   )
 }
 

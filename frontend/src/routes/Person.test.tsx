@@ -272,6 +272,51 @@ describe('Person', () => {
     expect(sentButton).toBeDisabled()
   })
 
+  it('surfaces a refusal from the API inline and re-enables the button (issue #397 review)', async () => {
+    mockFetchByUrl({
+      '/api/members/2/invite/': () => ({
+        status: 200,
+        body: {
+          context: memberContext({
+            viewer: { ...memberContext().viewer, is_admin: true },
+          }),
+          ok: false,
+          errors: {},
+          non_field_errors: [
+            "Couldn't send the invite email to alex@example.com.",
+          ],
+          fallout: null,
+          values: null,
+          data: null,
+        },
+      }),
+      '/api/members/2/': () => ({
+        status: 200,
+        body: {
+          context: memberContext({
+            viewer: { ...memberContext().viewer, is_admin: true },
+          }),
+          data: adminViewingTeammatePayload({
+            invite_status: 'not_yet_invited',
+          }),
+        },
+      }),
+    })
+
+    const user = (await import('@testing-library/user-event')).default.setup()
+    renderPerson('/members/2')
+
+    const inviteButton = await screen.findByRole('button', { name: 'Invite' })
+    await user.click(inviteButton)
+
+    await screen.findByText(
+      "Couldn't send the invite email to alex@example.com.",
+    )
+    expect(
+      await screen.findByRole('button', { name: 'Invite' }),
+    ).not.toBeDisabled()
+  })
+
   it('renders no Invite action once a teammate has accepted (issue #397)', async () => {
     mockFetchByUrl({
       '/api/members/2/': () => ({
