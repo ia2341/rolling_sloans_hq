@@ -213,17 +213,17 @@ class PreviewRosterEditsTests(TestCase):
         self.semester.refresh_from_db()
         self.assertEqual(self.semester.updated_at, original_stamp)
 
-    def test_pending_invites_lists_the_staged_names(self):
-        """A Buffer carrying a staged invite reports its name in pending_invites."""
+    def test_pending_created_lists_the_staged_names(self):
+        """A Buffer carrying a staged new Person reports its name in pending_created (issue #482)."""
         buffer = self._buffer(pending_invites=[RosterInvite(name='Future Member', email='future@example.com')])
 
         fallout = self._preview(buffer)
 
-        self.assertIn('Future Member', fallout.pending_invites)
+        self.assertIn('Future Member', fallout.pending_created)
         self.assertFalse(fallout.is_blocked)
 
-    def test_preview_of_a_buffer_with_an_invite_creates_no_person_and_sends_no_mail(self):
-        """Previewing a Buffer containing an invite writes nothing: no Person row, and mail.outbox stays empty (ADR 0008)."""
+    def test_preview_of_a_buffer_with_a_new_person_creates_no_person_and_sends_no_mail(self):
+        """Previewing a Buffer containing a new-Person row writes nothing: no Person row, and mail.outbox stays empty (ADR 0008)."""
         person_count_before = Person.objects.count()
         buffer = self._buffer(pending_invites=[RosterInvite(name='Never Created', email='never-created@example.com')])
 
@@ -232,15 +232,3 @@ class PreviewRosterEditsTests(TestCase):
         self.assertEqual(Person.objects.count(), person_count_before)
         self.assertFalse(Person.objects.filter(email='never-created@example.com').exists())
         self.assertEqual(len(mail.outbox), 0)
-
-    def test_pending_added_without_invite_lists_the_staged_names(self):
-        """A Buffer carrying a send_invite=False row reports its name in pending_added_without_invite, not pending_invites (#397)."""
-        buffer = self._buffer(
-            pending_invites=[RosterInvite(name='Staged Only', email='staged-only@example.com', send_invite=False)],
-        )
-
-        fallout = self._preview(buffer)
-
-        self.assertIn('Staged Only', fallout.pending_added_without_invite)
-        self.assertNotIn('Staged Only', fallout.pending_invites)
-        self.assertFalse(fallout.is_blocked)

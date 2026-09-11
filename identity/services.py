@@ -1,19 +1,28 @@
-"""The invite flow, its recovery path, and the project's first rate limits (issue #327).
+"""Person creation, the legacy invite flow, and the project's first rate limits (issue #327, #482, ADR 0018).
 
-`invite_person` creates the `Person` with an unusable password and emails a
-one-time set-password link. The link's token comes from Django's
-`default_token_generator` (a `PasswordResetTokenGenerator`), so it is
-single-use (the hash incorporates the password field, invalidating it the
-moment a password is set) and expires per `PASSWORD_RESET_TIMEOUT`.
+`create_person_with_temp_password` (issue #482) is the current creation
+path: it sets a real, immediately-usable password and flags the Person
+`must_change_password`, returning the plaintext once for an admin to relay
+verbally or by text — no email involved at all.
 
-`resend_invite` recovers a dead invite without a second `Person`. Rate
-limiting (`is_login_rate_limited` / `is_auth_email_rate_limited`) lives here
-too, beside the send and beside the authenticate call, per the project's
-irreversible-side-effect convention: a limit in a view is a limit the next
-view forgets.
+`invite_person`/`add_person`/`resend_invite` are the legacy email-invite
+path ADR 0018 replaces. They create the `Person` with an unusable password
+and (for `invite_person`/`resend_invite`) email a one-time set-password
+link — the link's token comes from Django's `default_token_generator` (a
+`PasswordResetTokenGenerator`), so it is single-use (the hash incorporates
+the password field, invalidating it the moment a password is set) and
+expires per `PASSWORD_RESET_TIMEOUT`. Kept, unused by the Roster editor's
+creation path as of #482, until the follow-on issue named in ADR 0018
+retires them outright.
+
+Rate limiting (`is_login_rate_limited` / `is_auth_email_rate_limited`) lives
+here too, beside the send and beside the authenticate call, per the
+project's irreversible-side-effect convention: a limit in a view is a limit
+the next view forgets.
 """
 
 import logging
+import string
 from datetime import timedelta
 from urllib.parse import urljoin
 
@@ -26,12 +35,22 @@ from django.db import transaction
 from django.template.loader import render_to_string
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.crypto import get_random_string
 from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_encode
 
 from .models import AuthEmailRequest, LoginAttempt, Person
 
 logger = logging.getLogger(__name__)
+
+# ADR 0018: a temp password is read aloud or typed from a text message, not
+# copy-pasted through a link, so the alphabet drops every character easily
+# confused with another when spoken or handwritten (0/O, 1/l/I).
+TEMP_PASSWORD_LENGTH = 12
+TEMP_PASSWORD_ALPHABET = ''.join(
+    character for character in string.ascii_letters + string.digits
+    if character not in '0O1lI'
+)
 
 # Both limits are windowed row counts, not a cache (see LoginAttempt's and
 # AuthEmailRequest's docstrings for why). Thresholds are deliberately
@@ -70,6 +89,42 @@ class CannotDeactivateLastActiveAdminError(Exception):
 
 class PersonIsDeactivatedError(Exception):
     """Raised by `resend_invite` when the target Person is deactivated (`is_active=False`)."""
+
+
+def generate_temp_password():
+    """Return a fresh temp password string (ADR 0018): 12 characters, no visually-ambiguous ones."""
+    return get_random_string(TEMP_PASSWORD_LENGTH, allowed_chars=TEMP_PASSWORD_ALPHABET)
+
+
+def create_person_with_temp_password(*, name, email):
+    """Create a Person with a real, immediately-usable temp password, forcing a change on first use (issue #482, ADR 0018).
+
+    The one creation path this project uses now: unlike `invite_person()`'s
+    unusable password plus emailed link, this calls `set_password()` with a
+    freshly generated plaintext directly, so the account is loggable-in the
+    instant this returns — there is no separate "accept the invite" step
+    left to wait on. `must_change_password=True` is the durable record that
+    the password was admin-generated rather than member-chosen; it's
+    cleared the moment the member successfully sets their own (issue #333's
+    change-password flow).
+
+    Sends no mail and reaches no external service at all, so unlike
+    `invite_person()` there's nothing here that needs `transaction.
+    on_commit()` protection during an ADR-0008 Preview: a rolled-back
+    transaction discards the Person row (and the temp password with it)
+    for free.
+
+    Returns:
+        A `(person, temp_password)` tuple — the plaintext is returned
+        exactly once and never persisted or logged; callers must relay it
+        to the admin's response and nowhere else.
+    """
+    with transaction.atomic():
+        temp_password = generate_temp_password()
+        person = Person.objects.create_user(email=email, name=name, password=temp_password)
+        person.must_change_password = True
+        person.save(update_fields=['must_change_password'])
+    return person, temp_password
 
 
 def invite_person(*, name, email, send_via_on_commit=False):
@@ -283,18 +338,16 @@ def apply_person_reactivation(target):
 
 
 def invite_status_for(person):
-    """Return `person`'s invite lifecycle status (issue #397): `'not_yet_invited'`, `'invited'`, or `'accepted'`.
+    """Return `person`'s credential lifecycle status (issue #482, ADR 0018): `'must_change_password'` or `'active'`.
 
-    Checked in this order because `has_usable_password()` is the terminal
-    state and takes precedence: `invited_at` stays set forever once an
-    invite has ever been sent, so a Person who has since set a password
-    would otherwise misread as merely `'invited'`.
+    Replaces the old three-state `'not_yet_invited'`/`'invited'`/
+    `'accepted'` read of `has_usable_password()`/`invited_at`: under ADR
+    0018 a Person is loggable-in from the moment they're created (a real
+    temp password, never an unusable one), so the only remaining lifecycle
+    fact worth surfacing is whether that password is still the
+    admin-generated one they haven't replaced yet.
     """
-    if person.has_usable_password():
-        return 'accepted'
-    if person.invited_at is not None:
-        return 'invited'
-    return 'not_yet_invited'
+    return 'must_change_password' if person.must_change_password else 'active'
 
 
 def build_set_password_url(person):

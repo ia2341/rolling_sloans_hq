@@ -88,8 +88,8 @@ export interface PersonRecordingsBlock {
   upload_slots: RecordingSlotOption[]
 }
 
-/** A Person's invite lifecycle status (issue #397), mirroring `identity.services.invite_status_for()` exactly. */
-export type InviteStatus = 'not_yet_invited' | 'invited' | 'accepted'
+/** A Person's credential lifecycle status (issue #397, two-state since issue #482/ADR 0018), mirroring `identity.services.invite_status_for()` exactly. */
+export type InviteStatus = 'must_change_password' | 'active'
 
 /** One other Semester `person` holds a Membership in (issue #468), outside the one being viewed. */
 export interface FutureMembership {
@@ -238,16 +238,14 @@ export interface RosterEditEntryWire {
 
 /**
  * One `/api/members/roster/{preview,save}/` request body `invites` row
- * (mirrors `scheduling/services.py`'s `RosterInvite`). `send_invite`
- * (issue #397) is the "Invite now" vs "Add without inviting" choice; it's
- * always sent explicitly here even though the backend defaults it to
- * `true` when absent.
+ * (mirrors `scheduling/services.py`'s `RosterInvite`). No `send_invite`
+ * (issue #482, ADR 0018): every row here is created the same way, via a
+ * generated temp password, whether Saved or merely Previewed.
  */
 export interface RosterInviteWire {
   row_key: string
   name: string
   email: string
-  send_invite: boolean
 }
 
 /** `/api/members/roster/{preview,save}/` request body (mirrors `scheduling/services.py`'s `RosterEditBuffer`). */
@@ -270,21 +268,38 @@ export interface RosterRemovalWire {
  * `RosterEditFallout`, as `serialize_roster_edit_fallout()` emits it -- the
  * `/api/members/roster/preview/` response's `fallout` value. No
  * `pending_role_changes` (issue #379) -- this Buffer never touches Role
- * data. `pending_added_without_invite` (issue #397) lists a send_invite:
- * false row's outcome separately from `pending_invites`. No
- * `pending_name_edits` (issue #407) -- the Roster editor no longer offers
- * a name-edit affordance.
+ * data. `pending_created` (issue #482, replacing the old
+ * `pending_invites`/`pending_added_without_invite` split) names every
+ * staged new Person -- never their temp password, which Preview must
+ * never reveal as if it were live. No `pending_name_edits` (issue #407)
+ * -- the Roster editor no longer offers a name-edit affordance.
  */
 export interface RosterEditFalloutWire {
   is_blocked: boolean
   block_message: string
   is_stale: boolean
   pending_adds: string[]
-  pending_invites: string[]
-  pending_added_without_invite: string[]
+  pending_created: string[]
   pending_removals: RosterRemovalWire[]
   loud: string[]
   quiet: string[]
+}
+
+/**
+ * One `{email, temp_password}` entry in `POST /api/members/roster/save/`'s
+ * `values.temp_passwords` (issue #482, ADR 0018) -- the real, one-time
+ * plaintext generated for a Person that Save just created. The *only*
+ * wire payload in this project that ever carries a live, usable
+ * password; never present on a Preview response.
+ */
+export interface RosterTempPasswordEntry {
+  email: string
+  temp_password: string
+}
+
+/** `values` shape of a successful `POST /api/members/roster/save/` -- the one-off exception to "a write response echoes nothing back" (issue #482). */
+export interface RosterSaveValues {
+  temp_passwords: RosterTempPasswordEntry[]
 }
 
 /** `data` shape of `POST /api/members/roster/roles/` — the Role that resulted, plus whether it was created, matched or reactivated. */

@@ -3729,25 +3729,22 @@ class RosterEditEntry:
 
 @dataclass(frozen=True)
 class RosterInvite:
-    """One not-yet-existing Person a Roster edit Buffer proposes to create and roster (issue #336, #397).
+    """One not-yet-existing Person a Roster edit Buffer proposes to create and roster (issue #336, narrowed to one creation path by #482, ADR 0018).
 
     Carries no `Person` id — there is none yet. Mirrors `RosterEditEntry`'s
-    shape but with no Role set: an invited Person's declared Roles are
+    shape but with no Role set: a newly created Person's declared Roles are
     theirs to set once they sign in (issue #336 user story 36), so this
-    Buffer never carries `role_ids` for a pending invite.
+    Buffer never carries `role_ids` for a pending row.
 
-    `send_invite` (issue #397) is the "Invite now" vs "Add without inviting"
-    choice the Add-people sheet's Invite section offers: `True` (the
-    default, and #336's only prior behavior) creates the Person via
-    `identity.services.invite_person()` and mails them immediately;
-    `False` creates them via `identity.services.add_person()` instead,
-    leaving them `'not_yet_invited'` so an admin can stage a roster ahead
-    of actually inviting anyone.
+    No `send_invite` flag (issue #482): ADR 0018 retires the "Invite now"
+    vs "Add without inviting" choice along with the email-invite path it
+    picked between — every row here is created the same way, via
+    `identity.services.create_person_with_temp_password()`, whether Saved
+    or merely Previewed.
     """
 
     name: str
     email: str
-    send_invite: bool = True
 
 
 @dataclass(frozen=True)
@@ -3780,8 +3777,27 @@ class RosterEditBuffer:
     pending_invites: list[RosterInvite] = field(default_factory=list)
 
 
-def apply_roster_edits(buffer: RosterEditBuffer, *, viewing_semester: Semester, requesting_admin: Person) -> None:
-    """Apply a whole Roster Pending Buffer — adds, removals, name edits and invites — in one transaction (issue #226, #336, narrowed by #379).
+@dataclass(frozen=True)
+class RosterCreatedPerson:
+    """One Person `apply_roster_edits()` created this call, and the temp password generated for them (issue #482, ADR 0018).
+
+    Returned only so `RosterSaveApiView` can relay the plaintext back in
+    its response — nothing else needs it, and it's never persisted or
+    logged. `preview_roster_edits()` calls `apply_roster_edits()` too
+    (ADR 0008), but discards this return value rather than serializing
+    it: the transaction it ran inside is about to be rolled back, so the
+    temp password it names is dead the instant this function returns, and
+    must never reach a Preview response looking like a live one.
+    """
+
+    email: str
+    temp_password: str
+
+
+def apply_roster_edits(
+    buffer: RosterEditBuffer, *, viewing_semester: Semester, requesting_admin: Person,
+) -> list[RosterCreatedPerson]:
+    """Apply a whole Roster Pending Buffer — adds, removals, name edits and new-Person creation — in one transaction (issue #226, #336, narrowed by #379, #482).
 
     The single write the Roster edit surface and its Preview both run
     (ADR-0008, issue #185): a failure anywhere leaves nothing applied.
@@ -3798,16 +3814,15 @@ def apply_roster_edits(buffer: RosterEditBuffer, *, viewing_semester: Semester, 
     data (issue #379) — a Person's declared Roles are set only on their
     Person page (#378), never here.
 
-    Each of `buffer.pending_invites` (issue #336) is created via
-    `identity.services.invite_person(..., send_via_on_commit=True)` and
-    immediately rostered with no declared Roles — the same transaction as
-    every other edit in this Buffer, so an invite either lands with the
-    rest of the batch or not at all. `send_via_on_commit=True` is
-    load-bearing under ADR 0008: `preview_roster_edits()` runs this exact
-    function and the caller rolls the transaction back, so an inline
-    `send_mail()` would mail a real person during a Preview,
-    unrecoverably — registering the send with `transaction.on_commit()`
-    makes rollback discard it for free.
+    Each of `buffer.pending_invites` is created via
+    `identity.services.create_person_with_temp_password()` (issue #482,
+    ADR 0018) and immediately rostered with no declared Roles — the same
+    transaction as every other edit in this Buffer, so a creation either
+    lands with the rest of the batch or not at all. Unlike the retired
+    `invite_person()` path, this reaches no external service, so there is
+    no `transaction.on_commit()` to register: a Preview's rollback
+    discards the created Person row (and its temp password) for free with
+    no special-casing.
 
     Raises `WrongViewingSemesterError` if `buffer.semester_id` doesn't match
     `viewing_semester`, or `SelfRemovalError` if the Buffer would remove
@@ -3816,6 +3831,10 @@ def apply_roster_edits(buffer: RosterEditBuffer, *, viewing_semester: Semester, 
     inside the transaction if the Semester's `updated_at` no longer matches
     `buffer.semester_updated_at`, rolling back whatever this call had
     already applied.
+
+    Returns:
+        A `RosterCreatedPerson` per row in `buffer.pending_invites`, each
+        carrying the real plaintext temp password generated for them.
     """
     if viewing_semester is None or buffer.semester_id != viewing_semester.pk:
         raise WrongViewingSemesterError(
@@ -3833,11 +3852,12 @@ def apply_roster_edits(buffer: RosterEditBuffer, *, viewing_semester: Semester, 
             _purge_person_from_semester(person_id, semester)
         for entry in buffer.entries:
             _apply_roster_edit_entry(entry, semester)
-        for invite in buffer.pending_invites:
-            _apply_roster_invite(invite, semester)
+        created_people = [_apply_roster_invite(invite, semester) for invite in buffer.pending_invites]
 
         semester.updated_at = timezone.now()
         semester.save(update_fields=['updated_at'])
+
+    return created_people
 
 
 def _purge_person_from_semester(person_id: int, semester: Semester) -> None:
@@ -3868,24 +3888,18 @@ def _apply_roster_edit_entry(entry: RosterEditEntry, semester: Semester) -> None
     Membership.objects.get_or_create(person=entry.person, semester=semester)
 
 
-def _apply_roster_invite(invite: RosterInvite, semester: Semester) -> None:
-    """Create `invite`'s Person and roster them into `semester` with no declared Roles (issue #336, #397).
+def _apply_roster_invite(invite: RosterInvite, semester: Semester) -> RosterCreatedPerson:
+    """Create `invite`'s Person via `create_person_with_temp_password()` and roster them into `semester` with no declared Roles (issue #336, narrowed to one creation path by #482, ADR 0018).
 
-    `invite.send_invite` picks the creation path: `invite_person(...,
-    send_via_on_commit=True)` when `True` (mirrors #336's original
-    behavior — the one path to a loggable-in, immediately-invited Person
-    stays single), or `add_person()` when `False`, staging the Person
-    `'not_yet_invited'` with no mail sent at all. Either way the Membership
-    is created bare (no `MembershipRole` rows): a Person's Roles are theirs
-    to declare once they sign in, not an admin's to guess on their behalf.
+    The Membership is created bare (no `MembershipRole` rows): a Person's
+    Roles are theirs to declare once they sign in, not an admin's to guess
+    on their behalf.
     """
-    from identity.services import add_person, invite_person
+    from identity.services import create_person_with_temp_password
 
-    if invite.send_invite:
-        person = invite_person(name=invite.name, email=invite.email, send_via_on_commit=True)
-    else:
-        person = add_person(name=invite.name, email=invite.email)
+    person, temp_password = create_person_with_temp_password(name=invite.name, email=invite.email)
     Membership.objects.create(person=person, semester=semester)
+    return RosterCreatedPerson(email=person.email, temp_password=temp_password)
 
 
 @dataclass(frozen=True)
@@ -3904,19 +3918,20 @@ class RosterRemoval:
 
 @dataclass(frozen=True)
 class RosterEditFallout:
-    """Every observable consequence of a Roster edit Buffer, computed without committing it (issue #228, narrowed by #379).
+    """Every observable consequence of a Roster edit Buffer, computed without committing it (issue #228, narrowed by #379, #482).
 
     `is_blocked` is true iff the Buffer cannot be saved at all (a
     WrongViewingSemesterError or SelfRemovalError) — a Validation Error in
     ADR 0008's terms, never blended with Fallout; `pending_*` and
     `loud`/`quiet` are all empty when blocked, since nothing was computed.
-    `pending_invites` (issue #336) names every Buffer-staged invite (rows
-    with `send_invite=True`) by the name it will roster under;
-    `pending_added_without_invite` (issue #397) names every staged row
-    added with `send_invite=False` instead — a real new Person, `'not_yet_invited'`,
-    but no mail sent. Neither list carries email (ADR 0005 keeps email off
-    every Roster surface but the removal lines below). `pending_*` name
-    every row's outcome for the Preview's summary list. `loud`/`quiet` are
+    `pending_created` (issue #482, replacing the old `pending_invites`/
+    `pending_added_without_invite` split now that ADR 0018 leaves only one
+    creation path) names every Buffer-staged new Person by the name they'll
+    roster under — never their temp password, which Preview must never
+    reveal as if it were live (see `preview_roster_edits()`'s docstring).
+    No list here carries email (ADR 0005 keeps email off every Roster
+    surface but the removal lines below). `pending_*` name every row's
+    outcome for the Preview's summary list. `loud`/`quiet` are
     human-readable Fallout messages in the two ADR 0002/issue #228 tiers;
     neither ever blocks a save. `is_stale` flags a `Semester.updated_at`
     mismatch — reported, never refused, per ADR 0008. Carries no
@@ -3930,8 +3945,7 @@ class RosterEditFallout:
     block_message: str
     is_stale: bool
     pending_adds: list[str]
-    pending_invites: list[str]
-    pending_added_without_invite: list[str]
+    pending_created: list[str]
     pending_removals: list[RosterRemoval]
     loud: list[str]
     quiet: list[str]
@@ -3944,8 +3958,7 @@ def _blocked_roster_fallout(block_message: str, *, is_stale: bool = False) -> Ro
         block_message=block_message,
         is_stale=is_stale,
         pending_adds=[],
-        pending_invites=[],
-        pending_added_without_invite=[],
+        pending_created=[],
         pending_removals=[],
         loud=[],
         quiet=[],
@@ -3974,12 +3987,18 @@ def preview_roster_edits(buffer: RosterEditBuffer, *, viewing_semester: Semester
 
     `buffer.pending_invites` (issue #336) rides along with the real
     `apply_roster_edits()` call below like everything else in the Buffer —
-    each invite really is created and really is sent via
-    `transaction.on_commit()`, and it is the caller's rollback (ADR 0008)
-    that discards both the Person row and the deferred send. This is the
-    one thing that makes a Preview of a Buffer containing an invite safe:
-    `assert_preview_writes_nothing()`'s `mail.outbox` assertion is what
-    verifies it.
+    each row really is created, with a real `set_password()` call, exactly
+    as Save would. That's safe only because it reaches no external service
+    (issue #482, ADR 0018): unlike the retired `invite_person()` email
+    path, there's no `transaction.on_commit()`-deferred side effect for a
+    rollback to have to discard — the caller's rollback (ADR 0008) discards
+    the created Person row, and the generated temp password along with it,
+    for free. This function deliberately discards `apply_roster_edits()`'s
+    returned `RosterCreatedPerson` list rather than serializing it: a
+    temp password generated inside a transaction that's about to roll back
+    is fake the instant it's minted, and must never reach a Preview
+    response looking like a live, usable one — only Save's response (which
+    really commits) reveals one.
     """
     if viewing_semester is None:
         return _blocked_roster_fallout(
@@ -4014,8 +4033,7 @@ def preview_roster_edits(buffer: RosterEditBuffer, *, viewing_semester: Semester
         return _blocked_roster_fallout(str(error), is_stale=is_stale)
 
     pending_adds = []
-    pending_invites = [invite.name for invite in buffer.pending_invites if invite.send_invite]
-    pending_added_without_invite = [invite.name for invite in buffer.pending_invites if not invite.send_invite]
+    pending_created = [invite.name for invite in buffer.pending_invites]
     pending_removals = [
         RosterRemoval(person_id=person_id, name=person.name, email=person.email)
         for person_id, person in removed_people_by_id.items()
@@ -4051,8 +4069,7 @@ def preview_roster_edits(buffer: RosterEditBuffer, *, viewing_semester: Semester
         block_message='',
         is_stale=is_stale,
         pending_adds=pending_adds,
-        pending_invites=pending_invites,
-        pending_added_without_invite=pending_added_without_invite,
+        pending_created=pending_created,
         pending_removals=pending_removals,
         loud=loud,
         quiet=quiet,

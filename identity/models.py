@@ -72,7 +72,18 @@ class Person(AbstractBaseUser, PermissionsMixin):
     actually sends. It's the one bit `has_usable_password()` alone can't
     supply: that flag already tells "Invited" from "Accepted" apart, but
     collapses "never invited" into the same false as "invited, not yet
-    accepted". See `identity.services.invite_status_for()`.
+    accepted". `invited_at` and the email-invite path it backs are legacy
+    (ADR 0018) — kept only until the follow-on issue that retires them.
+
+    `must_change_password` (issue #482, ADR 0018) is set whenever an admin
+    action generates a real, immediately-usable temp password for this
+    Person (`identity.services.create_person_with_temp_password()`), and
+    cleared the moment they successfully set their own password. Unlike
+    the old unusable-password-until-accepted state, a Person with
+    `must_change_password=True` already has a working password — the flag
+    only means their *next* sign-in must swap it for one only they know.
+    `identity.services.invite_status_for()` is now keyed on this flag,
+    not `has_usable_password()`.
     """
 
     name = models.CharField(max_length=255)
@@ -81,6 +92,7 @@ class Person(AbstractBaseUser, PermissionsMixin):
     is_staff = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
     invited_at = models.DateTimeField(null=True, blank=True)
+    must_change_password = models.BooleanField(default=False)
 
     objects = PersonManager()
 

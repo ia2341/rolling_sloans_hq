@@ -15,6 +15,9 @@ import type { AppContext } from '../../api/types'
  * exactly like `SetlistWriteEnvelope` (`setlistEditModel.ts`) — every
  * error here is a per-row, per-field Validation Error
  * (`RosterBufferValidationError.row_errors`), never a bare field name.
+ * `values` stays `unknown` (shared by resend-invite's `null`, Preview's
+ * echoed-Buffer shape, and Save's `RosterSaveValues`) -- a caller narrows
+ * it to the shape it actually expects for the endpoint it called.
  */
 export interface RosterWriteEnvelope {
   context: AppContext
@@ -41,21 +44,19 @@ export interface RosterWriteEnvelope {
  */
 export interface RosterEditRow {
   rowKey: string
-  /** `null` only for a not-yet-created invite -- there is no Person row yet. */
+  /** `null` only for a not-yet-created row -- there is no Person row yet. */
   personId: number | null
   name: string
-  /** Invite rows only; `null` for every existing/imported/added row (ADR 0005 keeps email off every other Roster surface). */
+  /** New-Person rows only; `null` for every existing/imported/added row (ADR 0005 keeps email off every other Roster surface). */
   email: string | null
-  /** Invite rows only (issue #397): `true` mails them immediately on Save, `false` stages them `'not_yet_invited'` with no mail sent. Meaningless for every other origin. */
-  sendInvite: boolean
   /** Struck through and kept in place with Undo, rather than removed from the array -- but only for a row that has something to undo to (`original`); see `deleteRosterRow()`. */
   deleted: boolean
   origin: 'existing' | 'imported' | 'added' | 'invited'
-  /** From the server for an existing row (issue #397), or set locally for a row staged this session -- backs the "not yet invited"/"invited · not active yet" badge and the Invite/Invite again control. */
+  /** From the server for an existing row, or set locally for a row staged this session -- backs the "must change password" badge. */
   inviteStatus: InviteStatus
   isRoleMismatch: boolean
   songCount: number
-  /** `true` for a row present when the page loaded (`origin: 'existing'`); `false` for a brand-new one (imported, added or invited this session) -- backs the strike-through-and-Undo delete rule, since only a loaded row has a server state to undo to. */
+  /** `true` for a row present when the page loaded (`origin: 'existing'`); `false` for a brand-new one (imported, added or newly created this session) -- backs the strike-through-and-Undo delete rule, since only a loaded row has a server state to undo to. */
   original: boolean
 }
 
@@ -74,7 +75,6 @@ export function rowsFromPayload(members: RosterEditMember[]): RosterEditRow[] {
     personId: member.id,
     name: member.name,
     email: null,
-    sendInvite: true,
     deleted: false,
     origin: 'existing',
     inviteStatus: member.invite_status,
@@ -93,10 +93,9 @@ export function newImportedRow(
     personId: candidate.id,
     name: candidate.name,
     email: null,
-    sendInvite: true,
     deleted: false,
     origin: 'imported',
-    inviteStatus: 'accepted',
+    inviteStatus: 'active',
     isRoleMismatch: false,
     songCount: 0,
     original: false,
@@ -110,10 +109,9 @@ export function newAddedRow(person: UnrosteredPerson): RosterEditRow {
     personId: person.id,
     name: person.name,
     email: null,
-    sendInvite: true,
     deleted: false,
     origin: 'added',
-    inviteStatus: 'accepted',
+    inviteStatus: 'active',
     isRoleMismatch: false,
     songCount: 0,
     original: false,
@@ -122,25 +120,19 @@ export function newAddedRow(person: UnrosteredPerson): RosterEditRow {
 
 /**
  * Builds one Buffer row for a not-yet-existing Person submitted through the
- * Add-people sheet's "Invite new member" section. `sendInvite` (issue
- * #397) is the "Invite now" (`true`, the default) vs "Add without
- * inviting" (`false`) choice; either way this is the same row shape and
- * the same `origin`, since both create a brand-new Person on Save.
+ * Add-people sheet's "New member" section (issue #482, ADR 0018 --
+ * replacing the old "Invite new member" section's Invite-now/Add-without-
+ * inviting choice with the single admin-relayed-temp-password path).
  */
-export function newInviteRow(
-  name: string,
-  email: string,
-  sendInvite = true,
-): RosterEditRow {
+export function newInviteRow(name: string, email: string): RosterEditRow {
   return {
     rowKey: nextRowKey('invited'),
     personId: null,
     name,
     email,
-    sendInvite,
     deleted: false,
     origin: 'invited',
-    inviteStatus: sendInvite ? 'invited' : 'not_yet_invited',
+    inviteStatus: 'must_change_password',
     isRoleMismatch: false,
     songCount: 0,
     original: false,
@@ -172,14 +164,14 @@ export function deleteRosterRow(
 /**
  * Returns the badges a grid row should render (issue #374, narrowed by
  * #407: no `Rename` badge -- the grid no longer offers a name-edit
- * affordance, so an existing row never has anything to badge), reusing
- * `PreviewChange['op']`'s existing tokens rather than inventing new
- * display vocabulary.
+ * affordance, so an existing row never has anything to badge; narrowed
+ * again by #482: no `Invite` badge -- every new row is created the same
+ * way now, so all of them badge `Add`), reusing `PreviewChange['op']`'s
+ * existing tokens rather than inventing new display vocabulary.
  */
 export function rowBadges(row: RosterEditRow): PreviewChange['op'][] {
   if (row.deleted) return ['Remove']
-  if (!row.original)
-    return [row.origin === 'invited' && row.sendInvite ? 'Invite' : 'Add']
+  if (!row.original) return ['Add']
   return []
 }
 
@@ -226,7 +218,6 @@ export function buildBufferWire(
         row_key: row.rowKey,
         name: row.name,
         email: row.email ?? '',
-        send_invite: row.sendInvite,
       })),
   }
 }
@@ -279,11 +270,7 @@ export function mapRosterPreviewToResult(
       op: 'Add',
       object: name,
     })),
-    ...fallout.pending_invites.map((name): PreviewChange => ({
-      op: 'Invite',
-      object: name,
-    })),
-    ...fallout.pending_added_without_invite.map((name): PreviewChange => ({
+    ...fallout.pending_created.map((name): PreviewChange => ({
       op: 'Add',
       object: name,
     })),

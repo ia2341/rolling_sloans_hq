@@ -185,7 +185,7 @@ class AccessControlTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class RosterReadTests(TestCase):
-    """`GET /api/members/roster/` returns every Membership, active and invited-but-inactive alike."""
+    """`GET /api/members/roster/` returns every Membership, active and must-change-password alike."""
 
     def setUp(self):
         """Log in a synthetic admin against a Semester with one active member and one pending invite."""
@@ -194,35 +194,30 @@ class RosterReadTests(TestCase):
         select(self, self.semester)
         self.role = RoleFactory()
 
-    def test_roster_read_lists_active_and_invited_members_with_no_email(self):
-        """The read model lists every Membership, distinguishes invite status, and never carries email (ADR 0005, #397)."""
+    def test_roster_read_lists_active_and_must_change_password_members_with_no_email(self):
+        """The read model lists every Membership, distinguishes credential status, and never carries email (ADR 0005, #482)."""
         from identity.factories import PersonFactory
-        from identity.services import invite_person
 
         active_person = PersonFactory(name='Active Person', password='a-strong-test-password-123')
         active_membership = MembershipFactory(person=active_person, semester=self.semester)
         MembershipRole.objects.create(membership=active_membership, role=self.role)
-        invited_person = invite_person(name='Invited Person', email='invited-person@example.com')
-        MembershipFactory(person=invited_person, semester=self.semester)
-        not_yet_invited_person = PersonFactory(name='Not Yet Invited Person', password=None)
-        MembershipFactory(person=not_yet_invited_person, semester=self.semester)
+        must_change_person = PersonFactory(name='Must Change Person', must_change_password=True)
+        MembershipFactory(person=must_change_person, semester=self.semester)
 
         response = self.client.get(_roster_url())
         envelope = json.loads(response.content)
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(envelope['data']['active_count'], 1)
-        self.assertEqual(envelope['data']['invited_count'], 2)
+        self.assertEqual(envelope['data']['invited_count'], 1)
         names = {member['name'] for member in envelope['data']['members']}
-        self.assertEqual(names, {'Active Person', 'Invited Person', 'Not Yet Invited Person'})
+        self.assertEqual(names, {'Active Person', 'Must Change Person'})
         for member in envelope['data']['members']:
             self.assertNotIn('email', member)
-        invited_row = next(m for m in envelope['data']['members'] if m['name'] == 'Invited Person')
-        not_yet_invited_row = next(m for m in envelope['data']['members'] if m['name'] == 'Not Yet Invited Person')
+        must_change_row = next(m for m in envelope['data']['members'] if m['name'] == 'Must Change Person')
         active_row = next(m for m in envelope['data']['members'] if m['name'] == 'Active Person')
-        self.assertEqual(invited_row['invite_status'], 'invited')
-        self.assertEqual(not_yet_invited_row['invite_status'], 'not_yet_invited')
-        self.assertEqual(active_row['invite_status'], 'accepted')
+        self.assertEqual(must_change_row['invite_status'], 'must_change_password')
+        self.assertEqual(active_row['invite_status'], 'active')
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class RosterReadNoSemesterTests(TestCase):
@@ -355,14 +350,14 @@ class ResendInviteTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class PersonPageInviteTests(TestCase):
-    """`POST /api/members/<pk>/invite/`: the Person page's Invite action (issue #397), mounted on the same view as the Roster editor's resend-invite."""
+    """`POST /api/members/<pk>/invite/`: the legacy email-invite action (issue #397), kept but no longer reachable from the SPA (issue #482, ADR 0018)."""
 
     def setUp(self):
         """Log in a synthetic admin."""
         admin_client(self)
 
-    def test_inviting_a_not_yet_invited_person_sends_mail_and_updates_status(self):
-        """Inviting a Person `add_person()` created sends the first invite and flips their status to 'invited'."""
+    def test_inviting_a_not_yet_invited_person_sends_mail(self):
+        """Inviting a Person `add_person()` created sends the legacy invite email. `invite_status` no longer tracks this path (#482) -- it reads 'active' either way, since `must_change_password` is untouched by it."""
         from identity.services import add_person
 
         person = add_person(name='Not Yet Invited Person', email='not-yet-invited@example.com')
@@ -372,7 +367,7 @@ class PersonPageInviteTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(envelope['ok'])
         self.assertEqual(len(mail.outbox), 1)
-        self.assertEqual(envelope['data']['invite_status'], 'invited')
+        self.assertEqual(envelope['data']['invite_status'], 'active')
 
     def test_inviting_an_active_person_is_refused(self):
         """Inviting a Person who already has a usable password is refused with ok: false."""
@@ -413,8 +408,8 @@ class PreviewValidBufferTests(TestCase):
         self.kept = PersonFactory(name='Kept Person')
         MembershipFactory(person=self.kept, semester=self.semester)
 
-    def test_valid_buffer_with_an_invite_previews_ok_and_writes_and_mails_nothing(self):
-        """A Buffer with a staged invite previews `ok: true`, lists the invite in pending_invites, and creates no Person."""
+    def test_valid_buffer_with_a_new_person_previews_ok_and_writes_and_mails_nothing(self):
+        """A Buffer with a staged new Person previews `ok: true`, lists them in pending_created, and creates no Person (issue #482)."""
         body = _valid_body(self.semester, invites=[
             {'row_key': 'invite-1', 'name': 'New Invitee', 'email': 'new-invitee@example.com'},
         ])
@@ -425,30 +420,22 @@ class PreviewValidBufferTests(TestCase):
         envelope = json.loads(response.content)
 
         self.assertTrue(envelope['ok'])
-        self.assertIn('New Invitee', envelope['fallout']['pending_invites'])
+        self.assertIn('New Invitee', envelope['fallout']['pending_created'])
         self.assertEqual(envelope['values']['invites'][0]['email'], 'new-invitee@example.com')
         self.assertFalse(Person.objects.filter(email='new-invitee@example.com').exists())
         self.assertEqual(len(mail.outbox), 0)
 
-    def test_valid_buffer_with_send_invite_false_previews_ok_and_reports_added_without_invite(self):
-        """A row with send_invite: false (issue #397) previews `ok: true`, lists the name in pending_added_without_invite, and mails nothing."""
+    def test_preview_never_reveals_a_temp_password(self):
+        """A Preview's echoed values never carry a temp password field anywhere in the response (issue #482)."""
         body = _valid_body(self.semester, invites=[
-            {
-                'row_key': 'invite-1', 'name': 'Staged Only',
-                'email': 'staged-only@example.com', 'send_invite': False,
-            },
+            {'row_key': 'invite-1', 'name': 'New Invitee', 'email': 'new-invitee@example.com'},
         ])
 
         response = assert_preview_writes_nothing(
             self, _preview_url(), models_to_check=[Person, Membership], semester=self.semester, json_body=body,
         )
-        envelope = json.loads(response.content)
 
-        self.assertTrue(envelope['ok'])
-        self.assertIn('Staged Only', envelope['fallout']['pending_added_without_invite'])
-        self.assertNotIn('Staged Only', envelope['fallout']['pending_invites'])
-        self.assertFalse(Person.objects.filter(email='staged-only@example.com').exists())
-        self.assertEqual(len(mail.outbox), 0)
+        self.assertNotIn(b'temp_password', response.content)
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)
@@ -583,20 +570,13 @@ class SelfRemovalTests(TestCase):
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)
-class SaveCommitsTests(TransactionTestCase):
-    """A valid Save actually persists the Buffer, including creating and mailing a staged invite.
+class SaveCommitsTests(TestCase):
+    """A valid Save actually persists the Buffer, including creating a new Person with a real temp password (issue #482, ADR 0018).
 
-    `TransactionTestCase`, not `TestCase`: `apply_roster_edits()` defers
-    the invite mail to `transaction.on_commit()` (ADR 0008), and
-    `TestCase` wraps every test in an outer transaction that's rolled
-    back rather than committed, so an `on_commit()` callback would never
-    fire here.
+    Plain `TestCase`: creation reaches no external service, so unlike the
+    retired email-invite path there's no `transaction.on_commit()`
+    deferral that needs a real commit to observe.
     """
-
-    # Restores the seeded RoleGroup catalog (issue #457) after this test's
-    # teardown flush, which would otherwise truncate it for every test that
-    # runs after this one in the same process.
-    serialized_rollback = True
 
     def setUp(self):
         """Log in a synthetic admin against a fresh Semester."""
@@ -604,8 +584,8 @@ class SaveCommitsTests(TransactionTestCase):
         self.semester = SemesterFactory()
         select(self, self.semester)
 
-    def test_valid_save_with_an_invite_creates_a_person_rosters_them_and_sends_mail(self):
-        """A Save with a staged invite creates the Person with no usable password, rosters them, and sends the invite mail."""
+    def test_valid_save_with_a_new_person_creates_them_with_a_temp_password_and_sends_no_mail(self):
+        """A Save with a staged new Person creates them with a real, usable temp password, rosters them, and sends no mail at all."""
         body = _valid_body(self.semester, invites=[
             {'row_key': 'invite-1', 'name': 'Brand New Member', 'email': 'brand-new@example.com'},
         ])
@@ -614,32 +594,64 @@ class SaveCommitsTests(TransactionTestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(envelope['ok'])
-        self.assertIsNone(envelope['values'])
         person = Person.objects.get(email='brand-new@example.com')
         self.assertEqual(person.name, 'Brand New Member')
-        self.assertFalse(person.has_usable_password())
+        self.assertTrue(person.has_usable_password())
+        self.assertTrue(person.must_change_password)
         self.assertTrue(Membership.objects.filter(person=person, semester=self.semester).exists())
-        self.assertEqual(len(mail.outbox), 1)
-        self.assertIn('brand-new@example.com', mail.outbox[0].to)
+        self.assertEqual(len(mail.outbox), 0)
 
-    def test_valid_save_with_send_invite_false_creates_a_person_and_sends_no_mail(self):
-        """A Save with send_invite: false (issue #397) creates the Person, rosters them, and sends no mail at all."""
+    def test_valid_save_creating_several_people_reveals_a_temp_password_for_each(self):
+        """A single Save that creates multiple people returns one temp_passwords entry per new Person, each usable on their own row (issue #482)."""
         body = _valid_body(self.semester, invites=[
-            {
-                'row_key': 'invite-1', 'name': 'Staged Only',
-                'email': 'staged-only@example.com', 'send_invite': False,
-            },
+            {'row_key': 'invite-1', 'name': 'First New Member', 'email': 'first-new@example.com'},
+            {'row_key': 'invite-2', 'name': 'Second New Member', 'email': 'second-new@example.com'},
         ])
 
         response, envelope = _post_json(self, _save_url(), body)
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(envelope['ok'])
-        person = Person.objects.get(email='staged-only@example.com')
-        self.assertFalse(person.has_usable_password())
-        self.assertIsNone(person.invited_at)
-        self.assertTrue(Membership.objects.filter(person=person, semester=self.semester).exists())
-        self.assertEqual(len(mail.outbox), 0)
+        temp_passwords = {entry['email']: entry['temp_password'] for entry in envelope['values']['temp_passwords']}
+        self.assertEqual(set(temp_passwords), {'first-new@example.com', 'second-new@example.com'})
+        first = Person.objects.get(email='first-new@example.com')
+        second = Person.objects.get(email='second-new@example.com')
+        self.assertTrue(first.check_password(temp_passwords['first-new@example.com']))
+        self.assertTrue(second.check_password(temp_passwords['second-new@example.com']))
+        self.assertNotEqual(temp_passwords['first-new@example.com'], temp_passwords['second-new@example.com'])
+        self.assertTrue(Membership.objects.filter(person=first, semester=self.semester).exists())
+        self.assertTrue(Membership.objects.filter(person=second, semester=self.semester).exists())
+
+    def test_valid_save_reveals_the_temp_password_in_values(self):
+        """Save's response carries the real, one-time temp password for each Person just created (issue #482)."""
+        body = _valid_body(self.semester, invites=[
+            {'row_key': 'invite-1', 'name': 'Brand New Member', 'email': 'brand-new@example.com'},
+        ])
+
+        response, envelope = _post_json(self, _save_url(), body)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(envelope['ok'])
+        temp_passwords = envelope['values']['temp_passwords']
+        self.assertEqual(len(temp_passwords), 1)
+        self.assertEqual(temp_passwords[0]['email'], 'brand-new@example.com')
+        person = Person.objects.get(email='brand-new@example.com')
+        self.assertTrue(person.check_password(temp_passwords[0]['temp_password']))
+
+    def test_valid_save_with_no_new_people_carries_an_empty_temp_passwords_list(self):
+        """A Save that only rosters an existing Person still carries `values.temp_passwords`, just empty."""
+        from identity.factories import PersonFactory
+
+        existing = PersonFactory(name='Existing Person')
+        body = _valid_body(self.semester, entries=[
+            {'row_key': 'row-1', 'person_id': existing.pk, 'name': existing.name},
+        ])
+
+        response, envelope = _post_json(self, _save_url(), body)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(envelope['ok'])
+        self.assertEqual(envelope['values']['temp_passwords'], [])
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)

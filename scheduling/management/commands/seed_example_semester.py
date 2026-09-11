@@ -7,12 +7,12 @@ real production database. It reuses `seed_dev_data`'s Song/Rehearsal
 builders for realistic demo content, but every demo Person here gets a
 **random, discarded** password, never a known one — they exist to make
 the demo Semester look populated to a logged-in member, not to be logged
-into themselves. Deliberately not `set_unusable_password()`: an unusable
-password reads as "not yet invited" (see `identity.services.invite_status_for()`)
-and would badge every seeded row that way on the Band page and Roster
-editor, which would defeat the point of this command. This command
-creates no admin account and touches no existing Person outside its own
-demo roster.
+into themselves. `must_change_password` is left at its default (`False`),
+so every seeded row reads `'active'` (see
+`identity.services.invite_status_for()`) — a demo Semester shouldn't badge
+every row as needing a password change, which would defeat the point of
+this command. This command creates no admin account and touches no
+existing Person outside its own demo roster.
 
 Requires `--confirm` so it can't run by accident. Running it again rewrites
 the existing "Example Semester" in place (issue #396): the old demo
@@ -144,13 +144,11 @@ def _build_demo_people(count=12):
     — these exist to populate the demo Semester's roster, not to be signed
     into, and this command must never create or touch an admin account.
 
-    Deliberately a random `set_password()`, not `set_unusable_password()`:
-    an unusable password reads as "not yet invited" (`invite_status_for()`)
-    and would badge every seeded row that way on the Band page and Roster
-    editor — exactly the wrong look for a demo roster that issue #396
-    needs to render as a normal, fully-populated band. A random,
-    never-surfaced password satisfies `has_usable_password()` without
-    making the account actually loggable-in by anyone.
+    A random, never-surfaced `set_password()` leaves `has_usable_password()`
+    true and `must_change_password` at its default `False`, so every
+    seeded row reads `'active'` (`invite_status_for()`) — a normal,
+    fully-populated-looking band for issue #396's demo, with no account
+    that's actually loggable-in by anyone.
     """
     return [
         PersonFactory(email=fake.unique.safe_email(), is_admin=False, password=get_random_string(32))

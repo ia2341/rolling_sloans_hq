@@ -1,10 +1,8 @@
-"""apply_roster_edits(): the batch write, the semester-scoped purge, and the two staleness checks (issue #226, narrowed to add/remove-only by issue #379)."""
+"""apply_roster_edits(): the batch write, the semester-scoped purge, and the two staleness checks (issue #226, narrowed to add/remove-only by issue #379, single creation path by #482)."""
 
 from datetime import date
 
-from django.core import mail
-from django.db import transaction
-from django.test import TestCase, TransactionTestCase
+from django.test import TestCase
 
 from identity.factories import PersonFactory
 from identity.models import Person
@@ -226,20 +224,14 @@ class ApplyRosterEditsTests(TestCase):
         self.assertGreater(self.semester.updated_at, original_stamp)
 
 
-class ApplyRosterEditsInviteTests(TransactionTestCase):
-    """A `RosterEditBuffer.pending_invites` entry creates and rosters a Person, with the mail deferred to on_commit (issue #336).
+class ApplyRosterEditsInviteTests(TestCase):
+    """A `RosterEditBuffer.pending_invites` entry creates and rosters a Person with a real temp password (issue #336, #482, ADR 0018).
 
-    `TransactionTestCase` (not `TestCase`) because the invite mail is
-    registered with `transaction.on_commit()` — a plain `TestCase` wraps
-    every test in a transaction that never really commits, so an
-    `on_commit()` callback would never fire and this test would pass for
-    the wrong reason.
+    Plain `TestCase` (not `TransactionTestCase`): unlike the retired
+    `invite_person()` email path, `create_person_with_temp_password()`
+    reaches no external service, so there's no `transaction.on_commit()`
+    deferral for a test to need a real commit to observe.
     """
-
-    # Restores the seeded RoleGroup catalog (issue #457) after this test's
-    # teardown flush, which would otherwise truncate it for every test that
-    # runs after this one in the same process.
-    serialized_rollback = True
 
     def setUp(self):
         """Build a Semester and one admin Person to submit Buffers as."""
@@ -257,38 +249,27 @@ class ApplyRosterEditsInviteTests(TransactionTestCase):
         )
 
     def test_invite_creates_a_person_and_rosters_them_with_no_roles(self):
-        """A staged invite creates a Person with an unusable password and a bare Membership, no declared Roles."""
+        """A staged row creates a Person with a real, usable temp password and a bare Membership, no declared Roles."""
         buffer = self._buffer([RosterInvite(name='New Member', email='new-member@example.com')])
 
-        apply_roster_edits(buffer, viewing_semester=self.semester, requesting_admin=self.admin)
+        created = apply_roster_edits(buffer, viewing_semester=self.semester, requesting_admin=self.admin)
 
         person = Person.objects.get(email='new-member@example.com')
         self.assertEqual(person.name, 'New Member')
-        self.assertFalse(person.has_usable_password())
+        self.assertTrue(person.has_usable_password())
+        self.assertTrue(person.must_change_password)
         membership = Membership.objects.get(person=person, semester=self.semester)
         self.assertEqual(MembershipRole.objects.filter(membership=membership).count(), 0)
+        self.assertEqual(len(created), 1)
+        self.assertEqual(created[0].email, 'new-member@example.com')
+        self.assertTrue(person.check_password(created[0].temp_password))
 
-    def test_invite_sends_mail_only_after_the_transaction_commits(self):
-        """The invite email is deferred via transaction.on_commit(), landing in the outbox only once this call's own transaction has committed."""
-        buffer = self._buffer([RosterInvite(name='Deferred Person', email='deferred@example.com')])
+    def test_creates_no_mail_at_all(self):
+        """Unlike the retired email-invite path, creation reaches no external service."""
+        from django.core import mail
 
-        with transaction.atomic():
-            apply_roster_edits(buffer, viewing_semester=self.semester, requesting_admin=self.admin)
-            self.assertEqual(len(mail.outbox), 0)
-
-        self.assertEqual(len(mail.outbox), 1)
-        self.assertIn('deferred@example.com', mail.outbox[0].to)
-
-    def test_send_invite_false_creates_a_person_and_rosters_them_with_no_mail(self):
-        """A staged row with send_invite=False (issue #397) creates a Person, rosters them, and sends no mail at all."""
-        buffer = self._buffer(
-            [RosterInvite(name='Staged Member', email='staged-member@example.com', send_invite=False)],
-        )
+        buffer = self._buffer([RosterInvite(name='Quiet Member', email='quiet@example.com')])
 
         apply_roster_edits(buffer, viewing_semester=self.semester, requesting_admin=self.admin)
 
-        person = Person.objects.get(email='staged-member@example.com')
-        self.assertFalse(person.has_usable_password())
-        self.assertIsNone(person.invited_at)
-        Membership.objects.get(person=person, semester=self.semester)
         self.assertEqual(len(mail.outbox), 0)
