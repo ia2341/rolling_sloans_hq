@@ -282,7 +282,9 @@ describe('Person', () => {
           }),
           ok: false,
           errors: {},
-          non_field_errors: ["Couldn't send the invite email to alex@example.com."],
+          non_field_errors: [
+            "Couldn't send the invite email to alex@example.com.",
+          ],
           fallout: null,
           values: null,
           data: null,
