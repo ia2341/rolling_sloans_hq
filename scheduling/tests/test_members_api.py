@@ -973,3 +973,77 @@ class PersonReactivationApiViewTests(TestCase):
         self.client.post(reactivate_api_url(target))
 
         self.assertTrue(Person.objects.get(pk=target.pk).is_admin)
+
+
+def reset_password_api_url(person):
+    """Return `/api/members/<pk>/reset-password/` for `person`."""
+    return reverse('api-member-reset-password', args=[person.pk])
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class PersonPasswordResetApiViewTests(TestCase):
+    """`POST /api/members/<pk>/reset-password/` (issue #483, ADR 0018): admin-relayed reset, gated by `AdminApiView`."""
+
+    def setUp(self):
+        """Log in as a synthetic admin before each test."""
+        self.admin = admin_client(self)
+
+    def test_anonymous_request_401s_not_302s(self):
+        """An unauthenticated POST gets a JSON 401, never a redirect (ApiView's contract)."""
+        self.client.logout()
+        target = PersonFactory()
+
+        response = self.client.post(reset_password_api_url(target))
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_non_admin_request_403s(self):
+        """A logged-in non-admin gets a JSON 403 (AdminApiView's contract), never a redirect."""
+        self.client.logout()
+        member_client(self)
+        target = PersonFactory()
+
+        response = self.client.post(reset_password_api_url(target))
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_resets_password_and_returns_the_fresh_person_payload_and_temp_password(self):
+        """A successful reset sets a usable password, flags `must_change_password`, and reveals the plaintext once."""
+        target = PersonFactory(is_active=True, must_change_password=False)
+
+        response = self.client.post(reset_password_api_url(target))
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body['ok'])
+        temp_password = body['data']['temp_password']
+        self.assertTrue(temp_password)
+        refreshed = Person.objects.get(pk=target.pk)
+        self.assertTrue(refreshed.must_change_password)
+        self.assertTrue(refreshed.check_password(temp_password))
+        self.assertEqual(body['data']['person']['id'], target.pk)
+
+    def test_reset_on_a_deactivated_target_is_refused_as_ok_false_not_a_4xx(self):
+        """Resetting a deactivated Person's password is a 200 with `ok: false`, not a 4xx."""
+        target = PersonFactory(is_active=False)
+        old_password_hash = target.password
+
+        response = self.client.post(reset_password_api_url(target))
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertFalse(body['ok'])
+        self.assertTrue(body['non_field_errors'])
+        self.assertEqual(Person.objects.get(pk=target.pk).password, old_password_hash)
+
+    def test_self_reset_is_refused_as_ok_false_not_a_4xx(self):
+        """Resetting your own password through this endpoint is a 200 with `ok: false`, not a 4xx."""
+        old_password_hash = self.admin.password
+
+        response = self.client.post(reset_password_api_url(self.admin))
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertFalse(body['ok'])
+        self.assertTrue(body['non_field_errors'])
+        self.assertEqual(Person.objects.get(pk=self.admin.pk).password, old_password_hash)

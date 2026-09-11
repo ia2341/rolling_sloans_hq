@@ -29,11 +29,13 @@ from identity.services import (
     AlreadyHasPasswordError,
     CannotDeactivateLastActiveAdminError,
     CannotDeactivateSelfError,
+    CannotResetOwnPasswordError,
     CannotRevokeLastActiveAdminError,
     CannotRevokeOwnAdminStatusError,
     EmailDeliveryError,
     PersonIsDeactivatedError,
     apply_admin_status_change,
+    apply_password_reset,
     apply_person_deactivation,
     apply_person_reactivation,
     resend_invite,
@@ -903,6 +905,42 @@ class PersonReactivationApiView(AdminApiView, View):
             target, semester=semester, is_self=False, can_edit_roles=True, membership=membership,
         )
         return self.write_response(request, ok=True, data=data)
+
+
+class PersonPasswordResetApiView(AdminApiView, View):
+    """`POST /api/members/<pk>/reset-password/`: an admin resets another Person's password (issue #483, ADR 0018).
+
+    A direct `apply_password_reset()` call, not a Pending Buffer, mirroring
+    `PersonDeactivationApiView`'s shape: there is no server-computed
+    derivation to preview, only a write plus a client-side result dialog
+    revealing the plaintext once. Unlike Deactivate/admin-status,
+    self-reset is refused server-side (issue #483) rather than allowed —
+    an admin who knows their current password uses `PasswordChangeApiView`
+    instead.
+    """
+
+    def post(self, request, pk):
+        """Reset `pk`'s password, or report the guard that refused it.
+
+        A refusal (self-reset, or a deactivated target) is rendered as
+        `ok: false` with a `non_field_errors` message, never a 4xx,
+        matching `PersonAdminStatusApiView`/`PersonDeactivationApiView`.
+        On success, `data` carries the fresh Person payload plus
+        `temp_password` — the one place besides Roster creation (#482)
+        this project ever reveals a real, usable password, existing only
+        in memory for the duration of this response.
+        """
+        target = get_object_or_404(Person, pk=pk)
+        try:
+            target, temp_password = apply_password_reset(target=target, requesting_admin=request.user)
+        except (PersonIsDeactivatedError, CannotResetOwnPasswordError) as error:
+            return self.write_response(request, ok=False, non_field_errors=[str(error)])
+        semester = services.get_viewing_semester(request)
+        membership = Membership.objects.filter(person=target, semester=semester).first() if semester is not None else None
+        person_data = serializers.serialize_person(
+            target, semester=semester, is_self=False, can_edit_roles=True, membership=membership,
+        )
+        return self.write_response(request, ok=True, data={'person': person_data, 'temp_password': temp_password})
 
 
 class RecordingPresignApiView(ApiView, View):

@@ -972,4 +972,160 @@ describe('Person', () => {
     await screen.findByText('Could not deactivate this member.')
     expect(confirmButton).not.toBeDisabled()
   })
+
+  it('renders no Reset password control for a plain teammate viewer (issue #483)', async () => {
+    mockFetchByUrl({
+      '/api/members/2/': () => ({
+        status: 200,
+        body: { context: memberContext(), data: teammatePayload() },
+      }),
+    })
+    renderPerson('/members/2')
+
+    await screen.findByRole('heading', { name: 'Alex Kim' })
+    expect(
+      screen.queryByRole('button', { name: 'Reset password' }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('renders no Reset password control on the self viewer’s own page (issue #483)', async () => {
+    mockFetchByUrl({
+      '/api/members/1/': () => ({
+        status: 200,
+        body: { context: memberContext(), data: selfPayload() },
+      }),
+    })
+    renderPerson('/members/1')
+
+    await screen.findByRole('heading', { name: 'Sam Rivera' })
+    expect(
+      screen.queryByRole('button', { name: 'Reset password' }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('resets a teammate’s password immediately (no confirm dialog) and reveals the temp password once (issue #483)', async () => {
+    const resetFetch = vi.fn()
+    mockFetchByUrl({
+      '/api/members/2/reset-password/': () => {
+        resetFetch()
+        return {
+          status: 200,
+          body: {
+            context: memberContext({
+              viewer: { ...memberContext().viewer, is_admin: true },
+            }),
+            ok: true,
+            errors: {},
+            non_field_errors: [],
+            fallout: null,
+            values: null,
+            data: {
+              person: adminViewingTeammatePayload({
+                is_active: true,
+                invite_status: 'must_change_password',
+              }),
+              temp_password: 'abc123XYZdef',
+            },
+          },
+        }
+      },
+      '/api/members/2/': () => ({
+        status: 200,
+        body: {
+          context: memberContext({
+            viewer: { ...memberContext().viewer, is_admin: true },
+          }),
+          data: adminViewingTeammatePayload({ is_active: true }),
+        },
+      }),
+    })
+
+    const user = (await import('@testing-library/user-event')).default.setup()
+    renderPerson('/members/2')
+
+    const resetButton = await screen.findByRole('button', {
+      name: 'Reset password',
+    })
+    await user.click(resetButton)
+
+    await waitFor(() => expect(resetFetch).toHaveBeenCalledTimes(1))
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText('abc123XYZdef')).toBeInTheDocument()
+
+    await user.click(
+      within(dialog).getByRole('button', { name: /I.ve relayed this/ }),
+    )
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('surfaces a reset-password refusal from the API inline, with no reveal dialog (issue #483)', async () => {
+    mockFetchByUrl({
+      '/api/members/2/reset-password/': () => ({
+        status: 200,
+        body: {
+          context: memberContext({
+            viewer: { ...memberContext().viewer, is_admin: true },
+          }),
+          ok: false,
+          errors: {},
+          non_field_errors: [
+            'You cannot reset your own password here — use Change password instead.',
+          ],
+          fallout: null,
+          values: null,
+          data: null,
+        },
+      }),
+      '/api/members/2/': () => ({
+        status: 200,
+        body: {
+          context: memberContext({
+            viewer: { ...memberContext().viewer, is_admin: true },
+          }),
+          data: adminViewingTeammatePayload({ is_active: true }),
+        },
+      }),
+    })
+
+    const user = (await import('@testing-library/user-event')).default.setup()
+    renderPerson('/members/2')
+
+    const resetButton = await screen.findByRole('button', {
+      name: 'Reset password',
+    })
+    await user.click(resetButton)
+
+    await screen.findByText(
+      'You cannot reset your own password here — use Change password instead.',
+    )
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('resets the saving state and shows a fallback error when the reset-password request itself fails (issue #483)', async () => {
+    mockFetchByUrl({
+      '/api/members/2/reset-password/': () => {
+        throw new Error('network error')
+      },
+      '/api/members/2/': () => ({
+        status: 200,
+        body: {
+          context: memberContext({
+            viewer: { ...memberContext().viewer, is_admin: true },
+          }),
+          data: adminViewingTeammatePayload({ is_active: true }),
+        },
+      }),
+    })
+
+    const user = (await import('@testing-library/user-event')).default.setup()
+    renderPerson('/members/2')
+
+    const resetButton = await screen.findByRole('button', {
+      name: 'Reset password',
+    })
+    await user.click(resetButton)
+
+    await screen.findByText("Could not reset this member's password.")
+    expect(resetButton).not.toBeDisabled()
+  })
 })
