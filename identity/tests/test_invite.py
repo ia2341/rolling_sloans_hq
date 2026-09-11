@@ -19,6 +19,7 @@ from identity.services import (
     AlreadyHasPasswordError,
     EmailDeliveryError,
     add_person,
+    clear_must_change_password,
     create_person_with_temp_password,
     invite_person,
     invite_status_for,
@@ -129,6 +130,27 @@ class InviteStatusForTests(TestCase):
         person = invite_person(**invite_args())
 
         self.assertEqual(invite_status_for(person), 'active')
+
+
+class ClearMustChangePasswordTests(TestCase):
+    """`clear_must_change_password()` (issue #484): the one place that retires the temp-password nag."""
+
+    def test_clears_a_set_flag(self):
+        """A Person flagged must_change_password comes back unflagged after the call, in the database too."""
+        person = PersonFactory(must_change_password=True)
+
+        clear_must_change_password(person)
+
+        self.assertFalse(person.must_change_password)
+        self.assertFalse(Person.objects.get(pk=person.pk).must_change_password)
+
+    def test_is_a_no_op_on_an_already_clear_flag(self):
+        """Calling it on a Person who never had the flag set leaves it clear, without erroring."""
+        person = PersonFactory(must_change_password=False)
+
+        clear_must_change_password(person)
+
+        self.assertFalse(Person.objects.get(pk=person.pk).must_change_password)
 
 
 class CreatePersonWithTempPasswordTests(TestCase):

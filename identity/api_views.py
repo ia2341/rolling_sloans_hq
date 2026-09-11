@@ -18,7 +18,12 @@ from django.views import View
 
 from config.views import ApiView
 
-from .services import client_ip, is_login_rate_limited, record_login_attempt
+from .services import (
+    clear_must_change_password,
+    client_ip,
+    is_login_rate_limited,
+    record_login_attempt,
+)
 
 
 class LoginApiView(View):
@@ -100,6 +105,11 @@ class PasswordChangeApiView(ApiView, View):
     envelope's `errors` dict. `update_session_auth_hash()` on success is
     load-bearing (issue #333 user story 49): without it, changing your
     password signs out the session you just used to change it.
+
+    Also the single place that clears `Person.must_change_password`
+    (issue #484): any successful change here, temp password or not,
+    retires the SPA's post-login nag, since the flag's only meaning is
+    "hasn't replaced the admin-generated password yet".
     """
 
     def post(self, request):
@@ -114,4 +124,5 @@ class PasswordChangeApiView(ApiView, View):
             return self.write_response(request, ok=False, errors=form.errors)
         form.save()
         update_session_auth_hash(request, form.user)
+        clear_must_change_password(form.user)
         return self.write_response(request, ok=True)

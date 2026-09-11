@@ -7,6 +7,7 @@ export interface Viewer {
   name: string
   email: string
   is_admin: boolean
+  must_change_password: boolean
 }
 
 export interface ViewingSemester {

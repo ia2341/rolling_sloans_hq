@@ -11,17 +11,20 @@ mechanically for both serializer modules.
 
 
 def serialize_viewer(person):
-    """Return `person` as the `context.viewer` block: `id`, `name`, `email`, `is_admin`.
+    """Return `person` as the `context.viewer` block: `id`, `name`, `email`, `is_admin`, `must_change_password`.
 
     `email` is always the *requesting* person's own address — this
     function is only ever called with `request.user` — so it never
     violates `docs/person-page-visibility.md`'s "self only" verdict on a
     teammate's email; there is no path here that serializes anyone else's
-    `Person` row.
+    `Person` row. `must_change_password` (issue #484) is the SPA's signal
+    to nag the viewer about a still-unreplaced admin-generated password;
+    it's the viewer's own flag by the same self-only reasoning.
     """
     return {
         'id': person.pk,
         'name': person.name,
         'email': person.email,
         'is_admin': person.is_admin,
+        'must_change_password': person.must_change_password,
     }

@@ -8,6 +8,7 @@ export function memberContext(overrides: Partial<AppContext> = {}): AppContext {
       name: 'Sam Rivera',
       email: 'sam@example.com',
       is_admin: false,
+      must_change_password: false,
     },
     viewing_semester: {
       id: 10,
@@ -32,6 +33,7 @@ export function adminContext(overrides: Partial<AppContext> = {}): AppContext {
       name: 'Alex Kim',
       email: 'alex@example.com',
       is_admin: true,
+      must_change_password: false,
     },
     viewing_semester: {
       id: 11,

@@ -5,6 +5,7 @@ import { ContextProvider } from '../api/ContextProvider'
 import { EditToolbar } from '../components/ui/EditToolbar'
 import { useIsPhone } from '../hooks/useIsPhone'
 import { EditSessionProvider, useEditSession } from './EditSessionContext'
+import { MustChangePasswordBanner } from './MustChangePasswordBanner'
 import { PageTitleProvider } from './PageTitleContext'
 import { Sidebar } from './Sidebar'
 import { TabBar } from './TabBar'
@@ -36,6 +37,7 @@ function ShellLayout({ children }: { children: ReactNode }) {
   if (isPhone) {
     return (
       <div className="flex min-h-screen flex-col pb-16">
+        <MustChangePasswordBanner />
         <TopBar />
         <main className="flex-1 px-3 py-3">{children}</main>
         <TabBar />
@@ -47,6 +49,7 @@ function ShellLayout({ children }: { children: ReactNode }) {
     <div className="flex min-h-screen">
       <Sidebar />
       <div className="flex flex-1 flex-col">
+        <MustChangePasswordBanner />
         <ActiveEditToolbar />
         <main className="flex-1 px-6 py-6">{children}</main>
       </div>

@@ -407,6 +407,20 @@ def invite_status_for(person):
     return 'must_change_password' if person.must_change_password else 'active'
 
 
+def clear_must_change_password(person):
+    """Set `person.must_change_password = False` (issue #484): the one place that clears the temp-password nag.
+
+    Mirrors `invite_status_for()`'s "one function decides" convention.
+    Called only from `PasswordChangeApiView`'s success path — any
+    successful self-serve password change, temp or not, retires the nag,
+    since the whole point of the flag is "hasn't replaced the
+    admin-generated password yet".
+    """
+    person.must_change_password = False
+    person.save(update_fields=['must_change_password'])
+    return person
+
+
 def build_set_password_url(person):
     """Build the absolute, single-use set-password link for a Person (invite or forgot-password)."""
     uidb64 = urlsafe_base64_encode(force_bytes(person.pk))

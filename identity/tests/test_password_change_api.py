@@ -58,6 +58,38 @@ class PasswordChangeApiViewTests(TestCase):
         follow_up = self.client.get(reverse('api-members'))
         self.assertEqual(follow_up.status_code, 200)
 
+    def test_valid_change_clears_must_change_password(self):
+        """A successful change against a temp-password Person (issue #484) clears `must_change_password`."""
+        self.person.must_change_password = True
+        self.person.save(update_fields=['must_change_password'])
+
+        response = self._post(OLD_PASSWORD, NEW_PASSWORD, NEW_PASSWORD)
+
+        self.assertTrue(response.json()['ok'])
+        self.person.refresh_from_db()
+        self.assertFalse(self.person.must_change_password)
+
+    def test_valid_change_leaves_a_non_temp_password_unflagged(self):
+        """A member who never carried `must_change_password` still doesn't after a self-serve change."""
+        self.assertFalse(self.person.must_change_password)
+
+        response = self._post(OLD_PASSWORD, NEW_PASSWORD, NEW_PASSWORD)
+
+        self.assertTrue(response.json()['ok'])
+        self.person.refresh_from_db()
+        self.assertFalse(self.person.must_change_password)
+
+    def test_invalid_change_does_not_clear_must_change_password(self):
+        """A rejected change (wrong current password) leaves `must_change_password` untouched."""
+        self.person.must_change_password = True
+        self.person.save(update_fields=['must_change_password'])
+
+        response = self._post('not-the-real-password', NEW_PASSWORD, NEW_PASSWORD)
+
+        self.assertFalse(response.json()['ok'])
+        self.person.refresh_from_db()
+        self.assertTrue(self.person.must_change_password)
+
     def test_invalid_old_password_reports_a_per_field_error(self):
         """A wrong current password reports a field error on `old_password`, changing nothing."""
         response = self._post('not-the-real-password', NEW_PASSWORD, NEW_PASSWORD)
