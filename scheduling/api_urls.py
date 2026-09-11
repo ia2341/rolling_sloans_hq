@@ -90,6 +90,10 @@ urlpatterns = [
         'members/<int:pk>/reactivate/',
         api_views.PersonReactivationApiView.as_view(), name='api-member-reactivate',
     ),
+    path(
+        'members/<int:pk>/reset-password/',
+        api_views.PersonPasswordResetApiView.as_view(), name='api-member-reset-password',
+    ),
     path('schedule/editor/', api_views.ScheduleEditorApiView.as_view(), name='api-schedule-editor'),
     path(
         'schedule/editor/preview/',

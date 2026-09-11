@@ -179,6 +179,20 @@ export interface PersonPayload {
 }
 
 /**
+ * `data` shape of `POST /api/members/<pk>/reset-password/` on success
+ * (issue #483, ADR 0018). `temp_password` is the one-time plaintext —
+ * `PersonPasswordResetApiView` never returns it a second time, and the
+ * caller must not persist it beyond the reveal dialog. `person` is the
+ * fresh `PersonPayload`, refreshed the same way every other Person-page
+ * write here echoes it back (its `invite_status` now reads
+ * `'must_change_password'`).
+ */
+export interface PersonPasswordResetValues {
+  person: PersonPayload
+  temp_password: string
+}
+
+/**
  * Wire types for the Roster editor (issue #336's backend, #374's
  * frontend), mirroring `scheduling/serializers.py`'s
  * `serialize_roster_edit()`/`serialize_roster_edit_fallout()`/

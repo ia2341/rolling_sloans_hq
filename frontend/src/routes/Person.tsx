@@ -5,6 +5,7 @@ import { ApiError, apiFetch } from '../api/client'
 import type {
   FutureSchedulingFootprint,
   MemberRole,
+  PersonPasswordResetValues,
   PersonPayload,
   PersonRecordingsBlock,
 } from '../api/memberTypes'
@@ -194,6 +195,9 @@ function DetailsSection({
           footprint={data.future_scheduling_footprint ?? null}
           onDataChange={onDataChange}
         />
+      )}
+      {data.is_active !== undefined && (
+        <ResetPasswordRow personId={data.id} onDataChange={onDataChange} />
       )}
     </div>
   )
@@ -444,6 +448,118 @@ function DeactivationFootprintSummary({
             ))}
           </ul>
         </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * The Reset-password control (issue #483, ADR 0018): renders for a
+ * teammate whose payload carries `is_active` (an admin viewer, never
+ * `is_self` — self-reset is refused server-side by
+ * `apply_password_reset()`, mirroring Deactivate/admin grant-revoke's own
+ * self-guards). Unlike Deactivate's pre-action confirm dialog, this fires
+ * the API call immediately and shows a **result** dialog revealing the
+ * one-time plaintext — there is nothing to confirm ahead of time, since
+ * the action carries no lockout risk and Reset can simply be clicked
+ * again if a relay is botched.
+ */
+function ResetPasswordRow({
+  personId,
+  onDataChange,
+}: {
+  personId: number
+  onDataChange: (next: PersonPayload) => void
+}) {
+  const [isSaving, setIsSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [revealedPassword, setRevealedPassword] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
+
+  /** Posts to the reset endpoint, then either opens the reveal dialog or surfaces the guard's refusal message inline. */
+  async function handleReset() {
+    setIsSaving(true)
+    setError(null)
+    try {
+      const envelope = await apiFetch<WriteEnvelope<PersonPasswordResetValues>>(
+        `/api/members/${personId}/reset-password/`,
+        { method: 'POST' },
+      )
+      if (envelope.ok && envelope.data !== null) {
+        onDataChange(envelope.data.person)
+        setRevealedPassword(envelope.data.temp_password)
+        setCopied(false)
+      } else {
+        setError(
+          envelope.non_field_errors[0] ??
+            "Could not reset this member's password.",
+        )
+      }
+    } catch {
+      setError("Could not reset this member's password.")
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  /** Copies the revealed plaintext to the clipboard, silently no-op-ing if the browser refuses. */
+  async function copyPassword() {
+    if (revealedPassword === null) return
+    try {
+      await navigator.clipboard.writeText(revealedPassword)
+      setCopied(true)
+    } catch {
+      setCopied(false)
+    }
+  }
+
+  return (
+    <div className="mt-3 flex flex-col gap-1">
+      <button
+        type="button"
+        onClick={() => void handleReset()}
+        disabled={isSaving}
+        className="rounded border border-rs-border px-3 py-1.5 text-sm font-medium text-rs-accent disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        Reset password
+      </button>
+      {error !== null && (
+        <span className="text-sm text-rs-danger">{error}</span>
+      )}
+      {revealedPassword !== null && (
+        <ResponsiveDialog
+          open
+          onOpenChange={(next) => {
+            if (!next) setRevealedPassword(null)
+          }}
+          title="New temp password"
+          footer={
+            <button
+              type="button"
+              onClick={() => setRevealedPassword(null)}
+              className="rounded bg-rs-accent px-3 py-1.5 text-sm font-medium text-rs-accent-fg"
+            >
+              Done — I&apos;ve relayed this
+            </button>
+          }
+        >
+          <p role="alert" className="mb-3 text-sm text-rs-danger">
+            Shown once. Relay this password to the member now — it will not be
+            shown again.
+          </p>
+          <div className="flex items-center justify-between gap-3 rounded border border-rs-border p-2">
+            <p className="font-mono text-sm tracking-wide">
+              {revealedPassword}
+            </p>
+            <button
+              type="button"
+              onClick={() => void copyPassword()}
+              className="shrink-0 rounded border border-rs-border px-2 py-1 text-xs font-medium"
+            >
+              {copied ? 'Copied' : 'Copy'}
+            </button>
+          </div>
+        </ResponsiveDialog>
       )}
     </div>
   )

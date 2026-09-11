@@ -1,9 +1,12 @@
-"""Person creation, the legacy invite flow, and the project's first rate limits (issue #327, #482, ADR 0018).
+"""Person creation, the legacy invite flow, and the project's first rate limits (issue #327, #482, #483, ADR 0018).
 
 `create_person_with_temp_password` (issue #482) is the current creation
 path: it sets a real, immediately-usable password and flags the Person
 `must_change_password`, returning the plaintext once for an admin to relay
-verbally or by text — no email involved at all.
+verbally or by text — no email involved at all. `apply_password_reset`
+(issue #483) is its sibling for an *existing* Person: same generated
+temp password and forced-change flag, reached from `/members/<pk>/`
+instead of account creation.
 
 `invite_person`/`add_person`/`resend_invite` are the legacy email-invite
 path ADR 0018 replaces. They create the `Person` with an unusable password
@@ -89,6 +92,17 @@ class CannotDeactivateLastActiveAdminError(Exception):
 
 class PersonIsDeactivatedError(Exception):
     """Raised by `resend_invite` when the target Person is deactivated (`is_active=False`)."""
+
+
+class CannotResetOwnPasswordError(Exception):
+    """Raised by `apply_password_reset` when an admin attempts to reset their own password through this endpoint.
+
+    An admin who knows their current password has the self-serve
+    change-password flow (`PasswordChangeApiView`) instead; this endpoint
+    exists for resetting *other* members, so a self-reset here would just
+    be a confusing second way to do the same thing with none of the
+    current-password confirmation the self-serve flow requires.
+    """
 
 
 def generate_temp_password():
@@ -218,6 +232,49 @@ def resend_invite(person):
     person.invited_at = timezone.now()
     person.save(update_fields=['invited_at'])
     return person
+
+
+def apply_password_reset(*, target, requesting_admin):
+    """Reset `target`'s password to a freshly generated temp password, forcing a change on next use (issue #483, ADR 0018).
+
+    The admin-relayed reset path this ADR describes: works on anyone, at
+    any time, replacing `resend_invite()`'s narrower job of recovering
+    only a never-accepted invite. Sets a real, immediately-usable password
+    via `set_password()` (not an unusable one, unlike `invite_person()`)
+    so the target can sign in the instant the admin relays it, and flags
+    `must_change_password=True` — the same durable "was admin-generated"
+    record `create_person_with_temp_password()` sets, cleared the moment
+    the member successfully changes their own password.
+
+    `set_password()` rotates the session auth hash Django embeds in every
+    session, so any of `target`'s existing sessions are invalidated as a
+    side effect on their next request — no separate session-termination
+    step is needed here the way `apply_person_deactivation()` needs one.
+
+    Raises:
+        PersonIsDeactivatedError: `target` is deactivated (`is_active=False`)
+            — mirrors `resend_invite()`'s identical refusal, so a locked-out
+            account can't be handed a working credential through this door
+            either.
+        CannotResetOwnPasswordError: `target` is `requesting_admin`
+            themselves — self-reset must go through the self-serve
+            change-password flow instead, which confirms the current
+            password before accepting a new one.
+
+    Returns:
+        A `(target, temp_password)` tuple — the plaintext is returned
+        exactly once and must be relayed in the caller's response, never
+        logged or persisted.
+    """
+    if target.pk == requesting_admin.pk:
+        raise CannotResetOwnPasswordError('You cannot reset your own password here — use Change password instead.')
+    if not target.is_active:
+        raise PersonIsDeactivatedError(f'{target.email} is deactivated and cannot have their password reset')
+    temp_password = generate_temp_password()
+    target.set_password(temp_password)
+    target.must_change_password = True
+    target.save(update_fields=['password', 'must_change_password'])
+    return target, temp_password
 
 
 def other_active_admins(person):
