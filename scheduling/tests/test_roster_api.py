@@ -601,6 +601,27 @@ class SaveCommitsTests(TestCase):
         self.assertTrue(Membership.objects.filter(person=person, semester=self.semester).exists())
         self.assertEqual(len(mail.outbox), 0)
 
+    def test_valid_save_creating_several_people_reveals_a_temp_password_for_each(self):
+        """A single Save that creates multiple people returns one temp_passwords entry per new Person, each usable on their own row (issue #482)."""
+        body = _valid_body(self.semester, invites=[
+            {'row_key': 'invite-1', 'name': 'First New Member', 'email': 'first-new@example.com'},
+            {'row_key': 'invite-2', 'name': 'Second New Member', 'email': 'second-new@example.com'},
+        ])
+
+        response, envelope = _post_json(self, _save_url(), body)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(envelope['ok'])
+        temp_passwords = {entry['email']: entry['temp_password'] for entry in envelope['values']['temp_passwords']}
+        self.assertEqual(set(temp_passwords), {'first-new@example.com', 'second-new@example.com'})
+        first = Person.objects.get(email='first-new@example.com')
+        second = Person.objects.get(email='second-new@example.com')
+        self.assertTrue(first.check_password(temp_passwords['first-new@example.com']))
+        self.assertTrue(second.check_password(temp_passwords['second-new@example.com']))
+        self.assertNotEqual(temp_passwords['first-new@example.com'], temp_passwords['second-new@example.com'])
+        self.assertTrue(Membership.objects.filter(person=first, semester=self.semester).exists())
+        self.assertTrue(Membership.objects.filter(person=second, semester=self.semester).exists())
+
     def test_valid_save_reveals_the_temp_password_in_values(self):
         """Save's response carries the real, one-time temp password for each Person just created (issue #482)."""
         body = _valid_body(self.semester, invites=[
