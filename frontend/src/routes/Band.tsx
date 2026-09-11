@@ -7,6 +7,7 @@ import type {
   BandPayload,
   RosterEditPayload,
   RosterEntry,
+  RosterSaveValues,
 } from '../api/memberTypes'
 import type { PreviewResult } from '../api/previewTypes'
 import type { ReadEnvelope } from '../api/types'
@@ -30,14 +31,16 @@ import {
   type RosterEditRow,
   type RosterWriteEnvelope,
 } from './band/rosterEditModel'
+import { TempPasswordsPanel } from './band/TempPasswordsPanel'
 
 /**
  * `/members/` (issue #366): the viewing Semester's whole Roster as a
  * single filterable card grid, fed by one `GET /api/members/` round trip.
  * Renders nothing until that response arrives, mirroring `Setlist`/`Song`.
- * Every Membership shows regardless of invite state (issue #455) -- an
- * admin sees a "not yet invited"/"invited · not active yet" badge on a
- * not-yet-active row rather than that row being hidden outright.
+ * Every Membership shows regardless of credential state (issue #455) --
+ * an admin sees a "must change password" badge (issue #482, ADR 0018) on
+ * a row that hasn't replaced its admin-generated temp password yet,
+ * rather than that row being hidden outright.
  *
  * For an admin, "Edit roster" (issue #374, backed by #336's Roster edit
  * surface) flips this same page into a Pending-Buffer grid rather than
@@ -64,7 +67,9 @@ export function Band() {
   const [addSheetOpen, setAddSheetOpen] = useState(false)
   const [saveDialogOpen, setSaveDialogOpen] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
-  const [resentPersonIds, setResentPersonIds] = useState<Set<number>>(new Set())
+  const [revealedTempPasswords, setRevealedTempPasswords] = useState<
+    RosterSaveValues['temp_passwords']
+  >([])
   const [searchParams, setSearchParams] = useSearchParams()
   const handledIntentRef = useRef(false)
 
@@ -94,7 +99,6 @@ export function Band() {
       (envelope) => {
         setRows(rowsFromPayload(envelope.data.members))
         setRowErrors({})
-        setResentPersonIds(new Set())
         setIsEditing(true)
       },
     )
@@ -162,16 +166,6 @@ export function Band() {
     })
   }, [])
 
-  const resendInvite = useCallback((personId: number) => {
-    void apiFetch<RosterWriteEnvelope>(
-      `/api/members/roster/${personId}/resend-invite/`,
-      { method: 'POST', body: JSON.stringify({}) },
-    ).then((envelope) => {
-      if (!envelope.ok) return
-      setResentPersonIds((current) => new Set(current).add(personId))
-    })
-  }, [])
-
   const previewRoster = useCallback((): Promise<PreviewResult> => {
     if (viewingSemester === null) {
       return Promise.resolve({
@@ -226,6 +220,10 @@ export function Band() {
       setIsEditing(false)
       setRows([])
       setRowErrors({})
+      const values = envelope.values as RosterSaveValues | null
+      if (values !== null && values.temp_passwords.length > 0) {
+        setRevealedTempPasswords(values.temp_passwords)
+      }
       load()
     })
   }, [rows, viewingSemester, load])
@@ -326,8 +324,6 @@ export function Band() {
           rowErrors={rowErrors}
           onDelete={deleteRow}
           onUndoDelete={undoDelete}
-          onResendInvite={resendInvite}
-          resentPersonIds={resentPersonIds}
         />
       ) : data.semester_name === null ? (
         <p className="text-sm text-rs-muted">No Semester published yet.</p>
@@ -365,6 +361,11 @@ export function Band() {
           onConfirm={confirmSave}
         />
       )}
+
+      <TempPasswordsPanel
+        entries={revealedTempPasswords}
+        onDismiss={() => setRevealedTempPasswords([])}
+      />
     </div>
   )
 }
@@ -494,14 +495,9 @@ function BandGrid({
             <p className="line-clamp-2 pt-1 text-sm text-rs-muted">
               {member.roles.length > 0 ? member.roles.join(', ') : '—'}
             </p>
-            {isAdmin && member.invite_status === 'not_yet_invited' && (
+            {isAdmin && member.invite_status === 'must_change_password' && (
               <span className="mt-1 inline-block rounded-full border border-dashed border-rs-border px-2 py-0.5 text-xs text-rs-muted">
-                not yet invited
-              </span>
-            )}
-            {isAdmin && member.invite_status === 'invited' && (
-              <span className="mt-1 inline-block rounded-full border border-dashed border-rs-border px-2 py-0.5 text-xs text-rs-muted">
-                invited · not active yet
+                must change password
               </span>
             )}
           </Link>

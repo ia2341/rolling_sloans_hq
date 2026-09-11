@@ -994,16 +994,16 @@ def _serialize_role(role) -> dict:
 
 
 def _serialize_roster_edit_member(membership, *, mismatched_person_ids: frozenset[int]) -> dict:
-    """Return one Roster editor row: name, Song count, mismatch flag and invite status (issue #336, narrowed by #379, tri-state by #397).
+    """Return one Roster editor row: name, Song count, mismatch flag and credential status (issue #336, narrowed by #379, two-state by #482).
 
     No `email` (ADR 0005 — it stays off every Roster surface but the
     removal lines in the Save popup). No Role data at all (issue #379):
     the Roster editor is add/remove-only now, and a Person's declared
     Roles are set only on their Person page (#378). `is_role_mismatch` is
-    the ADR 0002 soft flag, never a block; `invite_status` (issue #397) is
-    `identity.services.invite_status_for()`'s three-way read, letting the
-    editor show "not yet invited" / "invited · not active yet" and offer
-    the right action for each without a second query per row.
+    the ADR 0002 soft flag, never a block; `invite_status` (issue #482,
+    ADR 0018) is `identity.services.invite_status_for()`'s two-state read,
+    letting the editor show a "must change password" badge without a
+    second query per row.
     """
     return {
         'id': membership.person_id,
@@ -1025,7 +1025,7 @@ def serialize_roster_edit(semester, memberships, *, mismatched_person_ids: froze
     Role-editing control, so there is no Role catalog for it to pick from.
     """
     entries = list(memberships)
-    active_count = sum(1 for membership in entries if membership.person.has_usable_password())
+    active_count = sum(1 for membership in entries if not membership.person.must_change_password)
     return {
         'semester_id': semester.pk,
         'semester_updated_at': semester.updated_at.isoformat(),
@@ -1059,8 +1059,7 @@ def serialize_roster_edit_fallout(fallout: RosterEditFallout) -> dict:
         'block_message': fallout.block_message,
         'is_stale': fallout.is_stale,
         'pending_adds': list(fallout.pending_adds),
-        'pending_invites': list(fallout.pending_invites),
-        'pending_added_without_invite': list(fallout.pending_added_without_invite),
+        'pending_created': list(fallout.pending_created),
         'pending_removals': [_serialize_roster_removal(removal) for removal in fallout.pending_removals],
         'loud': list(fallout.loud),
         'quiet': list(fallout.quiet),
@@ -1201,10 +1200,12 @@ def serialize_person(person, *, semester, is_self: bool, can_edit_roles: bool, m
     anywhere, for any viewer, including an admin (ADR 0005, ADR 0007, ADR
     0002) — the boundary is drawn around this surface, not the viewer.
 
-    `invite_status` (issue #397) is present only for an admin viewing a
-    teammate, never for `is_self` (a session implies a usable password, so
-    it's always `'accepted'` with nothing useful to show or do) and never
-    for a non-admin teammate viewer, per this same "absent, not null" rule.
+    `invite_status` (issue #397, two-state since issue #482/ADR 0018) is
+    present only for an admin viewing a teammate, never for `is_self` (a
+    session implies `'active'`, since `must_change_password` gates access
+    before this page ever renders — nothing useful to show or do) and
+    never for a non-admin teammate viewer, per this same "absent, not
+    null" rule.
 
     `is_admin` (issue #467, reversing `docs/person-page-visibility.md`'s
     old "never" verdict) is present under that identical condition —

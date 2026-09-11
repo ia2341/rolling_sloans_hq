@@ -217,37 +217,27 @@ class SerializePersonExactKeySetTests(TestCase):
             )['is_active'],
         )
 
-    def test_invite_status_reflects_the_persons_lifecycle(self):
-        """`invite_status` (admin-viewing-a-teammate only) reads the Person's actual lifecycle state (#397)."""
-        from identity.services import add_person, invite_person
-
+    def test_invite_status_reflects_the_persons_must_change_password_flag(self):
+        """`invite_status` (admin-viewing-a-teammate only) reads `must_change_password` directly (#482, ADR 0018)."""
         semester = SemesterFactory()
-        not_yet_invited = add_person(name='Not Yet Invited Placeholder', email='not-yet-invited@example.com')
-        invited = invite_person(name='Invited Placeholder', email='invited-placeholder@example.com')
-        accepted = PersonFactory(name='Accepted Placeholder', password='a-strong-test-password-123')
-        for person in (not_yet_invited, invited, accepted):
+        must_change = PersonFactory(name='Must Change Placeholder', must_change_password=True)
+        active = PersonFactory(name='Active Placeholder', password='a-strong-test-password-123')
+        for person in (must_change, active):
             MembershipFactory(person=person, semester=semester)
 
         self.assertEqual(
             serialize_person(
-                not_yet_invited, semester=semester, is_self=False, can_edit_roles=True,
-                membership=Membership.objects.get(person=not_yet_invited),
+                must_change, semester=semester, is_self=False, can_edit_roles=True,
+                membership=Membership.objects.get(person=must_change),
             )['invite_status'],
-            'not_yet_invited',
+            'must_change_password',
         )
         self.assertEqual(
             serialize_person(
-                invited, semester=semester, is_self=False, can_edit_roles=True,
-                membership=Membership.objects.get(person=invited),
+                active, semester=semester, is_self=False, can_edit_roles=True,
+                membership=Membership.objects.get(person=active),
             )['invite_status'],
-            'invited',
-        )
-        self.assertEqual(
-            serialize_person(
-                accepted, semester=semester, is_self=False, can_edit_roles=True,
-                membership=Membership.objects.get(person=accepted),
-            )['invite_status'],
-            'accepted',
+            'active',
         )
 
     def test_role_entry_keys(self):
@@ -422,17 +412,17 @@ class BandApiViewTests(TestCase):
         self.assertNotIn('invite_status', row)
 
     def test_invite_status_is_present_for_an_admin_viewer(self):
-        """An admin viewer's row for a not-yet-invited Person carries `invite_status: 'not_yet_invited'` (issue #455)."""
+        """An admin viewer's row for a must-change-password Person carries `invite_status: 'must_change_password'` (issue #455, #482)."""
         semester = SemesterFactory()
-        not_yet_active = PersonFactory(name='Not Yet Active Placeholder')
-        MembershipFactory(person=not_yet_active, semester=semester)
+        must_change = PersonFactory(name='Must Change Placeholder', must_change_password=True)
+        MembershipFactory(person=must_change, semester=semester)
         admin_client(self)
         select(self, semester)
 
         response = self.client.get(band_api_url())
 
         row = response.json()['data']['members'][0]
-        self.assertEqual(row['invite_status'], 'not_yet_invited')
+        self.assertEqual(row['invite_status'], 'must_change_password')
 
     def test_members_ordered_by_name(self):
         """The roster is ordered by the Person's name."""

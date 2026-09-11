@@ -6,29 +6,28 @@ interface RosterEditGridProps {
   rowErrors: Record<string, Record<string, string[]>>
   onDelete: (rowKey: string) => void
   onUndoDelete: (rowKey: string) => void
-  onResendInvite: (personId: number) => void
-  resentPersonIds: ReadonlySet<number>
 }
 
 /**
  * The Roster editor's grid (issue #374, narrowed to add/remove-only by
- * #379, and to a compact read-only card by #407): the Pending Buffer and
- * nothing else -- a struck-through row and an `Add`/`Invite` badge are
- * the edits themselves, mirroring `SetlistEditGrid`'s shape but with no
- * ordering (the Roster has no position to reorder). No name-edit
- * affordance of any kind -- an existing Person's name is set only on
- * their own Person page, and a not-yet-saved invite's name is fixed by
- * removing and re-adding the row through the Add-people popup. No
- * Role-editing control of any kind -- a Person's declared Roles are set
- * only on their Person page (#378).
+ * #379, to a compact read-only card by #407, and dropping the legacy
+ * Invite/resend-invite control by #482): the Pending Buffer and nothing
+ * else -- a struck-through row and an `Add` badge are the edits
+ * themselves, mirroring `SetlistEditGrid`'s shape but with no ordering
+ * (the Roster has no position to reorder). No name-edit affordance of any
+ * kind -- an existing Person's name is set only on their own Person page,
+ * and a not-yet-saved row's name is fixed by removing and re-adding it
+ * through the Add-people popup. No Role-editing control of any kind -- a
+ * Person's declared Roles are set only on their Person page (#378). No
+ * Invite control (issue #482, ADR 0018): every row here already has a
+ * real, usable password from the moment it's created, so there is nothing
+ * left to (re-)send.
  */
 export function RosterEditGrid({
   rows,
   rowErrors,
   onDelete,
   onUndoDelete,
-  onResendInvite,
-  resentPersonIds,
 }: RosterEditGridProps) {
   if (rows.length === 0) {
     return (
@@ -69,14 +68,9 @@ export function RosterEditGrid({
 
             <div className="flex flex-wrap items-center gap-1">
               {row.isRoleMismatch && <RoleMismatchBadge />}
-              {row.inviteStatus === 'not_yet_invited' && (
+              {row.inviteStatus === 'must_change_password' && (
                 <span className="rounded-full border border-dashed border-rs-border px-2 py-0.5 text-xs text-rs-muted">
-                  not yet invited
-                </span>
-              )}
-              {row.inviteStatus === 'invited' && (
-                <span className="rounded-full border border-dashed border-rs-border px-2 py-0.5 text-xs text-rs-muted">
-                  invited · not active yet
+                  must change password
                 </span>
               )}
               {badges.map((badge) => (
@@ -96,22 +90,6 @@ export function RosterEditGrid({
             )}
 
             <div className="flex flex-wrap gap-2">
-              {!row.deleted &&
-                row.inviteStatus !== 'accepted' &&
-                row.personId !== null && (
-                  <button
-                    type="button"
-                    onClick={() => onResendInvite(row.personId as number)}
-                    disabled={resentPersonIds.has(row.personId)}
-                    className="rounded border border-rs-border px-2 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {resentPersonIds.has(row.personId)
-                      ? 'Invite sent'
-                      : row.inviteStatus === 'not_yet_invited'
-                        ? 'Invite'
-                        : 'Invite again'}
-                  </button>
-                )}
               {row.deleted ? (
                 <button
                   type="button"

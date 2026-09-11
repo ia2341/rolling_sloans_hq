@@ -180,15 +180,6 @@ function DetailsSection({
         )}
       </dl>
       {data.is_self && <ChangePasswordRow />}
-      {data.invite_status !== undefined &&
-        data.invite_status !== 'accepted' &&
-        data.is_active !== false && (
-          <InviteRow
-            personId={data.id}
-            inviteStatus={data.invite_status}
-            onDataChange={onDataChange}
-          />
-        )}
       {data.is_admin !== undefined && (
         <AdminStatusRow
           personId={data.id}
@@ -203,66 +194,6 @@ function DetailsSection({
           footprint={data.future_scheduling_footprint ?? null}
           onDataChange={onDataChange}
         />
-      )}
-    </div>
-  )
-}
-
-/**
- * The admin-only Invite action (issue #397): renders for a teammate whose
- * `invite_status` isn't `'accepted'` yet — "Invite" for `'not_yet_invited'`,
- * "Invite again" for `'invited'`. Calls the same
- * `RosterResendInviteApiView` the Roster editor's "Invite again" control
- * calls, mounted here at `/api/members/<pk>/invite/`, and surfaces its
- * refusal (already has a password, deactivated, or the send itself failed)
- * inline via `non_field_errors` rather than silently resetting the button,
- * matching `AdminStatusRow`'s error handling on this same page.
- */
-function InviteRow({
-  personId,
-  inviteStatus,
-  onDataChange,
-}: {
-  personId: number
-  inviteStatus: Exclude<PersonPayload['invite_status'], 'accepted' | undefined>
-  onDataChange: (next: PersonPayload) => void
-}) {
-  const [status, setStatus] = useState<'idle' | 'sending' | 'sent'>('idle')
-  const [error, setError] = useState<string | null>(null)
-
-  /** Sends (or re-sends) the invite and refreshes the page with the server's fresh Person payload, or surfaces the guard's refusal message inline. */
-  async function handleInvite() {
-    setStatus('sending')
-    setError(null)
-    const envelope = await apiFetch<WriteEnvelope<PersonPayload>>(
-      `/api/members/${personId}/invite/`,
-      { method: 'POST' },
-    )
-    if (envelope.ok && envelope.data !== null) {
-      onDataChange(envelope.data)
-      setStatus('sent')
-    } else {
-      setStatus('idle')
-      setError(envelope.non_field_errors[0] ?? 'Could not send the invite.')
-    }
-  }
-
-  return (
-    <div className="mt-3 flex flex-col gap-1">
-      <button
-        type="button"
-        onClick={() => void handleInvite()}
-        disabled={status !== 'idle'}
-        className="w-fit rounded border border-rs-border px-3 py-1.5 text-sm font-medium text-rs-accent disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        {status === 'sent'
-          ? 'Invite sent'
-          : inviteStatus === 'not_yet_invited'
-            ? 'Invite'
-            : 'Invite again'}
-      </button>
-      {error !== null && (
-        <span className="text-sm text-rs-danger">{error}</span>
       )}
     </div>
   )

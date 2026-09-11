@@ -23,14 +23,14 @@ function rosterEditPayload(overrides: Record<string, unknown> = {}) {
         name: 'Sam Rivera',
         song_count: 3,
         is_role_mismatch: false,
-        invite_status: 'accepted',
+        invite_status: 'active',
       },
       {
         id: 2,
         name: 'Alex Kim',
         song_count: 0,
         is_role_mismatch: false,
-        invite_status: 'invited',
+        invite_status: 'must_change_password',
       },
     ],
     ...overrides,
@@ -347,7 +347,7 @@ describe('Band', () => {
     ).not.toBeInTheDocument()
   })
 
-  it('shows a not-yet-invited badge on a member card for an admin viewer (issue #455)', async () => {
+  it('shows a must-change-password badge on a member card for an admin viewer (issue #482)', async () => {
     mockFetchOnce(200, {
       context: adminContext(),
       data: bandPayload({
@@ -357,7 +357,7 @@ describe('Band', () => {
             name: 'Sam Rivera',
             roles: ['Lead Vocals'],
             song_count: 0,
-            invite_status: 'not_yet_invited',
+            invite_status: 'must_change_password',
           },
         ],
         member_count: 1,
@@ -366,7 +366,7 @@ describe('Band', () => {
 
     renderShell(<Band />, ['/members'])
 
-    expect(await screen.findByText('not yet invited')).toBeInTheDocument()
+    expect(await screen.findByText('must change password')).toBeInTheDocument()
   })
 
   it('never shows an invite-status badge for a non-admin viewer', async () => {
@@ -484,7 +484,7 @@ describe('Band roster editor', () => {
     ).toBeInTheDocument()
     expect(screen.getByText('Sam Rivera')).toBeInTheDocument()
     expect(screen.getByText('Alex Kim')).toBeInTheDocument()
-    expect(screen.getByText('invited · not active yet')).toBeInTheDocument()
+    expect(screen.getByText('must change password')).toBeInTheDocument()
     expect(screen.getByText('3 songs')).toBeInTheDocument()
   })
 
@@ -564,32 +564,6 @@ describe('Band roster editor', () => {
     await screen.findByText('Sam Rivera')
 
     expect(screen.queryAllByRole('textbox')).toHaveLength(0)
-  })
-
-  it('removing a pending-invite row hides its Invite again control', async () => {
-    stubFetchSequence([
-      { status: 200, body: { context: adminContext(), data: bandPayload() } },
-      {
-        status: 200,
-        body: { context: adminContext(), data: rosterEditPayload() },
-      },
-    ])
-    const user = userEvent.setup()
-
-    renderShell(<Band />, ['/members'])
-    await user.click(await screen.findByRole('button', { name: 'Edit roster' }))
-    await screen.findByText('Alex Kim')
-
-    expect(
-      screen.getByRole('button', { name: 'Invite again' }),
-    ).toBeInTheDocument()
-
-    const removeButtons = screen.getAllByRole('button', { name: 'Remove' })
-    await user.click(removeButtons[1] as HTMLElement) // Alex Kim's row
-
-    expect(
-      screen.queryByRole('button', { name: 'Invite again' }),
-    ).not.toBeInTheDocument()
   })
 
   it('removing an existing member strikes the row through, and Undo restores it with no changes left', async () => {
@@ -734,43 +708,18 @@ describe('Band roster editor', () => {
 
     await user.click(screen.getByRole('button', { name: '+ Add people' }))
     await screen.findByText('Jamie Ortiz', { exact: false })
-    await user.click(screen.getByRole('radio', { name: 'Invite new member' }))
+    await user.click(screen.getByRole('radio', { name: 'New member' }))
     await user.type(screen.getByLabelText('Name'), 'Taylor Nguyen')
     await user.type(screen.getByLabelText('Email'), 'taylor@example.com')
     await user.click(screen.getByRole('button', { name: 'Add to the buffer' }))
 
-    expect(await screen.findByText('Taylor Nguyen')).toBeInTheDocument()
-  })
-
-  it('unchecking "Send the invite email now" stages an Add row instead of an Invite row (#397)', async () => {
-    stubFetchSequence([
-      { status: 200, body: { context: adminContext(), data: bandPayload() } },
-      {
-        status: 200,
-        body: { context: adminContext(), data: rosterEditPayload() },
-      },
-      {
-        status: 200,
-        body: { context: adminContext(), data: rosterCandidatesPayload() },
-      },
-    ])
-    const user = userEvent.setup()
-
-    renderShell(<Band />, ['/members'])
-    await user.click(await screen.findByRole('button', { name: 'Edit roster' }))
-    await screen.findByText('Sam Rivera')
-
-    await user.click(screen.getByRole('button', { name: '+ Add people' }))
-    await screen.findByText('Jamie Ortiz', { exact: false })
-    await user.click(screen.getByRole('radio', { name: 'Invite new member' }))
-    await user.type(screen.getByLabelText('Name'), 'Jordan Reyes')
-    await user.type(screen.getByLabelText('Email'), 'jordan@example.com')
-    await user.click(screen.getByLabelText('Send the invite email now'))
-    await user.click(screen.getByRole('button', { name: 'Add to the buffer' }))
-
-    expect(await screen.findByText('Jordan Reyes')).toBeInTheDocument()
-    expect(screen.getByText('not yet invited')).toBeInTheDocument()
-    expect(screen.getByText('Add')).toBeInTheDocument()
+    const newCard = (await screen.findByText('Taylor Nguyen')).closest(
+      'li',
+    ) as HTMLElement
+    expect(
+      within(newCard).getByText('must change password'),
+    ).toBeInTheDocument()
+    expect(within(newCard).getByText('Add')).toBeInTheDocument()
   })
 
   it('opening the Save popup calls preview exactly once and renders its changes', async () => {
@@ -792,8 +741,7 @@ describe('Band roster editor', () => {
             block_message: '',
             is_stale: false,
             pending_adds: [],
-            pending_invites: [],
-            pending_added_without_invite: [],
+            pending_created: [],
             pending_removals: [
               { person_id: 1, name: 'Sam Rivera', email: 'sam@example.com' },
             ],
@@ -852,8 +800,7 @@ describe('Band roster editor', () => {
             block_message: '',
             is_stale: false,
             pending_adds: [],
-            pending_invites: [],
-            pending_added_without_invite: [],
+            pending_created: [],
             pending_removals: [
               { person_id: 1, name: 'Sam Rivera', email: 'sam@example.com' },
             ],
@@ -909,5 +856,85 @@ describe('Band roster editor', () => {
     expect(screen.queryByText('What changes')).not.toBeInTheDocument()
     // Still editing -- a rejected save must not clear the buffer.
     expect(screen.getByRole('button', { name: 'Undo' })).toBeInTheDocument()
+  })
+
+  it('a successful save with a newly created Person reveals their temp password (issue #482)', async () => {
+    stubFetchSequence([
+      { status: 200, body: { context: adminContext(), data: bandPayload() } },
+      {
+        status: 200,
+        body: { context: adminContext(), data: rosterEditPayload() },
+      },
+      {
+        status: 200,
+        body: { context: adminContext(), data: rosterCandidatesPayload() },
+      },
+      {
+        status: 200,
+        body: {
+          context: adminContext(),
+          ok: true,
+          errors: {},
+          non_field_errors: [],
+          fallout: {
+            is_blocked: false,
+            block_message: '',
+            is_stale: false,
+            pending_adds: [],
+            pending_created: ['Taylor Nguyen'],
+            pending_removals: [],
+            loud: [],
+            quiet: [],
+          },
+          values: null,
+          data: null,
+        },
+      },
+      {
+        status: 200,
+        body: {
+          context: adminContext(),
+          ok: true,
+          errors: {},
+          non_field_errors: [],
+          fallout: null,
+          values: {
+            temp_passwords: [
+              { email: 'taylor@example.com', temp_password: 'aB3dEfGhJkMn' },
+            ],
+          },
+          data: null,
+        },
+      },
+      { status: 200, body: { context: adminContext(), data: bandPayload() } },
+    ])
+    const user = userEvent.setup()
+
+    renderShell(
+      <>
+        <Band />
+        <EditSessionSpy />
+      </>,
+      ['/members'],
+    )
+    await user.click(await screen.findByRole('button', { name: 'Edit roster' }))
+    await screen.findByText('Sam Rivera')
+
+    await user.click(screen.getByRole('button', { name: '+ Add people' }))
+    await screen.findByText('Jamie Ortiz', { exact: false })
+    await user.click(screen.getByRole('radio', { name: 'New member' }))
+    await user.type(screen.getByLabelText('Name'), 'Taylor Nguyen')
+    await user.type(screen.getByLabelText('Email'), 'taylor@example.com')
+    await user.click(screen.getByRole('button', { name: 'Add to the buffer' }))
+    await screen.findByText('Taylor Nguyen')
+
+    await user.click(screen.getByRole('button', { name: 'toolbar save' }))
+    await waitFor(() =>
+      expect(screen.getByText('What changes')).toBeInTheDocument(),
+    )
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    expect(await screen.findByText('taylor@example.com')).toBeInTheDocument()
+    expect(screen.getByText('aB3dEfGhJkMn')).toBeInTheDocument()
   })
 })

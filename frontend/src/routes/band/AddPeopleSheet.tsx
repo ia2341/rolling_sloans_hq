@@ -29,14 +29,15 @@ interface AddPeopleSheetProps {
  * phone via `ResponsiveDialog`, its three sources are sections behind a
  * `SegmentedControl` rather than three stacked forms -- import from the
  * prior Semester's roster, add an already-active but unrostered member, or
- * invite someone brand new -- and (issue #397) a checkbox in that third
- * section to stage them `'not_yet_invited'` instead, with no invite email
- * sent. All three sources land in the same Pending Buffer via `onAddRows`,
- * so invite-as-part-of-the-edit and import-from-prior-semester fold into
+ * create someone brand new. Creating a new member always generates a temp
+ * password on Save (issue #482, ADR 0018) -- there is no more "send the
+ * invite email now" choice, since there is no invite email left to send.
+ * All three sources land in the same Pending Buffer via `onAddRows`, so
+ * creating-as-part-of-the-edit and import-from-prior-semester fold into
  * one edit session per the issue's requirement. Nothing here writes
- * anything -- ticked candidates and a typed invite both become ordinary
- * Buffer rows only once "Add to the buffer" is pressed; the real write is
- * still the toolbar's Save changes -> the shared Save popup.
+ * anything -- ticked candidates and a typed new member both become
+ * ordinary Buffer rows only once "Add to the buffer" is pressed; the real
+ * write is still the toolbar's Save changes -> the shared Save popup.
  */
 export function AddPeopleSheet({
   open,
@@ -54,7 +55,6 @@ export function AddPeopleSheet({
 
   const [inviteName, setInviteName] = useState('')
   const [inviteEmail, setInviteEmail] = useState('')
-  const [inviteSendNow, setInviteSendNow] = useState(true)
 
   function resetAndClose() {
     setSource('import')
@@ -65,7 +65,6 @@ export function AddPeopleSheet({
     setExistingTicked(new Set())
     setInviteName('')
     setInviteEmail('')
-    setInviteSendNow(true)
     onOpenChange(false)
   }
 
@@ -130,9 +129,7 @@ export function AddPeopleSheet({
       })
     } else if (source === 'invite') {
       if (inviteName.trim() && EMAIL_PATTERN.test(inviteEmail.trim())) {
-        rows.push(
-          newInviteRow(inviteName.trim(), inviteEmail.trim(), inviteSendNow),
-        )
+        rows.push(newInviteRow(inviteName.trim(), inviteEmail.trim()))
       }
     }
     if (rows.length > 0) onAddRows(rows)
@@ -185,7 +182,7 @@ export function AddPeopleSheet({
                 : 'Import from a prior semester',
           },
           { value: 'existing', label: 'Add existing member' },
-          { value: 'invite', label: 'Invite new member' },
+          { value: 'invite', label: 'New member' },
         ]}
         value={source}
         onChange={(next) => setSource(next as Source)}
@@ -290,18 +287,10 @@ export function AddPeopleSheet({
               className="mt-1 block w-full rounded border border-rs-border px-2 py-1 text-sm"
             />
           </div>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={inviteSendNow}
-              onChange={(event) => setInviteSendNow(event.target.checked)}
-            />
-            Send the invite email now
-          </label>
           <p className="text-xs text-rs-muted">
-            {inviteSendNow
-              ? "They can declare their Roles on their own Person page once they've signed in."
-              : "They'll be added with no invite sent — invite them later from their Person page or the Roster."}
+            A temp password is generated when you save — relay it to them
+            verbally or by text. They can declare their Roles on their own
+            Person page once they've signed in.
           </p>
         </div>
       )}

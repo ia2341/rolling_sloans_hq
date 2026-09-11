@@ -15,9 +15,11 @@ from faker import Faker
 from identity.factories import PersonFactory
 from identity.models import Person
 from identity.services import (
+    TEMP_PASSWORD_ALPHABET,
     AlreadyHasPasswordError,
     EmailDeliveryError,
     add_person,
+    create_person_with_temp_password,
     invite_person,
     invite_status_for,
     resend_invite,
@@ -110,30 +112,64 @@ class AddPersonTests(TestCase):
 
 
 class InviteStatusForTests(TestCase):
-    """`invite_status_for()`: the three-way lifecycle status (issue #397)."""
+    """`invite_status_for()`: the two-state credential lifecycle status (issue #482, ADR 0018)."""
 
-    def test_not_yet_invited_for_a_person_never_invited(self):
-        person = add_person(**invite_args())
+    def test_must_change_password_for_a_person_with_the_flag_set(self):
+        person = PersonFactory(must_change_password=True)
 
-        self.assertEqual(invite_status_for(person), 'not_yet_invited')
+        self.assertEqual(invite_status_for(person), 'must_change_password')
 
-    def test_invited_for_a_person_with_a_sent_invite_and_no_password(self):
+    def test_active_for_a_person_with_the_flag_clear(self):
+        person = PersonFactory(must_change_password=False)
+
+        self.assertEqual(invite_status_for(person), 'active')
+
+    def test_active_for_a_legacy_invited_person_ignoring_password_usability(self):
+        """The legacy `has_usable_password()`/`invited_at` signals no longer factor in at all — only `must_change_password` does."""
         person = invite_person(**invite_args())
 
-        self.assertEqual(invite_status_for(person), 'invited')
+        self.assertEqual(invite_status_for(person), 'active')
 
-    def test_accepted_for_a_person_with_a_usable_password(self):
-        person = PersonFactory(password='a-strong-password-123')
 
-        self.assertEqual(invite_status_for(person), 'accepted')
+class CreatePersonWithTempPasswordTests(TestCase):
+    """`create_person_with_temp_password()`: the one creation path (issue #482, ADR 0018)."""
 
-    def test_accepted_takes_precedence_over_a_stale_invited_at(self):
-        """A Person who set a password after being invited reads 'accepted', not 'invited'."""
-        person = invite_person(**invite_args())
-        person.set_password('a-strong-password-123')
-        person.save(update_fields=['password'])
+    def test_creates_a_person_with_a_real_usable_password(self):
+        """The returned Person can sign in immediately -- no unusable password, no separate accept step."""
+        args = invite_args()
 
-        self.assertEqual(invite_status_for(person), 'accepted')
+        person, temp_password = create_person_with_temp_password(**args)
+
+        self.assertTrue(person.has_usable_password())
+        self.assertTrue(person.check_password(temp_password))
+        self.assertEqual(Person.objects.get(pk=person.pk).email, args['email'])
+
+    def test_sets_must_change_password(self):
+        person, _ = create_person_with_temp_password(**invite_args())
+
+        self.assertTrue(person.must_change_password)
+        self.assertTrue(Person.objects.get(pk=person.pk).must_change_password)
+
+    def test_sends_no_mail(self):
+        create_person_with_temp_password(**invite_args())
+
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_temp_password_avoids_visually_ambiguous_characters(self):
+        """ADR 0018: the generated password is read aloud or typed from a text, so it drops 0/O, 1/l/I."""
+        _, temp_password = create_person_with_temp_password(**invite_args())
+
+        self.assertEqual(len(temp_password), 12)
+        self.assertTrue(set(temp_password) <= set(TEMP_PASSWORD_ALPHABET))
+        for ambiguous in '0O1lI':
+            self.assertNotIn(ambiguous, temp_password)
+
+    def test_two_calls_generate_different_passwords(self):
+        """Not a fixed or reused string -- each call mints a fresh plaintext."""
+        _, first = create_person_with_temp_password(**invite_args())
+        _, second = create_person_with_temp_password(**invite_args())
+
+        self.assertNotEqual(first, second)
 
 
 @override_settings(EMAIL_BACKEND='django.core.mail.backends.console.EmailBackend')

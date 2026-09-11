@@ -648,9 +648,15 @@ class RosterPreviewApiView(AdminPreviewApiView):
         `preview_roster_edits()` is ever called, so that endpoint's
         `is_blocked` Fallout shape never has to double as this endpoint's
         4xx contract. `preview_roster_edits()` runs `apply_roster_edits()`
-        for real, including creating and mailing any staged invite via
-        `transaction.on_commit()` — the rollback `PreviewMixin.post()`
-        performs discards both for free (ADR 0008).
+        for real, including really creating any staged new Person with a
+        real temp password (issue #482, ADR 0018) — the rollback
+        `PreviewMixin.post()` performs discards the Person row and the
+        temp password with it (ADR 0008). This `values` echo never carries
+        a temp password: it's `serialize_roster_edit_buffer()`'s echo of
+        the *submitted* Buffer, which never had one to begin with — the
+        real plaintext exists only inside `preview_roster_edits()`'s own
+        call, and that function deliberately discards it rather than
+        returning it here.
         """
         viewing_semester = services.get_viewing_semester(request)
         try:
@@ -677,7 +683,7 @@ class RosterPreviewApiView(AdminPreviewApiView):
 
 
 class RosterSaveApiView(AdminApiView, View):
-    """`POST /api/members/roster/save/`: the Roster edit surface's Save — the real, committing write (issue #336)."""
+    """`POST /api/members/roster/save/`: the Roster edit surface's Save — the real, committing write (issue #336, #482)."""
 
     def post(self, request):
         """Build the Roster edit Buffer from the JSON body and apply it, or report why it couldn't be applied.
@@ -689,8 +695,18 @@ class RosterSaveApiView(AdminApiView, View):
         are reported as `ok: false` with a `non_field_errors` message — a
         blocking Validation Error, never a hard 4xx, since a hand-crafted
         self-removal must be *refused*, not merely 403'd (issue #336 user
-        story 15). `values` is omitted on every response here, per #326's
-        rule that a write response doesn't echo the Buffer back.
+        story 15).
+
+        `values` is a deliberate, one-off exception to #326's rule that a
+        write response never echoes anything back: on a successful Save it
+        carries `temp_passwords` — one `{email, temp_password}` entry per
+        Person `apply_roster_edits()` just created (issue #482, ADR 0018),
+        the *only* place this project ever reveals a real, usable temp
+        password. There is no other channel to hand it to the admin: the
+        plaintext exists only in memory for the duration of this request,
+        so it must ride this response or be lost. Every other Save
+        response (a validation failure, a blocked or stale Buffer) keeps
+        `values: None`, matching every other write endpoint.
         """
         viewing_semester = services.get_viewing_semester(request)
         try:
@@ -707,13 +723,20 @@ class RosterSaveApiView(AdminApiView, View):
             )
 
         try:
-            services.apply_roster_edits(buffer, viewing_semester=viewing_semester, requesting_admin=request.user)
+            created_people = services.apply_roster_edits(
+                buffer, viewing_semester=viewing_semester, requesting_admin=request.user,
+            )
         except WrongViewingSemesterError as error:
             return _wrong_roster_semester_response(str(error))
         except (SelfRemovalError, StaleRosterSemesterError) as error:
             return self.write_response(request, ok=False, non_field_errors=[str(error)], fallout=None, values=None)
 
-        return self.write_response(request, ok=True, values=None)
+        values = {
+            'temp_passwords': [
+                {'email': created.email, 'temp_password': created.temp_password} for created in created_people
+            ],
+        }
+        return self.write_response(request, ok=True, values=values)
 
 
 class PersonApiView(ApiView, View):
