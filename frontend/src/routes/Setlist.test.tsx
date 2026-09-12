@@ -1131,7 +1131,7 @@ describe('Setlist inline cast popover (issue #499, ADR 0019)', () => {
     expect(fetchSpy.mock.calls.length).toBe(2) // no preview/save call was ever made
   })
 
-  it("clicking the popover footer's Save changes commits the edit directly, with no intermediate confirm popup", async () => {
+  it("clicking the popover footer's Save changes previews silently and, with no loud warning, commits directly with no intermediate confirm popup", async () => {
     const fetchSpy = vi
       .fn()
       .mockResolvedValueOnce({
@@ -1177,6 +1177,20 @@ describe('Setlist inline cast popover (issue #499, ADR 0019)', () => {
         status: 200,
         ok: true,
         json: () =>
+          Promise.resolve({
+            context: adminContext(),
+            ok: true,
+            errors: {},
+            non_field_errors: [],
+            fallout: null,
+            values: null,
+            data: null,
+          }),
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        json: () =>
           Promise.resolve({ context: adminContext(), data: setlistPayload() }),
       })
     vi.stubGlobal('fetch', fetchSpy)
@@ -1199,14 +1213,173 @@ describe('Setlist inline cast popover (issue #499, ADR 0019)', () => {
     await user.click(screen.getByRole('button', { name: 'Save changes' }))
 
     await waitFor(() =>
-      expect(fetchSpy.mock.calls[2]?.[0]).toBe('/api/songs/1/cast/save/'),
+      expect(fetchSpy.mock.calls[2]?.[0]).toBe('/api/songs/1/cast/preview/'),
     )
-    // No second confirm popup, and no separate preview round trip -- Save commits and closes.
-    expect(fetchSpy.mock.calls.length).toBe(4)
+    await waitFor(() =>
+      expect(fetchSpy.mock.calls[3]?.[0]).toBe('/api/songs/1/cast/save/'),
+    )
+    // No second confirm popup rendered anywhere along the way.
+    expect(fetchSpy.mock.calls.length).toBe(5)
     await waitFor(() =>
       expect(
         screen.queryByRole('heading', { name: 'Singer — Test Song' }),
       ).not.toBeInTheDocument(),
     )
+  })
+
+  it('a loud ADR-0019 availability warning from the Preview pauses Save inline (issue #506 review) until "Save anyway" is clicked', async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        json: () =>
+          Promise.resolve({ context: adminContext(), data: setlistPayload() }),
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            context: adminContext(),
+            data: popoverSongPayload(),
+          }),
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            context: adminContext(),
+            ok: true,
+            errors: {},
+            non_field_errors: [],
+            fallout: {
+              is_blocked: false,
+              block_message: '',
+              is_stale: false,
+              pending_adds: [],
+              pending_removals: [
+                { role_name: 'Singer', person_name: 'Sam Rivera' },
+              ],
+              loud: ['Sam Rivera will miss Rehearsal on 2026-03-05.'],
+              quiet: [],
+            },
+            values: null,
+            data: null,
+          }),
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            context: adminContext(),
+            ok: true,
+            errors: {},
+            non_field_errors: [],
+            fallout: null,
+            values: null,
+            data: null,
+          }),
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        json: () =>
+          Promise.resolve({ context: adminContext(), data: setlistPayload() }),
+      })
+    vi.stubGlobal('fetch', fetchSpy)
+    const user = userEvent.setup()
+
+    renderShell(<Setlist />, ['/setlist'])
+    await screen.findByText('Test Song')
+    await user.click(
+      screen.getByRole('button', { name: 'Edit Singer on Test Song' }),
+    )
+    await waitFor(() =>
+      expect(
+        screen.getByRole('heading', { name: 'Singer — Test Song' }),
+      ).toBeInTheDocument(),
+    )
+    await user.click(
+      screen.getByRole('button', { name: 'Remove Sam Rivera from Singer' }),
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('Sam Rivera will miss Rehearsal on 2026-03-05.'),
+      ).toBeInTheDocument(),
+    )
+    // Still just the one dialog -- the warning renders inline, no second popup.
+    expect(
+      screen.getByRole('heading', { name: 'Singer — Test Song' }),
+    ).toBeInTheDocument()
+    expect(fetchSpy.mock.calls.length).toBe(3) // preview only -- no save call yet
+
+    await user.click(screen.getByRole('button', { name: 'Save anyway' }))
+
+    await waitFor(() =>
+      expect(fetchSpy.mock.calls[3]?.[0]).toBe('/api/songs/1/cast/save/'),
+    )
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('heading', { name: 'Singer — Test Song' }),
+      ).not.toBeInTheDocument(),
+    )
+  })
+
+  it('a failed Preview request (e.g. a dropped connection) surfaces an inline error instead of silently doing nothing', async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        json: () =>
+          Promise.resolve({ context: adminContext(), data: setlistPayload() }),
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            context: adminContext(),
+            data: popoverSongPayload(),
+          }),
+      })
+      .mockRejectedValueOnce(new Error('network error'))
+    vi.stubGlobal('fetch', fetchSpy)
+    const user = userEvent.setup()
+
+    renderShell(<Setlist />, ['/setlist'])
+    await screen.findByText('Test Song')
+    await user.click(
+      screen.getByRole('button', { name: 'Edit Singer on Test Song' }),
+    )
+    await waitFor(() =>
+      expect(
+        screen.getByRole('heading', { name: 'Singer — Test Song' }),
+      ).toBeInTheDocument(),
+    )
+    await user.click(
+      screen.getByRole('button', { name: 'Remove Sam Rivera from Singer' }),
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('Something went wrong saving this change. Try again.'),
+      ).toBeInTheDocument(),
+    )
+    // The popover stays open with the Buffer intact for a retry -- the
+    // staged removal is still there (rendered as "Undo", not the original
+    // Remove button, since it's still staged).
+    expect(
+      screen.getByRole('heading', { name: 'Singer — Test Song' }),
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeInTheDocument()
   })
 })

@@ -38,10 +38,16 @@ export interface CastGridColumnRow {
 
 /**
  * Whether at least one row needs `column` -- carries a Requirement for one
- * of its Role ids (issue #506), or, when an entry carries no
- * `has_requirement` at all (the Schedule's read-only matrix, which has no
- * per-(Song, Role) Requirement data of its own), falls back to "has a
- * performer" so that table's older column-hiding rule is unchanged.
+ * of its Role ids (issue #506), or has an actual performer cast in it
+ * regardless of `has_requirement`. The performer check is never a mere
+ * fallback for a missing `has_requirement`: a Requirement can be deleted
+ * without cascade-deleting the `SongRoleAssignment` rows it once gated
+ * (only creation is gated, per ADR 0015), so `has_requirement: false` with
+ * a non-empty `performers` list is a real, reachable state on the
+ * Setlist/Song read paths too -- and must never hide a standing cast
+ * assignment. On the Schedule's read-only matrix, which carries no
+ * `has_requirement` at all, this also reduces to the table's older
+ * "has a performer" column-hiding rule.
  */
 function columnHasRequirement(
   column: CastGridColumn,
@@ -50,7 +56,7 @@ function columnHasRequirement(
   return rows.some((row) =>
     row.cast.some((entry) => {
       if (!column.roleIds.includes(entry.role_id)) return false
-      return entry.has_requirement ?? entry.performers.length > 0
+      return (entry.has_requirement ?? false) || entry.performers.length > 0
     }),
   )
 }

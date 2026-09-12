@@ -184,6 +184,26 @@ describe('visibleCastGridColumns', () => {
     expect(visible.map((column) => column.label)).toEqual(['Drums'])
   })
 
+  it('keeps a column visible for a standing performer even when has_requirement is false (issue #506 review: Requirement deleted after casting)', () => {
+    const columns = buildCastGridColumns(roles)
+    const rows: CastGridColumnRow[] = [
+      {
+        cast: [
+          { role_id: 1, performers: [], has_requirement: false },
+          {
+            role_id: 2,
+            performers: [{ id: 1 }],
+            has_requirement: false,
+          },
+        ],
+      },
+    ]
+
+    const visible = visibleCastGridColumns(columns, rows)
+
+    expect(visible.map((column) => column.label)).toEqual(['Drums'])
+  })
+
   it('falls back to "has a performer" when an entry carries no has_requirement at all (the Schedule matrix)', () => {
     const columns = buildCastGridColumns(roles)
     const rows: CastGridColumnRow[] = [
