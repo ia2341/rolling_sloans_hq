@@ -4,6 +4,8 @@ export interface CastPerformer {
   id: number
   name: string
   is_role_mismatch: boolean
+  /** The underlying `SongRoleAssignment` row id -- what the Cast editor's ✕ stages into `removed_assignment_ids` (issue #499, ADR 0019). Absent on a Schedule `MatrixEntry` adaptation, which carries its own `id`. */
+  assignment_id?: number
   /** Absent on the Setlist's own cast (it has no notion of Backup) — present when adapted from a Schedule `MatrixEntry` (issue: UI overhaul round 2, shared cast grid). */
   kind?: 'assignment' | 'backup'
   has_conflict?: boolean
@@ -37,6 +39,8 @@ export interface SetlistSong {
   length: string
   position: number
   notes: string
+  /** The Song's own optimistic-concurrency stamp -- what the inline cast popover pins its `SongCastEditBuffer` to (ADR 0019). */
+  updated_at: string
   cast: CastEntry[]
   recording_count: number
 }
@@ -147,11 +151,6 @@ export interface RehearsedAtRow {
   end_time: string | null
 }
 
-export interface NextRehearsal {
-  id: number
-  date: string
-}
-
 /** One `RoleFillStatus` (issue #207, #339): a Role Requirement's target vs. actual headcount. */
 export interface RoleRequirement {
   role_id: number
@@ -168,7 +167,7 @@ export interface AddableRole {
   name: string
 }
 
-/** `data` shape of `GET /api/songs/<pk>/`. `next_rehearsal`/`available_roles` are absent entirely for a non-admin viewer. */
+/** `data` shape of `GET /api/songs/<pk>/`. `available_roles` is absent entirely for a non-admin viewer. */
 export interface SongPayload {
   id: number
   title: string
@@ -176,11 +175,12 @@ export interface SongPayload {
   length: string
   position: number
   notes: string
+  /** The Song's own optimistic-concurrency stamp, the Cast editor's staleness anchor (ADR 0019). */
+  updated_at: string
   cast: CastEntry[]
   role_requirements: RoleRequirement[]
   recording_groups: RecordingGroup[]
   rehearsed_at: RehearsedAtRow[]
-  next_rehearsal?: NextRehearsal | null
   available_roles?: AddableRole[]
 }
 
@@ -224,6 +224,67 @@ export interface SongRoleRequirementFalloutWire {
   pending_adds: SongRoleRequirementAdditionWire[]
   pending_edits: SongRoleRequirementCountChangeWire[]
   pending_removals: SongRoleRequirementRemovalWire[]
+  loud: string[]
+  quiet: string[]
+}
+
+/** One future Rehearsal a cast candidate can't make, as `serialize_song_cast_picker()` emits it (issue #499, ADR 0019). Admin-only: `reason` is ADR 0005 free text, served only by an `AdminApiView`. */
+export interface SongCastConflictEntryWire {
+  rehearsal_id: number
+  date: string
+  is_full_conflict: boolean
+  reason: string
+}
+
+/** One Song-level cast candidate, as `serialize_song_cast_picker()` emits it (issue #499). */
+export interface SongCastPickerOption {
+  person_id: number
+  person_name: string
+  has_declared_role: boolean
+  conflicts: SongCastConflictEntryWire[]
+}
+
+/** `data` shape of `GET /api/songs/<pk>/cast/picker/<role_id>/` -- its own shape, not the write envelope. */
+export interface SongCastPickerPayload {
+  song_id: number
+  song_title: string
+  role_id: number
+  role_name: string
+  declared: SongCastPickerOption[]
+  others: SongCastPickerOption[]
+}
+
+/** One `(role_id, person_id)` cast add, as `build_song_cast_buffer_from_request()` reads it. */
+export interface SongCastAddedEntryWire {
+  role_id: number
+  person_id: number
+}
+
+/** `/api/songs/<pk>/cast/{preview,save}/` request body (issue #499, mirroring `scheduling/services.py`'s `SongCastEditBuffer`).
+ *
+ * Carries no `semester_id`, unlike every other Buffer on the wire: this
+ * surface's Semester check is "does the URL's Song belong to the viewing
+ * Semester", answered server-side with a 404.
+ */
+export interface SongCastBufferWire {
+  song_updated_at: string
+  removed_assignment_ids: number[]
+  added_entries: SongCastAddedEntryWire[]
+}
+
+/** One pending add or removal line, as `serialize_song_cast_fallout()` emits it. */
+export interface SongCastChangeWire {
+  role_name: string
+  person_name: string
+}
+
+/** `SongCastFallout`, as `serialize_song_cast_fallout()` emits it -- the Cast Preview response's `fallout` value. */
+export interface SongCastFalloutWire {
+  is_blocked: boolean
+  block_message: string
+  is_stale: boolean
+  pending_adds: SongCastChangeWire[]
+  pending_removals: SongCastChangeWire[]
   loud: string[]
   quiet: string[]
 }

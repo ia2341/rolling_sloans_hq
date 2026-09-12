@@ -265,12 +265,20 @@ function CastGridCell({
  * Setlist and the Schedule's "Running order & assignments" view) must pass
  * the viewer's actual admin status; there's no default that could be safe
  * for both an admin and a non-admin caller.
+ *
+ * `onOpenCastCell` (issue #499, ADR 0019) turns each Role column's cell
+ * into its own click target, opening the caller's inline cast popover for
+ * that one (Song, column) pair instead of navigating. Every other cell
+ * (`#`, `Song`, `Length`, `Add Recording`) keeps `onOpenRow` untouched.
+ * Omit it — as the Schedule's read view does — and the Role cells behave
+ * exactly as they always have.
  */
 export function CastGridTable({
   roles,
   rows,
   viewerId,
   onOpenRow,
+  onOpenCastCell,
   renderRecordingCell,
   isAdmin,
 }: {
@@ -278,6 +286,7 @@ export function CastGridTable({
   rows: CastGridRow[]
   viewerId?: number
   onOpenRow: (songId: number) => void
+  onOpenCastCell?: (songId: number, column: CastGridColumn) => void
   renderRecordingCell: (row: CastGridRow) => ReactNode
   isAdmin: boolean
 }) {
@@ -346,13 +355,47 @@ export function CastGridTable({
                   key={column.key}
                   className="border border-rs-border px-2 py-2 align-top"
                 >
-                  <CastGridCell
-                    column={column}
-                    cast={row.cast}
-                    viewerId={viewerId}
-                    nameFor={nameFor}
-                    isAdmin={isAdmin}
-                  />
+                  {onOpenCastCell === undefined ? (
+                    <CastGridCell
+                      column={column}
+                      cast={row.cast}
+                      viewerId={viewerId}
+                      nameFor={nameFor}
+                      isAdmin={isAdmin}
+                    />
+                  ) : (
+                    // A div, not a <button>: the cell's own content already
+                    // contains person links, and an <a> inside a <button> is
+                    // invalid HTML. The click/key handlers stop propagation so
+                    // the enclosing row's `onOpenRow` doesn't also fire — its
+                    // own `closest('a, button')` guard can't see through a div.
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`Edit ${column.label} on ${row.title}`}
+                      onClick={(event) => {
+                        if ((event.target as HTMLElement).closest('a')) return
+                        event.stopPropagation()
+                        onOpenCastCell(row.id, column)
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key !== 'Enter' && event.key !== ' ') return
+                        if ((event.target as HTMLElement).closest('a')) return
+                        event.preventDefault()
+                        event.stopPropagation()
+                        onOpenCastCell(row.id, column)
+                      }}
+                      className="w-full cursor-pointer text-left hover:bg-rs-border/20"
+                    >
+                      <CastGridCell
+                        column={column}
+                        cast={row.cast}
+                        viewerId={viewerId}
+                        nameFor={nameFor}
+                        isAdmin={isAdmin}
+                      />
+                    </div>
+                  )}
                 </td>
               ))}
               <td className="border border-rs-border px-2 py-2 align-top">

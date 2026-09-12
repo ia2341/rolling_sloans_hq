@@ -3,7 +3,7 @@
 Reads (`SetlistApiView`, `SongDetailApiView`, `BandApiView`, `PersonApiView`,
 `PersonRolesApiView`, the Recordings endpoints) are `ApiView`s, not
 `AdminApiView`s: every route here is member-facing, and the only
-admin-conditional content (the ADR-0009 `next_rehearsal` pointer, and
+admin-conditional content (`available_roles` on the Song page, and
 `can_edit_roles` on the Person page) is decided by the serializer or the
 view's own per-request check, not by gating the whole endpoint — a
 non-admin still needs to read these surfaces.
@@ -46,6 +46,7 @@ from scheduling.api_builders import (
     RosterBufferValidationError,
     SemesterDefaultsReapplyBufferValidationError,
     SetlistBufferValidationError,
+    SongCastBufferValidationError,
     SongRoleRequirementBufferValidationError,
     build_adjudication_buffer_from_request,
     build_assignment_buffer_from_request,
@@ -56,6 +57,7 @@ from scheduling.api_builders import (
     build_roster_buffer_from_request,
     build_semester_defaults_reapply_buffer_from_request,
     build_setlist_buffer_from_request,
+    build_song_cast_buffer_from_request,
     build_song_role_requirement_buffer_from_request,
 )
 from scheduling.forms import DeclareConflictForm
@@ -88,6 +90,7 @@ from scheduling.services import (
     StaleRosterSemesterError,
     StaleSemesterDefaultsError,
     StaleSetlistSemesterError,
+    StaleSongCastError,
     StaleSongRoleRequirementsError,
     UnknownConflictError,
     WrongAdjudicationSemesterError,
@@ -126,12 +129,7 @@ class SongDetailApiView(ApiView, View):
         semester = services.get_viewing_semester(request)
         song = get_object_or_404(Song, pk=pk, semester=semester)
         is_admin = bool(getattr(request.user, 'is_admin', False))
-        next_rehearsal = None
-        if is_admin:
-            upcoming = services.upcoming_rehearsals_for(semester, count=1)
-            next_rehearsal = upcoming[0] if upcoming else None
-        data = serializers.serialize_song(song, is_admin=is_admin, next_rehearsal=next_rehearsal)
-        return self.read_response(request, data)
+        return self.read_response(request, serializers.serialize_song(song, is_admin=is_admin))
 
 
 def _song_in_viewing_semester_or_404(request, pk):
@@ -215,6 +213,108 @@ class SongRoleRequirementSaveApiView(AdminApiView, View):
         except WrongViewingSemesterError as error:
             return _wrong_semester_response(str(error))
         except StaleSongRoleRequirementsError as error:
+            return self.write_response(request, ok=False, non_field_errors=[str(error)], fallout=None, values=None)
+
+        return self.write_response(request, ok=True, values=None)
+
+
+class SongCastPickerApiView(AdminApiView, View):
+    """`GET /api/songs/<pk>/cast/picker/<role_id>/`: the Song-level Cast editor's candidate list (issue #499, ADR-0019).
+
+    Admin-only, and not merely because casting is: every candidate carries
+    a conflict summary whose entries include a Conflict's free-text
+    `reason`, which ADR-0005 keeps off every member-facing surface. This
+    is the only endpoint in the project that puts a `reason` on the wire
+    outside the adjudication surfaces, and `AdminApiView` is what makes
+    that safe.
+
+    Answers a question rather than taking a Pending Buffer, so it wears
+    the read envelope (`self.read_response()`), never the write one.
+    Reuses `services.assignment_picker_for()` with no `rehearsal_song` —
+    the same declared/others split the per-Rehearsal picker was built on,
+    with its Backup halves structurally empty and never serialized.
+    """
+
+    def get(self, request, pk, role_id):
+        """Return the cast picker's candidates for one (Song, Role) pair, each with their future-Rehearsal conflict summary, or 404."""
+        song = _song_in_viewing_semester_or_404(request, pk)
+        semester = services.get_viewing_semester(request)
+        role = get_object_or_404(Role, pk=role_id)
+        picker = services.assignment_picker_for(song, role, semester)
+        # One summary per offered candidate -- never eagerly for the whole roster, which
+        # would cost a Conflict query for people this cell will never be filled by.
+        conflicts_by_person_id = {
+            option.person.pk: services.song_cast_conflict_summary_for(song, option.person, semester)
+            for option in [*picker.declared, *picker.others]
+        }
+        return self.read_response(
+            request,
+            serializers.serialize_song_cast_picker(picker, conflicts_by_person_id=conflicts_by_person_id),
+        )
+
+
+class SongCastPreviewApiView(AdminPreviewApiView):
+    """`POST /api/songs/<pk>/cast/preview/`: the Cast editor's Preview, run for real and rolled back (issue #499, ADR 0008)."""
+
+    def run_preview(self, request, pk):
+        """Build the Cast edit Buffer from the JSON body and return its rendered Fallout envelope.
+
+        Mirrors `SongRoleRequirementPreviewApiView.run_preview()`, with one
+        difference: this surface's Buffer carries no `semester_id`, so
+        there is no `_wrong_semester_response()` 409 to answer here. Its
+        equivalent is the `pk` 404 against the viewing Semester (ADR 0001),
+        answered first, exactly as `SongDetailApiView.get()` does — a Song
+        from another term simply isn't found.
+        """
+        _song_in_viewing_semester_or_404(request, pk)
+        viewing_semester = services.get_viewing_semester(request)
+        try:
+            buffer = build_song_cast_buffer_from_request(request, song_id=pk)
+        except SongCastBufferValidationError as error:
+            return self.write_response(
+                request, ok=False, errors=None, non_field_errors=error.non_field_errors,
+                fallout=None, values=None,
+            )
+
+        fallout = services.preview_song_cast_edits(buffer, viewing_semester=viewing_semester)
+        return self.write_response(
+            request, ok=True,
+            fallout=serializers.serialize_song_cast_fallout(fallout),
+            values=serializers.serialize_song_cast_buffer(buffer),
+        )
+
+
+class SongCastSaveApiView(AdminApiView, View):
+    """`POST /api/songs/<pk>/cast/save/`: the Cast editor's Save — the real, committing write (issue #499)."""
+
+    def post(self, request, pk):
+        """Build the Cast edit Buffer from the JSON body and apply it, or report why it couldn't be applied.
+
+        Calls the same `build_song_cast_buffer_from_request()` the Preview
+        endpoint calls, then the unchanged `apply_song_cast_edits()`. A
+        `StaleSongCastError` and a `MissingSongRoleRequirementError` are
+        reported as `ok: false` with `non_field_errors` rather than a hard
+        4xx, per ADR 0008's "stale is reported, never refused" rule and
+        #326's "a rejected Buffer is 200" rule; a
+        `WrongViewingSemesterError` answers the shared 409, matching every
+        other Save endpoint. `values` is omitted on every response here,
+        per #326's rule that a write response doesn't echo the Buffer back.
+        """
+        _song_in_viewing_semester_or_404(request, pk)
+        viewing_semester = services.get_viewing_semester(request)
+        try:
+            buffer = build_song_cast_buffer_from_request(request, song_id=pk)
+        except SongCastBufferValidationError as error:
+            return self.write_response(
+                request, ok=False, errors=None, non_field_errors=error.non_field_errors,
+                fallout=None, values=None,
+            )
+
+        try:
+            services.apply_song_cast_edits(buffer, viewing_semester=viewing_semester)
+        except WrongViewingSemesterError as error:
+            return _wrong_semester_response(str(error))
+        except (StaleSongCastError, MissingSongRoleRequirementError) as error:
             return self.write_response(request, ok=False, non_field_errors=[str(error)], fallout=None, values=None)
 
         return self.write_response(request, ok=True, values=None)
@@ -1275,24 +1375,33 @@ class ScheduleEditorStatsApiView(AdminPreviewApiView):
         )
 
 
-def _editable_assignment_rehearsal_or_404(request, rehearsal_id):
-    """Return the viewing Semester's Rehearsal `rehearsal_id` names that also offers edit mode on its assignment grid, or 404 (issue #338, ADR-0009).
+def _editable_rehearsal_or_404(request, rehearsal_id):
+    """Return the viewing Semester's Rehearsal `rehearsal_id` names that also offers "Edit Rehearsal", or 404 (issue #338, ADR-0019).
 
-    Mirrors `scheduling/views.py`'s `_editable_assignment_rehearsal_or_404()`:
     `services.assignment_grid_is_editable()` stays the single definition
-    of "editable" — a hand-crafted request naming a past-dated,
-    non-Dress Rehearsal 404s rather than silently applying a removal or
-    add the grid never offered a control for.
+    of "not in the past" — a hand-crafted request naming a past-dated
+    Rehearsal 404s rather than silently applying a Backup or a reorder the
+    surface never offered a control for.
+
+    The Dress Rehearsal is refused outright here (ADR-0019). It carries no
+    `RehearsalSong` row (ADR-0003), so since casting moved to the
+    Song-level editor there is nothing left on this surface to edit there
+    at all — a Backup has no slot to anchor on and the Running Order has
+    no rows to reorder. Refusing it in one place is what keeps the
+    "Edit Rehearsal" control's three endpoints from each needing their own
+    `is_full_setlist` branch.
     """
     semester = services.get_viewing_semester(request)
     rehearsal = get_object_or_404(Rehearsal, pk=rehearsal_id, semester=semester)
+    if rehearsal.is_full_setlist:
+        raise Http404('The Dress Rehearsal has nothing of its own to edit (ADR 0003, ADR 0019).')
     if not services.assignment_grid_is_editable(rehearsal):
         raise Http404('This Rehearsal is not editable.')
     return rehearsal
 
 
 class AssignmentPickerApiView(AdminApiView, View):
-    """`GET /api/schedule/<rehearsal_id>/assignments/picker/<song_id>/<role_id>/`: the "+" picker's fetched-on-open contents (issue #338).
+    """`GET /api/schedule/<rehearsal_id>/assignments/picker/<song_id>/<role_id>/`: the Backup picker's fetched-on-open contents (issue #338, ADR-0019).
 
     Fetched only when a cell's "+" is opened, over the existing roster
     read — an unopened cell issues no request, so a twelve-song six-role
@@ -1301,17 +1410,21 @@ class AssignmentPickerApiView(AdminApiView, View):
     per #307's envelope boundary rule this wears the read envelope
     (`self.read_response()`), never the write one — there is no `values`
     or `errors` field that could ever be populated here.
+
+    Backup-only since ADR-0019 — the standing-assignment half of this
+    picker moved to `SongCastPickerApiView`. The Dress Rehearsal 404s
+    before any of this runs (`_editable_rehearsal_or_404()`), so the
+    `RehearsalSong` lookup below is unconditional rather than guarded by
+    an `is_full_setlist` branch.
     """
 
     def get(self, request, rehearsal_id, song_id, role_id):
-        """Return the picker's contents for one (Song, Role) cell on an editable grid, or 404."""
-        rehearsal = _editable_assignment_rehearsal_or_404(request, rehearsal_id)
+        """Return the Backup picker's contents for one (Song, Role) cell on an editable grid, or 404."""
+        rehearsal = _editable_rehearsal_or_404(request, rehearsal_id)
         semester = services.get_viewing_semester(request)
         song = get_object_or_404(Song, pk=song_id, semester=semester)
         role = get_object_or_404(Role, pk=role_id)
-        rehearsal_song = None
-        if not rehearsal.is_full_setlist:
-            rehearsal_song = get_object_or_404(RehearsalSong, rehearsal=rehearsal, song=song)
+        rehearsal_song = get_object_or_404(RehearsalSong, rehearsal=rehearsal, song=song)
         picker = services.assignment_picker_for(song, role, semester, rehearsal_song=rehearsal_song)
         return self.read_response(request, serializers.serialize_assignment_picker(picker, rehearsal))
 
@@ -1334,11 +1447,11 @@ class AssignmentPreviewApiView(AdminPreviewApiView):
         `AssignmentSaveApiView.post()` calls, so Preview and Save of an
         identical body can never disagree about what Buffer they
         describe. A wrong `semester_id`, or a Rehearsal that isn't
-        editable, is answered before `preview_song_role_assignments()` is
+        editable, is answered before `preview_rehearsal_backups()` is
         ever called, rather than being swallowed into an `is_blocked`
         Fallout.
         """
-        rehearsal = _editable_assignment_rehearsal_or_404(request, rehearsal_id)
+        rehearsal = _editable_rehearsal_or_404(request, rehearsal_id)
         viewing_semester = services.get_viewing_semester(request)
         try:
             buffer = build_assignment_buffer_from_request(request, viewing_semester=viewing_semester)
@@ -1352,7 +1465,7 @@ class AssignmentPreviewApiView(AdminPreviewApiView):
                 "This assignment edit Buffer's Semester doesn't match the Semester you're currently viewing."
             )
 
-        fallout = services.preview_song_role_assignments(buffer, rehearsal=rehearsal, viewing_semester=viewing_semester)
+        fallout = services.preview_rehearsal_backups(buffer, rehearsal=rehearsal, viewing_semester=viewing_semester)
         return self.write_response(
             request,
             ok=True,
@@ -1369,7 +1482,7 @@ class AssignmentSaveApiView(AdminApiView, View):
 
         Mirrors `ScheduleEditorSaveApiView.post()`: the same
         `build_assignment_buffer_from_request()` the Preview endpoint
-        calls, then the unchanged `apply_song_role_assignments()`. A
+        calls, then the unchanged `apply_rehearsal_backups()`. A
         `StaleAssignmentSemesterError` and `MissingSongRoleRequirementError`
         are reported as `ok: false` with `non_field_errors` rather than a
         hard 4xx, since `apply_*()`'s own transaction has already rolled
@@ -1377,7 +1490,7 @@ class AssignmentSaveApiView(AdminApiView, View):
         `values` is omitted on every response here, per #326's rule that a
         write response doesn't echo the Buffer back.
         """
-        rehearsal = _editable_assignment_rehearsal_or_404(request, rehearsal_id)
+        rehearsal = _editable_rehearsal_or_404(request, rehearsal_id)
         viewing_semester = services.get_viewing_semester(request)
         try:
             buffer = build_assignment_buffer_from_request(request, viewing_semester=viewing_semester)
@@ -1392,29 +1505,13 @@ class AssignmentSaveApiView(AdminApiView, View):
             )
 
         try:
-            services.apply_song_role_assignments(buffer, viewing_semester=viewing_semester, rehearsal=rehearsal)
+            services.apply_rehearsal_backups(buffer, viewing_semester=viewing_semester, rehearsal=rehearsal)
         except WrongViewingSemesterError as error:
             return _wrong_semester_response(str(error))
         except (StaleAssignmentSemesterError, MissingSongRoleRequirementError) as error:
             return self.write_response(request, ok=False, non_field_errors=[str(error)], fallout=None, values=None)
 
         return self.write_response(request, ok=True, values=None)
-
-
-def _reorderable_rehearsal_or_404(request, rehearsal_id):
-    """Return the viewing Semester's Rehearsal `rehearsal_id` names that offers a Running Order to reorder, or 404 ("Edit Rehearsal" consolidation).
-
-    Reuses `services.assignment_grid_is_editable()` — the same
-    editability rule the assignment grid uses, since "Edit Rehearsal" now
-    fronts both — but additionally refuses the Dress Rehearsal: it holds
-    no `RehearsalSong` rows to reorder at all (ADR-0003), a structural
-    exclusion rather than a Validation Error the client would have to
-    render.
-    """
-    rehearsal = _editable_assignment_rehearsal_or_404(request, rehearsal_id)
-    if rehearsal.is_full_setlist:
-        raise Http404("The Dress Rehearsal has no Running Order of its own to reorder (ADR 0003).")
-    return rehearsal
 
 
 class RunningOrderReorderPreviewApiView(AdminPreviewApiView):
@@ -1438,7 +1535,7 @@ class RunningOrderReorderPreviewApiView(AdminPreviewApiView):
         of an identical body can never disagree about what Buffer they
         describe.
         """
-        rehearsal = _reorderable_rehearsal_or_404(request, rehearsal_id)
+        rehearsal = _editable_rehearsal_or_404(request, rehearsal_id)
         viewing_semester = services.get_viewing_semester(request)
         try:
             buffer = build_rehearsal_reorder_buffer_from_request(request, rehearsal=rehearsal)
@@ -1477,7 +1574,7 @@ class RunningOrderReorderSaveApiView(AdminApiView, View):
         own transaction has already rolled back by the time any of these
         `except` clauses run.
         """
-        rehearsal = _reorderable_rehearsal_or_404(request, rehearsal_id)
+        rehearsal = _editable_rehearsal_or_404(request, rehearsal_id)
         viewing_semester = services.get_viewing_semester(request)
         try:
             buffer = build_rehearsal_reorder_buffer_from_request(request, rehearsal=rehearsal)

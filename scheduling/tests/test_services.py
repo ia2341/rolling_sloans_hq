@@ -693,16 +693,23 @@ class AssignmentGridIsEditableTests(TestCase):
         self.assertTrue(assignment_grid_is_editable(rehearsal))
 
     def test_past_rehearsal_is_not_editable(self):
-        """A Rehearsal dated before today offers no edit mode — a usability rule, not a data-integrity one."""
+        """A Rehearsal dated before today offers no edit mode — its Backups describe an evening that already happened."""
         rehearsal = RehearsalFactory(is_full_setlist=False, date=timezone.localdate() - timedelta(days=1))
 
         self.assertFalse(assignment_grid_is_editable(rehearsal))
 
-    def test_dress_rehearsal_is_always_editable_even_when_dated_in_the_past(self):
-        """The Dress Rehearsal is the backstop: editable regardless of date, since it's the Semester's last-dated Rehearsal."""
-        rehearsal = RehearsalFactory(is_full_setlist=True, date=timezone.localdate() - timedelta(days=30))
+    def test_the_dress_rehearsal_gets_no_special_case_from_this_predicate(self):
+        """The old ADR-0009 backstop is gone (ADR-0019): a past Dress Rehearsal is as un-editable as any other past date.
 
-        self.assertTrue(assignment_grid_is_editable(rehearsal))
+        The Dress Rehearsal's *own* exclusion — it has no RehearsalSong to
+        edit at all (ADR-0003) — is `_editable_rehearsal_or_404()`'s job,
+        not this predicate's, so a future-dated one still reads True here.
+        """
+        past_dress = RehearsalFactory(is_full_setlist=True, date=timezone.localdate() - timedelta(days=30))
+        future_dress = RehearsalFactory(is_full_setlist=True, date=timezone.localdate() + timedelta(days=30))
+
+        self.assertFalse(assignment_grid_is_editable(past_dress))
+        self.assertTrue(assignment_grid_is_editable(future_dress))
 
 
 class AssignmentPickerForTests(TestCase):

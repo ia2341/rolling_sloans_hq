@@ -16,9 +16,11 @@ import {
 import { PageHead } from '../components/ui/PageHead'
 import { SaveChangesDialog } from '../components/ui/SaveChangesDialog'
 import { useIsPhone } from '../hooks/useIsPhone'
+import type { CastGridColumn } from '../lib/roleColumns'
 import { useRegisterEditSession } from '../shell/EditSessionContext'
 import { usePageTitle } from '../shell/PageTitleContext'
 import { AddSongsSheet } from './setlist/AddSongsSheet'
+import { SetlistCastPopover } from './setlist/SetlistCastPopover'
 import { SetlistEditGrid } from './setlist/SetlistEditGrid'
 import {
   buildBufferWire,
@@ -46,6 +48,11 @@ type EditField = 'title' | 'artist' | 'length' | 'notes'
  * Add-songs sheet once the initial read has landed, then strips itself so
  * reloading doesn't repeat it -- ignored entirely for a non-admin viewer,
  * who must stay read-only regardless of the URL.
+ *
+ * An admin reading the table can also click one Role column's cell to cast
+ * that Song's Role inline, without navigating (issue #499, ADR 0019) --
+ * `SetlistCastPopover` runs its own batched edit session for that one
+ * cell, entirely separate from the Setlist's own row-editing Buffer.
  */
 export function Setlist() {
   usePageTitle('Setlist')
@@ -60,6 +67,12 @@ export function Setlist() {
   const [addSheetOpen, setAddSheetOpen] = useState(false)
   const [saveDialogOpen, setSaveDialogOpen] = useState(false)
   const [uploadSongId, setUploadSongId] = useState<number | null>(null)
+  const [castCell, setCastCell] = useState<{
+    songId: number
+    songTitle: string
+    roleIds: number[]
+    columnLabel: string
+  } | null>(null)
   const [searchParams, setSearchParams] = useSearchParams()
   const handledIntentRef = useRef(false)
   const [newSongLinks, setNewSongLinks] = useState<
@@ -300,6 +313,22 @@ export function Setlist() {
               viewerId={appContext?.viewer.id}
               isAdmin={isAdmin}
               onAddRecording={setUploadSongId}
+              onOpenCastCell={
+                isAdmin
+                  ? (songId, column) => {
+                      const song = data.songs.find(
+                        (candidate) => candidate.id === songId,
+                      )
+                      if (song === undefined) return
+                      setCastCell({
+                        songId,
+                        songTitle: song.title,
+                        roleIds: column.roleIds,
+                        columnLabel: column.label,
+                      })
+                    }
+                  : undefined
+              }
             />
           )}
         </>
@@ -311,6 +340,19 @@ export function Setlist() {
         roles={data.roles}
         onAddRows={addRows}
       />
+
+      {castCell !== null && (
+        <SetlistCastPopover
+          songId={castCell.songId}
+          songTitle={castCell.songTitle}
+          roleIds={castCell.roleIds}
+          columnLabel={castCell.columnLabel}
+          onClose={() => setCastCell(null)}
+          onSaved={() => {
+            void load()
+          }}
+        />
+      )}
 
       {uploadSongId !== null && (
         <RecordingUploadDialog
@@ -498,6 +540,12 @@ function SetlistCards({
  * trailing column's "+" opens the shared Recording-upload popup instead of
  * navigating to `/profile?song={id}`. `isAdmin` gates each cell's
  * role-mismatch badge (issue #365, ADR 0002).
+ *
+ * `onOpenCastCell` (admin only, issue #499) makes each Role column's cell
+ * its own click target for the inline cast popover; every other cell still
+ * opens the Song. A column with nobody in it anywhere on the Setlist isn't
+ * rendered at all (`visibleCastGridColumns()`, issue #436), so casting an
+ * as-yet-empty Role still starts from the Song page.
  */
 function SetlistTable({
   roles,
@@ -505,12 +553,14 @@ function SetlistTable({
   viewerId,
   isAdmin,
   onAddRecording,
+  onOpenCastCell,
 }: {
   roles: SetlistPayload['roles']
   songs: SetlistPayload['songs']
   viewerId?: number
   isAdmin: boolean
   onAddRecording: (songId: number) => void
+  onOpenCastCell?: (songId: number, column: CastGridColumn) => void
 }) {
   const navigate = useNavigate()
   const rows: CastGridRow[] = songs.map((song) => ({
@@ -529,6 +579,7 @@ function SetlistTable({
       viewerId={viewerId}
       isAdmin={isAdmin}
       onOpenRow={(songId) => navigate(`/songs/${songId}`)}
+      onOpenCastCell={onOpenCastCell}
       renderRecordingCell={(row) => (
         <button
           type="button"

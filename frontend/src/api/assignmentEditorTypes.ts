@@ -8,16 +8,19 @@ export interface AssignmentPickerOption {
   has_conflict: boolean
 }
 
-/** `data` shape of `GET /api/schedule/<id>/assignments/picker/<song_id>/<role_id>/` — its own shape, not the write envelope. */
+/** `data` shape of `GET /api/schedule/<id>/assignments/picker/<song_id>/<role_id>/` — its own shape, not the write envelope.
+ *
+ * Backup-only since ADR 0019: this surface writes no standing assignment,
+ * so the `declared`/`others` candidate split it used to carry now lives on
+ * `SongCastPickerPayload` instead. `rehearsal_song_id` is never null —
+ * the Dress Rehearsal 404s before this payload is built (ADR 0003).
+ */
 export interface AssignmentPickerPayload {
   song_id: number
   song_title: string
   role_id: number
   role_name: string
-  /** Null on the Dress Rehearsal (ADR 0006): no RehearsalSong to anchor a Backup on, rendered as structural copy. */
   rehearsal_song_id: number | null
-  declared: AssignmentPickerOption[]
-  others: AssignmentPickerOption[]
   backup_declared: AssignmentPickerOption[]
   backup_others: AssignmentPickerOption[]
 }
@@ -29,12 +32,6 @@ export interface AssignmentEditFalloutPayload {
   is_stale: boolean
   loud: string[]
   quiet: string[]
-}
-
-export interface AssignmentAddedEntryInput {
-  song_id: number
-  role_id: number
-  person_id: number
 }
 
 export interface AssignmentAddedBackupEntryInput {
@@ -49,12 +46,10 @@ export interface AssignmentBackupCoveringForUpdateInput {
   covering_for_id: number | null
 }
 
-/** Wire body for `POST /api/schedule/<id>/assignments/{preview,save}/`. */
+/** Wire body for `POST /api/schedule/<id>/assignments/{preview,save}/` — Backup-only since ADR 0019. */
 export interface AssignmentEditBufferInput {
   semester_id: number
   semester_updated_at: string
-  removed_assignment_ids: number[]
-  added_entries: AssignmentAddedEntryInput[]
   removed_backup_ids: number[]
   added_backup_entries: AssignmentAddedBackupEntryInput[]
   backup_covering_for_updates: AssignmentBackupCoveringForUpdateInput[]

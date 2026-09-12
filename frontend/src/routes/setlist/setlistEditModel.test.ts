@@ -21,6 +21,7 @@ function song(overrides: Partial<SetlistSong> = {}): SetlistSong {
     length: '3:00',
     position: 1,
     notes: '',
+    updated_at: '2026-01-01T00:00:00+00:00',
     cast: [],
     recording_count: 0,
     ...overrides,

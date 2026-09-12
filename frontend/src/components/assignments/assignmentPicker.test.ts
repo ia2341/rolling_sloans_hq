@@ -39,16 +39,25 @@ const CELL = {
 }
 
 describe('buildAssignmentPicker', () => {
-  it('splits the roster into declared (this cell’s Role) and others', () => {
+  it('splits the roster into backup_declared (this cell’s Role) and backup_others', () => {
     const payload = buildAssignmentPicker(detailFor({}), CELL)
 
-    expect(payload.declared.map((option) => option.person_name)).toEqual([
-      'Ada',
+    expect(payload.backup_declared.map((option) => option.person_name)).toEqual(
+      ['Ada'],
+    )
+    expect(payload.backup_others.map((option) => option.person_name)).toEqual([
+      'Bea',
     ])
-    expect(payload.others.map((option) => option.person_name)).toEqual(['Bea'])
   })
 
-  it('excludes a roster member already holding this exact (Song, Role) assignment', () => {
+  it('offers no standing-assignment lists at all (casting moved to the Song, ADR 0019)', () => {
+    const payload = buildAssignmentPicker(detailFor({}), CELL)
+
+    expect(payload).not.toHaveProperty('declared')
+    expect(payload).not.toHaveProperty('others')
+  })
+
+  it('still offers someone already holding this (Song, Role) assignment as a Backup candidate', () => {
     const detail = detailFor({
       rows: [
         {
@@ -80,11 +89,12 @@ describe('buildAssignmentPicker', () => {
 
     const payload = buildAssignmentPicker(detail, CELL)
 
-    expect(payload.declared).toEqual([])
-    expect(payload.others.map((option) => option.person_name)).toEqual(['Bea'])
+    expect(payload.backup_declared.map((option) => option.person_name)).toEqual(
+      ['Ada'],
+    )
   })
 
-  it('excludes a roster member already backed-up on this cell from the backup lists only', () => {
+  it('excludes a roster member already backed-up on this cell', () => {
     const detail = detailFor({
       rows: [
         {
@@ -116,13 +126,13 @@ describe('buildAssignmentPicker', () => {
 
     const payload = buildAssignmentPicker(detail, CELL)
 
-    expect(payload.declared.map((option) => option.person_name)).toEqual([
-      'Ada',
-    ])
     expect(payload.backup_declared).toEqual([])
+    expect(payload.backup_others.map((option) => option.person_name)).toEqual([
+      'Bea',
+    ])
   })
 
-  it('leaves both backup lists empty on the Dress Rehearsal (no RehearsalSong to anchor a Backup on, ADR 0006)', () => {
+  it('leaves both backup lists empty with no RehearsalSong to anchor a Backup on (ADR 0003/0006)', () => {
     const detail = detailFor({
       rows: [
         {
@@ -151,9 +161,13 @@ describe('buildAssignmentPicker', () => {
       CELL,
     )
 
-    const bea = payload.others.find((option) => option.person_name === 'Bea')
+    const bea = payload.backup_others.find(
+      (option) => option.person_name === 'Bea',
+    )
     expect(bea?.has_conflict).toBe(true)
-    const ada = payload.declared.find((option) => option.person_name === 'Ada')
+    const ada = payload.backup_declared.find(
+      (option) => option.person_name === 'Ada',
+    )
     expect(ada?.has_conflict).toBe(false)
   })
 

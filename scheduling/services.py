@@ -1450,10 +1450,18 @@ def role_codes_for(roles: list[Role]) -> dict[int, str]:
 
 @dataclass(frozen=True)
 class CastPerformer:
-    """One Person filling one Role in a Song's cast line, carrying the ADR-0002 mismatch flag for that Role (issue #330)."""
+    """One Person filling one Role in a Song's cast line, carrying the ADR-0002 mismatch flag for that Role (issue #330).
+
+    `assignment_id` is the underlying `SongRoleAssignment`'s primary key
+    — the id the Song-level Cast editor's ✕ stages into
+    `SongCastEditBuffer.removed_assignment_ids` (ADR-0019). It is a plain
+    row id, carrying no fact about the Person beyond the assignment the
+    viewer is already reading.
+    """
 
     person: object
     is_role_mismatch: bool
+    assignment_id: int
 
 
 @dataclass(frozen=True)
@@ -1475,19 +1483,21 @@ def cast_line_for(song, roles: list[Role], codes: dict[int, str]) -> list[CastRo
     once per payload by the caller (`active_roles_for`/`role_codes_for`),
     never re-derived per Song.
     """
-    mismatch_by_role_and_person = {
-        (role_id, person_id): is_role_mismatch
-        for role_id, person_id, is_role_mismatch in SongRoleAssignment.objects.filter(
+    assignment_by_role_and_person = {
+        (role_id, person_id): (pk, is_role_mismatch)
+        for pk, role_id, person_id, is_role_mismatch in SongRoleAssignment.objects.filter(
             song=song,
-        ).values_list('role_id', 'person_id', 'is_role_mismatch')
+        ).values_list('pk', 'role_id', 'person_id', 'is_role_mismatch')
     }
     performers_by_role_id: dict[int, list[CastPerformer]] = defaultdict(list)
     for performer in performers_for(song):
         for role in performer.roles:
+            assignment_id, is_role_mismatch = assignment_by_role_and_person[(role.id, performer.person.id)]
             performers_by_role_id[role.id].append(
                 CastPerformer(
                     person=performer.person,
-                    is_role_mismatch=mismatch_by_role_and_person.get((role.id, performer.person.id), False),
+                    is_role_mismatch=is_role_mismatch,
+                    assignment_id=assignment_id,
                 ),
             )
     return [
@@ -1513,7 +1523,11 @@ def cast_lines_for_semester(semester, roles: list[Role], codes: dict[int, str]) 
     performers_by_song_and_role: dict[tuple[int, int], list[CastPerformer]] = defaultdict(list)
     for assignment in assignments:
         performers_by_song_and_role[(assignment.song_id, assignment.role_id)].append(
-            CastPerformer(person=assignment.person, is_role_mismatch=assignment.is_role_mismatch),
+            CastPerformer(
+                person=assignment.person,
+                is_role_mismatch=assignment.is_role_mismatch,
+                assignment_id=assignment.pk,
+            ),
         )
     song_ids = Song.objects.filter(semester=semester).values_list('id', flat=True)
     return {
@@ -1958,9 +1972,11 @@ def assignment_picker_for(song, role, semester, *, rehearsal_song=None) -> Assig
     the candidate population above stays Semester-scoped.
 
     `rehearsal_song` scopes the Backup section: pass the Rehearsal's
-    RehearsalSong for `song` to populate it, or None (the Dress
-    Rehearsal's case, ADR-0006) to leave both Backup lists empty and let
-    the template render the structural explanation instead.
+    RehearsalSong for `song` to populate it, or None to leave both Backup
+    lists empty. Since ADR-0019 the None case is the Song-level cast
+    picker (`SongCastPickerApiView`), which wants exactly the
+    `declared`/`others` candidate split and no Backup section at all —
+    the reason this function is reused there rather than reimplemented.
     """
     already_assigned_ids = frozenset(
         SongRoleAssignment.objects.filter(song=song, role=role).values_list('person_id', flat=True)
@@ -2001,23 +2017,25 @@ def assignment_picker_for(song, role, semester, *, rehearsal_song=None) -> Assig
 
 
 def assignment_grid_is_editable(rehearsal) -> bool:
-    """Return whether an admin gets an "Edit assignments" control on `rehearsal`'s assignment grid (issue #210).
+    """Return whether an admin gets an "Edit Rehearsal" control on `rehearsal`'s grid (issue #210, ADR-0019).
 
-    A usability rule, not a data-integrity one (ADR-0009): every
-    SongRoleAssignment row reachable through a past-dated Rehearsal's grid
-    is exactly as writable in the database as any other, and removing one
-    still reaches every Rehearsal and the concert semester-wide regardless
-    of which grid the admin removed it from. The rule exists only because a
-    grid captioned with a stale date is a misleading place to change a live
-    concert lineup — unlike the rehearsal editor's own past-date lock,
-    which *is* about integrity. A same-day Rehearsal stays editable all day
-    (whole days, not instants, so a last-minute reassignment during
-    tonight's rehearsal is possible). The Dress Rehearsal is always
-    editable: its rows are the live setlist (ADR-0003) and it is the
-    Semester's last-dated Rehearsal, so it is the backstop that keeps a
-    late Semester editable once every other Rehearsal has passed.
+    Since ADR-0019 the only thing this grid writes is a `Backup`, which is
+    anchored on a `RehearsalSong` and so genuinely belongs to this one
+    evening (ADR-0007) — casting itself moved to the Song-level editor. A
+    past Rehearsal's Backups describe an evening that has already
+    happened, so the rule is simply "not in the past", with a same-day
+    Rehearsal staying editable all day (whole days, not instants, so a
+    last-minute Backup added during tonight's rehearsal is possible).
+
+    The old `rehearsal.is_full_setlist or ...` backstop is gone (#499): it
+    existed only to keep *standing-assignment* editing reachable through
+    the Dress Rehearsal once every other Rehearsal had passed, and this
+    surface no longer edits a standing assignment at all. The Dress
+    Rehearsal carries no `RehearsalSong` row (ADR-0003), so it has nothing
+    left here to edit — `_editable_rehearsal_or_404()` refuses it outright
+    rather than this predicate re-deciding it.
     """
-    return rehearsal.is_full_setlist or rehearsal.date >= timezone.localdate()
+    return rehearsal.date >= timezone.localdate()
 
 
 class StaleAssignmentSemesterError(ValueError):
@@ -2029,9 +2047,9 @@ def _requirement_pairs_for(song_ids):
 
     The bulk-query counterpart of `song_role_requirement_exists()`
     (scheduling/models.py) — used here instead of a per-row check since
-    `apply_song_role_assignments()` validates every buffered add in one
-    pass; both the SongRoleAssignment (issue #439) and Backup (issue
-    #440) add loops below call this on their own candidate song ids.
+    `apply_rehearsal_backups()` validates every buffered add in one
+    pass; both it (issue #440) and `apply_song_cast_edits()` (issue #439,
+    ADR-0019) call this on their own candidate song ids.
     """
     return frozenset(SongRoleRequirement.objects.filter(song_id__in=song_ids).values_list('song_id', 'role_id'))
 
@@ -2039,24 +2057,25 @@ def _requirement_pairs_for(song_ids):
 class MissingSongRoleRequirementError(ValueError):
     """Raised when an added assignment or Backup entry names a (song, role) pair with no SongRoleRequirement.
 
-    Shared by both `SongRoleAssignment` (issue #439) and `Backup` (issue
-    #440) adds in `apply_song_role_assignments()` — a role is only
-    assignable, and only Backup-able, once a SongRoleRequirement exists
-    for it.
+    Shared by `apply_song_cast_edits()`'s SongRoleAssignment adds (issue
+    #439, ADR-0019) and `apply_rehearsal_backups()`'s Backup adds (issue
+    #440) — a role is only assignable, and only Backup-able, once a
+    SongRoleRequirement exists for it.
     """
 
 
 @dataclass(frozen=True)
 class AssignmentEditBuffer:
-    """The Pending Buffer `apply_song_role_assignments()` commits in one transaction (issues #210, #211, #216).
+    """The Pending Buffer `apply_rehearsal_backups()` commits in one transaction (issues #210, #211, #216, ADR-0019).
 
-    `removed_assignment_ids` names every SongRoleAssignment row to delete,
-    wherever on the grid its chip's ✕ was clicked. `added_entries` names
-    every (song_id, role_id, person_id) a "+" picker pick added from the
-    "Assigned" section, wherever on the grid it was picked from.
+    Backup-only since ADR-0019: the `removed_assignment_ids`/
+    `added_entries` fields this Buffer used to carry are gone, along with
+    every line of `SongRoleAssignment` editing on this surface. Casting is
+    a Song-level act now (`SongCastEditBuffer`), and what stays here is
+    the one thing that really is scoped to one evening.
 
-    `removed_backup_ids` and `added_backup_entries` are the Backup
-    equivalents (issue #216): a Backup add is a
+    `removed_backup_ids` and `added_backup_entries` are that Backup
+    surface (issue #216): a Backup add is a
     (rehearsal_song_id, role_id, person_id, covering_for_id) tuple, where
     `covering_for_id` is None when the admin left "covering for" empty
     (ADR-0007: recording it is a choice, never a demand).
@@ -2073,59 +2092,40 @@ class AssignmentEditBuffer:
 
     semester_id: int
     semester_updated_at: datetime
-    removed_assignment_ids: frozenset[int]
-    added_entries: frozenset[tuple[int, int, int]] = frozenset()
     removed_backup_ids: frozenset[int] = frozenset()
     added_backup_entries: frozenset[tuple[int, int, int, int | None]] = frozenset()
     backup_covering_for_updates: frozenset[tuple[int, int | None]] = frozenset()
 
 
-def apply_song_role_assignments(
+def apply_rehearsal_backups(
     buffer: AssignmentEditBuffer, *, viewing_semester: Semester, rehearsal=None,
 ) -> None:
-    """Apply a Buffer of SongRoleAssignment and Backup removals and adds in one transaction (issues #210, #211, #216, ADR-0009).
+    """Apply a Buffer of Backup removals, adds and covering-for updates in one transaction (issues #210, #216, ADR-0019).
 
-    The SongRoleAssignment half is semester-wide: SongRoleAssignment is
-    (song, role, person) with no rehearsal FK, so a removal or an add
-    here changes that Person's assignment to that Song at every Rehearsal
-    and at the concert, not only the Rehearsal whose grid the admin was
-    viewing. The Backup half is anchored on a RehearsalSong instead
-    (ADR-0007), so it only ever touches the one Rehearsal it was added
-    from — every Backup query below is scoped to `rehearsal`, not merely
-    to `viewing_semester`, so a hand-crafted POST naming a RehearsalSong
-    or Backup id from a *different* Rehearsal in the same Semester (one
-    the admin wasn't looking at, possibly a past, non-editable one) can't
+    Writes no `SongRoleAssignment` at all — that is `apply_song_cast_edits()`'s
+    job since ADR-0019, and this function was renamed from
+    `apply_song_role_assignments()` the moment its standing-assignment
+    half was deleted, so nothing reads as editing a cast here any more.
+    Everything it does write is anchored on a RehearsalSong (ADR-0007),
+    so it only ever touches the one Rehearsal it was added from — every
+    Backup query below is scoped to `rehearsal`, not merely to
+    `viewing_semester`, so a hand-crafted POST naming a RehearsalSong or
+    Backup id from a *different* Rehearsal in the same Semester (one the
+    admin wasn't looking at, possibly a past, non-editable one) can't
     touch anything. `rehearsal` is required whenever `buffer` carries any
-    Backup field; the standing-assignment-only tests predating issue #216
-    pass no Backup entries and so can omit it. Takes no Semester row
-    lock — nothing here renumbers Song positions or RehearsalSong order,
-    so there is no ordering constraint to serialize against. Registers no
+    Backup field; a Buffer carrying none at all (a save with nothing
+    staged) can omit it. Takes no Semester row lock — nothing here
+    renumbers Song positions or RehearsalSong order, so there is no
+    ordering constraint to serialize against. Registers no
     `transaction.on_commit()` call — nothing here reaches outside the
     Semester (no mail, no object storage).
 
-    An added assignment entry is silently skipped if its Song isn't one
-    of `viewing_semester`'s (a hand-crafted POST naming another
-    Semester's Song), or if its Person holds no Membership in
-    `viewing_semester` (the picker never offers a non-rostered Person,
-    per issue #211, but a tampered POST could still try). `get_or_create`
-    makes a duplicate add a no-op rather than an IntegrityError against
-    `unique_song_role_person` — the picker already excludes anyone
-    already assigned to the cell, but two concurrent saves could still
-    race here. `SongRoleAssignment.save()` recomputes `is_role_mismatch`
-    on create (ADR-0002): picking a Person who hasn't declared the Role
-    is allowed, not blocked. Raises `MissingSongRoleRequirementError`
-    instead of adding an entry naming a (song, role) pair with no
-    SongRoleRequirement (issue #439): a role is only assignable once an
-    admin has added a Requirement for it, so unlike the Song/Membership
-    checks above this is a hard block, not a silent skip -- the same
-    belt-and-suspenders rule `SongRoleAssignment.save()` itself enforces.
-
-    An added Backup entry is likewise skipped if its RehearsalSong isn't
+    An added Backup entry is skipped if its RehearsalSong isn't
     one of `rehearsal`'s — which, since the Dress Rehearsal carries no
     RehearsalSong row at all (ADR-0006), is exactly what makes a Backup
     against it impossible by this route, structurally rather than by an
     explicit check — or if its Person holds no Membership in
-    `viewing_semester`. Like the SongRoleAssignment side, it raises
+    `viewing_semester`. Like the Song-level cast surface, it raises
     `MissingSongRoleRequirementError` instead of adding an entry naming a
     (song, role) pair with no SongRoleRequirement (issue #440): a Backup
     only makes sense as a substitute for a Role the Song actually
@@ -2137,8 +2137,8 @@ def apply_song_role_assignments(
     — is silently dropped to None rather than failing the whole save:
     recording who is covered is advisory (ADR-0007), never worth losing
     the Backup itself over. `get_or_create` makes a duplicate add a no-op
-    against `unique_backup_per_slot_role_person`, matching the assignment
-    side.
+    against `unique_backup_per_slot_role_person`, matching the Song-level
+    cast surface.
 
     A `backup_covering_for_updates` pair naming a Backup outside
     `rehearsal`, or one this call already deleted (via
@@ -2168,27 +2168,6 @@ def apply_song_role_assignments(
         rostered_person_ids = frozenset(
             Membership.objects.filter(semester=semester).values_list('person_id', flat=True)
         )
-
-        SongRoleAssignment.objects.filter(
-            pk__in=buffer.removed_assignment_ids, song__semester=semester,
-        ).delete()
-
-        if buffer.added_entries:
-            valid_song_ids = frozenset(
-                Song.objects.filter(
-                    semester=semester, pk__in={song_id for song_id, _, _ in buffer.added_entries},
-                ).values_list('pk', flat=True)
-            )
-            requirement_pairs = _requirement_pairs_for(valid_song_ids)
-            for song_id, role_id, person_id in buffer.added_entries:
-                if song_id not in valid_song_ids or person_id not in rostered_person_ids:
-                    continue
-                if (song_id, role_id) not in requirement_pairs:
-                    raise MissingSongRoleRequirementError(
-                        'This Song has no Role Requirement for this Role yet -- add one on the Song page before '
-                        'assigning it.'
-                    )
-                SongRoleAssignment.objects.get_or_create(song_id=song_id, role_id=role_id, person_id=person_id)
 
         Backup.objects.filter(
             pk__in=buffer.removed_backup_ids, rehearsal_song__rehearsal=rehearsal,
@@ -2249,14 +2228,16 @@ def apply_song_role_assignments(
 class AssignmentEditFallout:
     """Every observable consequence of a candidate SongRoleAssignment edit Buffer for one Rehearsal (issue #212, ADR 0008).
 
-    `is_blocked` mirrors `apply_song_role_assignments()`'s two checks
+    `is_blocked` mirrors `apply_rehearsal_backups()`'s two checks
     (wrong Semester, stale stamp) with no Fallout computed at all -- a
     Validation Error in ADR 0008's terms, never blended with Fallout.
     `loud`/`quiet` are the two ADR-0002/issue #185-worded tiers, computed
     against the Rehearsal's current (post-apply) assignment state rather
-    than a before/after diff: loud is the warning ADR-0009 built this
-    per-Rehearsal surface to raise (an assigned Person who can't be there
-    that evening), and quiet is a standing signal resolved elsewhere (an
+    than a before/after diff: loud is the availability warning this
+    per-Rehearsal surface raises (an assigned or backing-up Person who
+    can't be there that evening — still read across the standing cast the
+    Buffer no longer edits, since a Backup is only judged against who it
+    stands beside), and quiet is a standing signal resolved elsewhere (an
     unfilled Role Requirement, a role mismatch) -- neither ever blocks a
     save. `is_stale` flags a `Semester.updated_at` mismatch, reported never
     refused, per ADR 0008. Never reads `Conflict.status`.
@@ -2280,9 +2261,7 @@ def _assignment_fallout_lines(rehearsal, songs):
     Loud: an assigned Person (standing or Backup, issue #216) with a full
     Conflict for `rehearsal` (moot for the Dress Rehearsal, which no
     Conflict can point at per ADR-0006), or a partial Conflict whose
-    Window overlaps the Song's RehearsalSong slot -- only computable
-    through a Rehearsal, which is ADR-0009's whole reason this surface
-    exists. A Backup shares its standing counterpart's slot, so a Person
+    Window overlaps the Song's RehearsalSong slot. A Backup shares its standing counterpart's slot, so a Person
     holding both is warned only once. Quiet: an unfilled Role Requirement,
     or a role mismatch -- both standing flags resolved elsewhere
     (ADR-0002), kept quiet so they don't train an admin to ignore the loud
@@ -2371,15 +2350,15 @@ def _assignment_fallout_lines(rehearsal, songs):
     return loud, quiet
 
 
-def preview_song_role_assignments(buffer: AssignmentEditBuffer, *, rehearsal, viewing_semester: Semester) -> AssignmentEditFallout:
-    """Run the real `apply_song_role_assignments()` for `buffer` and report `rehearsal`'s Fallout, without committing it.
+def preview_rehearsal_backups(buffer: AssignmentEditBuffer, *, rehearsal, viewing_semester: Semester) -> AssignmentEditFallout:
+    """Run the real `apply_rehearsal_backups()` for `buffer` and report `rehearsal`'s Fallout, without committing it.
 
     ADR 0008/issue #212: this function's write is real -- it must be called
     inside a transaction the *caller* rolls back (`PreviewMixin` does this
     for the Preview view; tests must wrap the call the same way). Called
     outside such a transaction, this function corrupts the database.
 
-    Mirrors `apply_song_role_assignments()`'s wrong-Semester check so a
+    Mirrors `apply_rehearsal_backups()`'s wrong-Semester check so a
     Preview can never disagree with what Save would reject. The Semester's
     current `updated_at` is swapped in before the real call runs (mirroring
     `preview_roster_edits()`), so the write actually applies regardless of
@@ -2397,13 +2376,360 @@ def preview_song_role_assignments(buffer: AssignmentEditBuffer, *, rehearsal, vi
 
     apply_buffer = replace(buffer, semester_updated_at=current_semester.updated_at)
     try:
-        apply_song_role_assignments(apply_buffer, viewing_semester=viewing_semester, rehearsal=rehearsal)
+        apply_rehearsal_backups(apply_buffer, viewing_semester=viewing_semester, rehearsal=rehearsal)
     except (WrongViewingSemesterError, StaleAssignmentSemesterError, MissingSongRoleRequirementError) as error:
         return _blocked_assignment_fallout(str(error), is_stale=is_stale)
 
     songs, _, _ = _matrix_songs(rehearsal)
     loud, quiet = _assignment_fallout_lines(rehearsal, songs)
     return AssignmentEditFallout(is_blocked=False, block_message='', is_stale=is_stale, loud=loud, quiet=quiet)
+
+
+@dataclass(frozen=True)
+class SongCastConflictEntry:
+    """One future Rehearsal at which a candidate can't play the Song they're being cast on (issue #499, ADR-0019).
+
+    Admin-only, in full: `reason` is the Conflict's free-text reason,
+    which ADR-0005 keeps off every member-facing surface. The only caller
+    is `SongCastPickerApiView`, an `AdminApiView` — never serialize one of
+    these into a payload a member can read.
+    """
+
+    rehearsal_id: int
+    date: object
+    is_full_conflict: bool
+    reason: str
+
+
+def song_cast_conflict_summary_for(song, person, semester) -> list[SongCastConflictEntry]:
+    """Return one entry per future Rehearsal of `song` where `person` has a Conflict overlapping its slot (issue #499, ADR-0019).
+
+    This is the piece ADR-0009 said only a Rehearsal-anchored editor could
+    compute, computed from the Song's side instead: rather than asking
+    "who, of everyone cast tonight, can't be here", it asks "if I cast
+    this person on this Song, which of the Song's remaining rehearsals
+    would they miss". Both questions read the same two facts (a full
+    Conflict against the Rehearsal, or a ConflictWindow overlapping the
+    Song's `RehearsalSong` slot), so the overlap arithmetic is
+    `_windows_overlap()`'s, reused verbatim rather than reimplemented.
+
+    `_standing_overlap_target()`, the per-Rehearsal check's own caller of
+    that helper, is deliberately *not* reused: it answers a different
+    question (which single already-assigned cell to send an admin to for
+    one Conflict, silenced once a Backup covers it) over a whole
+    Rehearsal's worth of prefetched maps, and would have to be inverted
+    to answer this one. The shared primitive is the overlap test, and
+    that is what is shared.
+
+    Only future Rehearsals count (`date >= today`): a past Rehearsal's
+    availability is history a new cast decision can't act on. The Dress
+    Rehearsal drops out for free rather than by a check — it carries no
+    `RehearsalSong` row (ADR-0003), and no Conflict may point at it
+    anyway (ADR-0006). Ordered by Rehearsal date. Returns `[]` for a
+    person with nothing declared, which is the common case.
+    """
+    rehearsal_songs = list(
+        RehearsalSong.objects.filter(
+            song=song, rehearsal__semester=semester, rehearsal__date__gte=timezone.localdate(),
+        ).select_related('rehearsal').order_by('rehearsal__date', 'order')
+    )
+    if not rehearsal_songs:
+        return []
+
+    conflicts_by_rehearsal_id = {
+        conflict.rehearsal_id: conflict
+        for conflict in Conflict.objects.filter(
+            person=person,
+            rehearsal_id__in={rehearsal_song.rehearsal_id for rehearsal_song in rehearsal_songs},
+        ).prefetch_related('conflictwindow_set')
+    }
+
+    entries: list[SongCastConflictEntry] = []
+    for rehearsal_song in rehearsal_songs:
+        conflict = conflicts_by_rehearsal_id.get(rehearsal_song.rehearsal_id)
+        if conflict is None:
+            continue
+        if conflict.type == Conflict.FULL_CONFLICT:
+            entries.append(
+                SongCastConflictEntry(
+                    rehearsal_id=rehearsal_song.rehearsal_id,
+                    date=rehearsal_song.rehearsal.date,
+                    is_full_conflict=True,
+                    reason=conflict.reason,
+                )
+            )
+            continue
+        windows = [
+            (window.unavailable_start, window.unavailable_end)
+            for window in conflict.conflictwindow_set.all()
+        ]
+        if any(
+            _windows_overlap(window_start, window_end, rehearsal_song.start_time, rehearsal_song.end_time)
+            for window_start, window_end in windows
+        ):
+            entries.append(
+                SongCastConflictEntry(
+                    rehearsal_id=rehearsal_song.rehearsal_id,
+                    date=rehearsal_song.rehearsal.date,
+                    is_full_conflict=False,
+                    reason=conflict.reason,
+                )
+            )
+    return entries
+
+
+class StaleSongCastError(ValueError):
+    """Raised when a Song's cast changed since the Song-level cast edit Buffer was loaded (issue #499)."""
+
+
+@dataclass(frozen=True)
+class SongCastEditBuffer:
+    """The Pending Buffer `apply_song_cast_edits()` commits in one transaction (issue #499, ADR-0019).
+
+    `removed_assignment_ids` names every SongRoleAssignment row on this
+    Song to delete; `added_entries` names every `(role_id, person_id)` a
+    picker pick added. Neither carries a `song_id` of its own — the whole
+    Buffer describes exactly one Song, named once by `song_id`.
+
+    `song_updated_at` is the staleness anchor, and it is `Song.updated_at`
+    rather than `Semester.updated_at` — the one Buffer in this project
+    that doesn't stamp the Semester. A cast edit is scoped to one Song, so
+    two admins casting two different Songs concurrently have genuinely not
+    collided, and making them collide (as a Semester-wide stamp would)
+    would reject a save for a change it shares nothing with. The Semester
+    is still named, as `viewing_semester`, on the apply call itself — the
+    Song must belong to it, checked there.
+    """
+
+    song_id: int
+    song_updated_at: datetime
+    removed_assignment_ids: frozenset[int] = frozenset()
+    added_entries: frozenset[tuple[int, int]] = frozenset()
+
+
+def apply_song_cast_edits(buffer: SongCastEditBuffer, *, viewing_semester: Semester) -> None:
+    """Apply one Song's SongRoleAssignment removals and adds in one transaction (issue #499, ADR-0019).
+
+    The write half of the Song-level cast editor, and the only remaining
+    write path to `SongRoleAssignment` outside the Django admin —
+    `apply_rehearsal_backups()` gave this up when casting moved off the
+    per-Rehearsal grid. A `SongRoleAssignment` is `(song, role, person)`
+    with no rehearsal FK, so what this writes reaches every Rehearsal and
+    the concert; that has always been true of the data, and this surface
+    is simply the first one whose scope matches it.
+
+    Takes no Semester row lock and no `select_for_update()`: nothing here
+    renumbers Song positions or RehearsalSong order, so there is no
+    ordering constraint to serialize against. Registers no
+    `transaction.on_commit()` call — nothing here reaches outside the
+    Semester (no mail, no object storage).
+
+    An added entry is silently skipped if its Person holds no Membership
+    in `viewing_semester` (the picker never offers a non-rostered Person,
+    but a tampered POST could still try). `get_or_create` makes a
+    duplicate add a no-op rather than an IntegrityError against
+    `unique_song_role_person`. `SongRoleAssignment.save()` recomputes
+    `is_role_mismatch` on create (ADR-0002): casting a Person who hasn't
+    declared the Role is allowed, not blocked. Raises
+    `MissingSongRoleRequirementError` instead of adding an entry naming a
+    (song, role) pair with no SongRoleRequirement (issue #439, ADR-0015):
+    a Role is only assignable once a Requirement exists for it, so unlike
+    the Membership check this is a hard block, not a silent skip — the
+    same belt-and-suspenders rule `SongRoleAssignment.save()` enforces.
+
+    Raises `WrongViewingSemesterError` if `buffer.song_id` names no Song
+    in `viewing_semester` (two open tabs on different terms, or a
+    hand-crafted POST naming another Semester's Song) — the Song's own
+    membership of the Semester is this surface's version of the
+    `semester_id` check every other Buffer carries, since the Buffer
+    itself names no Semester. Raises `StaleSongCastError` if the Song's
+    `updated_at` no longer matches `buffer.song_updated_at`, rolling back
+    whatever this call had already applied.
+    """
+    if viewing_semester is None:
+        raise WrongViewingSemesterError(
+            "This cast edit Buffer's Song doesn't belong to the Semester you're currently viewing."
+        )
+
+    with transaction.atomic():
+        try:
+            song = Song.objects.get(pk=buffer.song_id, semester=viewing_semester)
+        except Song.DoesNotExist as error:
+            raise WrongViewingSemesterError(
+                "This cast edit Buffer's Song doesn't belong to the Semester you're currently viewing."
+            ) from error
+
+        if song.updated_at != buffer.song_updated_at:
+            raise StaleSongCastError('This Song changed while you were editing — reload and reapply.')
+
+        SongRoleAssignment.objects.filter(pk__in=buffer.removed_assignment_ids, song=song).delete()
+
+        if buffer.added_entries:
+            rostered_person_ids = frozenset(
+                Membership.objects.filter(semester=viewing_semester).values_list('person_id', flat=True)
+            )
+            requirement_pairs = _requirement_pairs_for([song.pk])
+            for role_id, person_id in buffer.added_entries:
+                if person_id not in rostered_person_ids:
+                    continue
+                if (song.pk, role_id) not in requirement_pairs:
+                    raise MissingSongRoleRequirementError(
+                        'This Song has no Role Requirement for this Role yet -- add one on the Song page before '
+                        'casting it.'
+                    )
+                SongRoleAssignment.objects.get_or_create(song=song, role_id=role_id, person_id=person_id)
+
+        # Re-stamps the Song's own optimistic-concurrency anchor (auto_now), so a second
+        # Buffer built before this save is refused by the staleness check above.
+        song.save(update_fields=['updated_at'])
+
+
+@dataclass(frozen=True)
+class SongCastChange:
+    """One person-on-a-Role line in a Song cast Fallout's pending-add or pending-removal list (issue #499)."""
+
+    role_name: str
+    person_name: str
+
+
+@dataclass(frozen=True)
+class SongCastFallout:
+    """Every observable consequence of a Song-level cast edit Buffer, computed without committing it (issue #499, ADR-0008).
+
+    `is_blocked` mirrors `apply_song_cast_edits()`'s Validation Errors
+    (wrong Semester, stale Song, missing Requirement) with no Fallout
+    computed at all. `pending_adds`/`pending_removals` let the Save popup
+    name each operation in this surface's own terms. `loud` is the
+    availability warning ADR-0009 said a per-Song editor structurally
+    couldn't raise, raised here from `song_cast_conflict_summary_for()`;
+    `quiet` is the standing-signal tier (an unfilled Requirement, a role
+    mismatch), which never blocks a save. Neither tier ever names a
+    Conflict's free-text reason — that stays on the picker, which is
+    admin-only by construction (ADR-0005).
+    """
+
+    is_blocked: bool
+    block_message: str
+    is_stale: bool
+    pending_adds: list[SongCastChange]
+    pending_removals: list[SongCastChange]
+    loud: list[str]
+    quiet: list[str]
+
+
+def _blocked_song_cast_fallout(block_message: str, *, is_stale: bool = False) -> SongCastFallout:
+    """Return a SongCastFallout reporting a hard block, with every Fallout/pending list empty."""
+    return SongCastFallout(
+        is_blocked=True,
+        block_message=block_message,
+        is_stale=is_stale,
+        pending_adds=[],
+        pending_removals=[],
+        loud=[],
+        quiet=[],
+    )
+
+
+def preview_song_cast_edits(buffer: SongCastEditBuffer, *, viewing_semester: Semester) -> SongCastFallout:
+    """Run the real `apply_song_cast_edits()` for `buffer` and report every observable consequence, without committing it (issue #499, ADR-0008).
+
+    This function's write is real — it must be called inside a transaction
+    the *caller* rolls back (a Preview view's `PreviewMixin` does this; a
+    test calling this directly must wrap it the same way, per
+    `assert_preview_writes_nothing`). Called outside such a transaction,
+    this function corrupts the database.
+
+    No `_lock_semester()` here either — mirrors `apply_song_cast_edits()`,
+    since nothing on this surface renumbers Song positions. No
+    `on_commit()` registration is needed: this surface sends no mail and
+    deletes no R2 object, so there is no irreversible external effect for
+    a rollback to have to discard.
+
+    Snapshots the doomed rows and the Song's `fill_status_for()` *before*
+    calling the real apply (with a copy of `buffer` whose
+    `song_updated_at` is swapped for the Song's current value, so the
+    real function's own staleness check always passes and the write
+    actually runs), then reads the post-apply state to derive the tiers.
+    `is_stale` is reported separately, from the *original* stamp, exactly
+    as the Save endpoint's own check would see it. A
+    `WrongViewingSemesterError`, `StaleSongCastError` or
+    `MissingSongRoleRequirementError` from the apply is reported as
+    `is_blocked` with no Fallout computed at all, rather than
+    re-implementing any of those checks here.
+    """
+    if viewing_semester is None:
+        return _blocked_song_cast_fallout(
+            "This cast edit Buffer's Song doesn't belong to the Semester you're currently viewing."
+        )
+    try:
+        song = Song.objects.get(pk=buffer.song_id, semester=viewing_semester)
+    except Song.DoesNotExist:
+        return _blocked_song_cast_fallout(
+            "This cast edit Buffer's Song doesn't belong to the Semester you're currently viewing."
+        )
+
+    is_stale = buffer.song_updated_at != song.updated_at
+
+    pending_removals = [
+        SongCastChange(role_name=assignment.role.name, person_name=assignment.person.name)
+        for assignment in SongRoleAssignment.objects.filter(
+            pk__in=buffer.removed_assignment_ids, song=song,
+        ).select_related('role', 'person').order_by('role__name', 'person__name')
+    ]
+
+    apply_buffer = replace(buffer, song_updated_at=song.updated_at)
+    try:
+        apply_song_cast_edits(apply_buffer, viewing_semester=viewing_semester)
+    except (WrongViewingSemesterError, StaleSongCastError, MissingSongRoleRequirementError) as error:
+        return _blocked_song_cast_fallout(str(error), is_stale=is_stale)
+
+    added_role_names = dict(
+        Role.objects.filter(pk__in={role_id for role_id, _ in buffer.added_entries}).values_list('pk', 'name')
+    )
+    added_people = {
+        person.pk: person
+        for person in Person.objects.filter(pk__in={person_id for _, person_id in buffer.added_entries})
+    }
+
+    pending_adds: list[SongCastChange] = []
+    loud: list[str] = []
+    for role_id, person_id in sorted(buffer.added_entries):
+        role_name = added_role_names.get(role_id)
+        person = added_people.get(person_id)
+        if role_name is None or person is None:
+            continue
+        pending_adds.append(SongCastChange(role_name=role_name, person_name=person.name))
+        for entry in song_cast_conflict_summary_for(song, person, viewing_semester):
+            loud.append(
+                f'{person.name} is cast as {role_name} on {song.title}, but '
+                f"{'is unavailable for' if entry.is_full_conflict else 'has a Conflict Window overlapping'} "
+                f"this Song's slot at the {entry.date.isoformat()} rehearsal."
+            )
+    pending_adds.sort(key=lambda change: (change.role_name, change.person_name))
+
+    quiet: list[str] = []
+    for status in fill_status_for(song):
+        if status.is_understaffed:
+            quiet.append(
+                f"{song.title}'s {status.role.name} Requirement is unfilled ({status.actual}/{status.target})."
+            )
+    for assignment in SongRoleAssignment.objects.filter(
+        song=song, is_role_mismatch=True,
+    ).select_related('role', 'person').order_by('role__name', 'person__name'):
+        quiet.append(
+            f"{assignment.person.name}'s {assignment.role.name} casting on {song.title} "
+            "doesn't match their declared Roles."
+        )
+
+    return SongCastFallout(
+        is_blocked=False,
+        block_message='',
+        is_stale=is_stale,
+        pending_adds=pending_adds,
+        pending_removals=pending_removals,
+        loud=loud,
+        quiet=quiet,
+    )
 
 
 def upcoming_rehearsals_for(semester, count=3):
@@ -3703,7 +4029,7 @@ class WrongViewingSemesterError(ValueError):
 
     Shared across every ADR-0008 apply function that carries this
     staleness check: `apply_roster_edits()` (issue #226) and
-    `apply_song_role_assignments()` (issue #210).
+    `apply_rehearsal_backups()` (issue #210).
     """
 
 
@@ -6343,7 +6669,7 @@ def compute_schedule_editor_live_stats(buffer: RehearsalEditBuffer, *, viewing_s
     panel's copy asks for. Propagates whatever `apply_rehearsal_edits()`
     itself raises (`WrongViewingSemesterError`, `StaleRehearsalSemesterError`,
     `PastRehearsalEditError`, `RunningOrderValidationError`) uncaught,
-    mirroring `preview_song_role_assignments()`'s contract — the view
+    mirroring `preview_rehearsal_backups()`'s contract — the view
     catches and reports these the same way its Buffer preview/save
     endpoints already do, rather than this function re-deciding how.
     """

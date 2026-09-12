@@ -281,6 +281,22 @@ describe('Schedule', () => {
     ).toBeDisabled()
   })
 
+  it('renders no "Edit Rehearsal" button at all for the Dress Rehearsal (ADR 0019)', async () => {
+    const payload = schedulePayload()
+    payload.selected!.is_dress = true
+    payload.selected!.can_edit_assignments = true
+    mockFetchOnce(200, { context: adminContext(), data: payload })
+
+    renderShell(<Schedule />, ['/schedule'])
+
+    await screen.findByRole('heading', {
+      name: 'Running order & assignments',
+    })
+    expect(
+      screen.queryByRole('button', { name: 'Edit Rehearsal' }),
+    ).not.toBeInTheDocument()
+  })
+
   it('switches sub-views via the segmented control without a second fetch', async () => {
     const fetchSpy = vi.fn().mockResolvedValue({
       status: 200,

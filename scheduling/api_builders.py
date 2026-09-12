@@ -69,6 +69,7 @@ from scheduling.services import (
     SetlistEditRow,
     SetlistRoleGroupCount,
     SkipDateInput,
+    SongCastEditBuffer,
     SongRoleRequirementBuffer,
     SongRoleRequirementEntry,
 )
@@ -1183,20 +1184,23 @@ def _parse_assignment_id_set(raw_values):
     return frozenset(parsed for value in raw_values if (parsed := _expect_int(value)) is not None)
 
 
-def _parse_added_assignment_entries(raw_values):
-    """Return `raw_values` as a `frozenset` of `(song_id, role_id, person_id)` tuples, dropping any malformed entry (issue #338)."""
+def _parse_added_cast_entries(raw_values):
+    """Return `raw_values` as a `frozenset` of `(role_id, person_id)` tuples, dropping any malformed entry (issue #499).
+
+    The Song-level cast Buffer's adds carry no `song_id` of their own —
+    the whole Buffer describes one Song, named once from the URL.
+    """
     if not isinstance(raw_values, list):
         return frozenset()
     entries = set()
     for entry in raw_values:
         if not isinstance(entry, dict):
             continue
-        song_id = _expect_int(entry.get('song_id'))
         role_id = _expect_int(entry.get('role_id'))
         person_id = _expect_int(entry.get('person_id'))
-        if song_id is None or role_id is None or person_id is None:
+        if role_id is None or person_id is None:
             continue
-        entries.add((song_id, role_id, person_id))
+        entries.add((role_id, person_id))
     return frozenset(entries)
 
 
@@ -1240,26 +1244,19 @@ def _parse_backup_covering_for_updates(raw_values):
 
 
 def build_assignment_buffer_from_request(request, *, viewing_semester) -> AssignmentEditBuffer:
-    """Parse `request`'s JSON body into an `AssignmentEditBuffer` (issue #338).
+    """Parse `request`'s JSON body into a Backup-only `AssignmentEditBuffer` (issue #338, ADR-0019).
 
-    The ONE place a submitted assignment edit JSON body becomes an
+    The ONE place a submitted Rehearsal-grid edit JSON body becomes an
     `AssignmentEditBuffer` — `/api/schedule/<id>/assignments/preview/`
     and `/api/schedule/<id>/assignments/save/` both call it, never fork
     it, mirroring `build_setlist_buffer_from_request()`'s ADR-0008 "preview
-    and save cannot disagree" guarantee. Ports `scheduling/views.py`'s
-    `_build_assignment_buffer()` (and its `_parse_assignment_ids()`/
-    `_parse_added_entries()`/`_parse_added_backup_entries()`/
-    `_parse_backup_covering_for_updates()` helpers) from form-encoded POST
-    fields to one JSON body — this ticket reimplements no derivation, only
-    the wire shape changes.
+    and save cannot disagree" guarantee.
 
     Wire shape::
 
         {
             "semester_id": 1,
             "semester_updated_at": "2026-01-01T00:00:00.000000+00:00",
-            "removed_assignment_ids": [1, 2],
-            "added_entries": [{"song_id": 1, "role_id": 2, "person_id": 3}],
             "removed_backup_ids": [4],
             "added_backup_entries": [
                 {"rehearsal_song_id": 5, "role_id": 2, "person_id": 6, "covering_for_id": null}
@@ -1267,14 +1264,20 @@ def build_assignment_buffer_from_request(request, *, viewing_semester) -> Assign
             "backup_covering_for_updates": [{"backup_id": 7, "covering_for_id": 8}]
         }
 
-    Every id list/entry is shape-checked only — whether a `song_id`,
-    `role_id`, `person_id` or Backup id actually names a live row `buffer`
-    can touch is `apply_song_role_assignments()`'s job, which already
-    silently skips anything outside `viewing_semester`/`rehearsal` (issue
-    #338's Implementation Decisions: "this ticket reimplements no
-    derivation"). Only a missing/malformed `semester_id` or
-    `semester_updated_at` — both required for either staleness check to
-    run at all — raises `AssignmentBufferValidationError`.
+    `removed_assignment_ids` and `added_entries` are deliberately **not
+    read at all** since ADR-0019 moved casting to the Song-level surface —
+    not merely ignored downstream. A stale tab or a hand-crafted POST can
+    still send them; never reading the keys is what makes them inert,
+    rather than relying on a Buffer field that happens to be unused.
+
+    Every id list/entry is shape-checked only — whether a
+    `rehearsal_song_id`, `role_id`, `person_id` or Backup id actually
+    names a live row `buffer` can touch is `apply_rehearsal_backups()`'s
+    job, which already silently skips anything outside
+    `viewing_semester`/`rehearsal`. Only a missing/malformed
+    `semester_id` or `semester_updated_at` — both required for either
+    staleness check to run at all — raises
+    `AssignmentBufferValidationError`.
     """
     from config.views import ApiView
 
@@ -1303,8 +1306,6 @@ def build_assignment_buffer_from_request(request, *, viewing_semester) -> Assign
     return AssignmentEditBuffer(
         semester_id=semester_id,
         semester_updated_at=semester_updated_at,
-        removed_assignment_ids=_parse_assignment_id_set(body.get('removed_assignment_ids', [])),
-        added_entries=_parse_added_assignment_entries(body.get('added_entries', [])),
         removed_backup_ids=_parse_assignment_id_set(body.get('removed_backup_ids', [])),
         added_backup_entries=_parse_added_backup_entries(body.get('added_backup_entries', [])),
         backup_covering_for_updates=_parse_backup_covering_for_updates(body.get('backup_covering_for_updates', [])),
@@ -1661,4 +1662,78 @@ def build_song_role_requirement_buffer_from_request(request, *, song_id, viewing
         semester_id=semester_id,
         semester_updated_at=semester_updated_at,
         entries=entries,
+    )
+
+
+class SongCastBufferValidationError(ValidationError):
+    """Raised by `build_song_cast_buffer_from_request()` for a JSON body that can't become a `SongCastEditBuffer` (issue #499).
+
+    Mirrors `AssignmentBufferValidationError`'s shape rather than the
+    row-keyed Setlist/Requirements one: every field on this Buffer is an
+    id or a flat tuple of ids, never a per-row edit a client renders back
+    beside one input, so a malformed submission is reported as
+    `non_field_errors` alone.
+    """
+
+    def __init__(self, *, non_field_errors):
+        """Store the submission-wide failure messages."""
+        super().__init__('The submitted cast edit could not be validated.')
+        self.non_field_errors = non_field_errors
+
+
+def build_song_cast_buffer_from_request(request, *, song_id) -> SongCastEditBuffer:
+    """Parse `request`'s JSON body into a `SongCastEditBuffer` for `song_id` (issue #499, ADR-0019).
+
+    The ONE place a submitted Song-level cast JSON body becomes a
+    `SongCastEditBuffer` — `/api/songs/<pk>/cast/preview/` and
+    `/api/songs/<pk>/cast/save/` both call it, never fork it, so ADR-0008's
+    "preview and save cannot disagree" guarantee holds on the wire too.
+    `song_id` always comes from the URL, never the body, the same way
+    `build_song_role_requirement_buffer_from_request()` takes it.
+
+    Wire shape::
+
+        {
+            "song_updated_at": "2026-01-01T00:00:00.000000+00:00",
+            "removed_assignment_ids": [1, 2],
+            "added_entries": [{"role_id": 2, "person_id": 3}]
+        }
+
+    There is no `semester_id` here, unlike every other Buffer on the wire:
+    this surface's Semester check is "does `song_id` name a Song in the
+    viewing Semester", answered by `apply_song_cast_edits()` (and 404'd by
+    the view before that), so a body-supplied Semester id would be a
+    second, redundant source of the same answer. `song_updated_at` is
+    required — without it neither the staleness check nor its `is_stale`
+    report can run at all — and is the only thing that raises here; every
+    id list is shape-checked only, since whether an id names a live row is
+    `apply_song_cast_edits()`'s job.
+    """
+    from config.views import ApiView
+
+    body = ApiView().parse_json_body(request)
+    if not isinstance(body, dict):
+        raise SongCastBufferValidationError(non_field_errors=['Expected a JSON object.'])
+
+    non_field_errors = []
+    song_updated_at = None
+    raw_stamp = body.get('song_updated_at')
+    if not isinstance(raw_stamp, str) or not raw_stamp:
+        non_field_errors.append('song_updated_at is required and must be an ISO datetime string.')
+    else:
+        try:
+            song_updated_at = parse_datetime(raw_stamp)
+        except ValueError:
+            song_updated_at = None
+        if song_updated_at is None:
+            non_field_errors.append('song_updated_at could not be parsed as an ISO datetime.')
+
+    if non_field_errors:
+        raise SongCastBufferValidationError(non_field_errors=non_field_errors)
+
+    return SongCastEditBuffer(
+        song_id=song_id,
+        song_updated_at=song_updated_at,
+        removed_assignment_ids=_parse_assignment_id_set(body.get('removed_assignment_ids', [])),
+        added_entries=_parse_added_cast_entries(body.get('added_entries', [])),
     )

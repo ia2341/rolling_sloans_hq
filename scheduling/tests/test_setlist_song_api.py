@@ -64,7 +64,10 @@ class SerializeSetlistExactKeySetTests(TestCase):
 
         self.assertEqual(
             set(data['songs'][0].keys()),
-            {'id', 'title', 'artist', 'length', 'position', 'notes', 'cast', 'recording_count'},
+            {
+                'id', 'title', 'artist', 'length', 'position', 'notes', 'updated_at',
+                'cast', 'recording_count',
+            },
         )
 
     def test_cast_entry_and_performer_keys(self):
@@ -78,7 +81,9 @@ class SerializeSetlistExactKeySetTests(TestCase):
 
         cast_entry = data['songs'][0]['cast'][0]
         self.assertEqual(set(cast_entry.keys()), {'role_id', 'role_name', 'code', 'performers'})
-        self.assertEqual(set(cast_entry['performers'][0].keys()), {'id', 'name', 'is_role_mismatch'})
+        self.assertEqual(
+            set(cast_entry['performers'][0].keys()), {'id', 'name', 'is_role_mismatch', 'assignment_id'},
+        )
 
     def test_no_semester_yields_the_empty_shape_with_the_same_keys(self):
         """`None` (no Semester at all) still returns the documented top-level keys, empty rather than absent."""
@@ -96,35 +101,33 @@ class SerializeSongExactKeySetTests(TestCase):
     """`serialize_song()` names every key it emits, and no more."""
 
     def test_member_viewer_keys(self):
-        """A member viewer's payload carries exactly the documented keys, with no `next_rehearsal`/`available_roles` key at all."""
+        """A member viewer's payload carries exactly the documented keys, with no `available_roles` key at all."""
         song = SongFactory()
 
-        data = serialize_song(song, is_admin=False, next_rehearsal=None)
+        data = serialize_song(song, is_admin=False)
 
         self.assertEqual(
             set(data.keys()),
             {
-                'id', 'title', 'artist', 'length', 'position', 'notes',
+                'id', 'title', 'artist', 'length', 'position', 'notes', 'updated_at',
                 'cast', 'role_requirements', 'recording_groups', 'rehearsed_at',
             },
         )
 
-    def test_admin_viewer_keys_add_next_rehearsal_and_available_roles(self):
-        """An admin viewer's payload adds exactly `next_rehearsal` and `available_roles` over the member shape."""
+    def test_admin_viewer_keys_add_available_roles(self):
+        """An admin viewer's payload adds exactly `available_roles` over the member shape (ADR-0019 dropped `next_rehearsal`)."""
         song = SongFactory()
-        rehearsal = RehearsalFactory(semester=song.semester)
 
-        data = serialize_song(song, is_admin=True, next_rehearsal=rehearsal)
+        data = serialize_song(song, is_admin=True)
 
         self.assertEqual(
             set(data.keys()),
             {
-                'id', 'title', 'artist', 'length', 'position', 'notes',
+                'id', 'title', 'artist', 'length', 'position', 'notes', 'updated_at',
                 'cast', 'role_requirements', 'recording_groups', 'rehearsed_at',
-                'next_rehearsal', 'available_roles',
+                'available_roles',
             },
         )
-        self.assertEqual(set(data['next_rehearsal'].keys()), {'id', 'date'})
 
     def test_role_requirement_entry_keys(self):
         """A `role_requirements` entry carries exactly its documented keys."""
@@ -132,7 +135,7 @@ class SerializeSongExactKeySetTests(TestCase):
         role = RoleFactory()
         SongRoleRequirementFactory(song=song, role=role, count=2)
 
-        data = serialize_song(song, is_admin=False, next_rehearsal=None)
+        data = serialize_song(song, is_admin=False)
 
         self.assertEqual(
             set(data['role_requirements'][0].keys()),
@@ -144,7 +147,7 @@ class SerializeSongExactKeySetTests(TestCase):
         song = SongFactory()
         RoleFactory()
 
-        data = serialize_song(song, is_admin=True, next_rehearsal=None)
+        data = serialize_song(song, is_admin=True)
 
         self.assertEqual(set(data['available_roles'][0].keys()), {'id', 'name'})
 
@@ -154,7 +157,7 @@ class SerializeSongExactKeySetTests(TestCase):
         rehearsal_song = RehearsalSongFactory(song=song, rehearsal=RehearsalFactory(semester=song.semester))
         RecordingFactory(rehearsal_song=rehearsal_song)
 
-        data = serialize_song(song, is_admin=False, next_rehearsal=None)
+        data = serialize_song(song, is_admin=False)
 
         group = data['recording_groups'][0]
         self.assertEqual(
@@ -168,7 +171,7 @@ class SerializeSongExactKeySetTests(TestCase):
         song = SongFactory()
         RehearsalSongFactory(song=song, rehearsal=RehearsalFactory(semester=song.semester))
 
-        data = serialize_song(song, is_admin=False, next_rehearsal=None)
+        data = serialize_song(song, is_admin=False)
 
         self.assertEqual(
             set(data['rehearsed_at'][0].keys()),
@@ -261,26 +264,20 @@ class SongDetailApiViewTests(TestCase):
 
         self.assertEqual(response.status_code, 404)
 
-    def test_member_viewer_gets_no_next_rehearsal_key(self):
-        """A non-admin viewer's payload carries no `next_rehearsal` key at all."""
+    def test_no_viewer_gets_a_next_rehearsal_pointer_any_more(self):
+        """ADR-0019 retired the "Casting happens on a rehearsal, not here" pointer — neither viewer gets the key."""
         semester = SemesterFactory()
         song = SongFactory(semester=semester)
+        RehearsalFactory(semester=semester, date=timezone.localdate() + timedelta(days=3))
 
-        response = self.client.get(f'/api/songs/{song.pk}/')
+        member_payload = self.client.get(f'/api/songs/{song.pk}/').json()['data']
 
-        self.assertNotIn('next_rehearsal', response.json()['data'])
-
-    def test_admin_viewer_gets_the_next_rehearsal_pointer(self):
-        """An admin viewer's payload carries the next upcoming Rehearsal for the ADR-0009 pointer."""
         admin = PersonFactory(password=PASSWORD, is_admin=True)
         self.client.login(username=admin.email, password=PASSWORD)
-        semester = SemesterFactory()
-        song = SongFactory(semester=semester)
-        upcoming = RehearsalFactory(semester=semester, date=timezone.localdate() + timedelta(days=3))
+        admin_payload = self.client.get(f'/api/songs/{song.pk}/').json()['data']
 
-        response = self.client.get(f'/api/songs/{song.pk}/')
-
-        self.assertEqual(response.json()['data']['next_rehearsal']['id'], upcoming.pk)
+        self.assertNotIn('next_rehearsal', member_payload)
+        self.assertNotIn('next_rehearsal', admin_payload)
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)
