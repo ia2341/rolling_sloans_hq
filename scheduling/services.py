@@ -3818,8 +3818,7 @@ def apply_roster_edits(
     `identity.services.create_person_with_temp_password()` (issue #482,
     ADR 0018) and immediately rostered with no declared Roles — the same
     transaction as every other edit in this Buffer, so a creation either
-    lands with the rest of the batch or not at all. Unlike the retired
-    `invite_person()` path, this reaches no external service, so there is
+    lands with the rest of the batch or not at all. This reaches no external service, so there is
     no `transaction.on_commit()` to register: a Preview's rollback
     discards the created Person row (and its temp password) for free with
     no special-casing.
@@ -3989,8 +3988,7 @@ def preview_roster_edits(buffer: RosterEditBuffer, *, viewing_semester: Semester
     `apply_roster_edits()` call below like everything else in the Buffer —
     each row really is created, with a real `set_password()` call, exactly
     as Save would. That's safe only because it reaches no external service
-    (issue #482, ADR 0018): unlike the retired `invite_person()` email
-    path, there's no `transaction.on_commit()`-deferred side effect for a
+    (issue #482, ADR 0018): there's no `transaction.on_commit()`-deferred side effect for a
     rollback to have to discard — the caller's rollback (ADR 0008) discards
     the created Person row, and the generated temp password along with it,
     for free. This function deliberately discards `apply_roster_edits()`'s

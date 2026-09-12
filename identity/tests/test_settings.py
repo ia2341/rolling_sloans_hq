@@ -18,7 +18,6 @@ BASE_ENV = {
     'DJANGO_SECRET_KEY': 'test-secret-key-not-used-anywhere-real',
     'DJANGO_ALLOWED_HOSTS': 'example.com',
     'DATABASE_URL': 'postgres://user:password@dbhost:5432/rolling_sloans?sslmode=require',
-    'SITE_URL': 'https://example.com',
 }
 
 PRINT_SETTINGS_SCRIPT = """
@@ -94,21 +93,6 @@ class ProductionSecuritySettingsTests(unittest.TestCase):
 
         self.assertEqual(values['DATABASE_OPTIONS'].get('sslmode'), 'require')
 
-    def test_startup_fails_without_site_url(self):
-        """In production, settings must fail to load rather than silently fall back to the localhost SITE_URL default."""
-        result = run_settings_subprocess('False', env_overrides={'SITE_URL': ''})
-
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('SITE_URL', result.stderr)
-
-
-class PasswordResetTimeoutTests(unittest.TestCase):
-    def test_password_reset_timeout_is_explicitly_three_days(self):
-        """PASSWORD_RESET_TIMEOUT is declared explicitly (issue #327), not left to Django's coincidentally-equal default."""
-        from django.conf import settings
-
-        self.assertEqual(settings.PASSWORD_RESET_TIMEOUT, 60 * 60 * 24 * 3)
-
 
 class DevSettingsTests(unittest.TestCase):
     def test_tls_settings_not_forced_when_debug_true(self):
@@ -119,12 +103,6 @@ class DevSettingsTests(unittest.TestCase):
         self.assertIs(values['SESSION_COOKIE_SECURE'], False)
         self.assertIs(values['CSRF_COOKIE_SECURE'], False)
         self.assertEqual(values['SECURE_HSTS_SECONDS'], 0)
-
-    def test_localhost_fallback_used_without_site_url(self):
-        """In dev, settings must still load successfully without SITE_URL, falling back to the localhost default."""
-        result = run_settings_subprocess('True', env_overrides={'SITE_URL': ''})
-
-        result.check_returncode()
 
 
 class EnvExampleTests(unittest.TestCase):
@@ -158,7 +136,6 @@ class EnvExampleTests(unittest.TestCase):
             'AWS_SECRET_ACCESS_KEY',
             'AWS_STORAGE_BUCKET_NAME',
             'AWS_S3_ENDPOINT_URL',
-            'RESEND_API_KEY',
             'DJANGO_ALLOWED_HOSTS',
             'DJANGO_DEBUG',
         ]

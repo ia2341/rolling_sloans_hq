@@ -66,15 +66,6 @@ class Person(AbstractBaseUser, PermissionsMixin):
     No separate Group/Permission objects back `is_admin` — save() mirrors it
     onto `is_staff`/`is_superuser` directly, per the Identity & Auth spec (#13).
 
-    `invited_at` (issue #397) is null for a Person created without ever
-    sending them an invite email (see `identity.services.add_person`), and
-    stamped by `invite_person()`/`resend_invite()` the moment an invite
-    actually sends. It's the one bit `has_usable_password()` alone can't
-    supply: that flag already tells "Invited" from "Accepted" apart, but
-    collapses "never invited" into the same false as "invited, not yet
-    accepted". `invited_at` and the email-invite path it backs are legacy
-    (ADR 0018) — kept only until the follow-on issue that retires them.
-
     `must_change_password` (issue #482, ADR 0018) is set whenever an admin
     action generates a real, immediately-usable temp password for this
     Person (`identity.services.create_person_with_temp_password()`), and
@@ -91,7 +82,6 @@ class Person(AbstractBaseUser, PermissionsMixin):
     is_admin = models.BooleanField(default=False)
     is_staff = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
-    invited_at = models.DateTimeField(null=True, blank=True)
     must_change_password = models.BooleanField(default=False)
 
     objects = PersonManager()
@@ -135,27 +125,6 @@ class LoginAttempt(models.Model):
     email = models.EmailField()
     ip_address = models.GenericIPAddressField()
     was_successful = models.BooleanField()
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        indexes: ClassVar[list] = [
-            models.Index(fields=['email', 'created_at']),
-            models.Index(fields=['ip_address', 'created_at']),
-        ]
-
-
-class AuthEmailRequest(models.Model):
-    """One row per outbound auth email requested: a reset request or a `resend_invite()` (#327's limit two).
-
-    This limit is about Resend quota and sending reputation, not
-    enumeration: an unauthenticated endpoint that triggers third-party
-    email is a way to burn both, which would take down all authentication,
-    invites included. Row-counted for the same worker-count reason as
-    `LoginAttempt`.
-    """
-
-    email = models.EmailField()
-    ip_address = models.GenericIPAddressField()
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

@@ -66,7 +66,6 @@ jobs:
           AWS_SECRET_ACCESS_KEY: unused
           AWS_STORAGE_BUCKET_NAME: unused
           AWS_S3_ENDPOINT_URL: https://unused.example.com
-          CLUB_EMAIL_FROM: unused@example.com
         run: |
           set -o pipefail
           python manage.py seed_example_semester --confirm 2>&1 | tee seed_output.log

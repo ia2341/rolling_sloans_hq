@@ -17,6 +17,9 @@ REMOVED_ROUTE_NAMES = (
     'identity:password-reset-complete',
     'identity:password-change',
     'identity:password-change-done',
+    # Issue #485, ADR 0018: the email-based invite/reset surface itself.
+    'identity:password-reset',
+    'identity:set-password-confirm',
 )
 
 REMOVED_TEMPLATES = (
@@ -26,6 +29,12 @@ REMOVED_TEMPLATES = (
     'identity/password_reset_confirm.html',
     'identity/password_change_form.html',
     'identity/password_change_done.html',
+    # Issue #485, ADR 0018: the email-based invite/reset surface itself.
+    'identity/invite_email.txt',
+    'identity/password_reset_form.html',
+    'identity/password_reset_email.txt',
+    'identity/password_reset_subject.txt',
+    'identity/set_password_form.html',
 )
 
 

@@ -24,8 +24,8 @@ const FAILURE_MESSAGES: Record<LoginFailureReason, string> = {
  * to-`/login` contract assumes a session already exists — exactly the
  * thing neither of these calls can assume. Deliberately just Email,
  * Password and one Sign In button: no forgot-password link, no sign-up
- * link (there is no self-registration — `identity/services.py`'s
- * `invite_person()` is the only path to an account).
+ * link (there is no self-registration — an admin creates every account,
+ * ADR 0018).
  */
 export function Login() {
   const navigate = useNavigate()

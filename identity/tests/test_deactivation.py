@@ -1,4 +1,4 @@
-"""`apply_person_deactivation()`, `apply_person_reactivation()`, and `resend_invite()`'s new refusal (issue #469, ADR 0017)."""
+"""`apply_person_deactivation()`, `apply_person_reactivation()`, and `apply_password_reset()`'s deactivated-target refusal (issue #469, #483, ADR 0017/0018)."""
 
 import threading
 
@@ -12,9 +12,9 @@ from identity.services import (
     CannotDeactivateLastActiveAdminError,
     CannotDeactivateSelfError,
     PersonIsDeactivatedError,
+    apply_password_reset,
     apply_person_deactivation,
     apply_person_reactivation,
-    resend_invite,
 )
 
 
@@ -158,10 +158,11 @@ class ApplyPersonReactivationTests(TestCase):
         self.assertTrue(Person.objects.get(pk=target.pk).is_admin)
 
 
-class ResendInviteDeactivatedRefusalTests(TestCase):
+class PasswordResetDeactivatedRefusalTests(TestCase):
     def test_refuses_a_deactivated_person(self):
-        """A deactivated-but-never-accepted invite must not still be able to get a working set-password email (issue #469)."""
+        """A deactivated Person must not be handed a fresh working password through an admin reset (issue #469, #483)."""
+        admin = PersonFactory(is_admin=True)
         target = PersonFactory(is_active=False)
 
         with self.assertRaises(PersonIsDeactivatedError):
-            resend_invite(target)
+            apply_password_reset(target=target, requesting_admin=admin)

@@ -30,7 +30,7 @@ class ApplyPasswordResetTests(TestCase):
         self.assertTrue(refreshed.must_change_password)
 
     def test_returns_a_fresh_temp_password_each_call(self):
-        """Reset works on anyone at any time, collapsing `resend_invite()`'s narrower job: calling it twice never errors and yields a different plaintext."""
+        """Reset works on anyone at any time: calling it twice never errors and yields a different plaintext."""
         requesting_admin = PersonFactory(is_admin=True, is_active=True)
         target = PersonFactory(is_active=True)
 
@@ -41,7 +41,7 @@ class ApplyPasswordResetTests(TestCase):
         self.assertTrue(Person.objects.get(pk=target.pk).check_password(second_password))
 
     def test_deactivated_target_is_refused(self):
-        """A deactivated Person cannot be handed a working credential through this door (mirrors `resend_invite()`)."""
+        """A deactivated Person cannot be handed a working credential through this door."""
         requesting_admin = PersonFactory(is_admin=True, is_active=True)
         target = PersonFactory(is_active=False)
         old_password_hash = target.password
