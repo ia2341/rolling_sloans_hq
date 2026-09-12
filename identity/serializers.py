@@ -20,7 +20,7 @@ def serialize_viewer(person):
     `Person` row. `must_change_password` (issue #484) is the SPA's signal
     to nag the viewer about a still-unreplaced admin-generated password;
     it's the viewer's own flag by the same self-only reasoning.
-    `theme_preference` (issue #500) is the viewer's own durable light/dark/
+    `theme_preference` (issue #497) is the viewer's own durable light/dark/
     system setting, applied client-side on every context update.
     """
     return {

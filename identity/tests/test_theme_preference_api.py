@@ -1,4 +1,4 @@
-"""`POST /api/theme/` (issue #500): the SPA's self-only theme-preference endpoint."""
+"""`POST /api/theme/` (issue #497): the SPA's self-only theme-preference endpoint."""
 
 from django.test import TestCase, override_settings
 from django.urls import reverse

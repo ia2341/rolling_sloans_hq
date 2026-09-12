@@ -24,7 +24,7 @@
 }
 
 /* `system` (the default, no attribute set) reads these from the OS via the
-   media query below; a manual `light`/`dark` choice (issue #500) is stamped
+   media query below; a manual `light`/`dark` choice (issue #497) is stamped
    as `data-theme` on `<html>` by `ThemeSync`/`main.tsx`'s pre-render read,
    and the attribute selectors below override the media query so the
    manual choice always wins. */

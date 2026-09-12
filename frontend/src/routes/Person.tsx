@@ -697,7 +697,7 @@ const THEME_PREFERENCE_OPTIONS: { value: ThemePreference; label: string }[] = [
 ]
 
 /**
- * The self-only Light/Dark/System control in the Details card (issue #500).
+ * The self-only Light/Dark/System control in the Details card (issue #497).
  * Reads the current value off `context.viewer` (a durable, per-Person
  * setting, not browser-local) and posts a change to `/api/theme/`; the
  * envelope's `context` block updates the shared store on success, which

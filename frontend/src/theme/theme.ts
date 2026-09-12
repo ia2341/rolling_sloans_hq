@@ -2,7 +2,7 @@ import type { ThemePreference } from '../api/types'
 
 /**
  * Local cache key for the viewer's last-known `theme_preference` (issue
- * #500). The setting itself lives on `Person` and travels with the
+ * #497). The setting itself lives on `Person` and travels with the
  * `context.viewer` envelope, so this cache exists only to apply the right
  * theme before that first `/api/` response lands — never as the source of
  * truth, which stays the server.

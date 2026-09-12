@@ -290,7 +290,7 @@ def clear_must_change_password(person):
 
 
 def apply_theme_preference_change(person, theme_preference):
-    """Set `person.theme_preference` to `theme_preference` (issue #500), self-only by construction.
+    """Set `person.theme_preference` to `theme_preference` (issue #497), self-only by construction.
 
     A plain apply-only write, mirroring `clear_must_change_password()`'s
     "one field, no derived fallout" shape — there is no guard, since a

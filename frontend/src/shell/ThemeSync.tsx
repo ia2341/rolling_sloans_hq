@@ -4,7 +4,7 @@ import { useAppContext } from '../api/ContextProvider'
 import { applyThemePreference, cacheThemePreference } from '../theme/theme'
 
 /**
- * Applies the viewer's `theme_preference` (issue #500) to the DOM on every
+ * Applies the viewer's `theme_preference` (issue #497) to the DOM on every
  * context update, and caches it so `main.tsx`'s pre-render read can apply
  * the right theme on the *next* load before this component — or any
  * `/api/` response — exists. Renders nothing; `index.css`'s

@@ -131,7 +131,7 @@ class PasswordChangeApiView(ApiView, View):
 
 
 class ThemePreferenceApiView(ApiView, View):
-    """`POST /api/theme/`: sets the requesting Person's own `theme_preference` (issue #500, self-only).
+    """`POST /api/theme/`: sets the requesting Person's own `theme_preference` (issue #497, self-only).
 
     Self-only by construction, like `PasswordChangeApiView` — no `pk` in
     the URL, so this can only ever act on `request.user`. `theme_preference`

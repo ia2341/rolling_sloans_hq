@@ -76,7 +76,7 @@ class Person(AbstractBaseUser, PermissionsMixin):
     `identity.services.invite_status_for()` is now keyed on this flag,
     not `has_usable_password()`.
 
-    `theme_preference` (issue #500) is a durable, per-Person setting rather
+    `theme_preference` (issue #497) is a durable, per-Person setting rather
     than a browser-local one, so it follows a member across devices; it
     defaults to `THEME_SYSTEM` for every new Person, including one who has
     never signed in yet, so a first-time login honors the OS preference

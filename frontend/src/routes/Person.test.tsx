@@ -515,7 +515,7 @@ describe('Person', () => {
     ).not.toBeInTheDocument()
   })
 
-  /** Issue #500: the self-only Theme control posts the selection and reflects the updated context. */
+  /** Issue #497: the self-only Theme control posts the selection and reflects the updated context. */
   it('changes the selected theme preference and marks it pressed', async () => {
     mockFetchByUrl({
       '/api/members/1/': () => ({
