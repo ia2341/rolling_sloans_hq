@@ -247,11 +247,21 @@ def _serialize_role_legend_entry(role, codes):
 
 
 def _serialize_cast_performer(performer):
-    """Return one `CastPerformer` by name only (never `Person.email`, ADR 0005), plus the ADR-0002 mismatch flag."""
+    """Return one `CastPerformer` by name only (never `Person.email`, ADR 0005), plus the ADR-0002 mismatch flag and its row id.
+
+    `assignment_id` is the `SongRoleAssignment` row id the Song-level Cast
+    editor's ✕ stages into `SongCastEditBuffer.removed_assignment_ids`
+    (issue #499, ADR-0019). It is emitted to every viewer rather than
+    gated on `is_admin`: it discloses nothing a member isn't already
+    reading (this same performer, on this same Role), and the surfaces
+    that can act on it are admin-gated server-side, not by the absence of
+    an id on the wire.
+    """
     return {
         'id': performer.person.pk,
         'name': performer.person.name,
         'is_role_mismatch': performer.is_role_mismatch,
+        'assignment_id': performer.assignment_id,
     }
 
 
@@ -266,7 +276,13 @@ def _serialize_cast_entry(entry):
 
 
 def _serialize_setlist_song(song, cast, recording_count):
-    """Return one Setlist row: the Song's own fields, its role-by-role cast line, and its take count."""
+    """Return one Setlist row: the Song's own fields, its role-by-role cast line, and its take count.
+
+    `updated_at` is the Song's own optimistic-concurrency stamp
+    (ADR-0019), carried here so the Setlist's inline cast popover can
+    build a `SongCastEditBuffer` for a row without a second read of
+    `/api/songs/<pk>/`.
+    """
     return {
         'id': song.pk,
         'title': song.title,
@@ -274,6 +290,7 @@ def _serialize_setlist_song(song, cast, recording_count):
         'length': format_song_length(song.length),
         'position': song.position,
         'notes': song.notes,
+        'updated_at': song.updated_at.isoformat(),
         'cast': [_serialize_cast_entry(entry) for entry in cast],
         'recording_count': recording_count,
     }
@@ -347,11 +364,6 @@ def _serialize_rehearsed_at_row(row):
     }
 
 
-def _serialize_next_rehearsal(rehearsal):
-    """Return the admin-only "Cast on …" pointer's target Rehearsal: `id` and `date`."""
-    return {'id': rehearsal.pk, 'date': rehearsal.date.isoformat()}
-
-
 def _serialize_role_fill_status(status) -> dict:
     """Return one `RoleFillStatus`: the Role's name and its target-vs-actual fill state (issue #207, #339).
 
@@ -376,14 +388,13 @@ def _serialize_addable_role(role) -> dict:
     return {'id': role.pk, 'name': role.name}
 
 
-def serialize_song(song, *, is_admin: bool, next_rehearsal) -> dict:
-    """Return the `/api/songs/<pk>/` `data` shape for `song` (issue #330, #339).
+def serialize_song(song, *, is_admin: bool) -> dict:
+    """Return the `/api/songs/<pk>/` `data` shape for `song` (issue #330, #339, #499).
 
-    `next_rehearsal` is the admin-only ADR-0009 pointer's target — pass
-    `None` for a member viewer or when there's nothing upcoming, and it's
-    omitted from the payload rather than emitted as a stray null so a
-    member's payload carries no admin-only key at all. Carries no
-    `Conflict`, `ConflictWindow` or `Backup` field, and no attendance
+    The admin-only `next_rehearsal` key is gone (ADR-0019): it existed
+    solely as the "Casting happens on a rehearsal, not here" pointer
+    ADR-0009 required, and casting now happens on this very page. Carries
+    no `Conflict`, `ConflictWindow` or `Backup` field, and no attendance
     inference (ADR 0005); `is_role_mismatch` is rendered here deliberately
     (ADR 0002) — see `serialize_setlist()`'s docstring. `role_requirements`
     is rendered for every viewer (issue #339 user story 35); `available_roles`
@@ -399,6 +410,7 @@ def serialize_song(song, *, is_admin: bool, next_rehearsal) -> dict:
         'length': format_song_length(song.length),
         'position': song.position,
         'notes': song.notes,
+        'updated_at': song.updated_at.isoformat(),
         'cast': [_serialize_cast_entry(entry) for entry in services.cast_line_for(song, roles, codes)],
         'role_requirements': [
             _serialize_role_fill_status(status) for status in services.fill_status_for(song)
@@ -407,7 +419,6 @@ def serialize_song(song, *, is_admin: bool, next_rehearsal) -> dict:
         'rehearsed_at': [_serialize_rehearsed_at_row(row) for row in services.rehearsed_at_for(song)],
     }
     if is_admin:
-        data['next_rehearsal'] = _serialize_next_rehearsal(next_rehearsal) if next_rehearsal is not None else None
         data['available_roles'] = [
             _serialize_addable_role(role) for role in services.addable_roles_for_song(song)
         ]
@@ -1669,12 +1680,6 @@ def serialize_assignment_edit_fallout(fallout: AssignmentEditFallout) -> dict:
     }
 
 
-def _serialize_assignment_edit_buffer_entry(entry) -> dict:
-    """Return one `(song_id, role_id, person_id)` added-entry tuple as a named object."""
-    song_id, role_id, person_id = entry
-    return {'song_id': song_id, 'role_id': role_id, 'person_id': person_id}
-
-
 def _serialize_assignment_edit_buffer_backup_entry(entry) -> dict:
     """Return one `(rehearsal_song_id, role_id, person_id, covering_for_id)` added-Backup-entry tuple as a named object."""
     rehearsal_song_id, role_id, person_id, covering_for_id = entry
@@ -1691,7 +1696,7 @@ def _serialize_assignment_edit_buffer_covering_for_update(entry) -> dict:
 
 
 def serialize_assignment_edit_buffer(buffer: AssignmentEditBuffer) -> dict:
-    """Return an `AssignmentEditBuffer` echoed back in `build_assignment_buffer_from_request()`'s wire shape (issue #338).
+    """Return a Backup-only `AssignmentEditBuffer` echoed back in `build_assignment_buffer_from_request()`'s wire shape (issue #338, ADR-0019).
 
     Used only by `/api/schedule/<id>/assignments/preview/`'s `values`
     field on a successful build (#308's amendment) — never by `.../save/`,
@@ -1703,10 +1708,6 @@ def serialize_assignment_edit_buffer(buffer: AssignmentEditBuffer) -> dict:
     return {
         'semester_id': buffer.semester_id,
         'semester_updated_at': buffer.semester_updated_at.isoformat() if buffer.semester_updated_at else None,
-        'removed_assignment_ids': sorted(buffer.removed_assignment_ids),
-        'added_entries': [
-            _serialize_assignment_edit_buffer_entry(entry) for entry in sorted(buffer.added_entries)
-        ],
         'removed_backup_ids': sorted(buffer.removed_backup_ids),
         'added_backup_entries': [
             _serialize_assignment_edit_buffer_backup_entry(entry)
@@ -1743,15 +1744,19 @@ def _serialize_picker_option(option, *, conflicted_person_ids) -> dict:
 
 
 def serialize_assignment_picker(picker: AssignmentPickerResult, rehearsal) -> dict:
-    """Return an `AssignmentPickerResult` as `/api/schedule/<id>/assignments/picker/<song_id>/<role_id>/`'s `data` value (issue #338).
+    """Return an `AssignmentPickerResult` as `/api/schedule/<id>/assignments/picker/<song_id>/<role_id>/`'s `data` value (issue #338, ADR-0019).
 
     Its own shape, not the write envelope: per #307's envelope boundary
     rule, the picker answers a question rather than taking a Pending
     Buffer, so it carries no `errors`/`values`/`fallout` fields that could
-    never be populated. `backup_declared`/`backup_others` come back empty
-    (with `rehearsal_song_id: None`) for the Dress Rehearsal — the client
-    renders that as the structural "no per-song slots to assign against"
-    explanation (ADR-0006), never as an empty list with no reason given.
+    never be populated. Backup-only since ADR-0019: `declared`/`others`
+    are no longer emitted, because this Rehearsal-scoped surface no longer
+    writes a standing assignment for the client to pick a candidate for —
+    the Song-level `serialize_song_cast_picker()` is where that split
+    reaches the wire now. `rehearsal_song_id` is never `None` here: the
+    Dress Rehearsal is refused by `_editable_rehearsal_or_404()` before
+    this function is reached (ADR-0003 leaves it no `RehearsalSong` to
+    anchor a Backup on at all).
     """
     conflicted_person_ids = _picker_conflicted_person_ids_for(rehearsal)
     return {
@@ -1760,12 +1765,6 @@ def serialize_assignment_picker(picker: AssignmentPickerResult, rehearsal) -> di
         'role_id': picker.role.pk,
         'role_name': picker.role.name,
         'rehearsal_song_id': picker.rehearsal_song_id,
-        'declared': [
-            _serialize_picker_option(option, conflicted_person_ids=conflicted_person_ids) for option in picker.declared
-        ],
-        'others': [
-            _serialize_picker_option(option, conflicted_person_ids=conflicted_person_ids) for option in picker.others
-        ],
         'backup_declared': [
             _serialize_picker_option(option, conflicted_person_ids=conflicted_person_ids)
             for option in picker.backup_declared
@@ -1774,6 +1773,124 @@ def serialize_assignment_picker(picker: AssignmentPickerResult, rehearsal) -> di
             _serialize_picker_option(option, conflicted_person_ids=conflicted_person_ids)
             for option in picker.backup_others
         ],
+    }
+
+
+def _serialize_song_cast_conflict_entry(entry) -> dict:
+    """Return one `SongCastConflictEntry`: the future Rehearsal's id/date, whether it's a full Conflict, and its reason (issue #499).
+
+    The `reason` free text is the one thing ADR 0005 guards hardest, so it
+    reaches the wire only from `SongCastPickerApiView` — an `AdminApiView`
+    — and nowhere else. Nothing in this shape is ever folded into a
+    member-facing payload.
+    """
+    return {
+        'rehearsal_id': entry.rehearsal_id,
+        'date': entry.date.isoformat(),
+        'is_full_conflict': entry.is_full_conflict,
+        'reason': entry.reason,
+    }
+
+
+def _serialize_song_cast_picker_option(option, *, conflicts) -> dict:
+    """Return one Song-level cast candidate: the Person by name, whether they declared the Role, and their per-Rehearsal conflict summary (issue #499)."""
+    return {
+        'person_id': option.person.pk,
+        'person_name': option.person.name,
+        'has_declared_role': option.has_declared_role,
+        'conflicts': [_serialize_song_cast_conflict_entry(entry) for entry in conflicts],
+    }
+
+
+def serialize_song_cast_picker(picker: AssignmentPickerResult, *, conflicts_by_person_id) -> dict:
+    """Return the Song-level cast picker's `data` shape for `/api/songs/<pk>/cast/picker/<role_id>/` (issue #499, ADR-0019).
+
+    Its own shape, not the write envelope — like every other picker here,
+    it answers a question rather than taking a Pending Buffer. Reuses
+    `assignment_picker_for()`'s `declared`/`others` split unchanged; the
+    Backup halves are structurally empty on this surface (it passes no
+    `rehearsal_song`) and are deliberately not emitted at all rather than
+    as two always-empty lists. `conflicts_by_person_id` maps each
+    candidate's Person id to their `song_cast_conflict_summary_for()`
+    entries — the availability warning ADR-0009 said a per-Song editor
+    could never raise.
+    """
+    return {
+        'song_id': picker.song.pk,
+        'song_title': picker.song.title,
+        'role_id': picker.role.pk,
+        'role_name': picker.role.name,
+        'declared': [
+            _serialize_song_cast_picker_option(option, conflicts=conflicts_by_person_id.get(option.person.pk, []))
+            for option in picker.declared
+        ],
+        'others': [
+            _serialize_song_cast_picker_option(option, conflicts=conflicts_by_person_id.get(option.person.pk, []))
+            for option in picker.others
+        ],
+    }
+
+
+def _serialize_song_cast_added_entry(entry) -> dict:
+    """Return one `(role_id, person_id)` added-cast-entry tuple as a named object."""
+    role_id, person_id = entry
+    return {'role_id': role_id, 'person_id': person_id}
+
+
+def serialize_song_cast_buffer(buffer) -> dict:
+    """Return a `SongCastEditBuffer` echoed back in `build_song_cast_buffer_from_request()`'s wire shape (issue #499).
+
+    Used only by `/api/songs/<pk>/cast/preview/`'s `values` field on a
+    successful build — never by `.../save/`, which drops `values` per
+    #326's rule that a write response echoes nothing back. `song_id` is
+    echoed even though it came from the URL, matching
+    `serialize_song_role_requirement_buffer()`.
+    """
+    return {
+        'song_id': buffer.song_id,
+        'song_updated_at': buffer.song_updated_at.isoformat() if buffer.song_updated_at else None,
+        'removed_assignment_ids': sorted(buffer.removed_assignment_ids),
+        'added_entries': [_serialize_song_cast_added_entry(entry) for entry in sorted(buffer.added_entries)],
+    }
+
+
+def _serialize_song_cast_change(change) -> dict:
+    """Return one `SongCastChange`: the Role's name and the Person's name."""
+    return {'role_name': change.role_name, 'person_name': change.person_name}
+
+
+def serialize_song_cast_fallout(fallout) -> dict:
+    """Return a `SongCastFallout` as the Cast editor Preview response's `fallout` value (issue #499).
+
+    Named field-by-field, matching every other serializer in this module.
+    `loud`/`quiet` are already rendered strings naming a Rehearsal date at
+    most — never a Conflict's free-text `reason`, which reaches the wire
+    only through the admin-only picker (ADR 0005).
+    """
+    return {
+        'is_blocked': fallout.is_blocked,
+        'block_message': fallout.block_message,
+        'is_stale': fallout.is_stale,
+        'pending_adds': [_serialize_song_cast_change(change) for change in fallout.pending_adds],
+        'pending_removals': [_serialize_song_cast_change(change) for change in fallout.pending_removals],
+        'loud': list(fallout.loud),
+        'quiet': list(fallout.quiet),
+    }
+
+
+def serialize_song_edit_fallout(fallout) -> dict:
+    """Return a `SongEditFallout` as the combined Song-edit Preview response's `fallout` value (PR #502 review).
+
+    Two named keys, each delegating to the serializer its own surface
+    already has — the Song page's Save popup renders the Requirements half
+    and the cast half as the separate change lists they are, so there is
+    nothing here to flatten. `cast` is `null` when the session staged no
+    cast change, matching `preview_song_edits()`/`apply_song_edits()`,
+    which skip that half entirely.
+    """
+    return {
+        'requirements': serialize_song_role_requirement_fallout(fallout.requirements),
+        'cast': None if fallout.cast is None else serialize_song_cast_fallout(fallout.cast),
     }
 
 

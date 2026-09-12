@@ -118,20 +118,24 @@ interface AssignmentEditorProps {
 }
 
 /**
- * The "Edit Rehearsal" surface (issue #338, ADR 0009; consolidated with
- * Running Order reordering): the per-Rehearsal standing-assignment grid,
- * its "+" picker, and the Running Order drag-and-drop, all reached from
- * the Schedule surface's "Edit Rehearsal" action. A cell edit here is a
- * standing Assignment (semester-wide, ADR 0009) unless made through the
- * Backup picker section (this evening only, ADR 0007); a Running Order
- * reorder is scoped to this one Rehearsal. Both buffer locally and only
- * reach the server when "Save changes" is confirmed (ADR 0008's Buffer →
- * preview → apply shape) — nothing here autosaves per click. Fetches its
- * own `GET /api/schedule/?rehearsal=<id>` — the same read the
- * member-facing grid uses (issue #331) — rather than a second endpoint,
- * per #307's "one endpoint per surface" rule. The "+" picker (issue #399)
- * derives its candidates from that one read too — `detail.roster` plus
- * the matrix's own entries — so opening it costs no further round trip.
+ * The "Edit Rehearsal" surface (issue #338, ADR 0019; consolidated with
+ * Running Order reordering): the per-Rehearsal Backup grid, its "+"
+ * picker, and the Running Order drag-and-drop, all reached from the
+ * Schedule surface's "Edit Rehearsal" action. Every write here is scoped
+ * to this one evening — a Backup (ADR 0007) or a Running Order change.
+ * Casting is **not** editable here any more (ADR 0019): a cell still
+ * displays its standing assignees as static text, but changing who is
+ * cast happens on the Song, at `/songs/:songId` or through the Setlist's
+ * inline popover, where the data's own scope matches the surface's.
+ *
+ * Both Buffers stage locally and only reach the server when "Save
+ * changes" is confirmed (ADR 0008's Buffer → preview → apply shape) —
+ * nothing here autosaves per click. Fetches its own
+ * `GET /api/schedule/?rehearsal=<id>` — the same read the member-facing
+ * grid uses (issue #331) — rather than a second endpoint, per #307's "one
+ * endpoint per surface" rule. The "+" picker (issue #399) derives its
+ * candidates from that one read too — `detail.roster` plus the matrix's
+ * own entries — so opening it costs no further round trip.
  */
 export function AssignmentEditor({
   rehearsalId,
@@ -144,12 +148,6 @@ export function AssignmentEditor({
     id: number
     updatedAt: string
   } | null>(null)
-  const [removedAssignmentIds, setRemovedAssignmentIds] = useState<Set<number>>(
-    new Set(),
-  )
-  const [addedEntries, setAddedEntries] = useState<Map<string, PendingEntry>>(
-    new Map(),
-  )
   const [removedBackupIds, setRemovedBackupIds] = useState<Set<number>>(
     new Set(),
   )
@@ -172,8 +170,6 @@ export function AssignmentEditor({
 
   /** Clears every unsaved pick/removal, restoring the grid to what the server last returned. */
   const resetPendingBuffer = useCallback(() => {
-    setRemovedAssignmentIds(new Set())
-    setAddedEntries(new Map())
     setRemovedBackupIds(new Set())
     setAddedBackupEntries(new Map())
     setSongSwaps(new Map())
@@ -295,15 +291,12 @@ export function AssignmentEditor({
         for (const entry of cell.entries) names.push(entry.person_name)
       }
     }
-    for (const entry of addedEntries.values()) names.push(entry.personName)
     for (const entry of addedBackupEntries.values())
       names.push(entry.personName)
     return shortenNames(names)
-  }, [detail, addedEntries, addedBackupEntries])
+  }, [detail, addedBackupEntries])
 
   const changeCount =
-    removedAssignmentIds.size +
-    addedEntries.size +
     removedBackupIds.size +
     addedBackupEntries.size +
     (hasRunningOrderChange ? 1 : 0)
@@ -314,12 +307,6 @@ export function AssignmentEditor({
     return {
       semester_id: semester.id,
       semester_updated_at: semester.updatedAt,
-      removed_assignment_ids: [...removedAssignmentIds],
-      added_entries: [...addedEntries.values()].map((entry) => ({
-        song_id: entry.songId,
-        role_id: entry.roleId,
-        person_id: entry.personId,
-      })),
       removed_backup_ids: [...removedBackupIds],
       added_backup_entries: [...addedBackupEntries.values()].map((entry) => ({
         rehearsal_song_id: entry.rehearsalSongId,
@@ -329,26 +316,37 @@ export function AssignmentEditor({
       })),
       backup_covering_for_updates: [],
     }
-  }, [
-    semester,
-    removedAssignmentIds,
-    addedEntries,
-    removedBackupIds,
-    addedBackupEntries,
-  ])
+  }, [semester, removedBackupIds, addedBackupEntries])
 
-  /** Serializes `runningOrder`/`songSwaps` into the `RunningOrderReorderInput` wire shape `.../running-order/{preview,save}/` post, or `null` with no viewed Semester or no reorder to submit. */
-  const buildReorderInput = useCallback((): RunningOrderReorderInput | null => {
-    if (semester === null || runningOrder === null) return null
-    return {
-      semester_id: semester.id,
-      semester_updated_at: semester.updatedAt,
-      ordered_rehearsal_song_ids: runningOrder,
-      song_overrides: [...songSwaps.entries()].map(
-        ([rehearsal_song_id, song_id]) => ({ rehearsal_song_id, song_id }),
-      ),
-    }
-  }, [semester, runningOrder, songSwaps])
+  /**
+   * Serializes `runningOrder`/`songSwaps` into the
+   * `RunningOrderReorderInput` wire shape
+   * `.../running-order/{preview,save}/` post, or `null` with no viewed
+   * Semester or no reorder to submit.
+   *
+   * `semesterUpdatedAt` is a parameter rather than always
+   * `semester.updatedAt` because these two Buffers save in sequence and
+   * the first save bumps `Semester.updated_at` server-side (PR #502
+   * review): built from the pre-save stamp, the second request was
+   * rejected as stale, the Backup change persisted and the Running Order
+   * change was silently lost. `confirmSave()` passes the fresh stamp the
+   * first save's own response envelope carries; Preview passes nothing,
+   * since a rolled-back preview bumps no stamp.
+   */
+  const buildReorderInput = useCallback(
+    (semesterUpdatedAt?: string): RunningOrderReorderInput | null => {
+      if (semester === null || runningOrder === null) return null
+      return {
+        semester_id: semester.id,
+        semester_updated_at: semesterUpdatedAt ?? semester.updatedAt,
+        ordered_rehearsal_song_ids: runningOrder,
+        song_overrides: [...songSwaps.entries()].map(
+          ([rehearsal_song_id, song_id]) => ({ rehearsal_song_id, song_id }),
+        ),
+      }
+    },
+    [semester, runningOrder, songSwaps],
+  )
 
   /** Adapts `.../assignments/{preview,save}/`'s Fallout envelope into `SaveChangesDialog`'s `PreviewResult` shape. */
   const toAssignmentResult = useCallback(
@@ -473,7 +471,21 @@ export function AssignmentEditor({
     toReorderResult,
   ])
 
-  /** Saves both pending buffers in sequence (assignments always, Running Order only if reordered) and, on success, closes the popup and reloads. */
+  /**
+   * Saves both pending buffers in sequence (Backups always, Running Order
+   * only if reordered) and, on success, closes the popup and reloads.
+   *
+   * The second request is built from the stamp the *first* save's own
+   * response envelope reports, not from the one this component loaded
+   * with (PR #502 review). `apply_rehearsal_backups()` bumps
+   * `Semester.updated_at`, so a Running Order body carrying the pre-save
+   * stamp was refused as stale by `apply_rehearsal_edits()`'s own
+   * staleness check — leaving the Backup change committed and the
+   * reorder silently dropped. The envelope's `context.viewing_semester`
+   * is built after the write commits, so it is exactly the value the
+   * second Buffer has to pin. A first save that isn't `ok` still stops
+   * the sequence outright, so the reorder can never land on its own.
+   */
   const confirmSave = useCallback(() => {
     const assignmentBody = buildBufferInput()
     if (assignmentBody === null) return
@@ -482,7 +494,11 @@ export function AssignmentEditor({
       { method: 'POST', body: JSON.stringify(assignmentBody) },
     ).then((assignmentEnvelope) => {
       if (!assignmentEnvelope.ok) return
-      const reorderBody = hasRunningOrderChange ? buildReorderInput() : null
+      const savedStamp =
+        assignmentEnvelope.context.viewing_semester?.updated_at ?? undefined
+      const reorderBody = hasRunningOrderChange
+        ? buildReorderInput(savedStamp)
+        : null
       if (reorderBody === null) {
         setSaveOpen(false)
         load()
@@ -516,7 +532,7 @@ export function AssignmentEditor({
   }, [load, onDone])
 
   useRegisterEditSession({
-    what: 'this Rehearsal’s assignments and Running Order',
+    what: 'this Rehearsal’s Backups and Running Order',
     changeCount,
     blockedReason: null,
     discard,
@@ -532,15 +548,8 @@ export function AssignmentEditor({
     ): DisplayEntry[] => {
       const entries: DisplayEntry[] = []
       for (const entry of cell?.entries ?? []) {
-        if (entry.kind === 'assignment' && removedAssignmentIds.has(entry.id))
-          continue
         if (entry.kind === 'backup' && removedBackupIds.has(entry.id)) continue
         entries.push(fromServerEntry(entry))
-      }
-      for (const pending of addedEntries.values()) {
-        if (pending.songId === songId && pending.roleId === roleId) {
-          entries.push(fromPendingEntry('assignment', pending))
-        }
       }
       for (const pending of addedBackupEntries.values()) {
         if (pending.songId === songId && pending.roleId === roleId) {
@@ -549,68 +558,50 @@ export function AssignmentEditor({
       }
       return entries
     },
-    [removedAssignmentIds, removedBackupIds, addedEntries, addedBackupEntries],
+    [removedBackupIds, addedBackupEntries],
   )
 
-  /** Removes one entry: drops it from the pending-add map if it was never saved, otherwise queues its id for removal on save. */
+  /** Removes one Backup: drops it from the pending-add map if it was never saved, otherwise queues its id for removal on save.
+   *
+   * A standing assignment is not removable here at all (ADR 0019) — it is
+   * rendered as static text with no ✕, so this is only ever reached for a
+   * Backup.
+   */
   const removeEntry = useCallback((entry: DisplayEntry) => {
+    if (entry.kind !== 'backup') return
     if (entry.pending) {
       const pendingKey = entry.key.replace(/^pending-/, '')
-      if (entry.kind === 'assignment') {
-        setAddedEntries((previous) => {
-          const next = new Map(previous)
-          next.delete(pendingKey)
-          return next
-        })
-      } else {
-        setAddedBackupEntries((previous) => {
-          const next = new Map(previous)
-          next.delete(pendingKey)
-          return next
-        })
-      }
+      setAddedBackupEntries((previous) => {
+        const next = new Map(previous)
+        next.delete(pendingKey)
+        return next
+      })
       return
     }
     if (entry.id === null) return
-    if (entry.kind === 'assignment') {
-      setRemovedAssignmentIds((previous) =>
-        new Set(previous).add(entry.id as number),
-      )
-    } else {
-      setRemovedBackupIds((previous) =>
-        new Set(previous).add(entry.id as number),
-      )
-    }
+    setRemovedBackupIds((previous) => new Set(previous).add(entry.id as number))
   }, [])
 
-  /** Lists a cell's current standing assignees (server-saved minus pending removals, plus pending adds) for the picker's "Covering for" menu, names shortened per `nameFor`.
+  /** Lists a cell's current standing assignees for the picker's "Covering for" menu, names shortened per `nameFor`.
    *
    * Reads `displayRows`, not the raw `detail.rows`, so a cell on a
    * pending-song-swap row (issue #406) lists the *new* Song's own standing
-   * assignees rather than the old one's.
+   * assignees rather than the old one's. Since ADR 0019 this surface can't
+   * change who those assignees are, so the list is simply what the server
+   * last returned — there is no pending cast edit to fold in.
    */
   const standingAssigneesFor = useCallback(
     (songId: number, roleId: number): { id: number; name: string }[] => {
       const row = displayRows.find((candidate) => candidate.song_id === songId)
       const cell = row ? cellFor(row, roleId) : undefined
-      const fromServer = (cell?.entries ?? [])
-        .filter(
-          (entry) =>
-            entry.kind === 'assignment' && !removedAssignmentIds.has(entry.id),
-        )
+      return (cell?.entries ?? [])
+        .filter((entry) => entry.kind === 'assignment')
         .map((entry) => ({
           id: entry.person_id,
           name: nameFor.get(entry.person_name) ?? entry.person_name,
         }))
-      const fromPending = [...addedEntries.values()]
-        .filter((entry) => entry.songId === songId && entry.roleId === roleId)
-        .map((entry) => ({
-          id: entry.personId,
-          name: nameFor.get(entry.personName) ?? entry.personName,
-        }))
-      return [...fromServer, ...fromPending]
     },
-    [displayRows, removedAssignmentIds, addedEntries, nameFor],
+    [displayRows, nameFor],
   )
 
   /** Records a pending song swap for one Running Order slot (issue #406): the row keeps its position, but its Song — and so its rendered Role columns and assignees — changes immediately, with no round trip. */
@@ -621,34 +612,6 @@ export function AssignmentEditor({
       return next
     })
   }, [])
-
-  /** Records a picker choice as a pending standing Assignment on the open cell, then closes the picker. */
-  const pickAssigned = useCallback(
-    (option: AssignmentPickerOption) => {
-      if (pickerCell === null) return
-      const key = entryKey(
-        pickerCell.songId,
-        pickerCell.roleId,
-        option.person_id,
-      )
-      setAddedEntries((previous) => {
-        const next = new Map(previous)
-        next.set(key, {
-          key,
-          songId: pickerCell.songId,
-          roleId: pickerCell.roleId,
-          personId: option.person_id,
-          personName: option.person_name,
-          isRoleMismatch: !option.has_declared_role,
-          coveringForId: null,
-          coveringForName: null,
-        })
-        return next
-      })
-      setPickerCell(null)
-    },
-    [pickerCell],
-  )
 
   /** Records a picker choice as a pending, this-evening-only Backup on the open cell, then closes the picker. */
   const pickBackup = useCallback(
@@ -692,10 +655,11 @@ export function AssignmentEditor({
           role="note"
           className="rounded border-2 border-rs-accent bg-rs-accent/10 p-3 text-sm"
         >
-          <p className="font-semibold">Editing standing assignments.</p>
+          <p className="font-semibold">Editing this evening only.</p>
           <p>
-            To cover one evening only, add a <strong>Backup</strong> from the
-            same picker.
+            Add a <strong>Backup</strong> to cover a Role tonight. To change who
+            is <strong>cast</strong> on a Song for every rehearsal and the
+            concert, edit the Song itself.
           </p>
         </div>
       )}
@@ -759,7 +723,6 @@ export function AssignmentEditor({
             pickerCell.songId,
             pickerCell.roleId,
           )}
-          onPickAssigned={pickAssigned}
           onPickBackup={pickBackup}
         />
       )}
@@ -767,7 +730,7 @@ export function AssignmentEditor({
       <SaveChangesDialog
         open={saveOpen}
         onOpenChange={setSaveOpen}
-        title={`Save ${changeCount} change${changeCount === 1 ? '' : 's'} to this Rehearsal's assignments?`}
+        title={`Save ${changeCount} change${changeCount === 1 ? '' : 's'} to this Rehearsal?`}
         preview={preview}
         onConfirm={confirmSave}
       />
@@ -793,11 +756,14 @@ function moveItem<T>(list: T[], fromIndex: number, toIndex: number): T[] {
   return next
 }
 
-/** One grid-cell occupant's pill: name, badges (backup/away/role-mismatch), and a remove control.
+/** One grid-cell occupant's pill: name, badges (backup/away/role-mismatch), and — for a Backup only — a remove control.
  *
  * Uncolored (issue: UI overhaul round 2) — the Edit Rehearsal grid already
  * arranges Roles as columns, so a per-Role hue here would be redundant
- * color-coding rather than information.
+ * color-coding rather than information. A standing assignee's pill carries
+ * no ✕ at all since ADR 0019: this surface displays the cast, it no longer
+ * edits it, and an affordance that looked editable would be the whole
+ * confusion ADR 0019 set out to remove.
  */
 function AssignmentEditorPill({
   entry,
@@ -822,14 +788,16 @@ function AssignmentEditorPill({
         <span className="rounded bg-rs-border px-1">away</span>
       )}
       {entry.isRoleMismatch && <span>◦</span>}
-      <button
-        type="button"
-        aria-label={`Remove ${entry.personName}`}
-        onClick={onRemove}
-        className="ml-0.5 rounded-full px-1 hover:bg-rs-border"
-      >
-        ✕
-      </button>
+      {entry.kind === 'backup' && (
+        <button
+          type="button"
+          aria-label={`Remove ${entry.personName}`}
+          onClick={onRemove}
+          className="ml-0.5 rounded-full px-1 hover:bg-rs-border"
+        >
+          ✕
+        </button>
+      )}
     </span>
   )
 }
@@ -882,7 +850,7 @@ function AssignmentEditorCell({
       )}
       <button
         type="button"
-        aria-label={`Assign ${role.name} on ${songTitle}`}
+        aria-label={`Add a Backup for ${role.name} on ${songTitle}`}
         onClick={() => onOpenPicker(songId, songTitle, role.id, role.name)}
         className="rounded-full border border-rs-border px-1.5 text-xs font-medium leading-5"
       >
@@ -1192,39 +1160,35 @@ function PickerOptionRow({
 }
 
 /**
- * The "+" cell's picker dialog (issue #338, story 15; derived client-side
- * with no fetch since issue #399): offers Assigned (declared-first) and
- * Backup (this-evening-only) sections for `payload`, each with a "Show all
- * members" expansion.
+ * The "+" cell's Backup picker dialog (issue #338, story 15; derived
+ * client-side with no fetch since issue #399, Backup-only since ADR
+ * 0019): offers this-evening-only Backup candidates for `payload`,
+ * declared-first, with a "Show all members" expansion. The "Assigned"
+ * section it used to carry moved to the Song-level Cast editor.
  */
 function AssignmentPickerDialog({
   payload,
   cell,
   onOpenChange,
   standingAssignees,
-  onPickAssigned,
   onPickBackup,
 }: {
   payload: AssignmentPickerPayload
   cell: { songId: number; songTitle: string; roleId: number; roleName: string }
   onOpenChange: (open: boolean) => void
   standingAssignees: { id: number; name: string }[]
-  onPickAssigned: (option: AssignmentPickerOption) => void
   onPickBackup: (
     option: AssignmentPickerOption,
     rehearsalSongId: number,
     coveringFor: { id: number; name: string } | null,
   ) => void
 }) {
-  const [showAllAssigned, setShowAllAssigned] = useState(false)
   const [showAllBackup, setShowAllBackup] = useState(false)
   const [coveringForId, setCoveringForId] = useState<number | ''>('')
 
   /** First-name-only display, scoped to this one dialog's candidate list (issue: UI overhaul round 2, item 3). */
   const nameFor = useMemo(() => {
     const names = [
-      ...payload.declared.map((option) => option.person_name),
-      ...payload.others.map((option) => option.person_name),
       ...payload.backup_declared.map((option) => option.person_name),
       ...payload.backup_others.map((option) => option.person_name),
       ...standingAssignees.map((assignee) => assignee.name),
@@ -1247,56 +1211,6 @@ function AssignmentPickerDialog({
       wide
     >
       <div className="flex flex-col gap-4">
-        <section>
-          <h3 className="text-sm font-semibold">Assigned</h3>
-          <p className="pb-1 text-xs text-rs-muted">
-            Every rehearsal + concert
-          </p>
-          <ul className="flex flex-col">
-            {payload.declared.map((option) => (
-              <PickerOptionRow
-                key={option.person_id}
-                option={option}
-                nameFor={nameFor}
-                onPick={() => onPickAssigned(option)}
-              />
-            ))}
-          </ul>
-          {payload.others.length > 0 && (
-            <>
-              <button
-                type="button"
-                onClick={() => setShowAllAssigned((previous) => !previous)}
-                className="pt-1 text-xs text-rs-accent"
-              >
-                {showAllAssigned ? 'Hide' : 'Show all members'}
-              </button>
-              {showAllAssigned && (
-                <ul className="flex flex-col">
-                  {payload.others.map((option) => (
-                    <li key={option.person_id}>
-                      <button
-                        type="button"
-                        onClick={() => onPickAssigned(option)}
-                        className="flex w-full items-center justify-between rounded px-2 py-1 text-left text-sm hover:bg-rs-border/40"
-                      >
-                        <span>
-                          {nameFor.get(option.person_name) ??
-                            option.person_name}
-                        </span>
-                        <span className="text-xs text-rs-muted">
-                          Has not declared {cell.roleName}
-                          {option.has_conflict ? ' · Conflict' : ''}
-                        </span>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </>
-          )}
-        </section>
-
         <section>
           <h3 className="text-sm font-semibold">Backup</h3>
           <p className="pb-1 text-xs text-rs-muted">
@@ -1387,7 +1301,8 @@ function AssignmentPickerDialog({
         </section>
 
         <p className="text-xs text-rs-muted">
-          Who a Backup is covering for is shown to admins only.
+          Who a Backup is covering for is shown to admins only. To change who is
+          cast on this Song for every rehearsal and the concert, edit the Song.
         </p>
       </div>
     </ResponsiveDialog>

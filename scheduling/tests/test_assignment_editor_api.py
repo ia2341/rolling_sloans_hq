@@ -1,13 +1,14 @@
 """`/api/schedule/<id>/assignments/{picker,preview,save}/`: the assignment editor over HTTP (issue #338, ADR 0009).
 
-Backend retargets `test_assignment_edit_mode.py`/`test_backup_picker.py`'s
-HTML assertions onto JSON, following `test_setlist_api_preview_save.py`'s
-shape. Service-level derivation (`apply_song_role_assignments()`,
-`preview_song_role_assignments()`, `assignment_matrix_for()`,
-`assignment_picker_for()`) is untouched and already covered by
-`test_apply_song_role_assignments.py`/`test_preview_song_role_assignments.py`/
-`test_backup.py` — this file exercises only what changed: the HTTP
-boundary.
+Backup-only since ADR-0019 (issue #499): every case that staged a
+`SongRoleAssignment` removal or add moved to `test_api_song_cast.py`, and
+the Dress Rehearsal — which has no `RehearsalSong` to back up at all
+(ADR-0003) — now 404s on all three endpoints rather than serving as the
+old standing-assignment backstop. Service-level derivation
+(`apply_rehearsal_backups()`, `preview_rehearsal_backups()`,
+`assignment_matrix_for()`, `assignment_picker_for()`) is covered by
+`test_apply_rehearsal_backups.py`/`test_preview_rehearsal_backups.py`/
+`test_backup.py` — this file exercises only the HTTP boundary.
 """
 
 import json
@@ -83,8 +84,6 @@ def _valid_body(semester, **overrides):
     body = {
         'semester_id': semester.pk,
         'semester_updated_at': semester.updated_at.isoformat(),
-        'removed_assignment_ids': [],
-        'added_entries': [],
         'removed_backup_ids': [],
         'added_backup_entries': [],
         'backup_covering_for_updates': [],
@@ -168,7 +167,7 @@ class AccessControlTests(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class PastRehearsalTests(TestCase):
-    """A past, non-Dress Rehearsal's grid is read-only (ADR-0009); the Dress Rehearsal stays editable as the backstop."""
+    """A past Rehearsal's grid is read-only, and the Dress Rehearsal has nothing to edit at all (ADR-0019)."""
 
     def setUp(self):
         """Log in a synthetic admin against a Semester holding one past Rehearsal and one past Dress Rehearsal."""
@@ -190,25 +189,37 @@ class PastRehearsalTests(TestCase):
         self.assertEqual(response.status_code, 404)
 
     def test_past_rehearsal_save_404s(self):
-        """Save 404s for a past, non-Dress Rehearsal — never silently applying a removal/add."""
+        """Save 404s for a past, non-Dress Rehearsal — never silently applying a Backup edit."""
         response = self.client.post(
             _save_url(self.past_rehearsal), data=json.dumps(_valid_body(self.semester)), content_type='application/json',
         )
 
         self.assertEqual(response.status_code, 404)
 
-    def test_past_dress_rehearsal_save_is_not_404(self):
-        """Save on the (past) Dress Rehearsal is not rejected as non-editable — it is the ADR-0009 backstop."""
+    def test_past_dress_rehearsal_save_404s_too(self):
+        """The ADR-0009 backstop is gone (ADR-0019): a past Dress Rehearsal is refused like any other past date."""
         response = self.client.post(
             _save_url(self.past_dress), data=json.dumps(_valid_body(self.semester)), content_type='application/json',
         )
 
-        self.assertNotEqual(response.status_code, 404)
+        self.assertEqual(response.status_code, 404)
+
+    def test_a_future_dress_rehearsal_save_404s_as_well(self):
+        """A Dress Rehearsal has no RehearsalSong to back up (ADR-0003), so this surface refuses it outright."""
+        future_dress = RehearsalFactory(
+            semester=self.semester, date=timezone.localdate() + timedelta(days=30), is_full_setlist=True,
+        )
+
+        response = self.client.post(
+            _save_url(future_dress), data=json.dumps(_valid_body(self.semester)), content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 404)
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class PickerTests(TestCase):
-    """The picker's contents: declared-first ordering, the Backup section, and the conflict note (issue #338, story 15)."""
+    """The Backup picker's contents: declared-first ordering and the bare conflict marker (issue #338, story 15; ADR-0019)."""
 
     def setUp(self):
         """Log in a synthetic admin against a Rehearsal with one Song/Role and a rostered declaring/non-declaring pair."""
@@ -223,44 +234,52 @@ class PickerTests(TestCase):
         PersonRoleFactory(person=self.declaring_membership.person, role=self.role)
         self.other_membership = MembershipFactory(semester=self.semester)
 
-    def test_declared_members_are_split_from_others(self):
-        """A Person who declared the cell's Role lists under `declared`; everyone else rostered lists under `others`."""
+    def test_payload_carries_no_standing_assignment_lists_at_all(self):
+        """`declared`/`others` left the wire with ADR-0019 — this surface writes no standing assignment."""
         response, envelope = _get_json(self, _picker_url(self.rehearsal, self.song, self.role))
 
         self.assertEqual(response.status_code, 200)
-        declared_ids = {option['person_id'] for option in envelope['data']['declared']}
-        other_ids = {option['person_id'] for option in envelope['data']['others']}
-        self.assertIn(self.declaring_membership.person_id, declared_ids)
-        self.assertIn(self.other_membership.person_id, other_ids)
-        self.assertNotIn(self.declaring_membership.person_id, other_ids)
+        self.assertEqual(
+            set(envelope['data'].keys()),
+            {'song_id', 'song_title', 'role_id', 'role_name', 'rehearsal_song_id', 'backup_declared', 'backup_others'},
+        )
 
-    def test_already_assigned_person_is_excluded(self):
-        """A Person already assigned to this exact (Song, Role) is offered nowhere in the picker."""
-        SongRoleAssignmentFactory(song=self.song, role=self.role, person=self.declaring_membership.person)
-
+    def test_backup_members_are_split_declared_first(self):
+        """A Person who declared the cell's Role lists under `backup_declared`; everyone else under `backup_others`."""
         _response, envelope = _get_json(self, _picker_url(self.rehearsal, self.song, self.role))
 
-        all_ids = {o['person_id'] for o in envelope['data']['declared'] + envelope['data']['others']}
-        self.assertNotIn(self.declaring_membership.person_id, all_ids)
+        declared_ids = {option['person_id'] for option in envelope['data']['backup_declared']}
+        other_ids = {option['person_id'] for option in envelope['data']['backup_others']}
+        self.assertIn(self.declaring_membership.person_id, declared_ids)
+        self.assertIn(self.other_membership.person_id, other_ids)
 
-    def test_backup_section_is_populated_for_a_regular_rehearsal(self):
-        """The Backup section's `rehearsal_song_id` names the cell's RehearsalSong for a regular Rehearsal."""
+    def test_backup_section_names_the_cells_rehearsal_song(self):
+        """`rehearsal_song_id` names the cell's RehearsalSong — the anchor a Backup is written against (ADR-0007)."""
         _response, envelope = _get_json(self, _picker_url(self.rehearsal, self.song, self.role))
 
         self.assertEqual(envelope['data']['rehearsal_song_id'], self.rehearsal_song.pk)
-        backup_ids = {o['person_id'] for o in envelope['data']['backup_declared'] + envelope['data']['backup_others']}
-        self.assertIn(self.declaring_membership.person_id, backup_ids)
 
-    def test_backup_section_is_empty_for_the_dress_rehearsal(self):
-        """The Dress Rehearsal's picker returns `rehearsal_song_id: None` and empty Backup lists (ADR-0006)."""
+    def test_a_person_already_backing_up_this_cell_is_excluded(self):
+        """Someone already holding a Backup on this exact slot/Role is offered nowhere in the picker."""
+        SongRoleRequirementFactory(song=self.song, role=self.role, count=1)
+        BackupFactory(
+            rehearsal_song=self.rehearsal_song, role=self.role, person=self.declaring_membership.person,
+        )
+
+        _response, envelope = _get_json(self, _picker_url(self.rehearsal, self.song, self.role))
+
+        offered = {
+            o['person_id'] for o in envelope['data']['backup_declared'] + envelope['data']['backup_others']
+        }
+        self.assertNotIn(self.declaring_membership.person_id, offered)
+
+    def test_the_dress_rehearsals_picker_404s(self):
+        """The Dress Rehearsal has no RehearsalSong to anchor a Backup on (ADR-0003), so its picker 404s (ADR-0019)."""
         dress = RehearsalFactory(semester=self.semester, is_full_setlist=True)
 
-        response, envelope = _get_json(self, _picker_url(dress, self.song, self.role))
+        response = self.client.get(_picker_url(dress, self.song, self.role))
 
-        self.assertEqual(response.status_code, 200)
-        self.assertIsNone(envelope['data']['rehearsal_song_id'])
-        self.assertEqual(envelope['data']['backup_declared'], [])
-        self.assertEqual(envelope['data']['backup_others'], [])
+        self.assertEqual(response.status_code, 404)
 
     def test_full_conflict_carries_a_bare_marker_and_no_reason_text(self):
         """A Person with a full Conflict for this Rehearsal is marked `has_conflict: True`, never their reason (ADR 0005)."""
@@ -272,7 +291,8 @@ class PickerTests(TestCase):
         response, envelope = _get_json(self, _picker_url(self.rehearsal, self.song, self.role))
 
         option = next(
-            o for o in envelope['data']['declared'] if o['person_id'] == self.declaring_membership.person_id
+            o for o in envelope['data']['backup_declared']
+            if o['person_id'] == self.declaring_membership.person_id
         )
         self.assertIs(option['has_conflict'], True)
         self.assertNotIn('conflict_note', option)
@@ -320,7 +340,8 @@ class StaleSemesterTests(TestCase):
         self.rehearsal = RehearsalFactory(semester=self.semester)
         self.song = SongFactory(semester=self.semester, position=1)
         self.role = RoleFactory()
-        RehearsalSongFactory(rehearsal=self.rehearsal, song=self.song)
+        SongRoleRequirementFactory(song=self.song, role=self.role, count=1)
+        self.rehearsal_song = RehearsalSongFactory(rehearsal=self.rehearsal, song=self.song)
         self.person = MembershipFactory(semester=self.semester).person
         self.stale_stamp = self.semester.updated_at.replace(year=self.semester.updated_at.year - 1)
 
@@ -329,7 +350,10 @@ class StaleSemesterTests(TestCase):
         return _valid_body(
             self.semester,
             semester_updated_at=self.stale_stamp.isoformat(),
-            added_entries=[{'song_id': self.song.pk, 'role_id': self.role.pk, 'person_id': self.person.pk}],
+            added_backup_entries=[{
+                'rehearsal_song_id': self.rehearsal_song.pk, 'role_id': self.role.pk,
+                'person_id': self.person.pk, 'covering_for_id': None,
+            }],
         )
 
     def test_stale_preview_reports_is_stale_true_with_fallout_still_computed(self):
@@ -342,39 +366,36 @@ class StaleSemesterTests(TestCase):
         self.assertTrue(envelope['fallout']['is_stale'])
 
     def test_stale_save_is_refused_without_corrupting_data(self):
-        """Save against a stale stamp reports `ok: false` (not a hard 4xx) and creates no SongRoleAssignment."""
+        """Save against a stale stamp reports `ok: false` (not a hard 4xx) and creates no Backup."""
         response, envelope = _post_json(self, _save_url(self.rehearsal), self._stale_body())
 
         self.assertEqual(response.status_code, 200)
         self.assertFalse(envelope['ok'])
         self.assertTrue(envelope['non_field_errors'])
-        self.assertFalse(SongRoleAssignment.objects.filter(song=self.song, role=self.role, person=self.person).exists())
+        self.assertFalse(Backup.objects.filter(rehearsal_song=self.rehearsal_song, person=self.person).exists())
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class PreviewWritesNothingTests(TestCase):
-    """A mixed add+remove+Backup Buffer previews `ok: true` with Fallout and echoed `values`, writing nothing (ADR 0008)."""
+    """A mixed add+remove Backup Buffer previews `ok: true` with Fallout and echoed `values`, writing nothing (ADR 0008)."""
 
     def setUp(self):
-        """Build a Rehearsal with a removable Assignment, a removable Backup and roster to add fresh entries for."""
+        """Build a Rehearsal with a removable Backup and roster to add a fresh one for."""
         admin_client(self)
         self.semester = SemesterFactory()
         select(self, self.semester)
         self.rehearsal = RehearsalFactory(semester=self.semester)
         self.song = SongFactory(semester=self.semester, position=1)
         self.role = RoleFactory()
+        SongRoleRequirementFactory(song=self.song, role=self.role, count=1)
         self.rehearsal_song = RehearsalSongFactory(rehearsal=self.rehearsal, song=self.song)
-        self.removable_assignment = SongRoleAssignmentFactory(song=self.song, role=self.role)
         self.removable_backup = BackupFactory(rehearsal_song=self.rehearsal_song, role=self.role)
-        self.new_person = MembershipFactory(semester=self.semester).person
         self.new_backup_person = MembershipFactory(semester=self.semester).person
 
     def test_mixed_buffer_previews_ok_and_writes_nothing(self):
-        """A Buffer removing an Assignment and a Backup while adding a fresh one of each previews cleanly and writes nothing."""
+        """A Buffer removing a Backup while adding a fresh one previews cleanly and writes nothing."""
         body = _valid_body(
             self.semester,
-            removed_assignment_ids=[self.removable_assignment.pk],
-            added_entries=[{'song_id': self.song.pk, 'role_id': self.role.pk, 'person_id': self.new_person.pk}],
             removed_backup_ids=[self.removable_backup.pk],
             added_backup_entries=[{
                 'rehearsal_song_id': self.rehearsal_song.pk, 'role_id': self.role.pk,
@@ -391,33 +412,60 @@ class PreviewWritesNothingTests(TestCase):
         self.assertTrue(envelope['ok'])
         self.assertIsNotNone(envelope['values'])
         self.assertEqual(
-            envelope['values']['added_entries'],
-            [{'song_id': self.song.pk, 'role_id': self.role.pk, 'person_id': self.new_person.pk}],
+            set(envelope['values'].keys()),
+            {
+                'semester_id', 'semester_updated_at', 'removed_backup_ids',
+                'added_backup_entries', 'backup_covering_for_updates',
+            },
+        )
+
+    def test_a_client_that_still_sends_the_retired_cast_keys_has_no_effect(self):
+        """A stale tab POSTing `removed_assignment_ids`/`added_entries` writes nothing — the builder never reads them (ADR-0019)."""
+        doomed_if_read = SongRoleAssignmentFactory(song=self.song, role=self.role)
+        body = _valid_body(self.semester)
+        body['removed_assignment_ids'] = [doomed_if_read.pk]
+        body['added_entries'] = [
+            {'song_id': self.song.pk, 'role_id': self.role.pk, 'person_id': self.new_backup_person.pk},
+        ]
+
+        response, envelope = _post_json(self, _save_url(self.rehearsal), body)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(envelope['ok'])
+        self.assertTrue(SongRoleAssignment.objects.filter(pk=doomed_if_read.pk).exists())
+        self.assertFalse(
+            SongRoleAssignment.objects.filter(
+                song=self.song, role=self.role, person=self.new_backup_person,
+            ).exists()
         )
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class SaveCommitsTests(TestCase):
-    """A valid Save actually persists the Buffer's removals/adds, and never echoes `values`."""
+    """A valid Save actually persists the Buffer's Backup removals/adds, and never echoes `values`."""
 
     def setUp(self):
-        """Build a Rehearsal with a removable Assignment and one Person to add a fresh Assignment for."""
+        """Build a Rehearsal with a removable Backup and one Person to add a fresh Backup for."""
         admin_client(self)
         self.semester = SemesterFactory()
         select(self, self.semester)
         self.rehearsal = RehearsalFactory(semester=self.semester)
         self.song = SongFactory(semester=self.semester, position=1)
         self.role = RoleFactory()
-        RehearsalSongFactory(rehearsal=self.rehearsal, song=self.song)
-        self.removable_assignment = SongRoleAssignmentFactory(song=self.song, role=self.role)
+        SongRoleRequirementFactory(song=self.song, role=self.role, count=1)
+        self.rehearsal_song = RehearsalSongFactory(rehearsal=self.rehearsal, song=self.song)
+        self.removable_backup = BackupFactory(rehearsal_song=self.rehearsal_song, role=self.role)
         self.new_person = MembershipFactory(semester=self.semester).person
 
     def test_valid_save_persists_and_does_not_echo_values(self):
-        """A valid Save removes the old Assignment, creates the new one, and answers with `values: null`."""
+        """A valid Save removes the old Backup, creates the new one, and answers with `values: null`."""
         body = _valid_body(
             self.semester,
-            removed_assignment_ids=[self.removable_assignment.pk],
-            added_entries=[{'song_id': self.song.pk, 'role_id': self.role.pk, 'person_id': self.new_person.pk}],
+            removed_backup_ids=[self.removable_backup.pk],
+            added_backup_entries=[{
+                'rehearsal_song_id': self.rehearsal_song.pk, 'role_id': self.role.pk,
+                'person_id': self.new_person.pk, 'covering_for_id': None,
+            }],
         )
 
         response, envelope = _post_json(self, _save_url(self.rehearsal), body)
@@ -425,19 +473,22 @@ class SaveCommitsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(envelope['ok'])
         self.assertIsNone(envelope['values'])
-        self.assertFalse(SongRoleAssignment.objects.filter(pk=self.removable_assignment.pk).exists())
+        self.assertFalse(Backup.objects.filter(pk=self.removable_backup.pk).exists())
         self.assertTrue(
-            SongRoleAssignment.objects.filter(song=self.song, role=self.role, person=self.new_person).exists()
+            Backup.objects.filter(
+                rehearsal_song=self.rehearsal_song, role=self.role, person=self.new_person,
+            ).exists()
         )
 
-    def test_duplicate_add_is_a_no_op(self):
-        """Adding an entry that already exists as a SongRoleAssignment is a no-op, never an IntegrityError."""
+    def test_duplicate_backup_add_is_a_no_op(self):
+        """Adding an entry that already exists as a Backup is a no-op, never an IntegrityError."""
         body = _valid_body(
             self.semester,
-            added_entries=[{
-                'song_id': self.removable_assignment.song_id,
-                'role_id': self.removable_assignment.role_id,
-                'person_id': self.removable_assignment.person_id,
+            added_backup_entries=[{
+                'rehearsal_song_id': self.removable_backup.rehearsal_song_id,
+                'role_id': self.removable_backup.role_id,
+                'person_id': self.removable_backup.person_id,
+                'covering_for_id': None,
             }],
         )
 
@@ -446,27 +497,12 @@ class SaveCommitsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(envelope['ok'])
         self.assertEqual(
-            SongRoleAssignment.objects.filter(
-                song=self.removable_assignment.song, role=self.removable_assignment.role,
-                person=self.removable_assignment.person,
+            Backup.objects.filter(
+                rehearsal_song=self.removable_backup.rehearsal_song,
+                role=self.removable_backup.role,
+                person=self.removable_backup.person,
             ).count(),
             1,
-        )
-
-    def test_adding_an_assignment_for_a_role_with_no_requirement_is_rejected(self):
-        """Assigning a Role nobody wrote a Requirement for is rejected as ok: false, and writes nothing (issue #439)."""
-        unrequired_role = RoleFactory()
-        body = _valid_body(
-            self.semester,
-            added_entries=[{'song_id': self.song.pk, 'role_id': unrequired_role.pk, 'person_id': self.new_person.pk}],
-        )
-
-        response, envelope = _post_json(self, _save_url(self.rehearsal), body)
-
-        self.assertEqual(response.status_code, 200)
-        self.assertFalse(envelope['ok'])
-        self.assertFalse(
-            SongRoleAssignment.objects.filter(song=self.song, role=unrequired_role, person=self.new_person).exists()
         )
 
     def test_adding_a_backup_for_a_role_with_no_requirement_is_rejected(self):

@@ -4,7 +4,7 @@ import { Link, useParams } from 'react-router-dom'
 import { ApiError, apiFetch } from '../api/client'
 import { useAppContext } from '../api/ContextProvider'
 import type { PreviewResult } from '../api/previewTypes'
-import type { SongPayload } from '../api/setlistTypes'
+import type { SongEditBufferWire, SongPayload } from '../api/setlistTypes'
 import type { ReadEnvelope } from '../api/types'
 import { RecordingUploadDialog } from '../components/recordings/RecordingUploadDialog'
 import { CastTable, RoleMismatchLegend } from '../components/ui/CastLine'
@@ -14,19 +14,34 @@ import { formatClockTime, formatRehearsalDate } from '../lib/formatDate'
 import { useRegisterEditSession } from '../shell/EditSessionContext'
 import { usePageTitle } from '../shell/PageTitleContext'
 import { AddRoleRequirementSheet } from './song/AddRoleRequirementSheet'
+import { CastEditor } from './song/CastEditor'
+import { CastPickerSheet } from './song/CastPickerSheet'
 import { RequirementsEditor } from './song/RequirementsEditor'
 import { RequirementsReadOnly } from './song/RequirementsReadOnly'
 import {
+  addCastEntry,
+  castPersonIdsFor,
+  computeCastChangeCount,
+  EMPTY_CAST_BUFFER,
+  removePendingCastEntry,
+  removeSavedCastEntry,
+  undoRemoveSavedCastEntry,
+  type CastableRole,
+  type CastEditBuffer,
+} from './song/songCastEditModel'
+import {
+  buildSongEditBufferWire,
+  mapSongEditPreviewToResult,
+  type SongEditWriteEnvelope,
+} from './song/songEditModel'
+import {
   addRequirementRow,
-  buildRequirementBufferWire,
   computeChangeCount,
-  mapSongRoleRequirementPreviewToResult,
   removeRequirementRow,
   rowsFromPayload,
   undoRemoveRequirementRow,
   updateRequirementCount,
   type RequirementEditRow,
-  type SongRoleRequirementWriteEnvelope,
 } from './song/songRoleRequirementsEditModel'
 
 type LoadState =
@@ -35,11 +50,15 @@ type LoadState =
   | { status: 'loaded'; data: SongPayload }
 
 /**
- * `/songs/<pk>/` (issue #330, #339): one Song's read model, fed by one
- * `GET /api/songs/<pk>/` round trip, plus (for an admin) its own Role
- * Requirements edit mode -- the same route flips into an editable cast
- * card rather than navigating anywhere else, matching the Setlist's
- * same-route toggle convention. A Song outside the viewing Semester 404s
+ * `/songs/<pk>/` (issue #330, #339, #499): one Song's read model, fed by
+ * one `GET /api/songs/<pk>/` round trip, plus (for an admin) its Cast and
+ * Role Requirements edit modes -- the same route flips into an editable
+ * cast card rather than navigating anywhere else, matching the Setlist's
+ * same-route toggle convention. Since ADR 0019 this page is where casting
+ * happens: "Edit song" opens both editors at once, staged into two
+ * Pending Buffers behind one Save popup, because the Song a Requirement
+ * describes and the Song its cast fills are the same Song and an admin
+ * setting one almost always wants to set the other. A Song outside the viewing Semester 404s
  * server-side (ADR 0001); this renders that as an explicit not-found
  * state rather than an error banner. The Cast section shares `CastLine.tsx`
  * with the Setlist, so it gets the same admin-only `RoleMismatchLegend`/
@@ -59,6 +78,12 @@ export function Song() {
   const [addSheetOpen, setAddSheetOpen] = useState(false)
   const [saveDialogOpen, setSaveDialogOpen] = useState(false)
   const [uploadOpen, setUploadOpen] = useState(false)
+  const [castBuffer, setCastBuffer] =
+    useState<CastEditBuffer>(EMPTY_CAST_BUFFER)
+  const [castPickerRole, setCastPickerRole] = useState<{
+    id: number
+    name: string
+  } | null>(null)
 
   const load = useCallback(() => {
     void apiFetch<ReadEnvelope<SongPayload>>(`/api/songs/${songId}/`)
@@ -85,6 +110,7 @@ export function Song() {
     if (song === null) return
     setRows(rowsFromPayload(song.role_requirements))
     setRowErrors({})
+    setCastBuffer(EMPTY_CAST_BUFFER)
     setIsEditing(true)
   }, [song])
 
@@ -92,6 +118,8 @@ export function Song() {
     setIsEditing(false)
     setRows([])
     setRowErrors({})
+    setCastBuffer(EMPTY_CAST_BUFFER)
+    setCastPickerRole(null)
   }, [])
 
   const requestSave = useCallback(() => setSaveDialogOpen(true), [])
@@ -112,8 +140,41 @@ export function Song() {
     setRows((current) => addRequirementRow(current, role))
   }, [])
 
-  const previewRequirements = useCallback((): Promise<PreviewResult> => {
-    if (viewingSemester === null || song === null) {
+  /** Stages one picked candidate onto the open cell, then closes the picker. */
+  const pickCastMember = useCallback(
+    (option: Parameters<typeof addCastEntry>[2]) => {
+      if (castPickerRole === null) return
+      setCastBuffer((current) =>
+        addCastEntry(current, castPickerRole.id, option),
+      )
+      setCastPickerRole(null)
+    },
+    [castPickerRole],
+  )
+
+  /** The combined body both halves of this one edit session post — Requirements rows and cast Buffer in one wire shape, or `null` with nothing to post against. */
+  const buildEditBody = useCallback((): SongEditBufferWire | null => {
+    if (viewingSemester === null || song === null) return null
+    return buildSongEditBufferWire(
+      viewingSemester.id,
+      viewingSemester.updated_at,
+      song.updated_at,
+      rows,
+      castBuffer,
+    )
+  }, [viewingSemester, song, rows, castBuffer])
+
+  /**
+   * Previews the whole edit session in one request (PR #502 review). Both
+   * Buffers run inside the endpoint's single rolled-back transaction, so
+   * the cast half is previewed against the Requirements this session
+   * staged — two separate preview requests each rolled back before the
+   * next began, which made a newly-staged Requirement's Role look
+   * un-castable in a preview whose save would have succeeded.
+   */
+  const preview = useCallback((): Promise<PreviewResult> => {
+    const body = buildEditBody()
+    if (body === null || song === null) {
       return Promise.resolve({
         ok: false,
         changes: [],
@@ -121,47 +182,53 @@ export function Song() {
         nonFieldErrors: ['No Semester is selected to save against.'],
       })
     }
-    const body = buildRequirementBufferWire(
-      viewingSemester.id,
-      viewingSemester.updated_at,
-      rows,
-    )
-    return apiFetch<SongRoleRequirementWriteEnvelope>(
-      `/api/songs/${song.id}/requirements/preview/`,
-      {
-        method: 'POST',
-        body: JSON.stringify(body),
-      },
+    return apiFetch<SongEditWriteEnvelope>(
+      `/api/songs/${song.id}/edit/preview/`,
+      { method: 'POST', body: JSON.stringify(body) },
     ).then((envelope) => {
       setRowErrors(envelope.errors)
-      return mapSongRoleRequirementPreviewToResult(envelope)
+      return mapSongEditPreviewToResult(envelope)
     })
-  }, [rows, viewingSemester, song])
+  }, [buildEditBody, song])
 
+  /** Saves the whole edit session in one request, so the Requirements and cast halves commit together or not at all (PR #502 review). */
   const confirmSave = useCallback(() => {
-    if (viewingSemester === null || song === null) return
-    const body = buildRequirementBufferWire(
-      viewingSemester.id,
-      viewingSemester.updated_at,
-      rows,
-    )
-    void apiFetch<SongRoleRequirementWriteEnvelope>(
-      `/api/songs/${song.id}/requirements/save/`,
-      {
-        method: 'POST',
-        body: JSON.stringify(body),
-      },
-    ).then((envelope) => {
+    const body = buildEditBody()
+    if (body === null || song === null) return
+    void apiFetch<SongEditWriteEnvelope>(`/api/songs/${song.id}/edit/save/`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }).then((envelope) => {
       if (!envelope.ok) return
       setSaveDialogOpen(false)
       setIsEditing(false)
       setRows([])
       setRowErrors({})
+      setCastBuffer(EMPTY_CAST_BUFFER)
       load()
     })
-  }, [rows, viewingSemester, song, load])
+  }, [buildEditBody, song, load])
 
-  const changeCount = useMemo(() => computeChangeCount(rows), [rows])
+  const changeCount = useMemo(
+    () => computeChangeCount(rows) + computeCastChangeCount(castBuffer),
+    [rows, castBuffer],
+  )
+  /**
+   * The Roles the Cast editor offers, derived from the *staged*
+   * Requirements rows rather than the Song's last-saved
+   * `role_requirements` (PR #502 review): a Requirement added in this
+   * session is castable straight away, and one staged for removal stops
+   * being offered, so the two editors on this page can't disagree about
+   * what is castable mid-session. Out of edit mode the list is unused —
+   * the read-only `CastTable` renders whatever is saved.
+   */
+  const castableRoles = useMemo<CastableRole[]>(
+    () =>
+      rows
+        .filter((row) => !row.removed)
+        .map((row) => ({ roleId: row.roleId, roleName: row.roleName })),
+    [rows],
+  )
   const existingRoleIds = useMemo(
     () => new Set(rows.map((row) => row.roleId)),
     [rows],
@@ -214,16 +281,37 @@ export function Song() {
           <h2 className="text-sm font-semibold uppercase text-rs-muted">
             Cast
           </h2>
-          <span className="text-xs text-rs-muted">Read-only here</span>
         </div>
         {appContext?.viewer.is_admin === true && <RoleMismatchLegend />}
-        <div className="pt-2">
-          <CastTable
+        {isEditing ? (
+          <CastEditor
             cast={song.cast}
-            viewerId={appContext?.viewer.id}
-            isAdmin={appContext?.viewer.is_admin ?? false}
+            castableRoles={castableRoles}
+            buffer={castBuffer}
+            onOpenPicker={setCastPickerRole}
+            onRemoveSaved={(assignmentId) =>
+              setCastBuffer((current) =>
+                removeSavedCastEntry(current, assignmentId),
+              )
+            }
+            onUndoRemoveSaved={(assignmentId) =>
+              setCastBuffer((current) =>
+                undoRemoveSavedCastEntry(current, assignmentId),
+              )
+            }
+            onRemovePending={(key) =>
+              setCastBuffer((current) => removePendingCastEntry(current, key))
+            }
           />
-        </div>
+        ) : (
+          <div className="pt-2">
+            <CastTable
+              cast={song.cast}
+              viewerId={appContext?.viewer.id}
+              isAdmin={appContext?.viewer.is_admin ?? false}
+            />
+          </div>
+        )}
         {isEditing ? (
           <RequirementsEditor
             rows={rows}
@@ -235,21 +323,6 @@ export function Song() {
           />
         ) : (
           <RequirementsReadOnly requirements={song.role_requirements} />
-        )}
-        {song.next_rehearsal !== undefined && (
-          <div className="mt-3 rounded border border-rs-warning-border bg-rs-warning-bg p-3 text-sm text-rs-warning-fg">
-            <p>
-              <strong>Casting happens on a rehearsal, not here.</strong>
-            </p>
-            {song.next_rehearsal !== null && (
-              <Link
-                to={`/schedule?rehearsal=${song.next_rehearsal.id}`}
-                className="mt-2 inline-block font-medium text-rs-accent"
-              >
-                Cast on {formatRehearsalDate(song.next_rehearsal.date)} →
-              </Link>
-            )}
-          </div>
         )}
       </section>
 
@@ -345,6 +418,22 @@ export function Song() {
         onAddRole={addRole}
       />
 
+      {castPickerRole !== null && (
+        <CastPickerSheet
+          songId={song.id}
+          role={castPickerRole}
+          excludePersonIds={castPersonIdsFor(
+            song.cast,
+            castBuffer,
+            castPickerRole.id,
+          )}
+          onOpenChange={(open) => {
+            if (!open) setCastPickerRole(null)
+          }}
+          onPick={pickCastMember}
+        />
+      )}
+
       {uploadOpen && (
         <RecordingUploadDialog
           onOpenChange={(open) => {
@@ -360,7 +449,7 @@ export function Song() {
           open={saveDialogOpen}
           onOpenChange={setSaveDialogOpen}
           title={`Save ${changeCount} change${changeCount === 1 ? '' : 's'} to ${song.title}?`}
-          preview={previewRequirements}
+          preview={preview}
           onConfirm={confirmSave}
         />
       )}
@@ -369,9 +458,11 @@ export function Song() {
 }
 
 /**
- * Mounts only while the Requirements editor is active, so the shell's edit
+ * Mounts only while the Song's edit mode is active, so the shell's edit
  * toolbar appears and disappears with it (mirrors Setlist's own
- * registrar).
+ * registrar). One registration covers both Buffers this page stages —
+ * the Cast editor and the Requirements editor share one toolbar, one
+ * change count and one Save (issue #499).
  */
 function SongEditSessionRegistrar({
   title,

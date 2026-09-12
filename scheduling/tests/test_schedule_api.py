@@ -230,6 +230,33 @@ class SerializeScheduleExactKeySetTests(TestCase):
         )
 
 
+class CanEditAssignmentsContractTests(TestCase):
+    """`can_edit_assignments` must promise exactly what the assignment endpoints allow (PR #502 review)."""
+
+    def test_a_future_dress_rehearsal_is_not_editable(self):
+        """The Dress Rehearsal reads false whatever its date — its endpoints 404 (ADR 0003, ADR 0019).
+
+        Reported by an admin viewer, the only viewer the field is ever
+        true for: a client trusting this field alone would otherwise
+        render an Edit control whose every endpoint refuses it.
+        """
+        admin = PersonFactory(is_admin=True)
+        dress = RehearsalFactory(is_full_setlist=True, date=timezone.localdate() + timedelta(days=30))
+
+        data = serialize_schedule(_RequestStub(admin), dress.semester, rehearsal_id=dress.pk)
+
+        self.assertFalse(data['selected']['can_edit_assignments'])
+
+    def test_a_future_regular_rehearsal_is_editable_for_an_admin(self):
+        """The field stays true where the endpoints really do accept an edit."""
+        admin = PersonFactory(is_admin=True)
+        rehearsal = RehearsalFactory(is_full_setlist=False, date=timezone.localdate() + timedelta(days=1))
+
+        data = serialize_schedule(_RequestStub(admin), rehearsal.semester, rehearsal_id=rehearsal.pk)
+
+        self.assertTrue(data['selected']['can_edit_assignments'])
+
+
 @override_settings(SECURE_SSL_REDIRECT=False)
 class ScheduleApiViewTests(TestCase):
     """`GET /api/schedule/` (issue #331)."""

@@ -18,6 +18,7 @@ function songPayload(overrides: Record<string, unknown> = {}) {
     length: '3:30',
     position: 1,
     notes: '',
+    updated_at: '2026-01-01T00:00:00+00:00',
     cast: [{ role_id: 1, role_name: 'Singer', code: 'SIN', performers: [] }],
     role_requirements: [],
     recording_groups: [],
@@ -56,24 +57,8 @@ describe('Song', () => {
     expect(link).toHaveAttribute('href', '/setlist')
   })
 
-  it('renders the casting pointer block for an admin', async () => {
-    mockFetchOnce(200, {
-      context: adminContext(),
-      data: songPayload({ next_rehearsal: { id: 5, date: '2026-03-01' } }),
-    })
-
-    renderShell(<Song />, ['/songs/1'])
-
-    expect(
-      await screen.findByText(/Casting happens on a rehearsal, not here/),
-    ).toBeInTheDocument()
-    expect(
-      screen.getByRole('link', { name: /Cast on 1st March, Sunday/ }),
-    ).toHaveAttribute('href', '/schedule?rehearsal=5')
-  })
-
-  it('does not render the casting pointer block for a member', async () => {
-    mockFetchOnce(200, { context: memberContext(), data: songPayload() })
+  it('renders no "casting happens on a rehearsal" pointer for anyone any more (ADR 0019)', async () => {
+    mockFetchOnce(200, { context: adminContext(), data: songPayload() })
 
     renderShell(<Song />, ['/songs/1'])
 
@@ -81,6 +66,15 @@ describe('Song', () => {
     expect(
       screen.queryByText(/Casting happens on a rehearsal/),
     ).not.toBeInTheDocument()
+  })
+
+  it('no longer labels the Cast section read-only, since an admin can now edit it here', async () => {
+    mockFetchOnce(200, { context: adminContext(), data: songPayload() })
+
+    renderShell(<Song />, ['/songs/1'])
+
+    await screen.findByRole('heading', { name: 'Test Song' })
+    expect(screen.queryByText('Read-only here')).not.toBeInTheDocument()
   })
 
   it('renders notes as one paragraph, absent entirely when empty', async () => {
@@ -399,14 +393,17 @@ describe('Song requirements editor', () => {
             errors: {},
             non_field_errors: [],
             fallout: {
-              is_blocked: false,
-              block_message: '',
-              is_stale: false,
-              pending_adds: [],
-              pending_edits: [{ role_name: 'Singer', before: 2, after: 3 }],
-              pending_removals: [],
-              loud: [],
-              quiet: [],
+              requirements: {
+                is_blocked: false,
+                block_message: '',
+                is_stale: false,
+                pending_adds: [],
+                pending_edits: [{ role_name: 'Singer', before: 2, after: 3 }],
+                pending_removals: [],
+                loud: [],
+                quiet: [],
+              },
+              cast: null,
             },
             values: null,
             data: null,
@@ -434,9 +431,7 @@ describe('Song requirements editor', () => {
     )
     expect(screen.getByText('Singer, 2 → 3')).toBeInTheDocument()
     expect(fetchSpy).toHaveBeenCalledTimes(2)
-    expect(fetchSpy.mock.calls[1]?.[0]).toBe(
-      '/api/songs/1/requirements/preview/',
-    )
+    expect(fetchSpy.mock.calls[1]?.[0]).toBe('/api/songs/1/edit/preview/')
   })
 
   it('confirming a save posts to the save endpoint and returns to read mode on success', async () => {
@@ -472,14 +467,17 @@ describe('Song requirements editor', () => {
             errors: {},
             non_field_errors: [],
             fallout: {
-              is_blocked: false,
-              block_message: '',
-              is_stale: false,
-              pending_adds: [],
-              pending_edits: [{ role_name: 'Singer', before: 2, after: 3 }],
-              pending_removals: [],
-              loud: [],
-              quiet: [],
+              requirements: {
+                is_blocked: false,
+                block_message: '',
+                is_stale: false,
+                pending_adds: [],
+                pending_edits: [{ role_name: 'Singer', before: 2, after: 3 }],
+                pending_removals: [],
+                loud: [],
+                quiet: [],
+              },
+              cast: null,
             },
             values: null,
             data: null,
@@ -543,7 +541,331 @@ describe('Song requirements editor', () => {
     await waitFor(() =>
       expect(screen.getByText('no edit session')).toBeInTheDocument(),
     )
-    expect(fetchSpy.mock.calls[2]?.[0]).toBe('/api/songs/1/requirements/save/')
+    expect(fetchSpy.mock.calls[2]?.[0]).toBe('/api/songs/1/edit/save/')
     expect(screen.getByText('Singer 1/3')).toBeInTheDocument()
+  })
+})
+
+/** A `songPayload()` carrying one Requirement and one cast member, for the Cast editor's own cases. */
+function castablePayload(overrides: Record<string, unknown> = {}) {
+  return songPayload({
+    cast: [
+      {
+        role_id: 1,
+        role_name: 'Singer',
+        code: 'SIN',
+        performers: [
+          {
+            id: 7,
+            name: 'Robin Vale',
+            is_role_mismatch: false,
+            assignment_id: 42,
+          },
+        ],
+      },
+    ],
+    role_requirements: [
+      {
+        role_id: 1,
+        role_name: 'Singer',
+        target: 2,
+        actual: 1,
+        is_understaffed: true,
+        is_retired_role: false,
+      },
+    ],
+    ...overrides,
+  })
+}
+
+describe('Song cast editor (issue #499, ADR 0019)', () => {
+  it('shows the read-only cast table and no cast controls for a member', async () => {
+    mockFetchOnce(200, { context: memberContext(), data: castablePayload() })
+
+    renderShell(<Song />, ['/songs/1'])
+
+    expect(await screen.findByText('Robin Vale')).toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: '+ Cast Singer' }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('Edit song reveals a "+ Cast <Role>" control per Role Requirement', async () => {
+    mockFetchOnce(200, { context: adminContext(), data: castablePayload() })
+    const user = userEvent.setup()
+
+    renderShell(<Song />, ['/songs/1'])
+    await user.click(await screen.findByRole('button', { name: 'Edit song' }))
+
+    expect(
+      screen.getByRole('button', { name: '+ Cast Singer' }),
+    ).toBeInTheDocument()
+  })
+
+  it('removing a cast member strikes them through and counts one unsaved change, with Undo restoring it', async () => {
+    mockFetchOnce(200, { context: adminContext(), data: castablePayload() })
+    const user = userEvent.setup()
+
+    renderShell(
+      <>
+        <Song />
+        <EditSessionSpy />
+      </>,
+      ['/songs/1'],
+    )
+    await user.click(await screen.findByRole('button', { name: 'Edit song' }))
+
+    await user.click(
+      screen.getByRole('button', { name: 'Remove Robin Vale from Singer' }),
+    )
+    expect(screen.getByText('1 unsaved')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Undo' }))
+    expect(screen.getByText('0 unsaved')).toBeInTheDocument()
+  })
+
+  it('a Role Requirement staged for removal stops being castable in the same session (PR #502 review)', async () => {
+    mockFetchOnce(200, { context: adminContext(), data: castablePayload() })
+    const user = userEvent.setup()
+
+    renderShell(<Song />, ['/songs/1'])
+    await user.click(await screen.findByRole('button', { name: 'Edit song' }))
+    expect(
+      screen.getByRole('button', { name: '+ Cast Singer' }),
+    ).toBeInTheDocument()
+
+    await user.click(
+      screen.getByRole('button', { name: 'Remove Singer requirement' }),
+    )
+
+    expect(
+      screen.queryByRole('button', { name: '+ Cast Singer' }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('a Role Requirement added in this session becomes castable straight away (PR #502 review)', async () => {
+    mockFetchOnce(200, {
+      context: adminContext(),
+      data: castablePayload({
+        available_roles: [{ id: 5, name: 'Keys', is_active: true }],
+      }),
+    })
+    const user = userEvent.setup()
+
+    renderShell(<Song />, ['/songs/1'])
+    await user.click(await screen.findByRole('button', { name: 'Edit song' }))
+    expect(
+      screen.queryByRole('button', { name: '+ Cast Keys' }),
+    ).not.toBeInTheDocument()
+
+    await user.click(
+      screen.getByRole('button', { name: '+ Add role requirement' }),
+    )
+    await user.click(await screen.findByRole('button', { name: 'Keys' }))
+
+    expect(
+      screen.getByRole('button', { name: '+ Cast Keys' }),
+    ).toBeInTheDocument()
+  })
+
+  it('a saved mismatched cast member wears the shared role-mismatch badge, not a bare name (PR #502 review)', async () => {
+    mockFetchOnce(200, {
+      context: adminContext(),
+      data: castablePayload({
+        cast: [
+          {
+            role_id: 1,
+            role_name: 'Singer',
+            code: 'SIN',
+            performers: [
+              {
+                id: 7,
+                name: 'Robin Vale',
+                is_role_mismatch: true,
+                assignment_id: 42,
+              },
+            ],
+          },
+        ],
+      }),
+    })
+    const user = userEvent.setup()
+
+    renderShell(<Song />, ['/songs/1'])
+    await user.click(await screen.findByRole('button', { name: 'Edit song' }))
+
+    expect(
+      screen.getAllByLabelText("Assigned outside this member's usual roles")
+        .length,
+    ).toBeGreaterThan(0)
+  })
+
+  it('opening the picker fetches the cast picker endpoint and staging a pick counts one change', async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            context: adminContext(),
+            data: castablePayload(),
+          }),
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            context: adminContext(),
+            data: {
+              song_id: 1,
+              song_title: 'Test Song',
+              role_id: 1,
+              role_name: 'Singer',
+              declared: [
+                {
+                  person_id: 8,
+                  person_name: 'Wren Okafor',
+                  has_declared_role: true,
+                  conflicts: [
+                    {
+                      rehearsal_id: 3,
+                      date: '2026-03-01',
+                      is_full_conflict: true,
+                      reason: 'a synthetic reason',
+                    },
+                  ],
+                },
+              ],
+              others: [],
+            },
+          }),
+      })
+    vi.stubGlobal('fetch', fetchSpy)
+    const user = userEvent.setup()
+
+    renderShell(
+      <>
+        <Song />
+        <EditSessionSpy />
+      </>,
+      ['/songs/1'],
+    )
+    await user.click(await screen.findByRole('button', { name: 'Edit song' }))
+    await user.click(screen.getByRole('button', { name: '+ Cast Singer' }))
+
+    await waitFor(() =>
+      expect(screen.getByText('Wren Okafor')).toBeInTheDocument(),
+    )
+    expect(fetchSpy.mock.calls[1]?.[0]).toBe('/api/songs/1/cast/picker/1/')
+
+    await user.click(screen.getByRole('button', { name: '1 conflict' }))
+    expect(
+      screen.getByText(/away all evening — a synthetic reason/),
+    ).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /Wren Okafor/ }))
+    expect(screen.getByText('1 unsaved')).toBeInTheDocument()
+  })
+
+  it('saving a cast removal posts one combined save carrying the staged assignment id', async () => {
+    const okWrite = (fallout: unknown) => ({
+      status: 200,
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          context: adminContext(),
+          ok: true,
+          errors: {},
+          non_field_errors: [],
+          fallout,
+          values: null,
+          data: null,
+        }),
+    })
+    const fetchSpy = vi
+      .fn()
+      // initial read
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            context: adminContext(),
+            data: castablePayload(),
+          }),
+      })
+      // one combined preview, carrying both halves
+      .mockResolvedValueOnce(
+        okWrite({
+          requirements: {
+            is_blocked: false,
+            block_message: '',
+            is_stale: false,
+            pending_adds: [],
+            pending_edits: [],
+            pending_removals: [],
+            loud: [],
+            quiet: [],
+          },
+          cast: {
+            is_blocked: false,
+            block_message: '',
+            is_stale: false,
+            pending_adds: [],
+            pending_removals: [
+              { role_name: 'Singer', person_name: 'Robin Vale' },
+            ],
+            loud: [],
+            quiet: [],
+          },
+        }),
+      )
+      // one combined save
+      .mockResolvedValueOnce(okWrite(null))
+      // reload
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            context: adminContext(),
+            data: songPayload(),
+          }),
+      })
+    vi.stubGlobal('fetch', fetchSpy)
+    const user = userEvent.setup()
+
+    renderShell(
+      <>
+        <Song />
+        <EditSessionSpy />
+      </>,
+      ['/songs/1'],
+    )
+    await user.click(await screen.findByRole('button', { name: 'Edit song' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Remove Robin Vale from Singer' }),
+    )
+    await user.click(screen.getByRole('button', { name: 'toolbar save' }))
+    await waitFor(() =>
+      expect(screen.getByText('Robin Vale — Singer')).toBeInTheDocument(),
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() =>
+      expect(screen.getByText('no edit session')).toBeInTheDocument(),
+    )
+    const save = fetchSpy.mock.calls.find(
+      ([url]) => String(url) === '/api/songs/1/edit/save/',
+    )
+    expect(save).toBeDefined()
+    const body = JSON.parse(String(save?.[1]?.body))
+    expect(body.removed_assignment_ids).toEqual([42])
+    expect(body.song_updated_at).toBe('2026-01-01T00:00:00+00:00')
+    // The Requirements half rides in the same body, so both commit in one transaction.
+    expect(body.entries).toBeDefined()
   })
 })

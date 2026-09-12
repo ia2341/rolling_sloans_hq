@@ -25,7 +25,21 @@ Issue #338 adds the assignment editor's `picker/`/`preview/`/`save/`
 trio, per-Rehearsal siblings of `schedule/<id>/conflict/`. The grid
 itself adds no new read: it comes from `schedule/`'s existing
 `AssignmentMatrix` (issue #331), per #307's "one endpoint per surface"
-rule.
+rule. Issue #499 (ADR-0019) narrows that trio to Backups only and adds
+the Song-level `songs/<pk>/cast/` trio beside it — the same three shapes,
+now anchored on the Song the data actually belongs to. Both the Song page
+and the Setlist's inline popover use that one trio; neither gets a read
+endpoint of its own, since `songs/<pk>/` and `setlist/` already carry
+each Song's cast.
+
+Beside that trio, `songs/<pk>/edit/{preview,save}/` is the Song *page's*
+own pair (PR #502 review): that page stages its Requirements Buffer and
+its cast Buffer behind one Save popup, and posting them as two
+independently committed requests could leave one half saved and the other
+refused. These two endpoints run both Buffers in one transaction — and,
+for the preview, inside one rolled-back transaction, so the cast half
+sees the Requirements this session staged. The per-surface endpoints stay
+for the Setlist popover, which really does edit a cast alone.
 """
 
 from django.urls import path
@@ -47,6 +61,20 @@ urlpatterns = [
         'songs/<int:pk>/requirements/save/',
         api_views.SongRoleRequirementSaveApiView.as_view(), name='api-song-requirements-save',
     ),
+    path(
+        'songs/<int:pk>/cast/picker/<int:role_id>/',
+        api_views.SongCastPickerApiView.as_view(), name='api-song-cast-picker',
+    ),
+    path(
+        'songs/<int:pk>/cast/preview/',
+        api_views.SongCastPreviewApiView.as_view(), name='api-song-cast-preview',
+    ),
+    path('songs/<int:pk>/cast/save/', api_views.SongCastSaveApiView.as_view(), name='api-song-cast-save'),
+    path(
+        'songs/<int:pk>/edit/preview/',
+        api_views.SongEditPreviewApiView.as_view(), name='api-song-edit-preview',
+    ),
+    path('songs/<int:pk>/edit/save/', api_views.SongEditSaveApiView.as_view(), name='api-song-edit-save'),
     path('schedule/', api_views.ScheduleApiView.as_view(), name='api-schedule'),
     path(
         'schedule/<int:rehearsal_id>/conflict/',

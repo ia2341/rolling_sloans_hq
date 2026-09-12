@@ -177,6 +177,13 @@ class Song(models.Model):
     Carries no relationship back to any other Semester's Song — a title
     replayed in a later semester is represented by a brand-new row, never a
     reused one (per ADR-0001).
+
+    `updated_at` is this Song's own optimistic-concurrency stamp, the
+    anchor `SongCastEditBuffer`'s staleness check reads (ADR-0019): a cast
+    edit is scoped to one Song rather than to the whole Semester, so two
+    admins casting two different Songs at once must not collide the way
+    they would on a shared `Semester.updated_at`. Every other Buffer
+    surface keeps stamping the Semester; this one deliberately does not.
     """
 
     semester = models.ForeignKey(Semester, on_delete=models.CASCADE)
@@ -185,6 +192,7 @@ class Song(models.Model):
     length = models.DurationField()
     notes = models.TextField(blank=True)
     position = models.PositiveIntegerField()
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         # Deferred so a reorder can update several Songs' positions inside
@@ -290,7 +298,7 @@ class SongRoleAssignment(models.Model):
 
         Mirrors Conflict.save()'s belt-and-suspenders check (ADR-0006):
         every write path (.objects.create(), the Django admin,
-        apply_song_role_assignments()) rejects a (song, role) pair with no
+        apply_song_cast_edits()) rejects a (song, role) pair with no
         SongRoleRequirement, not only callers that run full_clean() first.
         There is deliberately no DB-level constraint: a constraint
         expression cannot reach through the `song`/`role` FKs to check for
@@ -1078,7 +1086,7 @@ class Backup(models.Model):
 
         Mirrors SongRoleAssignment.save()'s belt-and-suspenders check
         (issue #439): every write path (.objects.create(), the Django
-        admin, apply_song_role_assignments()) rejects a (song, role) pair
+        admin, apply_rehearsal_backups()) rejects a (song, role) pair
         with no SongRoleRequirement, not only callers that run
         full_clean() first. There is deliberately no DB-level constraint:
         a constraint expression cannot reach through the `rehearsal_song`

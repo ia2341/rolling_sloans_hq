@@ -635,7 +635,17 @@ function AssignmentGrid({
         <h2 className="text-sm font-semibold uppercase text-rs-muted">
           Running order & assignments
         </h2>
-        {isAdmin && (
+        {/* The Dress Rehearsal gets no control at all (ADR 0019): it carries no
+            RehearsalSong row (ADR 0003), so there is no Backup to add and no
+            Running Order to reorder — and since casting left this surface, no
+            standing assignment to edit either. Its endpoints 404 to match.
+            `canEditAssignments` is now false there too (PR #502 review fixed
+            the API contract), so `!isDress` is no longer load-bearing — it is
+            kept only to choose *hiding* over *disabling*: a past Rehearsal's
+            disabled button explains itself, while the Dress Rehearsal has
+            nothing to edit ever, and an always-disabled button would just
+            invite a click. */}
+        {isAdmin && !isDress && (
           <button
             type="button"
             disabled={!canEditAssignments}

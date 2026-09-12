@@ -22,6 +22,16 @@ function ActiveEditSessionSaveButton() {
   )
 }
 
+/** One already-saved matrix entry, as `/api/schedule/` serializes it — spelled out so an empty `entries: []` literal below still widens to it. */
+interface FixtureEntry {
+  id: number
+  kind: string
+  person_id: number
+  person_name: string
+  is_role_mismatch: boolean
+  has_conflict: boolean
+}
+
 function schedulePayload() {
   return {
     context: adminContext(),
@@ -63,7 +73,7 @@ function schedulePayload() {
             song_title: 'Song One',
             start_time: '19:00:00',
             rehearsal_song_id: 200,
-            cells: [{ role_id: 5, entries: [] }],
+            cells: [{ role_id: 5, entries: [] as FixtureEntry[] }],
           },
         ],
         available_songs: [
@@ -125,6 +135,20 @@ function twoSongSchedulePayload() {
   return payload
 }
 
+/** A `schedulePayload()` variant whose one cell already holds a saved standing assignment, for the read-only-cast cases (ADR 0019). */
+function castSchedulePayload() {
+  const payload = schedulePayload()
+  payload.data.selected.rows[0]!.cells[0]!.entries.push({
+    id: 77,
+    kind: 'assignment',
+    person_id: 9,
+    person_name: 'Riley Song',
+    is_role_mismatch: false,
+    has_conflict: false,
+  })
+  return payload
+}
+
 /** A `schedulePayload()` variant adding one roster member ('Casey Undeclared') who hasn't declared the Guitar Role, for the picker's "Show all members" section. */
 function undeclaredSchedulePayload() {
   const payload = schedulePayload()
@@ -172,22 +196,22 @@ function renderEditor(onDone: () => void = vi.fn(), compact = false) {
 }
 
 describe('AssignmentEditor', () => {
-  it('renders the non-dismissible scope bar naming the Backup escape hatch', async () => {
+  it('renders the non-dismissible scope bar naming this-evening-only editing (ADR 0019)', async () => {
     mockMatchMedia(false)
     queueFetch(schedulePayload())
 
     renderEditor()
 
     expect(
-      await screen.findByText('Editing standing assignments.'),
+      await screen.findByText('Editing this evening only.'),
     ).toBeInTheDocument()
-    expect(screen.getByText(/To cover one evening only/)).toBeInTheDocument()
+    expect(screen.getByText(/Add a/)).toBeInTheDocument()
     expect(
       screen.queryByRole('button', { name: /dismiss/i }),
     ).not.toBeInTheDocument()
   })
 
-  it("the picker's two sections render with their scope lines, structural not dismissible", async () => {
+  it('the picker offers only the Backup section — casting moved to the Song (ADR 0019)', async () => {
     mockMatchMedia(false)
     queueFetch(schedulePayload())
     const user = userEvent.setup()
@@ -196,14 +220,20 @@ describe('AssignmentEditor', () => {
     await screen.findAllByText('Song One')
 
     await user.click(
-      screen.getByRole('button', { name: 'Assign Guitar on Song One' }),
+      screen.getByRole('button', {
+        name: 'Add a Backup for Guitar on Song One',
+      }),
     )
 
     expect(
-      await screen.findByRole('heading', { name: 'Assigned' }),
+      await screen.findByRole('heading', { name: 'Backup' }),
     ).toBeInTheDocument()
-    expect(screen.getByText('Every rehearsal + concert')).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: 'Backup' })).toBeInTheDocument()
+    expect(
+      screen.queryByRole('heading', { name: 'Assigned' }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByText('Every rehearsal + concert'),
+    ).not.toBeInTheDocument()
     expect(
       screen.getByText(
         'This rehearsal only — the standing assignment above is unaffected',
@@ -211,7 +241,7 @@ describe('AssignmentEditor', () => {
     ).toBeInTheDocument()
   })
 
-  it('picking a declared member adds a pending pill with no further round trip', async () => {
+  it('picking a declared member adds a pending Backup pill with no further round trip', async () => {
     mockMatchMedia(false)
     const fetchSpy = queueFetch(schedulePayload())
     const user = userEvent.setup()
@@ -219,16 +249,32 @@ describe('AssignmentEditor', () => {
     renderEditor()
     await screen.findAllByText('Song One')
     await user.click(
-      screen.getByRole('button', { name: 'Assign Guitar on Song One' }),
+      screen.getByRole('button', {
+        name: 'Add a Backup for Guitar on Song One',
+      }),
     )
-    await screen.findByRole('heading', { name: 'Assigned' })
+    await screen.findByRole('heading', { name: 'Backup' })
 
     const callsBeforePick = fetchSpy.mock.calls.length
-    const assignedRiley = screen.getAllByRole('button', { name: 'Riley' })[0]
-    await user.click(assignedRiley as HTMLElement)
+    const backupRiley = screen.getAllByRole('button', { name: 'Riley' })[0]
+    await user.click(backupRiley as HTMLElement)
 
     expect(await screen.findByText('Riley')).toBeInTheDocument()
     expect(fetchSpy.mock.calls.length).toBe(callsBeforePick)
+  })
+
+  it('a saved standing assignee renders with no remove control at all (ADR 0019)', async () => {
+    mockMatchMedia(false)
+    const payload = castSchedulePayload()
+    queueFetch(payload)
+
+    renderEditor()
+    await screen.findAllByText('Song One')
+
+    expect(await screen.findByText('Riley')).toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Remove Riley Song' }),
+    ).not.toBeInTheDocument()
   })
 
   it('opens the Save popup on Save and fires the preview endpoint exactly once', async () => {
@@ -253,11 +299,13 @@ describe('AssignmentEditor', () => {
     renderEditor()
     await screen.findAllByText('Song One')
     await user.click(
-      screen.getByRole('button', { name: 'Assign Guitar on Song One' }),
+      screen.getByRole('button', {
+        name: 'Add a Backup for Guitar on Song One',
+      }),
     )
-    await screen.findByRole('heading', { name: 'Assigned' })
-    const assignedRiley = screen.getAllByRole('button', { name: 'Riley' })[0]
-    await user.click(assignedRiley as HTMLElement)
+    await screen.findByRole('heading', { name: 'Backup' })
+    const backupRiley = screen.getAllByRole('button', { name: 'Riley' })[0]
+    await user.click(backupRiley as HTMLElement)
     await screen.findByText('Riley')
 
     await user.click(screen.getByRole('button', { name: /Save 1 change/ }))
@@ -275,12 +323,14 @@ describe('AssignmentEditor', () => {
     renderEditor()
     await screen.findAllByText('Song One')
     await user.click(
-      screen.getByRole('button', { name: 'Assign Guitar on Song One' }),
+      screen.getByRole('button', {
+        name: 'Add a Backup for Guitar on Song One',
+      }),
     )
-    const showAllAssigned = screen.getAllByRole('button', {
+    const showAllBackup = screen.getAllByRole('button', {
       name: 'Show all members',
     })[0]
-    await user.click(showAllAssigned as HTMLElement)
+    await user.click(showAllBackup as HTMLElement)
     await user.click(screen.getByRole('button', { name: /Casey/ }))
 
     const pill = await screen.findByText('Casey')
@@ -388,7 +438,7 @@ describe('AssignmentEditor', () => {
     await screen.findByRole('button', { name: 'Move Song One up' })
 
     expect(
-      screen.queryByText('Editing standing assignments.'),
+      screen.queryByText('Editing this evening only.'),
     ).not.toBeInTheDocument()
     expect(
       screen.queryByText('backup — covers one evening only'),
@@ -491,6 +541,68 @@ describe('AssignmentEditor', () => {
     ])
   })
 
+  it('the Running Order save pins the stamp the Backup save just returned, not the one this session loaded (PR #502 review)', async () => {
+    mockMatchMedia(false)
+    const okFallout = (
+      extra: Record<string, unknown> = {},
+      context = adminContext(),
+    ) => ({
+      context,
+      ok: true,
+      errors: {},
+      non_field_errors: [],
+      fallout: {
+        is_blocked: false,
+        block_message: '',
+        is_stale: false,
+        loud: [],
+        quiet: [],
+        ...extra,
+      },
+      values: null,
+      data: null,
+    })
+    // The Backup save bumps Semester.updated_at server-side; its envelope reports the
+    // fresh value, and the Running Order save must pin that or be refused as stale.
+    const bumpedContext = adminContext({
+      viewing_semester: {
+        id: 11,
+        name: 'Fall 2026 (draft)',
+        status: 'draft',
+        published_at: null,
+        updated_at: '2026-02-02T00:00:00Z',
+      },
+    })
+    const fetchSpy = queueFetch(
+      schedulePayload(),
+      okFallout(), // assignments/preview
+      okFallout({ doomed_recording_groups: [] }), // running-order/preview
+      okFallout({}, bumpedContext), // assignments/save
+      okFallout({ doomed_recording_groups: [] }), // running-order/save
+      schedulePayload(), // load() after a successful save
+    )
+    const user = userEvent.setup()
+
+    renderEditor()
+    await screen.findAllByText('Song One')
+    await user.selectOptions(
+      screen.getByRole('combobox', { name: 'Song for Song One' }),
+      'Song Three',
+    )
+
+    await user.click(screen.getByRole('button', { name: /Save 1 change/ }))
+    await user.click(
+      await screen.findByRole('button', { name: 'Save changes' }),
+    )
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(6))
+    const reorderSave = fetchSpy.mock.calls.find(([url]) =>
+      String(url).includes('/running-order/save/'),
+    )
+    const body = JSON.parse(String(reorderSave?.[1]?.body))
+    expect(body.semester_updated_at).toBe('2026-02-02T00:00:00Z')
+  })
+
   it('Discard reloads and calls onDone, since Discard is the only way to leave edit mode (issue: UI overhaul round 2, item 2)', async () => {
     mockMatchMedia(false)
     const fetchSpy = queueFetch(schedulePayload(), schedulePayload())
@@ -498,7 +610,7 @@ describe('AssignmentEditor', () => {
     const user = userEvent.setup()
 
     renderEditor(onDone)
-    await screen.findByText('Editing standing assignments.')
+    await screen.findByText('Editing this evening only.')
 
     await user.click(screen.getByRole('button', { name: 'Discard' }))
 
