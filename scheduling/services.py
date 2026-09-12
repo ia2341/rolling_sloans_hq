@@ -1382,6 +1382,65 @@ def fill_status_for(song) -> list[RoleFillStatus]:
     ]
 
 
+def _requirements_by_song_id(songs) -> dict[int, list[SongRoleRequirement]]:
+    """Return `songs`' SongRoleRequirements grouped by song id, in one query (issue #500).
+
+    A batched sibling of the per-song requirements lookup `fill_status_for()`
+    runs inline -- callers computing fill status for every Song in a
+    Semester (e.g. `preview_roster_edits()`) fetch this once rather than
+    once per Song, since Requirements don't change over the course of a
+    Roster edit.
+    """
+    requirements_by_song = defaultdict(list)
+    for requirement in (
+        SongRoleRequirement.objects.filter(song__in=songs).select_related('role').order_by('role__name')
+    ):
+        requirements_by_song[requirement.song_id].append(requirement)
+    return requirements_by_song
+
+
+def _actual_counts_by_song_and_role(songs) -> dict[tuple[int, int], int]:
+    """Return the actual SongRoleAssignment count for every (song id, role id) pair among `songs`, in one query.
+
+    A batched sibling of the per-song actual-count lookup `fill_status_for()`
+    runs inline (issue #500) -- computed fresh each call, so calling this
+    again after a write reflects the write.
+    """
+    return {
+        (row['song_id'], row['role_id']): row['actual']
+        for row in (
+            SongRoleAssignment.objects.filter(song__in=songs)
+            .values('song_id', 'role_id')
+            .annotate(actual=Count('id'))
+        )
+    }
+
+
+def _fill_statuses_by_song_id(
+    songs, requirements_by_song: dict[int, list[SongRoleRequirement]], actual_by_song_and_role: dict[tuple[int, int], int],
+) -> dict[int, dict[int, RoleFillStatus]]:
+    """Build each Song's RoleFillStatus-by-role-id map from prefetched Requirement/actual-count maps (issue #500).
+
+    Mirrors `fill_status_for()`'s per-song derivation exactly (same target,
+    actual, is_understaffed and is_retired_role logic) but reads from maps a
+    caller already fetched with one or two semester-wide queries, rather
+    than running `fill_status_for()`'s own two queries once per Song.
+    """
+    result = {}
+    for song in songs:
+        result[song.pk] = {
+            requirement.role_id: RoleFillStatus(
+                role=requirement.role,
+                target=requirement.count,
+                actual=actual_by_song_and_role.get((song.pk, requirement.role_id), 0),
+                is_understaffed=actual_by_song_and_role.get((song.pk, requirement.role_id), 0) < requirement.count,
+                is_retired_role=not requirement.role.is_active,
+            )
+            for requirement in requirements_by_song.get(song.pk, [])
+        }
+    return result
+
+
 def recording_count_for(song) -> int:
     """Return the all-time count of Recordings across every RehearsalSong slot for `song` (issue #103).
 
@@ -4403,16 +4462,30 @@ def preview_roster_edits(buffer: RosterEditBuffer, *, viewing_semester: Semester
     )
 
     removed_people_by_id = Person.objects.in_bulk(buffer.removed_person_ids)
+    removed_person_ids = list(buffer.removed_person_ids)
+    assignment_counts_by_person = dict(
+        SongRoleAssignment.objects.filter(person_id__in=removed_person_ids, song__semester=viewing_semester)
+        .values('person_id')
+        .annotate(count=Count('id'))
+        .values_list('person_id', 'count'),
+    )
+    conflict_counts_by_person = dict(
+        Conflict.objects.filter(person_id__in=removed_person_ids, rehearsal__semester=viewing_semester)
+        .values('person_id')
+        .annotate(count=Count('id'))
+        .values_list('person_id', 'count'),
+    )
     removal_counts_before = {
         person_id: (
-            SongRoleAssignment.objects.filter(person_id=person_id, song__semester=viewing_semester).count(),
-            Conflict.objects.filter(person_id=person_id, rehearsal__semester=viewing_semester).count(),
+            assignment_counts_by_person.get(person_id, 0),
+            conflict_counts_by_person.get(person_id, 0),
         )
-        for person_id in buffer.removed_person_ids
+        for person_id in removed_person_ids
     }
 
     songs = list(Song.objects.filter(semester=viewing_semester))
-    fill_before = {song.pk: {status.role.pk: status for status in fill_status_for(song)} for song in songs}
+    requirements_by_song = _requirements_by_song_id(songs)
+    fill_before = _fill_statuses_by_song_id(songs, requirements_by_song, _actual_counts_by_song_and_role(songs))
 
     apply_buffer = replace(buffer, semester_updated_at=current_semester.updated_at)
     try:
@@ -4440,9 +4513,10 @@ def preview_roster_edits(buffer: RosterEditBuffer, *, viewing_semester: Semester
             f"and deletes {conflict_count} Conflict{'' if conflict_count == 1 else 's'}."
         )
 
+    fill_after = _fill_statuses_by_song_id(songs, requirements_by_song, _actual_counts_by_song_and_role(songs))
     for song in songs:
         before_map = fill_before[song.pk]
-        after_map = {status.role.pk: status for status in fill_status_for(song)}
+        after_map = fill_after[song.pk]
         for role_id, before_status in before_map.items():
             after_status = after_map.get(role_id)
             if before_status.actual > 0 and after_status is not None and after_status.actual == 0:

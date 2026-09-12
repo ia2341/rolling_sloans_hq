@@ -10,8 +10,11 @@ from django.test import TestCase
 
 from identity.factories import PersonFactory
 from scheduling.factories import (
+    BackupFactory,
     PersonRoleFactory,
+    RehearsalSongFactory,
     RoleFactory,
+    SemesterFactory,
     SongFactory,
     SongRoleAssignmentFactory,
 )
@@ -96,6 +99,41 @@ class PersonRoleMismatchResweepTests(TestCase):
 
         assignment.refresh_from_db()
         self.assertTrue(assignment.is_role_mismatch)
+
+    def test_backups_are_also_reswept(self):
+        """Creating a matching PersonRole clears is_role_mismatch on an affected Backup too, mirroring SongRoleAssignment."""
+        person = PersonFactory()
+        role = RoleFactory(name='Drummer')
+        rehearsal_song = RehearsalSongFactory()
+        backup = BackupFactory(rehearsal_song=rehearsal_song, person=person, role=role)
+        self.assertTrue(backup.is_role_mismatch)
+
+        PersonRoleFactory(person=person, role=role)
+
+        backup.refresh_from_db()
+        self.assertFalse(backup.is_role_mismatch)
+
+    def test_query_count_does_not_grow_with_the_number_of_affected_rows(self):
+        """Declaring a Role a Person already holds several mismatched Assignments/Backups for (spanning several Semesters, per ADR-0014) costs the same query count regardless of how many rows that resweeps -- the point of bulk_update()-ing them in one pass instead of looping `.save()` per row (issue #500)."""
+        role = RoleFactory(name='Cellist')
+
+        def _build_mismatched_person(assignment_count, backup_count):
+            """Build a Person holding `assignment_count` mismatched SongRoleAssignments across distinct Semesters and `backup_count` mismatched Backups, none holding the PersonRole yet."""
+            person = PersonFactory()
+            for _ in range(assignment_count):
+                song = SongFactory(semester=SemesterFactory())
+                SongRoleAssignmentFactory(song=song, person=person, role=role)
+            for _ in range(backup_count):
+                BackupFactory(rehearsal_song=RehearsalSongFactory(), person=person, role=role)
+            return person
+
+        light_person = _build_mismatched_person(assignment_count=1, backup_count=1)
+        heavy_person = _build_mismatched_person(assignment_count=5, backup_count=5)
+
+        with self.assertNumQueries(6):
+            PersonRoleFactory(person=light_person, role=role)
+        with self.assertNumQueries(6):
+            PersonRoleFactory(person=heavy_person, role=role)
 
 
 class DeclaredRolesForPersonTests(TestCase):

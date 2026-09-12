@@ -272,3 +272,37 @@ class ApplyRosterEditsInviteTests(TestCase):
         apply_roster_edits(buffer, viewing_semester=self.semester, requesting_admin=self.admin)
 
         self.assertEqual(len(mail.outbox), 0)
+
+
+class ApplyRosterEditsQueryCountTests(TestCase):
+    """Query-count regression coverage for issue #500: apply_roster_edits() must not scale with a removed Person's row count."""
+
+    def _removed_person_buffer(self, song_count):
+        """Build a fresh Semester whose one Membership will be removed, with `song_count` Songs/Rehearsals attaching that Person to Role Assignments and Conflicts, and return (semester, admin, buffer)."""
+        semester = SemesterFactory()
+        admin = PersonFactory(is_admin=True)
+        person = PersonFactory()
+        MembershipFactory(person=person, semester=semester)
+        for i in range(song_count):
+            song = SongFactory(semester=semester)
+            SongRoleAssignmentFactory(song=song, person=person)
+            rehearsal = RehearsalFactory(semester=semester, date=date(2026, 9, 16 + i))
+            ConflictFactory(person=person, rehearsal=rehearsal)
+        buffer = RosterEditBuffer(
+            semester_id=semester.pk,
+            semester_updated_at=semester.updated_at,
+            entries=[],
+            removed_person_ids=frozenset([person.pk]),
+            pending_invites=[],
+        )
+        return semester, admin, buffer
+
+    def test_removal_query_count_does_not_grow_with_assignment_or_conflict_count(self):
+        """Removing a Person cast across many Songs/Rehearsals costs the same queries as removing one cast across a single Song — the purge is a queryset `.delete()`, not a per-row loop."""
+        light_semester, light_admin, light_buffer = self._removed_person_buffer(song_count=1)
+        heavy_semester, heavy_admin, heavy_buffer = self._removed_person_buffer(song_count=8)
+
+        with self.assertNumQueries(11):
+            apply_roster_edits(light_buffer, viewing_semester=light_semester, requesting_admin=light_admin)
+        with self.assertNumQueries(11):
+            apply_roster_edits(heavy_buffer, viewing_semester=heavy_semester, requesting_admin=heavy_admin)
