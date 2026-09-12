@@ -10,6 +10,13 @@ interface SaveChangesDialogProps {
   /** Runs the real save and rolls it back (ADR 0008); called exactly once per dialog open. */
   preview: () => Promise<PreviewResult>
   onConfirm: () => void
+  /**
+   * Whether the caller's `onConfirm` is currently in flight (issue #506):
+   * disables the confirm button and swaps its label to "Saving…"/"Saving
+   * anyway…". Optional and defaults to `false` so a caller that doesn't
+   * track this (four of five callers, as of #506) sees no behavior change.
+   */
+  isSaving?: boolean
 }
 
 /**
@@ -27,6 +34,7 @@ export function SaveChangesDialog({
   title,
   preview,
   onConfirm,
+  isSaving = false,
 }: SaveChangesDialogProps) {
   const state = usePreviewOnOpen(open, preview)
 
@@ -35,7 +43,7 @@ export function SaveChangesDialog({
   const result = state.status === 'success' ? state.result : null
   const rejected = result !== null && !result.ok
   const doomed = result?.doomed
-  const confirmDisabled = isLoading || rejected
+  const confirmDisabled = isLoading || rejected || isSaving
 
   return (
     <ResponsiveDialog
@@ -57,7 +65,13 @@ export function SaveChangesDialog({
             disabled={confirmDisabled}
             className="rounded bg-rs-accent px-3 py-1.5 text-sm font-medium text-rs-accent-fg disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {doomed ? 'Save anyway' : 'Save changes'}
+            {isSaving
+              ? doomed
+                ? 'Saving anyway…'
+                : 'Saving…'
+              : doomed
+                ? 'Save anyway'
+                : 'Save changes'}
           </button>
         </>
       }

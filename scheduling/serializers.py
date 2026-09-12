@@ -1158,6 +1158,16 @@ def serialize_role_declaration(result: RoleCreationResult) -> dict:
     }
 
 
+def _serialize_role_group(group) -> dict:
+    """Return one RoleGroup as `id`/`name`, for a new-Role picker's group dropdown (issue #506)."""
+    return {'id': group.pk, 'name': group.name}
+
+
+def serialize_role_groups(groups) -> dict:
+    """Return the `GET /api/members/roster/roles/` `data` shape (issue #506): every RoleGroup, for the Person page's "+ Add new role" group picker."""
+    return {'role_groups': [_serialize_role_group(group) for group in groups]}
+
+
 def _serialize_person_song(assignment) -> dict:
     """Return one Person-page Songs row: the Song's title and the Role filled — never `is_role_mismatch` (ADR 0002, issue #333)."""
     return {

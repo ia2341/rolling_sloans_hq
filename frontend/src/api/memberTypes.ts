@@ -323,6 +323,17 @@ export interface RoleDeclaration {
   reactivated: boolean
 }
 
+/** One RoleGroup option, as offered by a new-Role picker's group dropdown (issue #506). */
+export interface RoleGroupOption {
+  id: number
+  name: string
+}
+
+/** `data` shape of `GET /api/members/roster/roles/` — every RoleGroup, for the Person page's "+ Add new role" group picker (issue #506). */
+export interface RoleGroupsPayload {
+  role_groups: RoleGroupOption[]
+}
+
 /** Success body of `POST /api/members/recordings/presign/` (`data` of the read envelope it wears — see #307's envelope boundary rule). */
 export interface RecordingPresignReservation {
   upload_url: string

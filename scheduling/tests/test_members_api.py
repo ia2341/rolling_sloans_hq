@@ -28,6 +28,7 @@ from scheduling.factories import (
     RehearsalFactory,
     RehearsalSongFactory,
     RoleFactory,
+    RoleGroupFactory,
     SemesterFactory,
     SongFactory,
     SongRoleAssignmentFactory,
@@ -251,6 +252,30 @@ class SerializePersonExactKeySetTests(TestCase):
 
         self.assertEqual(set(data['roles'][0].keys()), {'id', 'name'})
         self.assertEqual(set(data['available_roles'][0].keys()), {'id', 'name'})
+
+    def test_available_roles_stays_ungrouped_two_roles_in_the_same_group_both_appear(self):
+        """`available_roles` is flat, never collapsed by RoleGroup (issue #506).
+
+        RoleGroup only drives the Setlist/Schedule cast tables' column
+        collapsing (`frontend/src/lib/roleColumns.ts`) -- it has nothing
+        to do with this picker. Locking this in as a regression guard: a
+        future dev skimming ADR-0016 and seeing `Role.group` might
+        plausibly "fix" this picker into grouping by mistake, deduplicating
+        two same-group Roles into one option.
+        """
+        semester = SemesterFactory()
+        person = PersonFactory(name='Self Placeholder')
+        membership = MembershipFactory(person=person, semester=semester)
+        shared_group = RoleGroupFactory(name='Guitars Placeholder')
+        RoleFactory(name='Lead Guitar', group=shared_group)
+        RoleFactory(name='Rhythm Guitar', group=shared_group)
+
+        data = serialize_person(person, semester=semester, is_self=True, can_edit_roles=True, membership=membership)
+
+        available_names = {role['name'] for role in data['available_roles']}
+        self.assertIn('Lead Guitar', available_names)
+        self.assertIn('Rhythm Guitar', available_names)
+        self.assertEqual(len(data['available_roles']), 2)
 
     def test_song_row_keys(self):
         """A `songs` row carries exactly `song_id`, `song_title`, `artist`, `role_name` — never `is_role_mismatch`."""

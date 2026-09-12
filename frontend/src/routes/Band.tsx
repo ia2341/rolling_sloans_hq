@@ -13,6 +13,7 @@ import type { PreviewResult } from '../api/previewTypes'
 import type { ReadEnvelope } from '../api/types'
 import { PageHead } from '../components/ui/PageHead'
 import { SaveChangesDialog } from '../components/ui/SaveChangesDialog'
+import { SaveStatusMessage } from '../components/ui/SaveStatusMessage'
 import {
   buildRosterFilterBuckets,
   memberMatchesRosterFilter,
@@ -67,6 +68,10 @@ export function Band() {
   const [addSheetOpen, setAddSheetOpen] = useState(false)
   const [saveDialogOpen, setSaveDialogOpen] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [saveSuccessMessage, setSaveSuccessMessage] = useState<string | null>(
+    null,
+  )
+  const [isSaving, setIsSaving] = useState(false)
   const [revealedTempPasswords, setRevealedTempPasswords] = useState<
     RosterSaveValues['temp_passwords']
   >([])
@@ -132,6 +137,7 @@ export function Band() {
     setRows([])
     setRowErrors({})
     setSaveError(null)
+    setSaveSuccessMessage(null)
   }, [])
 
   const requestSave = useCallback(() => setSaveDialogOpen(true), [])
@@ -196,10 +202,13 @@ export function Band() {
       viewingSemester.updated_at,
       rows,
     )
+    setIsSaving(true)
+    setSaveSuccessMessage(null)
     void apiFetch<RosterWriteEnvelope>('/api/members/roster/save/', {
       method: 'POST',
       body: JSON.stringify(body),
     }).then((envelope) => {
+      setIsSaving(false)
       if (!envelope.ok) {
         // A rejected save (e.g. a stale Semester) means the successful
         // preview the dialog is still showing no longer reflects what the
@@ -220,6 +229,7 @@ export function Band() {
       setIsEditing(false)
       setRows([])
       setRowErrors({})
+      setSaveSuccessMessage('Roster saved successfully')
       const values = envelope.values as RosterSaveValues | null
       if (values !== null && values.temp_passwords.length > 0) {
         setRevealedTempPasswords(values.temp_passwords)
@@ -311,12 +321,18 @@ export function Band() {
           </p>
         )}
       {isEditing && saveError !== null && (
-        <p
-          role="alert"
-          className="mb-3 rounded border border-rs-danger/40 bg-rs-danger/5 px-3 py-2 text-sm text-rs-danger"
-        >
-          {saveError}
-        </p>
+        <SaveStatusMessage
+          kind="error"
+          message={saveError}
+          onDismiss={() => setSaveError(null)}
+        />
+      )}
+      {!isEditing && saveSuccessMessage !== null && (
+        <SaveStatusMessage
+          kind="success"
+          message={saveSuccessMessage}
+          onDismiss={() => setSaveSuccessMessage(null)}
+        />
       )}
       {isEditing ? (
         <RosterEditGrid
@@ -359,6 +375,7 @@ export function Band() {
           title={`Save ${changeCount} change${changeCount === 1 ? '' : 's'} to ${viewingSemester.name}?`}
           preview={previewRoster}
           onConfirm={confirmSave}
+          isSaving={isSaving}
         />
       )}
 

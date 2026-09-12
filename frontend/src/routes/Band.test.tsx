@@ -937,4 +937,177 @@ describe('Band roster editor', () => {
     expect(await screen.findByText('taylor@example.com')).toBeInTheDocument()
     expect(screen.getByText('aB3dEfGhJkMn')).toBeInTheDocument()
   })
+
+  it('a successful save with no new Person shows a transient success message (issue #506)', async () => {
+    stubFetchSequence([
+      { status: 200, body: { context: adminContext(), data: bandPayload() } },
+      {
+        status: 200,
+        body: { context: adminContext(), data: rosterEditPayload() },
+      },
+      {
+        status: 200,
+        body: {
+          context: adminContext(),
+          ok: true,
+          errors: {},
+          non_field_errors: [],
+          fallout: {
+            is_blocked: false,
+            block_message: '',
+            is_stale: false,
+            pending_adds: [],
+            pending_created: [],
+            pending_removals: [
+              { person_id: 1, name: 'Sam Rivera', email: 'sam@example.com' },
+            ],
+            loud: [],
+            quiet: [],
+          },
+          values: null,
+          data: null,
+        },
+      },
+      {
+        status: 200,
+        body: {
+          context: adminContext(),
+          ok: true,
+          errors: {},
+          non_field_errors: [],
+          fallout: null,
+          values: null,
+          data: null,
+        },
+      },
+      { status: 200, body: { context: adminContext(), data: bandPayload() } },
+    ])
+    const user = userEvent.setup()
+
+    renderShell(
+      <>
+        <Band />
+        <EditSessionSpy />
+      </>,
+      ['/members'],
+    )
+    await user.click(await screen.findByRole('button', { name: 'Edit roster' }))
+    await screen.findByText('Sam Rivera')
+    await user.click(
+      screen.getAllByRole('button', { name: 'Remove' })[0] as HTMLElement,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'toolbar save' }))
+    await waitFor(() =>
+      expect(screen.getByText('What changes')).toBeInTheDocument(),
+    )
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    expect(
+      await screen.findByText('Roster saved successfully'),
+    ).toBeInTheDocument()
+    // Editing ended -- the plain read view is back, not the edit grid.
+    expect(
+      screen.queryByRole('button', { name: 'Undo' }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('shows "Saving…" on the confirm button while the save request is in flight (issue #506)', async () => {
+    let resolveSave: (value: unknown) => void = () => {}
+    const fetchSpy = vi.fn()
+    const sequence = [
+      { status: 200, body: { context: adminContext(), data: bandPayload() } },
+      {
+        status: 200,
+        body: { context: adminContext(), data: rosterEditPayload() },
+      },
+      {
+        status: 200,
+        body: {
+          context: adminContext(),
+          ok: true,
+          errors: {},
+          non_field_errors: [],
+          fallout: {
+            is_blocked: false,
+            block_message: '',
+            is_stale: false,
+            pending_adds: [],
+            pending_created: [],
+            pending_removals: [
+              { person_id: 1, name: 'Sam Rivera', email: 'sam@example.com' },
+            ],
+            loud: [],
+            quiet: [],
+          },
+          values: null,
+          data: null,
+        },
+      },
+    ]
+    for (const { status, body } of sequence) {
+      fetchSpy.mockResolvedValueOnce({
+        status,
+        ok: status >= 200 && status < 300,
+        json: () => Promise.resolve(body),
+      })
+    }
+    // The Save call never resolves until the test says so, so the
+    // "Saving…" state can be observed before it settles; the load() refetch
+    // after it resolves falls back to this default (the plain read view).
+    fetchSpy.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSave = resolve
+        }),
+    )
+    fetchSpy.mockResolvedValue({
+      status: 200,
+      ok: true,
+      json: () =>
+        Promise.resolve({ context: adminContext(), data: bandPayload() }),
+    })
+    vi.stubGlobal('fetch', fetchSpy)
+    const user = userEvent.setup()
+
+    renderShell(
+      <>
+        <Band />
+        <EditSessionSpy />
+      </>,
+      ['/members'],
+    )
+    await user.click(await screen.findByRole('button', { name: 'Edit roster' }))
+    await screen.findByText('Sam Rivera')
+    await user.click(
+      screen.getAllByRole('button', { name: 'Remove' })[0] as HTMLElement,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'toolbar save' }))
+    await waitFor(() =>
+      expect(screen.getByText('What changes')).toBeInTheDocument(),
+    )
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    const savingButton = await screen.findByRole('button', {
+      name: 'Saving…',
+    })
+    expect(savingButton).toBeDisabled()
+
+    resolveSave({
+      status: 200,
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          context: adminContext(),
+          ok: true,
+          errors: {},
+          non_field_errors: [],
+          fallout: null,
+          values: null,
+          data: null,
+        }),
+    })
+    await screen.findByText('Roster saved successfully')
+  })
 })

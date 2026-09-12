@@ -8,11 +8,15 @@ import type {
   PersonPasswordResetValues,
   PersonPayload,
   PersonRecordingsBlock,
+  RoleDeclaration,
+  RoleGroupOption,
+  RoleGroupsPayload,
 } from '../api/memberTypes'
 import type { ReadEnvelope, WriteEnvelope } from '../api/types'
 import { RecordingUploadDialog } from '../components/recordings/RecordingUploadDialog'
 import { PageHead } from '../components/ui/PageHead'
 import { ResponsiveDialog } from '../components/ui/ResponsiveDialog'
+import { SaveStatusMessage } from '../components/ui/SaveStatusMessage'
 import { useIsPhone } from '../hooks/useIsPhone'
 import { formatClockTime } from '../lib/formatDate'
 import { usePageTitle } from '../shell/PageTitleContext'
@@ -521,10 +525,14 @@ function ResetPasswordRow({
         disabled={isSaving}
         className="rounded border border-rs-border px-3 py-1.5 text-sm font-medium text-rs-accent disabled:cursor-not-allowed disabled:opacity-50"
       >
-        Reset password
+        {isSaving ? 'Resetting…' : 'Reset password'}
       </button>
       {error !== null && (
-        <span className="text-sm text-rs-danger">{error}</span>
+        <SaveStatusMessage
+          kind="error"
+          message={error}
+          onDismiss={() => setError(null)}
+        />
       )}
       {revealedPassword !== null && (
         <ResponsiveDialog
@@ -572,12 +580,14 @@ function ChangePasswordRow() {
   const [newPassword1, setNewPassword1] = useState('')
   const [newPassword2, setNewPassword2] = useState('')
   const [errors, setErrors] = useState<Record<string, string[]>>({})
+  const [nonFieldError, setNonFieldError] = useState<string | null>(null)
   const [status, setStatus] = useState<'idle' | 'saving' | 'saved'>('idle')
 
-  /** Submits the three password fields and reports per-field errors, or confirms success. */
+  /** Submits the three password fields and reports per-field errors and `non_field_errors`, or confirms success (issue #506). */
   async function handleSubmit(event: FormEvent) {
     event.preventDefault()
     setStatus('saving')
+    setNonFieldError(null)
     const envelope = await apiFetch<WriteEnvelope>('/api/password/', {
       method: 'POST',
       body: JSON.stringify({
@@ -596,12 +606,13 @@ function ChangePasswordRow() {
     } else {
       setStatus('idle')
       setErrors(envelope.errors)
+      setNonFieldError(envelope.non_field_errors[0] ?? null)
     }
   }
 
   if (!isOpen) {
     return (
-      <div className="mt-3 flex items-center gap-2">
+      <div className="mt-3 flex flex-col gap-1">
         <button
           type="button"
           onClick={() => {
@@ -613,9 +624,11 @@ function ChangePasswordRow() {
           Change password
         </button>
         {status === 'saved' && (
-          <span className="text-sm text-rs-muted">
-            Password was successfully updated
-          </span>
+          <SaveStatusMessage
+            kind="success"
+            message="Password was successfully updated"
+            onDismiss={() => setStatus('idle')}
+          />
         )}
       </div>
     )
@@ -668,18 +681,26 @@ function ChangePasswordRow() {
           </span>
         ))}
       </label>
+      {nonFieldError !== null && (
+        <SaveStatusMessage
+          kind="error"
+          message={nonFieldError}
+          onDismiss={() => setNonFieldError(null)}
+        />
+      )}
       <div className="flex gap-2">
         <button
           type="submit"
           disabled={status === 'saving'}
-          className="rounded bg-rs-accent px-3 py-1.5 text-sm font-medium text-rs-accent-fg"
+          className="rounded bg-rs-accent px-3 py-1.5 text-sm font-medium text-rs-accent-fg disabled:cursor-not-allowed disabled:opacity-50"
         >
-          Save password
+          {status === 'saving' ? 'Saving…' : 'Save password'}
         </button>
         <button
           type="button"
           onClick={() => setIsOpen(false)}
-          className="rounded border border-rs-border px-3 py-1.5 text-sm"
+          disabled={status === 'saving'}
+          className="rounded border border-rs-border px-3 py-1.5 text-sm disabled:cursor-not-allowed disabled:opacity-50"
         >
           Cancel
         </button>
@@ -714,6 +735,15 @@ function RolesSection({
   // in an effect.
   const [stagedRoleIds, setStagedRoleIds] = useState<Set<number>>(savedRoleIds)
   const [isSaving, setIsSaving] = useState(false)
+  const [saveStatus, setSaveStatus] = useState<{
+    kind: 'success' | 'error'
+    message: string
+  } | null>(null)
+  // Roles declared brand-new via "+ Add new role" (issue #506) this
+  // session, so a just-created Role is immediately pickable without a full
+  // page reload. Deduped against `data.available_roles` when merged below,
+  // since a later refresh (e.g. after Save roles) already carries it.
+  const [extraRoles, setExtraRoles] = useState<MemberRole[]>([])
 
   if (!data.can_edit_roles) {
     const roles = data.roles ?? []
@@ -739,7 +769,13 @@ function RolesSection({
     )
   }
 
-  const availableRoles = data.available_roles ?? []
+  const baseAvailableRoles = data.available_roles ?? []
+  const availableRoles = [
+    ...baseAvailableRoles,
+    ...extraRoles.filter(
+      (role) => !baseAvailableRoles.some((existing) => existing.id === role.id),
+    ),
+  ]
   const stagedRoles: MemberRole[] = availableRoles.filter((role) =>
     stagedRoleIds.has(role.id),
   )
@@ -761,9 +797,20 @@ function RolesSection({
     setStagedRoleIds((previous) => new Set(previous).add(roleId))
   }
 
-  /** Persists the staged Role set via `POST /api/members/<pk>/roles/`. */
+  /** Adds a brand-new (or reactivated) Role from "+ Add new role" (issue #506) into the local pool and stages it immediately. */
+  function handleRoleCreated(role: MemberRole) {
+    setExtraRoles((previous) =>
+      previous.some((existing) => existing.id === role.id)
+        ? previous
+        : [...previous, role],
+    )
+    stageAddition(role.id)
+  }
+
+  /** Persists the staged Role set via `POST /api/members/<pk>/roles/`, surfacing success/failure via the shared status message (issue #506). */
   async function handleSave() {
     setIsSaving(true)
+    setSaveStatus(null)
     const envelope = await apiFetch<WriteEnvelope<PersonPayload>>(
       `/api/members/${data.id}/roles/`,
       {
@@ -774,6 +821,12 @@ function RolesSection({
     setIsSaving(false)
     if (envelope.ok && envelope.data !== null) {
       onDataChange(envelope.data)
+      setSaveStatus({ kind: 'success', message: 'Roles saved successfully' })
+    } else {
+      setSaveStatus({
+        kind: 'error',
+        message: envelope.non_field_errors[0] ?? 'Could not save roles.',
+      })
     }
   }
 
@@ -805,15 +858,174 @@ function RolesSection({
           </li>
         )}
       </ul>
+      <AddNewRoleForm onCreated={handleRoleCreated} />
       <button
         type="button"
         onClick={() => void handleSave()}
         disabled={isSaving}
-        className="mt-3 rounded bg-rs-accent px-3 py-1.5 text-sm font-medium text-rs-accent-fg"
+        className="mt-3 rounded bg-rs-accent px-3 py-1.5 text-sm font-medium text-rs-accent-fg disabled:cursor-not-allowed disabled:opacity-50"
       >
-        Save roles
+        {isSaving ? 'Saving…' : 'Save roles'}
       </button>
+      {saveStatus !== null && (
+        <SaveStatusMessage
+          kind={saveStatus.kind}
+          message={saveStatus.message}
+          onDismiss={() => setSaveStatus(null)}
+        />
+      )}
     </div>
+  )
+}
+
+/**
+ * The admin-only "+ Add new role" control (issue #506): declares a
+ * brand-new Role catalog entry -- name plus a required RoleGroup -- via
+ * `POST /api/members/roster/roles/`, the same get-or-create endpoint the
+ * Song page's `AddRoleRequirementSheet` uses. Renders only inside
+ * `RolesSection`, which already gates the whole card on
+ * `data.can_edit_roles` (admin or self, per that section's docstring) --
+ * this control itself has no further gate. Lazily fetches the RoleGroup
+ * catalog (`GET` on the same endpoint) the first time it's opened, rather
+ * than on every Person page load, since most visits never open it.
+ */
+function AddNewRoleForm({
+  onCreated,
+}: {
+  onCreated: (role: MemberRole) => void
+}) {
+  const [isOpen, setIsOpen] = useState(false)
+  const [groups, setGroups] = useState<RoleGroupOption[] | null>(null)
+  const [name, setName] = useState('')
+  const [groupId, setGroupId] = useState<number | null>(null)
+  const [isSaving, setIsSaving] = useState(false)
+  const [status, setStatus] = useState<{
+    kind: 'success' | 'error'
+    message: string
+  } | null>(null)
+
+  /** Opens the form, lazily fetching the RoleGroup catalog for the group dropdown on first open. */
+  function open() {
+    setIsOpen(true)
+    setStatus(null)
+    if (groups !== null) return
+    void apiFetch<ReadEnvelope<RoleGroupsPayload>>(
+      '/api/members/roster/roles/',
+    ).then((envelope) => {
+      setGroups(envelope.data.role_groups)
+      if (envelope.data.role_groups.length > 0) {
+        setGroupId(envelope.data.role_groups[0]?.id ?? null)
+      }
+    })
+  }
+
+  /** Submits the new Role's name and chosen group, then hands the result to `onCreated` and reports what happened. */
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault()
+    const trimmed = name.trim()
+    if (!trimmed || groupId === null) return
+    setIsSaving(true)
+    setStatus(null)
+    try {
+      const envelope = await apiFetch<ReadEnvelope<RoleDeclaration>>(
+        '/api/members/roster/roles/',
+        {
+          method: 'POST',
+          body: JSON.stringify({ name: trimmed, group_id: groupId }),
+        },
+      )
+      const { role, created, reactivated } = envelope.data
+      onCreated(role)
+      setName('')
+      setStatus({
+        kind: 'success',
+        message: created
+          ? `${role.name} created and added.`
+          : reactivated
+            ? `${role.name} reactivated and added.`
+            : `Matched the existing Role ${role.name} and added it.`,
+      })
+    } catch {
+      setStatus({ kind: 'error', message: 'Could not create that Role.' })
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  if (!isOpen) {
+    return (
+      <button
+        type="button"
+        onClick={open}
+        className="mt-2 text-sm text-rs-accent"
+      >
+        + Add new role
+      </button>
+    )
+  }
+
+  return (
+    <form
+      onSubmit={(event) => void handleSubmit(event)}
+      className="mt-2 flex flex-col gap-2 rounded border border-rs-border p-2"
+    >
+      <label className="flex flex-col gap-1 text-sm">
+        Role name
+        <input
+          type="text"
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          placeholder="e.g. Trombone"
+          className="rounded border border-rs-border px-2 py-1"
+        />
+      </label>
+      <label className="flex flex-col gap-1 text-sm">
+        Role group
+        {groups === null ? (
+          <span className="text-rs-muted">Loading groups…</span>
+        ) : (
+          <select
+            value={groupId ?? ''}
+            onChange={(event) => setGroupId(Number(event.target.value))}
+            className="rounded border border-rs-border px-2 py-1"
+          >
+            {groups.map((group) => (
+              <option key={group.id} value={group.id}>
+                {group.name}
+              </option>
+            ))}
+          </select>
+        )}
+      </label>
+      <div className="flex gap-2">
+        <button
+          type="submit"
+          disabled={isSaving || groups === null || name.trim() === ''}
+          className="rounded bg-rs-accent px-3 py-1.5 text-sm font-medium text-rs-accent-fg disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {isSaving ? 'Adding…' : 'Add role'}
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setIsOpen(false)
+            setName('')
+            setStatus(null)
+          }}
+          disabled={isSaving}
+          className="rounded border border-rs-border px-3 py-1.5 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          Cancel
+        </button>
+      </div>
+      {status !== null && (
+        <SaveStatusMessage
+          kind={status.kind}
+          message={status.message}
+          onDismiss={() => setStatus(null)}
+        />
+      )}
+    </form>
   )
 }
 

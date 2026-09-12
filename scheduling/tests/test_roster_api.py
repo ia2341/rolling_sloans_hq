@@ -10,9 +10,10 @@ from identity.models import Person
 from scheduling.factories import (
     MembershipFactory,
     RoleFactory,
+    RoleGroupFactory,
     SemesterFactory,
 )
-from scheduling.models import Membership, MembershipRole
+from scheduling.models import Membership, MembershipRole, Role
 from scheduling.tests.api_test_helpers import (
     admin_client,
     member_client,
@@ -111,6 +112,20 @@ class AccessControlTests(TestCase):
         member_client(self)
 
         response = self.client.post(_declare_role_url(), data='{}', content_type='application/json')
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_anonymous_role_groups_get_is_401(self):
+        """An anonymous GET to the declare-Role endpoint's group list answers 401 (issue #506)."""
+        response = self.client.get(_declare_role_url())
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_non_admin_role_groups_get_is_403(self):
+        """A logged-in non-admin's GET to the declare-Role endpoint's group list is rejected with 403 (issue #506)."""
+        member_client(self)
+
+        response = self.client.get(_declare_role_url())
 
         self.assertEqual(response.status_code, 403)
 
@@ -260,6 +275,59 @@ class DeclareRoleTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(envelope['error'], 'invalid_name')
+
+    def test_declaring_with_a_group_id_creates_the_role_in_that_group(self):
+        """A submitted `group_id` (issue #506) is used as the new Role's group, rather than keyword classification."""
+        group = RoleGroupFactory(name='Choir')
+
+        response, envelope = _post_json(self, _declare_role_url(), {'name': 'Trombone', 'group_id': group.pk})
+
+        self.assertEqual(response.status_code, 200)
+        role = Role.objects.get(name='Trombone')
+        self.assertEqual(role.group_id, group.pk)
+        self.assertTrue(envelope['data']['created'])
+
+    def test_reactivating_with_a_group_id_leaves_the_existing_group_alone(self):
+        """A submitted `group_id` on a name that matches a retired Role (issue #506) is ignored -- reactivation never reclassifies."""
+        original_group = RoleGroupFactory(name='Original Placeholder')
+        other_group = RoleGroupFactory(name='Other Placeholder')
+        RoleFactory(name='Trombone', is_active=False, group=original_group)
+
+        response, envelope = _post_json(self, _declare_role_url(), {'name': 'Trombone', 'group_id': other_group.pk})
+
+        self.assertEqual(response.status_code, 200)
+        role = Role.objects.get(name='Trombone')
+        self.assertEqual(role.group_id, original_group.pk)
+        self.assertTrue(envelope['data']['reactivated'])
+
+    def test_declaring_with_an_unknown_group_id_is_a_400(self):
+        """A `group_id` matching no RoleGroup is rejected with a 400, not a created Role."""
+        response, envelope = _post_json(self, _declare_role_url(), {'name': 'Trombone', 'group_id': 999999})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(envelope['error'], 'invalid_group')
+        self.assertFalse(Role.objects.filter(name='Trombone').exists())
+
+
+class RoleGroupsListTests(TestCase):
+    """`GET /api/members/roster/roles/` (issue #506) lists every RoleGroup for a new-Role picker."""
+
+    def setUp(self):
+        """Log in a synthetic admin."""
+        admin_client(self)
+
+    def test_lists_every_role_group(self):
+        """The response's `role_groups` names every RoleGroup that exists."""
+        group = RoleGroupFactory(name='Choir')
+
+        response = self.client.get(_declare_role_url())
+        envelope = json.loads(response.content)
+
+        self.assertEqual(response.status_code, 200)
+        names = {row['name'] for row in envelope['data']['role_groups']}
+        self.assertIn('Choir', names)
+        matched = next(row for row in envelope['data']['role_groups'] if row['name'] == 'Choir')
+        self.assertEqual(matched['id'], group.pk)
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)
