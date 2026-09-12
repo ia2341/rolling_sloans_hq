@@ -46,3 +46,16 @@ export function readCachedThemePreference(): ThemePreference {
   }
   return 'system'
 }
+
+/**
+ * Clears the cache, called on logout so a shared browser's next signed-in
+ * viewer never has the outgoing account's preference applied before their
+ * own `context.viewer` arrives.
+ */
+export function clearCachedThemePreference(): void {
+  try {
+    localStorage.removeItem(STORAGE_KEY)
+  } catch {
+    // Nothing to clear if storage was already unavailable.
+  }
+}

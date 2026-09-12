@@ -64,6 +64,17 @@ class ThemePreferenceApiViewTests(TestCase):
         self.person.refresh_from_db()
         self.assertEqual(self.person.theme_preference, 'system')
 
+    def test_non_object_json_body_is_rejected_not_500(self):
+        """A well-formed but non-object JSON body (array, string, null) reports ok: false, never a 500."""
+        for body in ('[]', '"dark"', 'null'):
+            with self.subTest(body=body):
+                response = self.client.post(theme_url(), data=body, content_type='application/json')
+
+                self.assertEqual(response.status_code, 200)
+                self.assertFalse(response.json()['ok'])
+                self.person.refresh_from_db()
+                self.assertEqual(self.person.theme_preference, 'system')
+
     def test_anonymous_request_401s_not_302s(self):
         """An anonymous POST gets the bare JSON 401, never a redirect (issue #326)."""
         self.client.logout()

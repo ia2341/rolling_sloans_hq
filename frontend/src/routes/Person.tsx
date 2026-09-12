@@ -711,11 +711,14 @@ function ThemePreferenceRow() {
   async function selectPreference(preference: ThemePreference) {
     if (preference === themePreference || isSaving) return
     setIsSaving(true)
-    await apiFetch<WriteEnvelope>('/api/theme/', {
-      method: 'POST',
-      body: JSON.stringify({ theme_preference: preference }),
-    })
-    setIsSaving(false)
+    try {
+      await apiFetch<WriteEnvelope>('/api/theme/', {
+        method: 'POST',
+        body: JSON.stringify({ theme_preference: preference }),
+      })
+    } finally {
+      setIsSaving(false)
+    }
   }
 
   return (

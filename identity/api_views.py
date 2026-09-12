@@ -140,9 +140,15 @@ class ThemePreferenceApiView(ApiView, View):
     """
 
     def post(self, request):
-        """Set `request.user.theme_preference` to the submitted value, or reject an unrecognized one."""
+        """Set `request.user.theme_preference` to the submitted value, or reject an unrecognized one.
+
+        `parse_json_body()` only rejects unparseable JSON, so a well-formed
+        body that isn't an object (an array, a bare string, `null`, …) would
+        otherwise reach `payload.get()` and raise `AttributeError` — checked
+        for here rather than left to bubble up as a 500.
+        """
         payload = self.parse_json_body(request)
-        theme_preference = payload.get('theme_preference')
+        theme_preference = payload.get('theme_preference') if isinstance(payload, dict) else None
         valid_values = {value for value, _label in Person.THEME_CHOICES}
         if theme_preference not in valid_values:
             return self.write_response(

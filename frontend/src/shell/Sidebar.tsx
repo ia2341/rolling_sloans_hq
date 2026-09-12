@@ -5,6 +5,7 @@ import { useAppContext } from '../api/ContextProvider'
 import { BlockNote } from '../components/ui/BlockNote'
 import { useRailCollapsed } from '../hooks/useRailCollapsed'
 import { cn } from '../lib/utils'
+import { clearCachedThemePreference } from '../theme/theme'
 import { useEditSession } from './EditSessionContext'
 import { isNavItemActive, SIDEBAR_NAV_ITEMS } from './navigation'
 import { SemesterPanel } from './SemesterPanel'
@@ -83,7 +84,12 @@ export function Sidebar() {
       {isAdmin && <SemesterPanel collapsed={collapsed} />}
 
       <div className="border-t border-rs-border p-2">
-        <form action="/accounts/logout/" method="post" className="contents">
+        <form
+          action="/accounts/logout/"
+          method="post"
+          className="contents"
+          onSubmit={clearCachedThemePreference}
+        >
           <CsrfField />
           <button
             type="submit"
