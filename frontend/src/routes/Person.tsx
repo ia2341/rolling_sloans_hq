@@ -9,8 +9,7 @@ import type {
   PersonPayload,
   PersonRecordingsBlock,
 } from '../api/memberTypes'
-import { useAppContext } from '../api/ContextProvider'
-import type { ReadEnvelope, ThemePreference, WriteEnvelope } from '../api/types'
+import type { ReadEnvelope, WriteEnvelope } from '../api/types'
 import { RecordingUploadDialog } from '../components/recordings/RecordingUploadDialog'
 import { PageHead } from '../components/ui/PageHead'
 import { ResponsiveDialog } from '../components/ui/ResponsiveDialog'
@@ -182,7 +181,6 @@ function DetailsSection({
         )}
       </dl>
       {data.is_self && <ChangePasswordRow />}
-      {data.is_self && <ThemePreferenceRow />}
       {data.is_admin !== undefined && (
         <AdminStatusRow
           personId={data.id}
@@ -687,62 +685,6 @@ function ChangePasswordRow() {
         </button>
       </div>
     </form>
-  )
-}
-
-const THEME_PREFERENCE_OPTIONS: { value: ThemePreference; label: string }[] = [
-  { value: 'light', label: 'Light' },
-  { value: 'dark', label: 'Dark' },
-  { value: 'system', label: 'System' },
-]
-
-/**
- * The self-only Light/Dark/System control in the Details card (issue #497).
- * Reads the current value off `context.viewer` (a durable, per-Person
- * setting, not browser-local) and posts a change to `/api/theme/`; the
- * envelope's `context` block updates the shared store on success, which
- * `ThemeSync` picks up to actually repaint the page.
- */
-function ThemePreferenceRow() {
-  const appContext = useAppContext()
-  const [isSaving, setIsSaving] = useState(false)
-  const themePreference = appContext?.viewer.theme_preference ?? 'system'
-
-  async function selectPreference(preference: ThemePreference) {
-    if (preference === themePreference || isSaving) return
-    setIsSaving(true)
-    try {
-      await apiFetch<WriteEnvelope>('/api/theme/', {
-        method: 'POST',
-        body: JSON.stringify({ theme_preference: preference }),
-      })
-    } finally {
-      setIsSaving(false)
-    }
-  }
-
-  return (
-    <div className="mt-3">
-      <span className="block text-sm text-rs-muted">Theme</span>
-      <div className="mt-1 inline-flex rounded border border-rs-border">
-        {THEME_PREFERENCE_OPTIONS.map(({ value, label }) => (
-          <button
-            key={value}
-            type="button"
-            disabled={isSaving}
-            onClick={() => void selectPreference(value)}
-            aria-pressed={themePreference === value}
-            className={
-              themePreference === value
-                ? 'bg-rs-accent px-3 py-1 text-sm font-medium text-rs-accent-fg'
-                : 'px-3 py-1 text-sm'
-            }
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-    </div>
   )
 }
 
