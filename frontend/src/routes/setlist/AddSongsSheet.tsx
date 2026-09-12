@@ -462,6 +462,19 @@ export function AddSongsSheet({
                 items={handCards.map((card, index) => ({
                   key: card.key,
                   summary: handCardSummary(card, index),
+                  actions: (
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        removeHandCard(card.key)
+                      }}
+                      aria-label={`Remove ${handCardSummary(card, index)}`}
+                      className="rounded border border-rs-border p-1.5 text-rs-muted hover:bg-rs-border/40 hover:text-rs-danger"
+                    >
+                      <Trash2 size={14} aria-hidden="true" />
+                    </button>
+                  ),
                   content: (
                     <div className="flex flex-col gap-2">
                       <div>
@@ -533,16 +546,6 @@ export function AddSongsSheet({
                               {INVALID_LENGTH_MESSAGE}
                             </p>
                           )}
-                      </div>
-                      <div>
-                        <button
-                          type="button"
-                          onClick={() => removeHandCard(card.key)}
-                          className="flex items-center gap-1 rounded border border-rs-border px-2 py-1 text-xs font-medium text-rs-muted hover:bg-rs-border/40 hover:text-rs-danger"
-                        >
-                          <Trash2 size={14} aria-hidden="true" />
-                          Remove {handCardSummary(card, index)}
-                        </button>
                       </div>
                     </div>
                   ),
