@@ -17,7 +17,10 @@ from scheduling.factories import (
     SongRoleRequirementFactory,
 )
 from scheduling.models import Conflict
-from scheduling.services import song_cast_conflict_summary_for
+from scheduling.services import (
+    song_cast_conflict_summaries_for,
+    song_cast_conflict_summary_for,
+)
 
 
 class SongCastConflictSummaryTests(TestCase):
@@ -141,3 +144,50 @@ class SongCastConflictSummaryTests(TestCase):
         ConflictFactory(person=self.person, rehearsal=self.rehearsal, type=Conflict.FULL_CONFLICT)
 
         self.assertEqual(song_cast_conflict_summary_for(other_song, self.person, self.semester), [])
+
+
+class SongCastConflictSummariesForTests(TestCase):
+    """The batched sibling the cast picker calls, so N candidates cost a fixed number of queries (PR #502 review)."""
+
+    def setUp(self):
+        """Build a Semester with one Song on one future Rehearsal's Running Order, and three rostered candidates."""
+        self.semester = SemesterFactory()
+        self.song = SongFactory(semester=self.semester, position=1)
+        self.role = RoleFactory()
+        SongRoleRequirementFactory(song=self.song, role=self.role, count=1)
+        self.rehearsal = RehearsalFactory(
+            semester=self.semester,
+            is_full_setlist=False,
+            start_time=time(18, 0),
+            date=timezone.localdate() + timedelta(days=7),
+        )
+        RehearsalSongFactory(rehearsal=self.rehearsal, song=self.song, order=1, slot_count=1)
+        self.people = [MembershipFactory(semester=self.semester).person for _ in range(3)]
+
+    def test_every_person_asked_about_gets_a_key(self):
+        """A candidate with nothing declared maps to `[]`, so a caller never distinguishes "none" from "not asked"."""
+        summaries = song_cast_conflict_summaries_for(self.song, self.people, self.semester)
+
+        self.assertEqual(set(summaries), {person.pk for person in self.people})
+        self.assertEqual(list(summaries.values()), [[], [], []])
+
+    def test_each_persons_entries_match_the_single_person_answer(self):
+        """The batch and the one-person wrapper can't disagree — the wrapper delegates to this function."""
+        ConflictFactory(person=self.people[0], rehearsal=self.rehearsal, type=Conflict.FULL_CONFLICT)
+
+        summaries = song_cast_conflict_summaries_for(self.song, self.people, self.semester)
+
+        for person in self.people:
+            self.assertEqual(
+                summaries[person.pk], song_cast_conflict_summary_for(self.song, person, self.semester),
+            )
+
+    def test_query_count_does_not_grow_with_the_candidate_count(self):
+        """Three candidates cost the same queries as one — the point of batching (PR #502 review)."""
+        for person in self.people:
+            ConflictFactory(person=person, rehearsal=self.rehearsal, type=Conflict.FULL_CONFLICT)
+
+        with self.assertNumQueries(3):
+            song_cast_conflict_summaries_for(self.song, self.people, self.semester)
+        with self.assertNumQueries(3):
+            song_cast_conflict_summaries_for(self.song, self.people[:1], self.semester)

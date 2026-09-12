@@ -225,6 +225,34 @@ class ApplyRehearsalBackupsTests(TestCase):
         with self.assertRaisesMessage(StaleAssignmentSemesterError, 'changed while you were editing'):
             apply_rehearsal_backups(buffer, viewing_semester=self.semester, rehearsal=self.rehearsal)
 
+    def test_two_saves_built_from_the_same_stamp_cannot_both_commit(self):
+        """The second of two same-row saves built from one stamp is refused, not silently applied over the first (PR #502 review).
+
+        The sibling of `test_apply_song_cast_edits.py`'s own case, for the
+        same class of bug: a read-then-compare staleness check let two
+        concurrent Backup saves both read the same `Semester.updated_at`,
+        both pass, and both commit. Both Buffers are built before either
+        is applied, and the compare-and-swap
+        `UPDATE ... WHERE updated_at = <stamp>` is what refuses the
+        second one.
+        """
+        first_person = MembershipFactory(semester=self.semester).person
+        second_person = MembershipFactory(semester=self.semester).person
+        first = self._buffer(
+            added_backup_entries=[(self.rehearsal_song.pk, self.role.pk, first_person.pk, None)],
+        )
+        second = self._buffer(
+            added_backup_entries=[(self.rehearsal_song.pk, self.role.pk, second_person.pk, None)],
+        )
+
+        apply_rehearsal_backups(first, viewing_semester=self.semester, rehearsal=self.rehearsal)
+
+        with self.assertRaises(StaleAssignmentSemesterError):
+            apply_rehearsal_backups(second, viewing_semester=self.semester, rehearsal=self.rehearsal)
+
+        self.assertTrue(Backup.objects.filter(person=first_person).exists())
+        self.assertFalse(Backup.objects.filter(person=second_person).exists())
+
     def test_wrong_viewing_semester_hard_fails_and_writes_nothing(self):
         """A Buffer whose semester_id doesn't match the session-scoped viewing Semester is rejected before any write."""
         other_semester = SemesterFactory()

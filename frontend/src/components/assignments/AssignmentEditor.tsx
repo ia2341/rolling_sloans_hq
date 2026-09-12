@@ -318,18 +318,35 @@ export function AssignmentEditor({
     }
   }, [semester, removedBackupIds, addedBackupEntries])
 
-  /** Serializes `runningOrder`/`songSwaps` into the `RunningOrderReorderInput` wire shape `.../running-order/{preview,save}/` post, or `null` with no viewed Semester or no reorder to submit. */
-  const buildReorderInput = useCallback((): RunningOrderReorderInput | null => {
-    if (semester === null || runningOrder === null) return null
-    return {
-      semester_id: semester.id,
-      semester_updated_at: semester.updatedAt,
-      ordered_rehearsal_song_ids: runningOrder,
-      song_overrides: [...songSwaps.entries()].map(
-        ([rehearsal_song_id, song_id]) => ({ rehearsal_song_id, song_id }),
-      ),
-    }
-  }, [semester, runningOrder, songSwaps])
+  /**
+   * Serializes `runningOrder`/`songSwaps` into the
+   * `RunningOrderReorderInput` wire shape
+   * `.../running-order/{preview,save}/` post, or `null` with no viewed
+   * Semester or no reorder to submit.
+   *
+   * `semesterUpdatedAt` is a parameter rather than always
+   * `semester.updatedAt` because these two Buffers save in sequence and
+   * the first save bumps `Semester.updated_at` server-side (PR #502
+   * review): built from the pre-save stamp, the second request was
+   * rejected as stale, the Backup change persisted and the Running Order
+   * change was silently lost. `confirmSave()` passes the fresh stamp the
+   * first save's own response envelope carries; Preview passes nothing,
+   * since a rolled-back preview bumps no stamp.
+   */
+  const buildReorderInput = useCallback(
+    (semesterUpdatedAt?: string): RunningOrderReorderInput | null => {
+      if (semester === null || runningOrder === null) return null
+      return {
+        semester_id: semester.id,
+        semester_updated_at: semesterUpdatedAt ?? semester.updatedAt,
+        ordered_rehearsal_song_ids: runningOrder,
+        song_overrides: [...songSwaps.entries()].map(
+          ([rehearsal_song_id, song_id]) => ({ rehearsal_song_id, song_id }),
+        ),
+      }
+    },
+    [semester, runningOrder, songSwaps],
+  )
 
   /** Adapts `.../assignments/{preview,save}/`'s Fallout envelope into `SaveChangesDialog`'s `PreviewResult` shape. */
   const toAssignmentResult = useCallback(
@@ -454,7 +471,21 @@ export function AssignmentEditor({
     toReorderResult,
   ])
 
-  /** Saves both pending buffers in sequence (assignments always, Running Order only if reordered) and, on success, closes the popup and reloads. */
+  /**
+   * Saves both pending buffers in sequence (Backups always, Running Order
+   * only if reordered) and, on success, closes the popup and reloads.
+   *
+   * The second request is built from the stamp the *first* save's own
+   * response envelope reports, not from the one this component loaded
+   * with (PR #502 review). `apply_rehearsal_backups()` bumps
+   * `Semester.updated_at`, so a Running Order body carrying the pre-save
+   * stamp was refused as stale by `apply_rehearsal_edits()`'s own
+   * staleness check — leaving the Backup change committed and the
+   * reorder silently dropped. The envelope's `context.viewing_semester`
+   * is built after the write commits, so it is exactly the value the
+   * second Buffer has to pin. A first save that isn't `ok` still stops
+   * the sequence outright, so the reorder can never land on its own.
+   */
   const confirmSave = useCallback(() => {
     const assignmentBody = buildBufferInput()
     if (assignmentBody === null) return
@@ -463,7 +494,11 @@ export function AssignmentEditor({
       { method: 'POST', body: JSON.stringify(assignmentBody) },
     ).then((assignmentEnvelope) => {
       if (!assignmentEnvelope.ok) return
-      const reorderBody = hasRunningOrderChange ? buildReorderInput() : null
+      const savedStamp =
+        assignmentEnvelope.context.viewing_semester?.updated_at ?? undefined
+      const reorderBody = hasRunningOrderChange
+        ? buildReorderInput(savedStamp)
+        : null
       if (reorderBody === null) {
         setSaveOpen(false)
         load()

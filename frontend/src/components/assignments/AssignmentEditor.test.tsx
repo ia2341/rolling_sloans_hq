@@ -541,6 +541,68 @@ describe('AssignmentEditor', () => {
     ])
   })
 
+  it('the Running Order save pins the stamp the Backup save just returned, not the one this session loaded (PR #502 review)', async () => {
+    mockMatchMedia(false)
+    const okFallout = (
+      extra: Record<string, unknown> = {},
+      context = adminContext(),
+    ) => ({
+      context,
+      ok: true,
+      errors: {},
+      non_field_errors: [],
+      fallout: {
+        is_blocked: false,
+        block_message: '',
+        is_stale: false,
+        loud: [],
+        quiet: [],
+        ...extra,
+      },
+      values: null,
+      data: null,
+    })
+    // The Backup save bumps Semester.updated_at server-side; its envelope reports the
+    // fresh value, and the Running Order save must pin that or be refused as stale.
+    const bumpedContext = adminContext({
+      viewing_semester: {
+        id: 11,
+        name: 'Fall 2026 (draft)',
+        status: 'draft',
+        published_at: null,
+        updated_at: '2026-02-02T00:00:00Z',
+      },
+    })
+    const fetchSpy = queueFetch(
+      schedulePayload(),
+      okFallout(), // assignments/preview
+      okFallout({ doomed_recording_groups: [] }), // running-order/preview
+      okFallout({}, bumpedContext), // assignments/save
+      okFallout({ doomed_recording_groups: [] }), // running-order/save
+      schedulePayload(), // load() after a successful save
+    )
+    const user = userEvent.setup()
+
+    renderEditor()
+    await screen.findAllByText('Song One')
+    await user.selectOptions(
+      screen.getByRole('combobox', { name: 'Song for Song One' }),
+      'Song Three',
+    )
+
+    await user.click(screen.getByRole('button', { name: /Save 1 change/ }))
+    await user.click(
+      await screen.findByRole('button', { name: 'Save changes' }),
+    )
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(6))
+    const reorderSave = fetchSpy.mock.calls.find(([url]) =>
+      String(url).includes('/running-order/save/'),
+    )
+    const body = JSON.parse(String(reorderSave?.[1]?.body))
+    expect(body.semester_updated_at).toBe('2026-02-02T00:00:00Z')
+  })
+
   it('Discard reloads and calls onDone, since Discard is the only way to leave edit mode (issue: UI overhaul round 2, item 2)', async () => {
     mockMatchMedia(false)
     const fetchSpy = queueFetch(schedulePayload(), schedulePayload())

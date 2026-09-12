@@ -242,11 +242,12 @@ class SongCastPickerApiView(AdminApiView, View):
         role = get_object_or_404(Role, pk=role_id)
         picker = services.assignment_picker_for(song, role, semester)
         # One summary per offered candidate -- never eagerly for the whole roster, which
-        # would cost a Conflict query for people this cell will never be filled by.
-        conflicts_by_person_id = {
-            option.person.pk: services.song_cast_conflict_summary_for(song, option.person, semester)
-            for option in [*picker.declared, *picker.others]
-        }
+        # would cost a Conflict query for people this cell will never be filled by. Batched
+        # rather than asked per candidate (PR #502 review): the Song's future RehearsalSong
+        # rows and every candidate's Conflicts load once, instead of ~3 queries per person.
+        conflicts_by_person_id = services.song_cast_conflict_summaries_for(
+            song, [option.person for option in [*picker.declared, *picker.others]], semester,
+        )
         return self.read_response(
             request,
             serializers.serialize_song_cast_picker(picker, conflicts_by_person_id=conflicts_by_person_id),
@@ -315,6 +316,134 @@ class SongCastSaveApiView(AdminApiView, View):
         except WrongViewingSemesterError as error:
             return _wrong_semester_response(str(error))
         except (StaleSongCastError, MissingSongRoleRequirementError) as error:
+            return self.write_response(request, ok=False, non_field_errors=[str(error)], fallout=None, values=None)
+
+        return self.write_response(request, ok=True, values=None)
+
+
+def _build_song_edit_buffers(request, *, song_id, viewing_semester):
+    """Parse one combined Song-edit body into both of the session's Buffers (PR #502 review).
+
+    Calls the two existing `build_*_buffer_from_request()` functions
+    against the *same* request body rather than adding a third parser:
+    the combined wire shape is deliberately the flat union of the two
+    surfaces' own shapes (`semester_id`/`semester_updated_at`/`entries`
+    for Requirements, `song_updated_at`/`removed_assignment_ids`/
+    `added_entries` for the cast), whose key sets don't overlap, so each
+    builder reads exactly the keys it already documents and ADR 0012's
+    "one place a body becomes this surface's Buffer" rule still holds per
+    Buffer. `request.body` is cached by Django, so parsing it twice costs
+    nothing.
+
+    Raises whichever builder's validation error fires first —
+    `SongRoleRequirementBufferValidationError` (row-keyed errors) or
+    `SongCastBufferValidationError` (`non_field_errors` only) — for the
+    caller to render, exactly as each single-surface endpoint does.
+    """
+    requirements_buffer = build_song_role_requirement_buffer_from_request(
+        request, song_id=song_id, viewing_semester=viewing_semester,
+    )
+    cast_buffer = build_song_cast_buffer_from_request(request, song_id=song_id)
+    return services.SongEditBuffers(requirements=requirements_buffer, cast=cast_buffer)
+
+
+class SongEditPreviewApiView(AdminPreviewApiView):
+    """`POST /api/songs/<pk>/edit/preview/`: the Song page's combined Requirements-and-cast Preview, run for real and rolled back (PR #502 review, ADR 0008).
+
+    The Song page stages both editors behind one Save popup (issue #499),
+    so it previews through one endpoint rather than two: two separate
+    preview requests each roll back before the next begins, which made the
+    cast half report `MissingSongRoleRequirementError` for a Role whose
+    Requirement the same session had just staged — a preview that
+    disagreed with the save that followed it, the exact failure ADR 0008
+    exists to rule out. Both halves run inside this one view's single
+    rolled-back transaction instead.
+
+    The per-surface `requirements/preview/` and `cast/preview/` endpoints
+    stay: the Setlist's inline cast popover edits a cast alone, and
+    neither is this endpoint's second implementation of anything — it
+    calls the same two `preview_*()` functions they do.
+    """
+
+    def run_preview(self, request, pk):
+        """Build both of the session's Buffers from one JSON body and return their combined Fallout envelope."""
+        _song_in_viewing_semester_or_404(request, pk)
+        viewing_semester = services.get_viewing_semester(request)
+        try:
+            buffers = _build_song_edit_buffers(request, song_id=pk, viewing_semester=viewing_semester)
+        except SongRoleRequirementBufferValidationError as error:
+            return self.write_response(
+                request, ok=False, errors=error.row_errors, non_field_errors=error.non_field_errors,
+                fallout=None, values=error.raw_body,
+            )
+        except SongCastBufferValidationError as error:
+            return self.write_response(
+                request, ok=False, errors=None, non_field_errors=error.non_field_errors,
+                fallout=None, values=None,
+            )
+
+        if viewing_semester is None or buffers.requirements.semester_id != viewing_semester.pk:
+            return _wrong_semester_response(
+                "This Requirements edit Buffer's Semester doesn't match the Semester you're currently viewing."
+            )
+
+        fallout = services.preview_song_edits(buffers, viewing_semester=viewing_semester)
+        return self.write_response(
+            request, ok=True,
+            fallout=serializers.serialize_song_edit_fallout(fallout),
+            values=serializers.serialize_song_role_requirement_buffer(buffers.requirements),
+        )
+
+
+class SongEditSaveApiView(AdminApiView, View):
+    """`POST /api/songs/<pk>/edit/save/`: the Song page's combined Save — both Buffers, one transaction (PR #502 review).
+
+    What makes this endpoint exist rather than two client-side calls: the
+    Song page's two Buffers used to be posted as two independently
+    committed requests, so a Requirements save that succeeded followed by
+    a cast save that failed left a partial, inconsistent Song behind.
+    `services.apply_song_edits()` commits both or neither.
+    """
+
+    def post(self, request, pk):
+        """Build both of the session's Buffers from one JSON body and apply them together, or report why they couldn't be applied.
+
+        Calls the same `_build_song_edit_buffers()` the Preview endpoint
+        calls, then `apply_song_edits()`. Every rejected-Buffer answer is
+        an `ok: false` 200 with `non_field_errors` (ADR 0008's "stale is
+        reported, never refused", #326's "a rejected Buffer is 200"); a
+        `WrongViewingSemesterError` answers the shared 409, matching every
+        other Save endpoint. Nothing partial survives any of them —
+        `apply_song_edits()`'s transaction has already rolled both halves
+        back by the time an `except` clause runs.
+        """
+        _song_in_viewing_semester_or_404(request, pk)
+        viewing_semester = services.get_viewing_semester(request)
+        try:
+            buffers = _build_song_edit_buffers(request, song_id=pk, viewing_semester=viewing_semester)
+        except SongRoleRequirementBufferValidationError as error:
+            return self.write_response(
+                request, ok=False, errors=error.row_errors, non_field_errors=error.non_field_errors,
+                fallout=None, values=None,
+            )
+        except SongCastBufferValidationError as error:
+            return self.write_response(
+                request, ok=False, errors=None, non_field_errors=error.non_field_errors,
+                fallout=None, values=None,
+            )
+
+        if viewing_semester is None or buffers.requirements.semester_id != viewing_semester.pk:
+            return _wrong_semester_response(
+                "This Requirements edit Buffer's Semester doesn't match the Semester you're currently viewing."
+            )
+
+        try:
+            services.apply_song_edits(buffers, viewing_semester=viewing_semester)
+        except WrongViewingSemesterError as error:
+            return _wrong_semester_response(str(error))
+        except (
+            StaleSongRoleRequirementsError, StaleSongCastError, MissingSongRoleRequirementError,
+        ) as error:
             return self.write_response(request, ok=False, non_field_errors=[str(error)], fallout=None, values=None)
 
         return self.write_response(request, ok=True, values=None)

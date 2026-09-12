@@ -288,3 +288,19 @@ export interface SongCastFalloutWire {
   loud: string[]
   quiet: string[]
 }
+
+/**
+ * The Song page's combined edit body: the flat union of the Requirements
+ * and cast Buffer wires, posted to `songs/<pk>/edit/{preview,save}/` so
+ * both Buffers commit in one transaction (PR #502 review). The two key
+ * sets don't overlap, which is what lets each server-side builder read
+ * exactly the keys it already documents.
+ */
+export type SongEditBufferWire = SongRoleRequirementBufferWire &
+  SongCastBufferWire
+
+/** `SongEditFallout`, as `serialize_song_edit_fallout()` emits it -- `cast` is null when the session staged no cast change. */
+export interface SongEditFalloutWire {
+  requirements: SongRoleRequirementFalloutWire
+  cast: SongCastFalloutWire | null
+}

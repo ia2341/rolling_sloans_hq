@@ -698,18 +698,24 @@ class AssignmentGridIsEditableTests(TestCase):
 
         self.assertFalse(assignment_grid_is_editable(rehearsal))
 
-    def test_the_dress_rehearsal_gets_no_special_case_from_this_predicate(self):
-        """The old ADR-0009 backstop is gone (ADR-0019): a past Dress Rehearsal is as un-editable as any other past date.
+    def test_the_dress_rehearsal_is_never_editable_whatever_its_date(self):
+        """The old ADR-0009 backstop is gone (ADR-0019) and the Dress Rehearsal is excluded outright, future-dated or not.
 
-        The Dress Rehearsal's *own* exclusion — it has no RehearsalSong to
-        edit at all (ADR-0003) — is `_editable_rehearsal_or_404()`'s job,
-        not this predicate's, so a future-dated one still reads True here.
+        The old direction of this exclusion (`is_full_setlist **or** a
+        future date`) is what's retired; the Dress Rehearsal has no
+        RehearsalSong to edit at all (ADR-0003), which
+        `_editable_rehearsal_or_404()` enforces on the endpoints. This
+        predicate says the same thing, because it is also what
+        `_serialize_rehearsal_detail()` puts on the wire as
+        `can_edit_assignments` — an API that promised an edit its own
+        endpoints 404'd would mislead any client trusting that field
+        alone (PR #502 review).
         """
         past_dress = RehearsalFactory(is_full_setlist=True, date=timezone.localdate() - timedelta(days=30))
         future_dress = RehearsalFactory(is_full_setlist=True, date=timezone.localdate() + timedelta(days=30))
 
         self.assertFalse(assignment_grid_is_editable(past_dress))
-        self.assertTrue(assignment_grid_is_editable(future_dress))
+        self.assertFalse(assignment_grid_is_editable(future_dress))
 
 
 class AssignmentPickerForTests(TestCase):

@@ -2023,19 +2023,26 @@ def assignment_grid_is_editable(rehearsal) -> bool:
     anchored on a `RehearsalSong` and so genuinely belongs to this one
     evening (ADR-0007) — casting itself moved to the Song-level editor. A
     past Rehearsal's Backups describe an evening that has already
-    happened, so the rule is simply "not in the past", with a same-day
-    Rehearsal staying editable all day (whole days, not instants, so a
-    last-minute Backup added during tonight's rehearsal is possible).
+    happened, so the date half of the rule is "not in the past", with a
+    same-day Rehearsal staying editable all day (whole days, not instants,
+    so a last-minute Backup added during tonight's rehearsal is possible).
 
-    The old `rehearsal.is_full_setlist or ...` backstop is gone (#499): it
-    existed only to keep *standing-assignment* editing reachable through
-    the Dress Rehearsal once every other Rehearsal had passed, and this
-    surface no longer edits a standing assignment at all. The Dress
-    Rehearsal carries no `RehearsalSong` row (ADR-0003), so it has nothing
-    left here to edit — `_editable_rehearsal_or_404()` refuses it outright
-    rather than this predicate re-deciding it.
+    The old `rehearsal.is_full_setlist **or** ...` backstop is gone
+    (#499) — it existed only to keep *standing-assignment* editing
+    reachable through the Dress Rehearsal once every other Rehearsal had
+    passed, and this surface no longer edits a standing assignment at all
+    — but the Dress Rehearsal is excluded here rather than merely by the
+    view: it carries no `RehearsalSong` row (ADR-0003), so it has nothing
+    left on this surface to edit, and `_editable_rehearsal_or_404()`
+    refuses its endpoints outright. This predicate is what
+    `_serialize_rehearsal_detail()` puts on the wire as
+    `can_edit_assignments`, so leaving the Dress Rehearsal out of it was
+    the API promising an edit the endpoints then 404'd — a contract a
+    client trusting `can_edit_assignments` alone would be misled by (PR
+    #502 review). One predicate, one answer, read by both the wire and the
+    view.
     """
-    return rehearsal.date >= timezone.localdate()
+    return not rehearsal.is_full_setlist and rehearsal.date >= timezone.localdate()
 
 
 class StaleAssignmentSemesterError(ValueError):
@@ -2150,7 +2157,12 @@ def apply_rehearsal_backups(
     Raises `WrongViewingSemesterError` if `buffer.semester_id` doesn't
     match `viewing_semester`, checked before any transaction opens. Raises
     `StaleAssignmentSemesterError` inside the transaction if the Semester's
-    `updated_at` no longer matches `buffer.semester_updated_at`, or
+    `updated_at` no longer matches `buffer.semester_updated_at` — checked
+    via a conditional `UPDATE ... WHERE updated_at = <buffer's stamp>`,
+    not a read-then-compare, so the read of the stamp and its bump to a
+    fresh value happen as one atomic operation a concurrent call can't
+    interleave with (the same compare-and-swap
+    `apply_song_role_requirements()` uses; PR #502 review). Raises
     `MissingSongRoleRequirementError` if an added entry names a
     Requirement-less (song, role) pair, rolling back whatever this call
     had already applied either way.
@@ -2161,9 +2173,18 @@ def apply_rehearsal_backups(
         )
 
     with transaction.atomic():
-        semester = Semester.objects.get(pk=buffer.semester_id)
-        if semester.updated_at != buffer.semester_updated_at:
+        # A conditional UPDATE ... WHERE updated_at = <the Buffer's stamp>, not a read-then-compare:
+        # the read of the stamp and its bump to a fresh value are one atomic statement a concurrent
+        # call can't interleave with, so two overlapping saves built from the same stamp can no
+        # longer both pass and both commit (PR #502 review). Same compare-and-swap
+        # `apply_song_role_requirements()` and `apply_song_cast_edits()` use.
+        rows_updated = Semester.objects.filter(
+            pk=buffer.semester_id, updated_at=buffer.semester_updated_at,
+        ).update(updated_at=timezone.now())
+        if rows_updated == 0:
             raise StaleAssignmentSemesterError('The assignments changed while you were editing — reload and reapply.')
+
+        semester = Semester.objects.get(pk=buffer.semester_id)
 
         rostered_person_ids = frozenset(
             Membership.objects.filter(semester=semester).values_list('person_id', flat=True)
@@ -2220,8 +2241,9 @@ def apply_rehearsal_backups(
                 backup.covering_for_id = covering_for_id
                 backup.save(update_fields=['covering_for_id'])
 
-        semester.updated_at = timezone.now()
-        semester.save(update_fields=['updated_at'])
+        # No trailing `semester.save(update_fields=['updated_at'])`: the compare-and-swap
+        # above already bumped the stamp to a fresh value as part of the same statement
+        # that checked it.
 
 
 @dataclass(frozen=True)
@@ -2427,55 +2449,86 @@ def song_cast_conflict_summary_for(song, person, semester) -> list[SongCastConfl
     `RehearsalSong` row (ADR-0003), and no Conflict may point at it
     anyway (ADR-0006). Ordered by Rehearsal date. Returns `[]` for a
     person with nothing declared, which is the common case.
+
+    A thin wrapper over `song_cast_conflict_summaries_for()` rather than
+    its own query pass, so the one-person and whole-picker answers can
+    never be computed two different ways.
     """
+    return song_cast_conflict_summaries_for(song, [person], semester).get(person.pk, [])
+
+
+def song_cast_conflict_summaries_for(song, people, semester) -> dict[int, list[SongCastConflictEntry]]:
+    """Return every Person in `people`'s `song_cast_conflict_summary_for()` answer, in three queries total (PR #502 review).
+
+    The cast picker needs one summary per offered candidate, and asking
+    per candidate cost roughly three queries each (the Song's future
+    `RehearsalSong` rows, that person's Conflicts, their Conflict Windows)
+    — an N-candidate picker paying ~3N. The facts are the same for every
+    candidate, so this loads the Song's future `RehearsalSong` rows once
+    and every candidate's Conflicts (with Windows prefetched) once, then
+    derives each summary in memory with the same `_windows_overlap()`
+    arithmetic the per-person answer used.
+
+    Keyed by Person id, with an entry for every Person asked about — a
+    candidate with nothing declared maps to `[]` rather than being absent,
+    so a caller never has to distinguish "no Conflicts" from "not asked".
+    """
+    summaries: dict[int, list[SongCastConflictEntry]] = {person.pk: [] for person in people}
+    if not summaries:
+        return summaries
+
     rehearsal_songs = list(
         RehearsalSong.objects.filter(
             song=song, rehearsal__semester=semester, rehearsal__date__gte=timezone.localdate(),
         ).select_related('rehearsal').order_by('rehearsal__date', 'order')
     )
     if not rehearsal_songs:
-        return []
+        return summaries
 
-    conflicts_by_rehearsal_id = {
-        conflict.rehearsal_id: conflict
+    conflicts_by_person_and_rehearsal = {
+        (conflict.person_id, conflict.rehearsal_id): conflict
         for conflict in Conflict.objects.filter(
-            person=person,
+            person_id__in=summaries,
             rehearsal_id__in={rehearsal_song.rehearsal_id for rehearsal_song in rehearsal_songs},
         ).prefetch_related('conflictwindow_set')
     }
+    if not conflicts_by_person_and_rehearsal:
+        return summaries
 
-    entries: list[SongCastConflictEntry] = []
-    for rehearsal_song in rehearsal_songs:
-        conflict = conflicts_by_rehearsal_id.get(rehearsal_song.rehearsal_id)
-        if conflict is None:
-            continue
-        if conflict.type == Conflict.FULL_CONFLICT:
-            entries.append(
-                SongCastConflictEntry(
-                    rehearsal_id=rehearsal_song.rehearsal_id,
-                    date=rehearsal_song.rehearsal.date,
-                    is_full_conflict=True,
-                    reason=conflict.reason,
+    for person_id in summaries:
+        entries: list[SongCastConflictEntry] = []
+        for rehearsal_song in rehearsal_songs:
+            conflict = conflicts_by_person_and_rehearsal.get((person_id, rehearsal_song.rehearsal_id))
+            if conflict is None:
+                continue
+            if conflict.type == Conflict.FULL_CONFLICT:
+                entries.append(
+                    SongCastConflictEntry(
+                        rehearsal_id=rehearsal_song.rehearsal_id,
+                        date=rehearsal_song.rehearsal.date,
+                        is_full_conflict=True,
+                        reason=conflict.reason,
+                    )
                 )
-            )
-            continue
-        windows = [
-            (window.unavailable_start, window.unavailable_end)
-            for window in conflict.conflictwindow_set.all()
-        ]
-        if any(
-            _windows_overlap(window_start, window_end, rehearsal_song.start_time, rehearsal_song.end_time)
-            for window_start, window_end in windows
-        ):
-            entries.append(
-                SongCastConflictEntry(
-                    rehearsal_id=rehearsal_song.rehearsal_id,
-                    date=rehearsal_song.rehearsal.date,
-                    is_full_conflict=False,
-                    reason=conflict.reason,
+                continue
+            windows = [
+                (window.unavailable_start, window.unavailable_end)
+                for window in conflict.conflictwindow_set.all()
+            ]
+            if any(
+                _windows_overlap(window_start, window_end, rehearsal_song.start_time, rehearsal_song.end_time)
+                for window_start, window_end in windows
+            ):
+                entries.append(
+                    SongCastConflictEntry(
+                        rehearsal_id=rehearsal_song.rehearsal_id,
+                        date=rehearsal_song.rehearsal.date,
+                        is_full_conflict=False,
+                        reason=conflict.reason,
+                    )
                 )
-            )
-    return entries
+        summaries[person_id] = entries
+    return summaries
 
 
 class StaleSongCastError(ValueError):
@@ -2543,7 +2596,12 @@ def apply_song_cast_edits(buffer: SongCastEditBuffer, *, viewing_semester: Semes
     membership of the Semester is this surface's version of the
     `semester_id` check every other Buffer carries, since the Buffer
     itself names no Semester. Raises `StaleSongCastError` if the Song's
-    `updated_at` no longer matches `buffer.song_updated_at`, rolling back
+    `updated_at` no longer matches `buffer.song_updated_at` — checked via
+    a conditional `UPDATE ... WHERE updated_at = <buffer's stamp>`, not a
+    read-then-compare, so the read of the stamp and its bump to a fresh
+    value happen as one atomic operation a concurrent call can't
+    interleave with (the same compare-and-swap
+    `apply_song_role_requirements()` uses; PR #502 review) — rolling back
     whatever this call had already applied.
     """
     if viewing_semester is None:
@@ -2559,7 +2617,17 @@ def apply_song_cast_edits(buffer: SongCastEditBuffer, *, viewing_semester: Semes
                 "This cast edit Buffer's Song doesn't belong to the Semester you're currently viewing."
             ) from error
 
-        if song.updated_at != buffer.song_updated_at:
+        # A conditional UPDATE ... WHERE updated_at = <the Buffer's stamp>, not a
+        # read-then-compare: the read of the stamp and its bump to a fresh value are one
+        # atomic statement a concurrent call can't interleave with, so two overlapping
+        # saves built from the same stamp can no longer both pass and both commit (PR #502
+        # review). `.update()` bypasses `auto_now`, which is why the fresh value is passed
+        # explicitly -- and why no trailing `song.save(update_fields=['updated_at'])` is
+        # needed afterward.
+        rows_updated = Song.objects.filter(pk=song.pk, updated_at=buffer.song_updated_at).update(
+            updated_at=timezone.now(),
+        )
+        if rows_updated == 0:
             raise StaleSongCastError('This Song changed while you were editing — reload and reapply.')
 
         SongRoleAssignment.objects.filter(pk__in=buffer.removed_assignment_ids, song=song).delete()
@@ -2578,10 +2646,6 @@ def apply_song_cast_edits(buffer: SongCastEditBuffer, *, viewing_semester: Semes
                         'casting it.'
                     )
                 SongRoleAssignment.objects.get_or_create(song=song, role_id=role_id, person_id=person_id)
-
-        # Re-stamps the Song's own optimistic-concurrency anchor (auto_now), so a second
-        # Buffer built before this save is refused by the staleness check above.
-        song.save(update_fields=['updated_at'])
 
 
 @dataclass(frozen=True)
@@ -5116,6 +5180,124 @@ def preview_song_role_requirements(
         loud=[],
         quiet=quiet,
     )
+
+
+@dataclass(frozen=True)
+class SongEditBuffers:
+    """The Song page's one edit session, as the two Pending Buffers it stages (PR #502 review).
+
+    The Song page opens its Requirements editor and its Cast editor
+    together behind one Save popup (issue #499), so what an admin stages
+    there is one act with two Buffers, not two acts. Carrying them as one
+    value is what lets `apply_song_edits()` commit both in a single
+    transaction — the surfaces' own `apply_*()` functions stay exactly as
+    they are, each still usable alone by the Setlist's cast popover and by
+    any caller editing only Requirements.
+
+    `cast` is `Optional` in effect rather than in type: a Buffer staging
+    no removal and no add is skipped outright (see
+    `_song_cast_buffer_is_empty()`), so an edit session that touched only
+    Requirements never has to carry a fresh `Song.updated_at` and can
+    never be refused as stale over a cast change it didn't make.
+    """
+
+    requirements: SongRoleRequirementBuffer
+    cast: SongCastEditBuffer
+
+
+def _song_cast_buffer_is_empty(buffer: SongCastEditBuffer) -> bool:
+    """Return whether a cast Buffer stages nothing at all, so the Song page's combined save can skip its half."""
+    return not buffer.removed_assignment_ids and not buffer.added_entries
+
+
+def apply_song_edits(buffers: SongEditBuffers, *, viewing_semester: Semester) -> Song:
+    """Apply one Song edit session's Requirements and cast Buffers in a single transaction (PR #502 review).
+
+    The Song page used to post its two Buffers as two sequential,
+    independently-committed requests, so a Requirements save that
+    succeeded followed by a cast save that failed (a `StaleSongCastError`,
+    say) left the Requirements change committed and the cast change
+    silently dropped — a partial save no rollback undid. One
+    `transaction.atomic()` around both `apply_*()` calls is the whole fix:
+    either every staged edit lands or none does. Each surface's own
+    `apply_*()` is unchanged and still opens its own `atomic()` block,
+    which nests here as a savepoint.
+
+    Requirements are applied **first**, deliberately: a Role only becomes
+    castable once a `SongRoleRequirement` exists for it (ADR 0015), so
+    casting someone onto a Role added in this same session only works if
+    the Requirement is already written when `apply_song_cast_edits()`
+    checks. The reverse order would raise
+    `MissingSongRoleRequirementError` for an edit the admin staged
+    coherently.
+
+    The two Buffers pin different staleness anchors — `Semester.updated_at`
+    for Requirements, `Song.updated_at` for the cast (ADR 0019) — and
+    neither write bumps the other's, so committing them together adds no
+    new way for one half to make the other stale.
+
+    Every exception the two `apply_*()` functions raise propagates
+    unchanged (`WrongViewingSemesterError`,
+    `StaleSongRoleRequirementsError`, `StaleSongCastError`,
+    `MissingSongRoleRequirementError`), rolling the whole transaction back.
+    Returns the Song, as `apply_song_role_requirements()` does.
+    """
+    with transaction.atomic():
+        song = apply_song_role_requirements(buffers.requirements, viewing_semester=viewing_semester)
+        if not _song_cast_buffer_is_empty(buffers.cast):
+            apply_song_cast_edits(buffers.cast, viewing_semester=viewing_semester)
+    return song
+
+
+@dataclass(frozen=True)
+class SongEditFallout:
+    """Both halves of one Song edit session's Fallout, computed without committing either (PR #502 review, ADR 0008).
+
+    Deliberately a pair rather than a flattened merge: each half is the
+    exact `*Fallout` its own surface already produces, so the Save popup's
+    "What changes" section keeps naming a Requirement change in
+    Requirements terms and a cast change in cast terms, and the two
+    existing serializers and client mappers are reused verbatim rather
+    than forked.
+
+    `cast` is `None` when the session staged no cast change at all — the
+    same skip `apply_song_edits()` makes, so preview and save agree about
+    whether the cast half ran.
+    """
+
+    requirements: SongRoleRequirementFallout
+    cast: SongCastFallout | None
+
+
+def preview_song_edits(buffers: SongEditBuffers, *, viewing_semester: Semester) -> SongEditFallout:
+    """Run both halves of a Song edit session for real, in order, and report their Fallout without committing (PR #502 review, ADR 0008).
+
+    This function's writes are real — it must be called inside a
+    transaction the *caller* rolls back (`PreviewMixin` does this; a test
+    calling it directly must wrap it the same way, per
+    `assert_preview_writes_nothing`). Called outside such a transaction,
+    it corrupts the database.
+
+    Calling the two `preview_*()` functions in sequence inside one
+    caller-owned transaction is what makes the preview agree with the
+    combined save: `preview_song_role_requirements()` really writes its
+    Requirements (rolled back only at the very end), so
+    `preview_song_cast_edits()` runs against a Song that already has them
+    and no longer reports `MissingSongRoleRequirementError` for a Role the
+    admin added in this same session. Two separate preview *requests*
+    could never do that — the first one's rollback landed before the
+    second one started — which is precisely the disagreement between
+    preview and save that ADR 0008 exists to prevent.
+
+    A blocked Requirements half short-circuits: the cast half is not
+    previewed at all, matching `apply_song_edits()`, where a failed
+    Requirements apply means the cast apply never runs either.
+    """
+    requirements_fallout = preview_song_role_requirements(buffers.requirements, viewing_semester=viewing_semester)
+    if requirements_fallout.is_blocked or _song_cast_buffer_is_empty(buffers.cast):
+        return SongEditFallout(requirements=requirements_fallout, cast=None)
+    cast_fallout = preview_song_cast_edits(buffers.cast, viewing_semester=viewing_semester)
+    return SongEditFallout(requirements=requirements_fallout, cast=cast_fallout)
 
 
 class StaleRehearsalSemesterError(ValueError):

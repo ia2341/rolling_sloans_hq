@@ -1878,6 +1878,22 @@ def serialize_song_cast_fallout(fallout) -> dict:
     }
 
 
+def serialize_song_edit_fallout(fallout) -> dict:
+    """Return a `SongEditFallout` as the combined Song-edit Preview response's `fallout` value (PR #502 review).
+
+    Two named keys, each delegating to the serializer its own surface
+    already has — the Song page's Save popup renders the Requirements half
+    and the cast half as the separate change lists they are, so there is
+    nothing here to flatten. `cast` is `null` when the session staged no
+    cast change, matching `preview_song_edits()`/`apply_song_edits()`,
+    which skip that half entirely.
+    """
+    return {
+        'requirements': serialize_song_role_requirement_fallout(fallout.requirements),
+        'cast': None if fallout.cast is None else serialize_song_cast_fallout(fallout.cast),
+    }
+
+
 def _serialize_adjudication_rehearsal_window(rehearsal) -> dict:
     """Return `rehearsal`'s `date`/`start_time`/`end_time` for the Conflict-adjudication surface (issue #340).
 

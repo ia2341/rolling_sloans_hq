@@ -4,7 +4,7 @@ import { Link, useParams } from 'react-router-dom'
 import { ApiError, apiFetch } from '../api/client'
 import { useAppContext } from '../api/ContextProvider'
 import type { PreviewResult } from '../api/previewTypes'
-import type { SongPayload } from '../api/setlistTypes'
+import type { SongEditBufferWire, SongPayload } from '../api/setlistTypes'
 import type { ReadEnvelope } from '../api/types'
 import { RecordingUploadDialog } from '../components/recordings/RecordingUploadDialog'
 import { CastTable, RoleMismatchLegend } from '../components/ui/CastLine'
@@ -20,28 +20,28 @@ import { RequirementsEditor } from './song/RequirementsEditor'
 import { RequirementsReadOnly } from './song/RequirementsReadOnly'
 import {
   addCastEntry,
-  buildCastBufferWire,
   castPersonIdsFor,
   computeCastChangeCount,
   EMPTY_CAST_BUFFER,
-  mapSongCastPreviewToResult,
   removePendingCastEntry,
   removeSavedCastEntry,
   undoRemoveSavedCastEntry,
+  type CastableRole,
   type CastEditBuffer,
-  type SongCastWriteEnvelope,
 } from './song/songCastEditModel'
 import {
+  buildSongEditBufferWire,
+  mapSongEditPreviewToResult,
+  type SongEditWriteEnvelope,
+} from './song/songEditModel'
+import {
   addRequirementRow,
-  buildRequirementBufferWire,
   computeChangeCount,
-  mapSongRoleRequirementPreviewToResult,
   removeRequirementRow,
   rowsFromPayload,
   undoRemoveRequirementRow,
   updateRequirementCount,
   type RequirementEditRow,
-  type SongRoleRequirementWriteEnvelope,
 } from './song/songRoleRequirementsEditModel'
 
 type LoadState =
@@ -152,22 +152,29 @@ export function Song() {
     [castPickerRole],
   )
 
-  /** Runs the Cast Buffer's own Preview, or resolves an empty result when nothing is staged. */
-  const previewCast = useCallback((): Promise<PreviewResult | null> => {
-    if (song === null || computeCastChangeCount(castBuffer) === 0) {
-      return Promise.resolve(null)
-    }
-    return apiFetch<SongCastWriteEnvelope>(
-      `/api/songs/${song.id}/cast/preview/`,
-      {
-        method: 'POST',
-        body: JSON.stringify(buildCastBufferWire(song.updated_at, castBuffer)),
-      },
-    ).then(mapSongCastPreviewToResult)
-  }, [song, castBuffer])
+  /** The combined body both halves of this one edit session post — Requirements rows and cast Buffer in one wire shape, or `null` with nothing to post against. */
+  const buildEditBody = useCallback((): SongEditBufferWire | null => {
+    if (viewingSemester === null || song === null) return null
+    return buildSongEditBufferWire(
+      viewingSemester.id,
+      viewingSemester.updated_at,
+      song.updated_at,
+      rows,
+      castBuffer,
+    )
+  }, [viewingSemester, song, rows, castBuffer])
 
-  const previewRequirements = useCallback((): Promise<PreviewResult> => {
-    if (viewingSemester === null || song === null) {
+  /**
+   * Previews the whole edit session in one request (PR #502 review). Both
+   * Buffers run inside the endpoint's single rolled-back transaction, so
+   * the cast half is previewed against the Requirements this session
+   * staged — two separate preview requests each rolled back before the
+   * next began, which made a newly-staged Requirement's Role look
+   * un-castable in a preview whose save would have succeeded.
+   */
+  const preview = useCallback((): Promise<PreviewResult> => {
+    const body = buildEditBody()
+    if (body === null || song === null) {
       return Promise.resolve({
         ok: false,
         changes: [],
@@ -175,86 +182,52 @@ export function Song() {
         nonFieldErrors: ['No Semester is selected to save against.'],
       })
     }
-    const body = buildRequirementBufferWire(
-      viewingSemester.id,
-      viewingSemester.updated_at,
-      rows,
-    )
-    return apiFetch<SongRoleRequirementWriteEnvelope>(
-      `/api/songs/${song.id}/requirements/preview/`,
-      {
-        method: 'POST',
-        body: JSON.stringify(body),
-      },
+    return apiFetch<SongEditWriteEnvelope>(
+      `/api/songs/${song.id}/edit/preview/`,
+      { method: 'POST', body: JSON.stringify(body) },
     ).then((envelope) => {
       setRowErrors(envelope.errors)
-      return mapSongRoleRequirementPreviewToResult(envelope)
+      return mapSongEditPreviewToResult(envelope)
     })
-  }, [rows, viewingSemester, song])
+  }, [buildEditBody, song])
 
-  /** Previews both Buffers and merges them into the one result the shared Save popup renders (ADR 0008 — each Preview runs its own surface's real save and rolls it back). */
-  const preview = useCallback(async (): Promise<PreviewResult> => {
-    const requirementsResult = await previewRequirements()
-    if (!requirementsResult.ok) return requirementsResult
-    const castResult = await previewCast()
-    if (castResult === null) return requirementsResult
-    if (!castResult.ok) return castResult
-    return {
-      ok: true,
-      changes: [...requirementsResult.changes, ...castResult.changes],
-      fallout: {
-        loud: [...requirementsResult.fallout.loud, ...castResult.fallout.loud],
-        quiet: [
-          ...requirementsResult.fallout.quiet,
-          ...castResult.fallout.quiet,
-        ],
-      },
-    }
-  }, [previewRequirements, previewCast])
-
+  /** Saves the whole edit session in one request, so the Requirements and cast halves commit together or not at all (PR #502 review). */
   const confirmSave = useCallback(() => {
-    if (viewingSemester === null || song === null) return
-    /** Leaves edit mode and reloads the Song, once every staged Buffer has committed. */
-    const finish = () => {
+    const body = buildEditBody()
+    if (body === null || song === null) return
+    void apiFetch<SongEditWriteEnvelope>(`/api/songs/${song.id}/edit/save/`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }).then((envelope) => {
+      if (!envelope.ok) return
       setSaveDialogOpen(false)
       setIsEditing(false)
       setRows([])
       setRowErrors({})
       setCastBuffer(EMPTY_CAST_BUFFER)
       load()
-    }
-    const saveCast = () => {
-      if (computeCastChangeCount(castBuffer) === 0) {
-        finish()
-        return
-      }
-      void apiFetch<SongCastWriteEnvelope>(`/api/songs/${song.id}/cast/save/`, {
-        method: 'POST',
-        body: JSON.stringify(buildCastBufferWire(song.updated_at, castBuffer)),
-      }).then((envelope) => {
-        if (envelope.ok) finish()
-      })
-    }
-    const body = buildRequirementBufferWire(
-      viewingSemester.id,
-      viewingSemester.updated_at,
-      rows,
-    )
-    void apiFetch<SongRoleRequirementWriteEnvelope>(
-      `/api/songs/${song.id}/requirements/save/`,
-      {
-        method: 'POST',
-        body: JSON.stringify(body),
-      },
-    ).then((envelope) => {
-      if (!envelope.ok) return
-      saveCast()
     })
-  }, [rows, viewingSemester, song, load, castBuffer])
+  }, [buildEditBody, song, load])
 
   const changeCount = useMemo(
     () => computeChangeCount(rows) + computeCastChangeCount(castBuffer),
     [rows, castBuffer],
+  )
+  /**
+   * The Roles the Cast editor offers, derived from the *staged*
+   * Requirements rows rather than the Song's last-saved
+   * `role_requirements` (PR #502 review): a Requirement added in this
+   * session is castable straight away, and one staged for removal stops
+   * being offered, so the two editors on this page can't disagree about
+   * what is castable mid-session. Out of edit mode the list is unused —
+   * the read-only `CastTable` renders whatever is saved.
+   */
+  const castableRoles = useMemo<CastableRole[]>(
+    () =>
+      rows
+        .filter((row) => !row.removed)
+        .map((row) => ({ roleId: row.roleId, roleName: row.roleName })),
+    [rows],
   )
   const existingRoleIds = useMemo(
     () => new Set(rows.map((row) => row.roleId)),
@@ -313,7 +286,7 @@ export function Song() {
         {isEditing ? (
           <CastEditor
             cast={song.cast}
-            roleRequirements={song.role_requirements}
+            castableRoles={castableRoles}
             buffer={castBuffer}
             onOpenPicker={setCastPickerRole}
             onRemoveSaved={(assignmentId) =>

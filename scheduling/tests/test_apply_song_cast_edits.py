@@ -230,6 +230,33 @@ class ApplySongCastEditsTests(TestCase):
         with self.assertRaisesMessage(StaleSongCastError, 'changed while you were editing'):
             apply_song_cast_edits(self._buffer(updated_at=stale_stamp), viewing_semester=self.semester)
 
+    def test_two_saves_built_from_the_same_stamp_cannot_both_commit(self):
+        """The second of two same-row saves built from one stamp is refused, not silently applied over the first (PR #502 review).
+
+        The regression this guards: a read-then-compare staleness check
+        lets two concurrent saves both read the same `Song.updated_at`,
+        both pass, and both commit — one admin's edit clobbering the
+        other's with neither told to reload. Both Buffers here are built
+        *before* either is applied, which is what a real interleaving
+        looks like from the database's point of view; the compare-and-swap
+        `UPDATE ... WHERE updated_at = <stamp>` is what makes the second
+        one's row count zero.
+        """
+        other_person = PersonFactory()
+        MembershipFactory(semester=self.semester, person=other_person)
+        PersonRoleFactory(person=other_person, role=self.role)
+        first = self._buffer(removed_assignment_ids=[self.assignment.pk])
+        second = self._buffer(added_entries=[(self.role.pk, other_person.pk)])
+
+        apply_song_cast_edits(first, viewing_semester=self.semester)
+
+        with self.assertRaises(StaleSongCastError):
+            apply_song_cast_edits(second, viewing_semester=self.semester)
+
+        self.assertFalse(
+            SongRoleAssignment.objects.filter(song=self.song, person=other_person).exists()
+        )
+
     def test_an_edit_on_another_song_does_not_make_this_buffer_stale(self):
         """Two admins casting two different Songs concurrently don't collide — the stamp is per-Song."""
         other_song = SongFactory(semester=self.semester)

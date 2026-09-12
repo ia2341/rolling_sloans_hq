@@ -12,6 +12,7 @@ import { CastPickerSheet } from '../song/CastPickerSheet'
 import {
   addCastEntry,
   buildCastBufferWire,
+  castableRolesFromRequirements,
   castPersonIdsFor,
   computeCastChangeCount,
   EMPTY_CAST_BUFFER,
@@ -81,10 +82,13 @@ export function SetlistCastPopover({
     }
   }, [songId])
 
-  const roleRequirements = useMemo(
+  /** The clicked column's castable Roles, from the Song's saved Requirements — this surface edits no Requirement, so saved *is* staged here. */
+  const castableRoles = useMemo(
     () =>
-      (song?.role_requirements ?? []).filter((requirement) =>
-        roleIds.includes(requirement.role_id),
+      castableRolesFromRequirements(
+        (song?.role_requirements ?? []).filter((requirement) =>
+          roleIds.includes(requirement.role_id),
+        ),
       ),
     [song, roleIds],
   )
@@ -155,7 +159,7 @@ export function SetlistCastPopover({
       >
         {song === null ? (
           <p className="text-sm text-rs-muted">Loading…</p>
-        ) : roleRequirements.length === 0 ? (
+        ) : castableRoles.length === 0 ? (
           <p className="text-sm text-rs-muted">
             No Role Requirement for this column yet — add one on the Song page
             before casting it.
@@ -163,7 +167,7 @@ export function SetlistCastPopover({
         ) : (
           <CastEditor
             cast={song.cast}
-            roleRequirements={roleRequirements}
+            castableRoles={castableRoles}
             buffer={buffer}
             onOpenPicker={setPickerRole}
             onRemoveSaved={(assignmentId) =>

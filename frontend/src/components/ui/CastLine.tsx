@@ -353,22 +353,30 @@ export function CastGridTable({
               {columns.map((column) => (
                 <td
                   key={column.key}
-                  className="border border-rs-border px-2 py-2 align-top"
+                  // No padding on the cell itself: the padding belongs to whichever
+                  // element fills it below, so the editable variant's click target
+                  // covers the whole cell rather than leaving a padded gutter that
+                  // falls through to the row's own `onOpenRow` (PR #502 review).
+                  className="border border-rs-border align-top"
                 >
                   {onOpenCastCell === undefined ? (
-                    <CastGridCell
-                      column={column}
-                      cast={row.cast}
-                      viewerId={viewerId}
-                      nameFor={nameFor}
-                      isAdmin={isAdmin}
-                    />
+                    <div className="px-2 py-2">
+                      <CastGridCell
+                        column={column}
+                        cast={row.cast}
+                        viewerId={viewerId}
+                        nameFor={nameFor}
+                        isAdmin={isAdmin}
+                      />
+                    </div>
                   ) : (
                     // A div, not a <button>: the cell's own content already
                     // contains person links, and an <a> inside a <button> is
                     // invalid HTML. The click/key handlers stop propagation so
                     // the enclosing row's `onOpenRow` doesn't also fire — its
                     // own `closest('a, button')` guard can't see through a div.
+                    // It carries the cell's padding (see the <td> above) so the
+                    // whole cell, gutters included, opens the cast editor.
                     <div
                       role="button"
                       tabIndex={0}
@@ -385,7 +393,7 @@ export function CastGridTable({
                         event.stopPropagation()
                         onOpenCastCell(row.id, column)
                       }}
-                      className="w-full cursor-pointer text-left hover:bg-rs-border/20"
+                      className="h-full w-full cursor-pointer px-2 py-2 text-left hover:bg-rs-border/20"
                     >
                       <CastGridCell
                         column={column}
