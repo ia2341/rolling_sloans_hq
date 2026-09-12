@@ -10,6 +10,7 @@ import { PageTitleProvider } from './PageTitleContext'
 import { Sidebar } from './Sidebar'
 import { TabBar } from './TabBar'
 import { ThemeSync } from './ThemeSync'
+import { ThemeToggle } from './ThemeToggle'
 import { TopBar } from './TopBar'
 
 /**
@@ -51,8 +52,13 @@ function ShellLayout({ children }: { children: ReactNode }) {
     <div className="flex min-h-screen">
       <Sidebar />
       <div className="flex flex-1 flex-col">
-        <MustChangePasswordBanner />
-        <ActiveEditToolbar />
+        <div className="sticky top-0 z-20 flex flex-col">
+          <div className="flex justify-end border-b border-rs-border bg-rs-surface px-4 py-2">
+            <ThemeToggle />
+          </div>
+          <MustChangePasswordBanner />
+          <ActiveEditToolbar />
+        </div>
         <main className="flex-1 px-6 py-6">{children}</main>
       </div>
     </div>

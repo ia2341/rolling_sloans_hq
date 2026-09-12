@@ -6,10 +6,12 @@ import { useEditSession } from './EditSessionContext'
 import { usePageTitleValue } from './PageTitleContext'
 import { PublishSemesterDialog } from './PublishSemesterDialog'
 import { SwitchSemesterDialog } from './SwitchSemesterDialog'
+import { ThemeToggle } from './ThemeToggle'
 
 /**
  * The phone top bar (issue #328, #329): the page title, naming the surface
- * with the sidebar gone, plus right-aligned Discard (only while an
+ * with the sidebar gone, plus a right-aligned `ThemeToggle` (issue #500,
+ * always present) and Discard (only while an
  * `EditSession` is registered — issue: UI overhaul round 2, item 6, the
  * one place a phone viewer could leave edit mode without saving), Save and
  * Publish — Save/Publish disabled unless applicable, reading the same
@@ -47,7 +49,8 @@ export function TopBar() {
       )}
       <div className="flex items-center justify-between gap-2 border-b border-rs-border bg-rs-surface px-3 py-2">
         <h1 className="truncate text-base font-semibold">{title}</h1>
-        <div className="flex shrink-0 gap-2">
+        <div className="flex shrink-0 items-center gap-2">
+          <ThemeToggle />
           {isAdmin && (
             <button
               type="button"
