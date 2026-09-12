@@ -515,6 +515,50 @@ describe('Person', () => {
     ).not.toBeInTheDocument()
   })
 
+  /** Issue #497: the self-only Theme control posts the selection and reflects the updated context. */
+  it('changes the selected theme preference and marks it pressed', async () => {
+    mockFetchByUrl({
+      '/api/members/1/': () => ({
+        status: 200,
+        body: { context: memberContext(), data: selfPayload() },
+      }),
+      '/api/theme/': () => ({
+        status: 200,
+        body: {
+          context: memberContext({
+            viewer: { ...memberContext().viewer, theme_preference: 'dark' },
+          }),
+          ok: true,
+          errors: {},
+          non_field_errors: [],
+          fallout: null,
+          values: null,
+          data: null,
+        },
+      }),
+    })
+
+    const user = (await import('@testing-library/user-event')).default.setup()
+    renderPerson('/members/1')
+
+    expect(
+      await screen.findByRole('button', { name: 'System' }),
+    ).toHaveAttribute('aria-pressed', 'true')
+
+    await user.click(screen.getByRole('button', { name: 'Dark' }))
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Dark' })).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      ),
+    )
+    expect(screen.getByRole('button', { name: 'System' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    )
+  })
+
   it('locks the Song select to the preselected Song (issue #395) rather than merely defaulting to it', async () => {
     const payload = selfPayload({
       recordings: {

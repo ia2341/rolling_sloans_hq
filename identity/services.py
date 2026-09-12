@@ -289,6 +289,18 @@ def clear_must_change_password(person):
     return person
 
 
+def apply_theme_preference_change(person, theme_preference):
+    """Set `person.theme_preference` to `theme_preference` (issue #497), self-only by construction.
+
+    A plain apply-only write, mirroring `clear_must_change_password()`'s
+    "one field, no derived fallout" shape — there is no guard, since a
+    Person can always change their own display preference.
+    """
+    person.theme_preference = theme_preference
+    person.save(update_fields=['theme_preference'])
+    return person
+
+
 def client_ip(request):
     """Return the requesting client's IP address, for the rate-limit keys (issue #327, #362).
 

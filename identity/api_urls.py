@@ -13,4 +13,5 @@ from identity import api_views
 urlpatterns = [
     path('login/', api_views.LoginApiView.as_view(), name='api-login'),
     path('password/', api_views.PasswordChangeApiView.as_view(), name='api-password-change'),
+    path('theme/', api_views.ThemePreferenceApiView.as_view(), name='api-theme-preference'),
 ]

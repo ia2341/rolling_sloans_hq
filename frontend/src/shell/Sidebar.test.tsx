@@ -14,6 +14,19 @@ afterEach(() => {
 })
 
 describe('Sidebar', () => {
+  /** Issue #497: a shared browser's next signed-in viewer must never see the outgoing account's cached theme flash before their own context loads. */
+  it('clears the cached theme preference when Log out is submitted', async () => {
+    window.localStorage.setItem('rs-theme-preference', 'dark')
+    setContext(memberContext())
+    renderShell(<Sidebar />)
+
+    const form = screen.getByRole('button', { name: 'Log out' }).closest('form')
+    form?.addEventListener('submit', (event) => event.preventDefault())
+    await userEvent.click(screen.getByRole('button', { name: 'Log out' }))
+
+    expect(window.localStorage.getItem('rs-theme-preference')).toBeNull()
+  })
+
   it('collapsing hides nav labels and the semester panel body but keeps the block note glyph', async () => {
     setContext(adminContext())
     renderShell(

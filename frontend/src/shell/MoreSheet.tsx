@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom'
 
 import { useAppContext } from '../api/ContextProvider'
 import { ResponsiveDialog } from '../components/ui/ResponsiveDialog'
+import { clearCachedThemePreference } from '../theme/theme'
 import { ManageSemestersSheet } from './ManageSemestersSheet'
 import { NewSemesterDialog } from './NewSemesterDialog'
 import { SwitchSemesterDialog } from './SwitchSemesterDialog'
@@ -139,7 +140,12 @@ function MoreSheetLogoutItem() {
 
   return (
     <li>
-      <form action="/accounts/logout/" method="post" className="contents">
+      <form
+        action="/accounts/logout/"
+        method="post"
+        className="contents"
+        onSubmit={clearCachedThemePreference}
+      >
         <input type="hidden" name="csrfmiddlewaretoken" value={token} />
         <button
           type="submit"

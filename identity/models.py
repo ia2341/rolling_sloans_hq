@@ -75,7 +75,22 @@ class Person(AbstractBaseUser, PermissionsMixin):
     only means their *next* sign-in must swap it for one only they know.
     `identity.services.invite_status_for()` is now keyed on this flag,
     not `has_usable_password()`.
+
+    `theme_preference` (issue #497) is a durable, per-Person setting rather
+    than a browser-local one, so it follows a member across devices; it
+    defaults to `THEME_SYSTEM` for every new Person, including one who has
+    never signed in yet, so a first-time login honors the OS preference
+    until the member picks something else.
     """
+
+    THEME_LIGHT = 'light'
+    THEME_DARK = 'dark'
+    THEME_SYSTEM = 'system'
+    THEME_CHOICES: ClassVar[list[tuple[str, str]]] = [
+        (THEME_LIGHT, 'Light'),
+        (THEME_DARK, 'Dark'),
+        (THEME_SYSTEM, 'System'),
+    ]
 
     name = models.CharField(max_length=255)
     email = models.EmailField(unique=True)
@@ -83,6 +98,7 @@ class Person(AbstractBaseUser, PermissionsMixin):
     is_staff = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
     must_change_password = models.BooleanField(default=False)
+    theme_preference = models.CharField(max_length=10, choices=THEME_CHOICES, default=THEME_SYSTEM)
 
     objects = PersonManager()
 

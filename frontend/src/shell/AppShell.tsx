@@ -9,6 +9,7 @@ import { MustChangePasswordBanner } from './MustChangePasswordBanner'
 import { PageTitleProvider } from './PageTitleContext'
 import { Sidebar } from './Sidebar'
 import { TabBar } from './TabBar'
+import { ThemeSync } from './ThemeSync'
 import { TopBar } from './TopBar'
 
 /**
@@ -19,6 +20,7 @@ import { TopBar } from './TopBar'
 export function AppShell() {
   return (
     <ContextProvider>
+      <ThemeSync />
       <EditSessionProvider>
         <PageTitleProvider>
           <ShellLayout>

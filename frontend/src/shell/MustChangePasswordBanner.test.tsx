@@ -33,6 +33,7 @@ describe('MustChangePasswordBanner', () => {
           email: 'sam@example.com',
           is_admin: false,
           must_change_password: true,
+          theme_preference: 'system',
         },
       }),
     )
@@ -53,6 +54,7 @@ describe('MustChangePasswordBanner', () => {
           email: 'sam@example.com',
           is_admin: false,
           must_change_password: true,
+          theme_preference: 'system',
         },
       }),
     )

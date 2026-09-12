@@ -11,7 +11,7 @@ mechanically for both serializer modules.
 
 
 def serialize_viewer(person):
-    """Return `person` as the `context.viewer` block: `id`, `name`, `email`, `is_admin`, `must_change_password`.
+    """Return `person` as the `context.viewer` block: `id`, `name`, `email`, `is_admin`, `must_change_password`, `theme_preference`.
 
     `email` is always the *requesting* person's own address — this
     function is only ever called with `request.user` — so it never
@@ -20,6 +20,8 @@ def serialize_viewer(person):
     `Person` row. `must_change_password` (issue #484) is the SPA's signal
     to nag the viewer about a still-unreplaced admin-generated password;
     it's the viewer's own flag by the same self-only reasoning.
+    `theme_preference` (issue #497) is the viewer's own durable light/dark/
+    system setting, applied client-side on every context update.
     """
     return {
         'id': person.pk,
@@ -27,4 +29,5 @@ def serialize_viewer(person):
         'email': person.email,
         'is_admin': person.is_admin,
         'must_change_password': person.must_change_password,
+        'theme_preference': person.theme_preference,
     }

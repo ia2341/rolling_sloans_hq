@@ -2,12 +2,15 @@
 
 export type SemesterStatus = 'live' | 'draft' | 'previously_published'
 
+export type ThemePreference = 'light' | 'dark' | 'system'
+
 export interface Viewer {
   id: number
   name: string
   email: string
   is_admin: boolean
   must_change_password: boolean
+  theme_preference: ThemePreference
 }
 
 export interface ViewingSemester {
