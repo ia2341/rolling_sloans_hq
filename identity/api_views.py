@@ -18,7 +18,9 @@ from django.views import View
 
 from config.views import ApiView
 
+from .models import Person
 from .services import (
+    apply_theme_preference_change,
     clear_must_change_password,
     client_ip,
     is_login_rate_limited,
@@ -125,4 +127,26 @@ class PasswordChangeApiView(ApiView, View):
         form.save()
         update_session_auth_hash(request, form.user)
         clear_must_change_password(form.user)
+        return self.write_response(request, ok=True)
+
+
+class ThemePreferenceApiView(ApiView, View):
+    """`POST /api/theme/`: sets the requesting Person's own `theme_preference` (issue #500, self-only).
+
+    Self-only by construction, like `PasswordChangeApiView` — no `pk` in
+    the URL, so this can only ever act on `request.user`. `theme_preference`
+    is a durable per-Person setting (not browser-local), so it follows a
+    member across devices and is included in every `context.viewer` block.
+    """
+
+    def post(self, request):
+        """Set `request.user.theme_preference` to the submitted value, or reject an unrecognized one."""
+        payload = self.parse_json_body(request)
+        theme_preference = payload.get('theme_preference')
+        valid_values = {value for value, _label in Person.THEME_CHOICES}
+        if theme_preference not in valid_values:
+            return self.write_response(
+                request, ok=False, non_field_errors=['theme_preference must be one of light, dark, or system.'],
+            )
+        apply_theme_preference_change(request.user, theme_preference)
         return self.write_response(request, ok=True)

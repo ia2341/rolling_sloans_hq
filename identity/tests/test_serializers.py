@@ -7,17 +7,17 @@ from identity.serializers import serialize_viewer
 
 
 class SerializeViewerTests(TestCase):
-    """`serialize_viewer()` emits exactly `id`, `name`, `email`, `is_admin`, `must_change_password`."""
+    """`serialize_viewer()` emits exactly `id`, `name`, `email`, `is_admin`, `must_change_password`, `theme_preference`."""
 
     def test_exact_key_set(self):
-        """The emitted dict has exactly the five documented keys — no more, no fewer."""
+        """The emitted dict has exactly the six documented keys — no more, no fewer."""
         person = PersonFactory()
 
         payload = serialize_viewer(person)
 
         self.assertEqual(
             set(payload),
-            {'id', 'name', 'email', 'is_admin', 'must_change_password'},
+            {'id', 'name', 'email', 'is_admin', 'must_change_password', 'theme_preference'},
         )
 
     def test_values(self):
@@ -31,3 +31,4 @@ class SerializeViewerTests(TestCase):
         self.assertEqual(payload['email'], person.email)
         self.assertIs(payload['is_admin'], True)
         self.assertIs(payload['must_change_password'], True)
+        self.assertEqual(payload['theme_preference'], 'system')

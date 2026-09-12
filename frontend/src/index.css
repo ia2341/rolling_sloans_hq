@@ -23,8 +23,13 @@
   --breakpoint-phone: 640px;
 }
 
+/* `system` (the default, no attribute set) reads these from the OS via the
+   media query below; a manual `light`/`dark` choice (issue #500) is stamped
+   as `data-theme` on `<html>` by `ThemeSync`/`main.tsx`'s pre-render read,
+   and the attribute selectors below override the media query so the
+   manual choice always wins. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme='light']) {
     --color-rs-bg: oklch(18% 0 0);
     --color-rs-surface: oklch(23% 0 0);
     --color-rs-fg: oklch(95% 0 0);
@@ -39,6 +44,22 @@
     --color-rs-toolbar-bg: oklch(10% 0 0);
     --color-rs-toolbar-fg: oklch(96% 0 0);
   }
+}
+
+:root[data-theme='dark'] {
+  --color-rs-bg: oklch(18% 0 0);
+  --color-rs-surface: oklch(23% 0 0);
+  --color-rs-fg: oklch(95% 0 0);
+  --color-rs-muted: oklch(70% 0 0);
+  --color-rs-border: oklch(32% 0 0);
+  --color-rs-accent: oklch(70% 0.16 264);
+  --color-rs-accent-fg: oklch(15% 0 0);
+  --color-rs-danger: oklch(70% 0.18 27);
+  --color-rs-warning-bg: oklch(30% 0.06 80);
+  --color-rs-warning-fg: oklch(92% 0.08 90);
+  --color-rs-warning-border: oklch(45% 0.1 80);
+  --color-rs-toolbar-bg: oklch(10% 0 0);
+  --color-rs-toolbar-fg: oklch(96% 0 0);
 }
 
 /* Role-hue tokens (issue #328, user stories 36-37): one token per Role slot,
@@ -56,13 +77,21 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme='light']) {
     --role-1: oklch(70% 0.17 25);
     --role-2: oklch(75% 0.15 95);
     --role-3: oklch(70% 0.14 150);
     --role-4: oklch(70% 0.14 230);
     --role-5: oklch(72% 0.16 300);
   }
+}
+
+:root[data-theme='dark'] {
+  --role-1: oklch(70% 0.17 25);
+  --role-2: oklch(75% 0.15 95);
+  --role-3: oklch(70% 0.14 150);
+  --role-4: oklch(70% 0.14 230);
+  --role-5: oklch(72% 0.16 300);
 }
 
 /* Intentional readability bump (~3pt over the 16px browser default), not a stray override:
