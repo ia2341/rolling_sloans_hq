@@ -68,6 +68,7 @@ from scheduling.models import (
     Rehearsal,
     RehearsalSong,
     Role,
+    RoleGroup,
     Semester,
     Song,
 )
@@ -805,22 +806,39 @@ class RosterCandidatesApiView(AdminApiView, View):
 
 
 class RoleDeclareApiView(AdminApiView, View):
-    """`POST /api/members/roster/roles/`: get-or-creates a Role by name for the `+ Role` chip's "declare a new one" path (issue #336).
+    """`/api/members/roster/roles/`: the `+ Role` chip's/Person page's "declare a new one" path (issue #336, #506).
 
-    Wraps `create_or_reactivate_role()` unchanged — it commits immediately,
-    outside any Pending Buffer, so a Role invented mid-edit survives
-    discarding the batch. Own shape, plus `context`, per the envelope
-    boundary rule: this answers "what Role resulted from this name", it
-    doesn't apply a Buffer.
+    `POST` wraps `create_or_reactivate_role()` unchanged — it commits
+    immediately, outside any Pending Buffer, so a Role invented mid-edit
+    survives discarding the batch. Own shape, plus `context`, per the
+    envelope boundary rule: this answers "what Role resulted from this
+    name", it doesn't apply a Buffer. `GET` answers the sibling question a
+    new-Role picker needs before it can even submit a `POST`: which
+    RoleGroups exist to choose from (issue #506) — folded onto this same
+    view rather than a separate URL, since both questions serve the one
+    "declare a Role" control.
     """
 
+    def get(self, request):
+        """Return every RoleGroup, for a new-Role picker's group dropdown."""
+        return self.read_response(request, serializers.serialize_role_groups(services.role_groups()))
+
     def post(self, request):
-        """Validate the submitted name and return the resulting Role, or a 400 for a blank one."""
+        """Validate the submitted name (and optional `group_id`) and return the resulting Role, or a 400 for a blank name or an unknown group."""
         payload = self.parse_json_body(request)
         name = payload.get('name')
         if not isinstance(name, str) or not name.strip():
             return JsonResponse({'context': self.build_context(request), 'error': 'invalid_name'}, status=400)
-        result = services.create_or_reactivate_role(name.strip())
+        group = None
+        group_id = payload.get('group_id')
+        if group_id is not None:
+            if isinstance(group_id, bool) or not isinstance(group_id, int):
+                return JsonResponse({'context': self.build_context(request), 'error': 'invalid_group'}, status=400)
+            try:
+                group = RoleGroup.objects.get(pk=group_id)
+            except (RoleGroup.DoesNotExist, ValueError, TypeError):
+                return JsonResponse({'context': self.build_context(request), 'error': 'invalid_group'}, status=400)
+        result = services.create_or_reactivate_role(name.strip(), group=group)
         return self.read_response(request, serializers.serialize_role_declaration(result))
 
 
@@ -955,7 +973,8 @@ class PersonApiView(ApiView, View):
         can_edit_roles = is_self or is_admin
         membership = self._get_or_build_membership(person, semester) if semester is not None else None
         data = serializers.serialize_person(
-            person, semester=semester, is_self=is_self, can_edit_roles=can_edit_roles, membership=membership,
+            person, semester=semester, is_self=is_self, can_edit_roles=can_edit_roles,
+            can_create_roles=is_admin, membership=membership,
         )
         return self.read_response(request, data)
 
@@ -1012,7 +1031,7 @@ class PersonRolesApiView(ApiView, View):
         membership = Membership.objects.filter(person=person, semester=semester).first() if semester is not None else None
         data = serializers.serialize_person(
             person, semester=semester, is_self=(person.pk == request.user.pk), can_edit_roles=True,
-            membership=membership,
+            can_create_roles=is_admin, membership=membership,
         )
         return self.write_response(request, ok=True, data=data)
 
@@ -1046,7 +1065,8 @@ class PersonAdminStatusApiView(AdminApiView, View):
         semester = services.get_viewing_semester(request)
         membership = Membership.objects.filter(person=target, semester=semester).first() if semester is not None else None
         data = serializers.serialize_person(
-            target, semester=semester, is_self=False, can_edit_roles=True, membership=membership,
+            target, semester=semester, is_self=False, can_edit_roles=True, can_create_roles=True,
+            membership=membership,
         )
         return self.write_response(request, ok=True, data=data)
 
@@ -1075,7 +1095,8 @@ class PersonDeactivationApiView(AdminApiView, View):
         semester = services.get_viewing_semester(request)
         membership = Membership.objects.filter(person=target, semester=semester).first() if semester is not None else None
         data = serializers.serialize_person(
-            target, semester=semester, is_self=False, can_edit_roles=True, membership=membership,
+            target, semester=semester, is_self=False, can_edit_roles=True, can_create_roles=True,
+            membership=membership,
         )
         return self.write_response(request, ok=True, data=data)
 
@@ -1095,7 +1116,8 @@ class PersonReactivationApiView(AdminApiView, View):
         semester = services.get_viewing_semester(request)
         membership = Membership.objects.filter(person=target, semester=semester).first() if semester is not None else None
         data = serializers.serialize_person(
-            target, semester=semester, is_self=False, can_edit_roles=True, membership=membership,
+            target, semester=semester, is_self=False, can_edit_roles=True, can_create_roles=True,
+            membership=membership,
         )
         return self.write_response(request, ok=True, data=data)
 
@@ -1131,7 +1153,8 @@ class PersonPasswordResetApiView(AdminApiView, View):
         semester = services.get_viewing_semester(request)
         membership = Membership.objects.filter(person=target, semester=semester).first() if semester is not None else None
         person_data = serializers.serialize_person(
-            target, semester=semester, is_self=False, can_edit_roles=True, membership=membership,
+            target, semester=semester, is_self=False, can_edit_roles=True, can_create_roles=True,
+            membership=membership,
         )
         return self.write_response(request, ok=True, data={'person': person_data, 'temp_password': temp_password})
 
