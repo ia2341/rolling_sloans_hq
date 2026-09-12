@@ -10,16 +10,17 @@ Django 6.1 on Postgres serving a same-origin JSON `/api/`, and a
 React/TypeScript single-page app (`frontend/`, built by Vite) as the entire
 client. No CDN and no DRF — the seam for any future API is `services.py`,
 endpoint-per-interaction, not a resource-shaped HTTP layer. Recordings live in
-a private Cloudflare R2 bucket (`django-storages`), transactional mail goes
-out through Resend (`django-anymail`), WhiteNoise serves static assets, and an
-optional Spotify Client Credentials integration turns a public playlist link
-into setlist rows.
+a private Cloudflare R2 bucket (`django-storages`), WhiteNoise serves static
+assets, and an optional Spotify Client Credentials integration turns a public
+playlist link into setlist rows. There is no transactional-mail dependency at
+all: an admin creates or resets a `Person`'s credentials with a temp password
+revealed once in the response, relayed verbally or by text.
 
 ## Architecture
 
 Two Django apps:
 
-- **`identity`** — auth and account lifecycle. Accounts are never self-registered; an admin invites a `Person` by email, and that's the only path to a loggable-in account besides the Django admin.
+- **`identity`** — auth and account lifecycle. Accounts are never self-registered; an admin creates a `Person` with a real, immediately-usable temp password revealed once in the response, and that's the only path to a loggable-in account besides the Django admin. The Person is flagged to change that password on first use.
 - **`scheduling`** — the domain model for semesters, membership, roles, songs, rehearsals, and recordings. See [`CONTEXT.md`](CONTEXT.md) for the ubiquitous language (e.g. "Song" is scoped to one semester and never reused across terms).
 
 `scheduling/services.py` is the **read-model layer, not just a write layer**.
@@ -35,9 +36,12 @@ commits it, and `preview_*(buffer, ...)` shows an admin the **Fallout** of
 saving. The preview is not a reimplementation — it runs the real `apply_*()`
 inside a transaction and rolls it back, so there is never a second, drifting
 copy of a derivation. The cost of that choice is a rule the codebase holds
-everywhere: irreversible external side effects (mail, R2 deletion, any
-external API) are registered with `transaction.on_commit()` and never called
-inline, or a preview would really send the email and really delete the object.
+everywhere: irreversible external side effects (R2 deletion, any external
+API) are registered with `transaction.on_commit()` and never called inline,
+or a preview would really delete the object. Creating or resetting a
+`Person`'s credentials sends no mail and reaches no external service at
+all, so there's nothing to protect there — a rolled-back preview discards
+the generated temp password for free along with the row.
 
 Several design decisions that reject the "obvious" alternative are recorded as ADRs in [`docs/adr/`](docs/adr/) — read the relevant one before touching related behavior:
 
@@ -53,7 +57,8 @@ Several design decisions that reject the "obvious" alternative are recorded as A
 - [`0010`](docs/adr/0010-live-semester-is-greatest-published-at.md) — the Live Semester is simply the greatest `published_at`: no status enum, no singleton pointer row, no unpublish. Rollback is re-publishing an older Semester through the same code path.
 - [`0011`](docs/adr/0011-semester-deletion-is-a-hard-delete.md) — deleting a Semester is a real hard delete, cascading to its recordings' stored objects; a deliberate exception to the soft-delete convention, and the Live Semester is always refused.
 - [`0012`](docs/adr/0012-spa-migration-and-api-contract.md) — the portal is a React/TypeScript SPA over a same-origin JSON `/api/`, reversing the no-bundler decision but not the no-CDN or no-DRF ones.
-- [`0013`](docs/adr/0013-password-authentication.md) — sign-in is email and password over Django's stock machinery, reversing an earlier plan for passwordless emailed codes.
+- [`0013`](docs/adr/0013-password-authentication.md) — sign-in is email and password over Django's stock machinery, reversing an earlier plan for passwordless emailed codes. Narrowed by `0018` (below): the delivery mechanism changed, not the password-vs-passwordless call.
+- [`0018`](docs/adr/0018-admin-relayed-temp-passwords.md) — credentials are relayed by an admin as a one-time-revealed temp password, not emailed: the emailed invite/reset link and the self-serve forgot-password flow are retired, and a `manage.py reset_password` break-glass command covers the sole-locked-out-admin case.
 
 `0005` was later amended to permit an unattributed, admin-only aggregate count — the boundary it draws is about attribution, not arithmetic.
 
@@ -90,14 +95,10 @@ python manage.py migrate
 python manage.py runserver
 ```
 
-Local dev does not need a live Resend key. With `DJANGO_DEBUG=True`, outbound
-email defaults to Django's console backend, so inviting a member prints the
-message — set-password link included — to the runserver terminal, and the
-invite → set password → profile flow can be walked end to end offline. Set
-`DJANGO_EMAIL_BACKEND` to override that locally (`.env.example` has the
-Resend value commented out ready to uncomment). With `DJANGO_DEBUG=False` the
-Resend backend is pinned and `DJANGO_EMAIL_BACKEND` is ignored, so nothing
-can quietly divert a real member's invite in production.
+Local dev needs no third-party credential to onboard a member: creating a
+`Person` returns their temp password directly in the admin's own response,
+so the create → relay → change-password → profile flow can be walked end to
+end offline, identically in every environment.
 
 ## Tests
 

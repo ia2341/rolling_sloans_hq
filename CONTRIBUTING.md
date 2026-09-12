@@ -6,7 +6,7 @@ This repo is public — it's the codebase for a private, auth-gated band website
 
 1. **No real member data, ever** — names, emails, real setlists, real rehearsal dates/times, real recordings, real conflict submissions. This applies everywhere: seed/fixture files, migrations, code comments, commit messages, issue/PR descriptions, even in a "temporary" test commit you plan to fix later. If it identifies a real Rolling Sloans member or event, it doesn't go in the repo.
 2. **No real credentials, ever** — API keys, database URLs, the Django `SECRET_KEY`, tokens. These live only in Render environment variables (app runtime) and GitHub Actions encrypted secrets (the backup job) — never in code, never in `.env.example`, never in docs.
-3. **`.env.example` gets placeholder values only** (e.g. `RESEND_API_KEY=your-api-key-here`), never a real key with a few characters changed.
+3. **`.env.example` gets placeholder values only** (e.g. `AWS_SECRET_ACCESS_KEY=changeme-r2-secret-access-key`), never a real key with a few characters changed.
 4. **Local secrets go in `.env`**, which is already gitignored (see `.gitignore`) — it never leaves your machine.
 
 ## Test data
