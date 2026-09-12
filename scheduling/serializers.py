@@ -1205,7 +1205,9 @@ def _serialize_slot_option(option) -> dict:
     }
 
 
-def serialize_person(person, *, semester, is_self: bool, can_edit_roles: bool, membership) -> dict:
+def serialize_person(
+    person, *, semester, is_self: bool, can_edit_roles: bool, can_create_roles: bool, membership,
+) -> dict:
     """Return the `/api/members/<pk>/` `data` shape for `person` (issue #333), computed for exactly one of the three viewer states.
 
     Follows `docs/person-page-visibility.md`'s "absent, not null" contract
@@ -1248,6 +1250,13 @@ def serialize_person(person, *, semester, is_self: bool, can_edit_roles: bool, m
     `invite_status` is: it's a Deactivate-dialog dependency an admin needs
     on someone else's page, never on their own (self-deactivation is
     refused outright) and never for a plain teammate viewer.
+
+    `can_create_roles` (issue #505) reflects the viewer's `is_admin` status
+    alone, never `is_self` — unlike `can_edit_roles`, which also opens the
+    Roles card for a self, not-yet-admin viewer. `RoleDeclareApiView`, the
+    endpoint `AddNewRoleForm` posts and gets to, is admin-only, so a
+    non-admin self viewer must not be shown that control even though they
+    can still remove their own declared Roles via `PersonRolesApiView`.
     """
     has_membership = membership is not None and membership.pk is not None
     data = {
@@ -1255,6 +1264,7 @@ def serialize_person(person, *, semester, is_self: bool, can_edit_roles: bool, m
         'name': person.name,
         'is_self': is_self,
         'can_edit_roles': can_edit_roles,
+        'can_create_roles': can_create_roles,
         'has_membership': has_membership,
         'semester_name': semester.name if semester is not None else None,
         'roles': [_serialize_role(role) for role in services.declared_roles_for_person(person)],

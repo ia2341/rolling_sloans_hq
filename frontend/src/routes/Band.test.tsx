@@ -1110,4 +1110,127 @@ describe('Band roster editor', () => {
     })
     await screen.findByText('Roster saved successfully')
   })
+
+  it('a rejected (non-2xx) roster save closes the dialog, shows an error, and un-sticks the Save button', async () => {
+    const fetchSpy = vi.fn()
+    const sequence = [
+      { status: 200, body: { context: adminContext(), data: bandPayload() } },
+      {
+        status: 200,
+        body: { context: adminContext(), data: rosterEditPayload() },
+      },
+      {
+        status: 200,
+        body: {
+          context: adminContext(),
+          ok: true,
+          errors: {},
+          non_field_errors: [],
+          fallout: {
+            is_blocked: false,
+            block_message: '',
+            is_stale: false,
+            pending_adds: [],
+            pending_created: [],
+            pending_removals: [
+              { person_id: 1, name: 'Sam Rivera', email: 'sam@example.com' },
+            ],
+            loud: [],
+            quiet: [],
+          },
+          values: null,
+          data: null,
+        },
+      },
+    ]
+    for (const { status, body } of sequence) {
+      fetchSpy.mockResolvedValueOnce({
+        status,
+        ok: status >= 200 && status < 300,
+        json: () => Promise.resolve(body),
+      })
+    }
+    // The save call itself comes back 409 (e.g. the admin's Semester
+    // selection went stale) -- `apiFetch` rejects with `ApiError` rather
+    // than resolving, which is the case `confirmSave`'s `.catch()` exists
+    // to handle.
+    fetchSpy.mockResolvedValueOnce({
+      status: 409,
+      ok: false,
+      json: () =>
+        Promise.resolve({
+          context: adminContext(),
+          error: 'wrong_semester',
+        }),
+    })
+    // Reopening the Save popup after the failure runs a fresh preview
+    // against the still-intact Buffer.
+    fetchSpy.mockResolvedValueOnce({
+      status: 200,
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          context: adminContext(),
+          ok: true,
+          errors: {},
+          non_field_errors: [],
+          fallout: {
+            is_blocked: false,
+            block_message: '',
+            is_stale: false,
+            pending_adds: [],
+            pending_created: [],
+            pending_removals: [
+              { person_id: 1, name: 'Sam Rivera', email: 'sam@example.com' },
+            ],
+            loud: [],
+            quiet: [],
+          },
+          values: null,
+          data: null,
+        }),
+    })
+    vi.stubGlobal('fetch', fetchSpy)
+    const user = userEvent.setup()
+
+    renderShell(
+      <>
+        <Band />
+        <EditSessionSpy />
+      </>,
+      ['/members'],
+    )
+    await user.click(await screen.findByRole('button', { name: 'Edit roster' }))
+    await screen.findByText('Sam Rivera')
+    await user.click(
+      screen.getAllByRole('button', { name: 'Remove' })[0] as HTMLElement,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'toolbar save' }))
+    await waitFor(() =>
+      expect(screen.getByText('What changes')).toBeInTheDocument(),
+    )
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    // The dialog closes rather than staying stuck on "Saving...", and the
+    // failure is surfaced as a page-level error.
+    await waitFor(() =>
+      expect(screen.queryByText('What changes')).not.toBeInTheDocument(),
+    )
+    expect(
+      await screen.findByText(
+        'This save failed. Review the roster and try again.',
+      ),
+    ).toBeInTheDocument()
+
+    // Still in edit mode with the buffer intact -- Save is clickable again,
+    // not stuck disabled forever.
+    await user.click(screen.getByRole('button', { name: 'toolbar save' }))
+    await waitFor(() =>
+      expect(screen.getByText('What changes')).toBeInTheDocument(),
+    )
+    expect(
+      screen.getByRole('button', { name: 'Save changes' }),
+    ).not.toBeDisabled()
+  })
 })

@@ -832,6 +832,8 @@ class RoleDeclareApiView(AdminApiView, View):
         group = None
         group_id = payload.get('group_id')
         if group_id is not None:
+            if isinstance(group_id, bool) or not isinstance(group_id, int):
+                return JsonResponse({'context': self.build_context(request), 'error': 'invalid_group'}, status=400)
             try:
                 group = RoleGroup.objects.get(pk=group_id)
             except (RoleGroup.DoesNotExist, ValueError, TypeError):
@@ -971,7 +973,8 @@ class PersonApiView(ApiView, View):
         can_edit_roles = is_self or is_admin
         membership = self._get_or_build_membership(person, semester) if semester is not None else None
         data = serializers.serialize_person(
-            person, semester=semester, is_self=is_self, can_edit_roles=can_edit_roles, membership=membership,
+            person, semester=semester, is_self=is_self, can_edit_roles=can_edit_roles,
+            can_create_roles=is_admin, membership=membership,
         )
         return self.read_response(request, data)
 
@@ -1028,7 +1031,7 @@ class PersonRolesApiView(ApiView, View):
         membership = Membership.objects.filter(person=person, semester=semester).first() if semester is not None else None
         data = serializers.serialize_person(
             person, semester=semester, is_self=(person.pk == request.user.pk), can_edit_roles=True,
-            membership=membership,
+            can_create_roles=is_admin, membership=membership,
         )
         return self.write_response(request, ok=True, data=data)
 
@@ -1062,7 +1065,8 @@ class PersonAdminStatusApiView(AdminApiView, View):
         semester = services.get_viewing_semester(request)
         membership = Membership.objects.filter(person=target, semester=semester).first() if semester is not None else None
         data = serializers.serialize_person(
-            target, semester=semester, is_self=False, can_edit_roles=True, membership=membership,
+            target, semester=semester, is_self=False, can_edit_roles=True, can_create_roles=True,
+            membership=membership,
         )
         return self.write_response(request, ok=True, data=data)
 
@@ -1091,7 +1095,8 @@ class PersonDeactivationApiView(AdminApiView, View):
         semester = services.get_viewing_semester(request)
         membership = Membership.objects.filter(person=target, semester=semester).first() if semester is not None else None
         data = serializers.serialize_person(
-            target, semester=semester, is_self=False, can_edit_roles=True, membership=membership,
+            target, semester=semester, is_self=False, can_edit_roles=True, can_create_roles=True,
+            membership=membership,
         )
         return self.write_response(request, ok=True, data=data)
 
@@ -1111,7 +1116,8 @@ class PersonReactivationApiView(AdminApiView, View):
         semester = services.get_viewing_semester(request)
         membership = Membership.objects.filter(person=target, semester=semester).first() if semester is not None else None
         data = serializers.serialize_person(
-            target, semester=semester, is_self=False, can_edit_roles=True, membership=membership,
+            target, semester=semester, is_self=False, can_edit_roles=True, can_create_roles=True,
+            membership=membership,
         )
         return self.write_response(request, ok=True, data=data)
 
@@ -1147,7 +1153,8 @@ class PersonPasswordResetApiView(AdminApiView, View):
         semester = services.get_viewing_semester(request)
         membership = Membership.objects.filter(person=target, semester=semester).first() if semester is not None else None
         person_data = serializers.serialize_person(
-            target, semester=semester, is_self=False, can_edit_roles=True, membership=membership,
+            target, semester=semester, is_self=False, can_edit_roles=True, can_create_roles=True,
+            membership=membership,
         )
         return self.write_response(request, ok=True, data={'person': person_data, 'temp_password': temp_password})
 

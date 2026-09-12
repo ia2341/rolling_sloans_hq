@@ -134,11 +134,11 @@ class SerializePersonExactKeySetTests(TestCase):
         person = PersonFactory(name='Teammate Placeholder')
         membership = MembershipFactory(person=person, semester=semester)
 
-        data = serialize_person(person, semester=semester, is_self=False, can_edit_roles=False, membership=membership)
+        data = serialize_person(person, semester=semester, is_self=False, can_edit_roles=False, can_create_roles=False, membership=membership)
 
         self.assertEqual(
             set(data.keys()),
-            {'id', 'name', 'is_self', 'can_edit_roles', 'has_membership', 'semester_name', 'roles', 'songs'},
+            {'id', 'name', 'is_self', 'can_edit_roles', 'can_create_roles', 'has_membership', 'semester_name', 'roles', 'songs'},
         )
 
     def test_self_keys_add_email_available_roles_and_recordings(self):
@@ -147,12 +147,12 @@ class SerializePersonExactKeySetTests(TestCase):
         person = PersonFactory(name='Self Placeholder')
         membership = MembershipFactory(person=person, semester=semester)
 
-        data = serialize_person(person, semester=semester, is_self=True, can_edit_roles=True, membership=membership)
+        data = serialize_person(person, semester=semester, is_self=True, can_edit_roles=True, can_create_roles=False, membership=membership)
 
         self.assertEqual(
             set(data.keys()),
             {
-                'id', 'name', 'is_self', 'can_edit_roles', 'has_membership', 'semester_name',
+                'id', 'name', 'is_self', 'can_edit_roles', 'can_create_roles', 'has_membership', 'semester_name',
                 'roles', 'songs', 'email', 'available_roles', 'recordings',
             },
         )
@@ -163,18 +163,43 @@ class SerializePersonExactKeySetTests(TestCase):
         person = PersonFactory(name='Teammate Placeholder')
         membership = MembershipFactory(person=person, semester=semester)
 
-        data = serialize_person(person, semester=semester, is_self=False, can_edit_roles=True, membership=membership)
+        data = serialize_person(person, semester=semester, is_self=False, can_edit_roles=True, can_create_roles=False, membership=membership)
 
         self.assertEqual(
             set(data.keys()),
             {
-                'id', 'name', 'is_self', 'can_edit_roles', 'has_membership', 'semester_name',
+                'id', 'name', 'is_self', 'can_edit_roles', 'can_create_roles', 'has_membership', 'semester_name',
                 'roles', 'songs', 'available_roles', 'invite_status', 'is_admin', 'is_active',
                 'future_scheduling_footprint',
             },
         )
         self.assertNotIn('email', data)
         self.assertNotIn('recordings', data)
+
+    def test_can_create_roles_reflects_the_viewers_admin_flag_not_is_self(self):
+        """`can_create_roles` (issue #505) is true only for an admin viewer, regardless of `is_self` — unlike `can_edit_roles`.
+
+        `AddNewRoleForm` posts to `RoleDeclareApiView`, which is admin-only,
+        so a self, non-admin viewer must see `can_create_roles: False` even
+        though `can_edit_roles` is `True` for them (they can still remove
+        their own declared Roles, just not add a new one via that form).
+        """
+        semester = SemesterFactory()
+        person = PersonFactory(name='Self Non-admin Placeholder')
+        membership = MembershipFactory(person=person, semester=semester)
+
+        self_non_admin_data = serialize_person(
+            person, semester=semester, is_self=True, can_edit_roles=True, can_create_roles=False,
+            membership=membership,
+        )
+        teammate_data = serialize_person(
+            person, semester=semester, is_self=False, can_edit_roles=True, can_create_roles=True,
+            membership=membership,
+        )
+
+        self.assertTrue(self_non_admin_data['can_edit_roles'])
+        self.assertFalse(self_non_admin_data['can_create_roles'])
+        self.assertTrue(teammate_data['can_create_roles'])
 
     def test_is_admin_reflects_the_targets_actual_admin_flag(self):
         """`is_admin` (admin-viewing-a-teammate only) reads the target Person's real flag, not the viewer's (issue #467)."""
@@ -186,13 +211,13 @@ class SerializePersonExactKeySetTests(TestCase):
 
         self.assertTrue(
             serialize_person(
-                admin_target, semester=semester, is_self=False, can_edit_roles=True,
+                admin_target, semester=semester, is_self=False, can_edit_roles=True, can_create_roles=False,
                 membership=Membership.objects.get(person=admin_target),
             )['is_admin'],
         )
         self.assertFalse(
             serialize_person(
-                non_admin_target, semester=semester, is_self=False, can_edit_roles=True,
+                non_admin_target, semester=semester, is_self=False, can_edit_roles=True, can_create_roles=False,
                 membership=Membership.objects.get(person=non_admin_target),
             )['is_admin'],
         )
@@ -207,13 +232,13 @@ class SerializePersonExactKeySetTests(TestCase):
 
         self.assertTrue(
             serialize_person(
-                active_target, semester=semester, is_self=False, can_edit_roles=True,
+                active_target, semester=semester, is_self=False, can_edit_roles=True, can_create_roles=False,
                 membership=Membership.objects.get(person=active_target),
             )['is_active'],
         )
         self.assertFalse(
             serialize_person(
-                inactive_target, semester=semester, is_self=False, can_edit_roles=True,
+                inactive_target, semester=semester, is_self=False, can_edit_roles=True, can_create_roles=False,
                 membership=Membership.objects.get(person=inactive_target),
             )['is_active'],
         )
@@ -228,14 +253,14 @@ class SerializePersonExactKeySetTests(TestCase):
 
         self.assertEqual(
             serialize_person(
-                must_change, semester=semester, is_self=False, can_edit_roles=True,
+                must_change, semester=semester, is_self=False, can_edit_roles=True, can_create_roles=False,
                 membership=Membership.objects.get(person=must_change),
             )['invite_status'],
             'must_change_password',
         )
         self.assertEqual(
             serialize_person(
-                active, semester=semester, is_self=False, can_edit_roles=True,
+                active, semester=semester, is_self=False, can_edit_roles=True, can_create_roles=False,
                 membership=Membership.objects.get(person=active),
             )['invite_status'],
             'active',
@@ -248,7 +273,7 @@ class SerializePersonExactKeySetTests(TestCase):
         membership = MembershipFactory(person=person, semester=semester)
         PersonRoleFactory(person=person, role=RoleFactory(name='Bassist'))
 
-        data = serialize_person(person, semester=semester, is_self=True, can_edit_roles=True, membership=membership)
+        data = serialize_person(person, semester=semester, is_self=True, can_edit_roles=True, can_create_roles=False, membership=membership)
 
         self.assertEqual(set(data['roles'][0].keys()), {'id', 'name'})
         self.assertEqual(set(data['available_roles'][0].keys()), {'id', 'name'})
@@ -270,7 +295,7 @@ class SerializePersonExactKeySetTests(TestCase):
         RoleFactory(name='Lead Guitar', group=shared_group)
         RoleFactory(name='Rhythm Guitar', group=shared_group)
 
-        data = serialize_person(person, semester=semester, is_self=True, can_edit_roles=True, membership=membership)
+        data = serialize_person(person, semester=semester, is_self=True, can_edit_roles=True, can_create_roles=False, membership=membership)
 
         available_names = {role['name'] for role in data['available_roles']}
         self.assertIn('Lead Guitar', available_names)
@@ -285,7 +310,7 @@ class SerializePersonExactKeySetTests(TestCase):
         song = SongFactory(semester=semester)
         SongRoleAssignmentFactory(song=song, person=person)
 
-        data = serialize_person(person, semester=semester, is_self=True, can_edit_roles=True, membership=membership)
+        data = serialize_person(person, semester=semester, is_self=True, can_edit_roles=True, can_create_roles=False, membership=membership)
 
         self.assertEqual(set(data['songs'][0].keys()), {'song_id', 'song_title', 'artist', 'role_name'})
 
@@ -296,7 +321,7 @@ class SerializePersonExactKeySetTests(TestCase):
         unsaved_membership = Membership(person=person, semester=semester)
 
         data = serialize_person(
-            person, semester=semester, is_self=True, can_edit_roles=True, membership=unsaved_membership,
+            person, semester=semester, is_self=True, can_edit_roles=True, can_create_roles=False, membership=unsaved_membership,
         )
 
         self.assertFalse(data['has_membership'])
@@ -619,6 +644,33 @@ class PersonApiViewTests(TestCase):
         response = self.client.get(reverse('api-member-detail', args=[999999]))
 
         self.assertEqual(response.status_code, 404)
+
+    def test_can_create_roles_false_for_a_self_non_admin_viewer(self):
+        """A self, non-admin viewer's own page reports `can_create_roles: False` (issue #505).
+
+        `RoleDeclareApiView` (`/api/members/roster/roles/`) is admin-only,
+        so `AddNewRoleForm` must gate on this rather than `can_edit_roles`,
+        which is `True` here since a non-admin can edit their own Roles.
+        """
+        response = self.client.get(person_api_url(self.person))
+
+        data = response.json()['data']
+        self.assertTrue(data['can_edit_roles'])
+        self.assertFalse(data['can_create_roles'])
+
+    def test_can_create_roles_true_for_an_admin_viewing_a_teammate(self):
+        """An admin viewing a teammate's page reports `can_create_roles: True` (issue #505)."""
+        semester = SemesterFactory()
+        admin = PersonFactory(password=PASSWORD, is_admin=True)
+        teammate = PersonFactory(name='Teammate Placeholder')
+        MembershipFactory(person=teammate, semester=semester)
+        self.client.logout()
+        self.client.login(username=admin.email, password=PASSWORD)
+        select(self, semester)
+
+        response = self.client.get(person_api_url(teammate))
+
+        self.assertTrue(response.json()['data']['can_create_roles'])
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)

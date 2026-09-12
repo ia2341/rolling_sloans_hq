@@ -583,30 +583,44 @@ function ChangePasswordRow() {
   const [nonFieldError, setNonFieldError] = useState<string | null>(null)
   const [status, setStatus] = useState<'idle' | 'saving' | 'saved'>('idle')
 
-  /** Submits the three password fields and reports per-field errors and `non_field_errors`, or confirms success (issue #506). */
+  /**
+   * Submits the three password fields and reports per-field errors and
+   * `non_field_errors`, or confirms success (issue #506). A rejected
+   * request (network failure, non-2xx) is caught and treated the same as
+   * a resolved `ok: false` envelope — `status` returns to `'idle'` only on
+   * that failure path, never unconditionally in a `finally`, so a
+   * successful `'saved'` set by the try block is never clobbered back to
+   * `'idle'` afterwards.
+   */
   async function handleSubmit(event: FormEvent) {
     event.preventDefault()
     setStatus('saving')
     setNonFieldError(null)
-    const envelope = await apiFetch<WriteEnvelope>('/api/password/', {
-      method: 'POST',
-      body: JSON.stringify({
-        old_password: oldPassword,
-        new_password1: newPassword1,
-        new_password2: newPassword2,
-      }),
-    })
-    if (envelope.ok) {
-      setStatus('saved')
-      setErrors({})
-      setOldPassword('')
-      setNewPassword1('')
-      setNewPassword2('')
-      setIsOpen(false)
-    } else {
+    try {
+      const envelope = await apiFetch<WriteEnvelope>('/api/password/', {
+        method: 'POST',
+        body: JSON.stringify({
+          old_password: oldPassword,
+          new_password1: newPassword1,
+          new_password2: newPassword2,
+        }),
+      })
+      if (envelope.ok) {
+        setStatus('saved')
+        setErrors({})
+        setOldPassword('')
+        setNewPassword1('')
+        setNewPassword2('')
+        setIsOpen(false)
+      } else {
+        setStatus('idle')
+        setErrors(envelope.errors)
+        setNonFieldError(envelope.non_field_errors[0] ?? null)
+      }
+    } catch {
       setStatus('idle')
-      setErrors(envelope.errors)
-      setNonFieldError(envelope.non_field_errors[0] ?? null)
+      setErrors({})
+      setNonFieldError('Could not update your password.')
     }
   }
 
@@ -807,26 +821,31 @@ function RolesSection({
     stageAddition(role.id)
   }
 
-  /** Persists the staged Role set via `POST /api/members/<pk>/roles/`, surfacing success/failure via the shared status message (issue #506). */
+  /** Persists the staged Role set via `POST /api/members/<pk>/roles/`, surfacing success/failure via the shared status message (issue #506) — including a rejected request (network failure, non-2xx), which previously left `isSaving` stuck `true` forever with no error shown. */
   async function handleSave() {
     setIsSaving(true)
     setSaveStatus(null)
-    const envelope = await apiFetch<WriteEnvelope<PersonPayload>>(
-      `/api/members/${data.id}/roles/`,
-      {
-        method: 'POST',
-        body: JSON.stringify({ role_ids: [...stagedRoleIds] }),
-      },
-    )
-    setIsSaving(false)
-    if (envelope.ok && envelope.data !== null) {
-      onDataChange(envelope.data)
-      setSaveStatus({ kind: 'success', message: 'Roles saved successfully' })
-    } else {
-      setSaveStatus({
-        kind: 'error',
-        message: envelope.non_field_errors[0] ?? 'Could not save roles.',
-      })
+    try {
+      const envelope = await apiFetch<WriteEnvelope<PersonPayload>>(
+        `/api/members/${data.id}/roles/`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ role_ids: [...stagedRoleIds] }),
+        },
+      )
+      if (envelope.ok && envelope.data !== null) {
+        onDataChange(envelope.data)
+        setSaveStatus({ kind: 'success', message: 'Roles saved successfully' })
+      } else {
+        setSaveStatus({
+          kind: 'error',
+          message: envelope.non_field_errors[0] ?? 'Could not save roles.',
+        })
+      }
+    } catch {
+      setSaveStatus({ kind: 'error', message: 'Could not save roles.' })
+    } finally {
+      setIsSaving(false)
     }
   }
 
@@ -858,7 +877,9 @@ function RolesSection({
           </li>
         )}
       </ul>
-      <AddNewRoleForm onCreated={handleRoleCreated} />
+      {data.can_create_roles && (
+        <AddNewRoleForm onCreated={handleRoleCreated} />
+      )}
       <button
         type="button"
         onClick={() => void handleSave()}
@@ -882,12 +903,13 @@ function RolesSection({
  * The admin-only "+ Add new role" control (issue #506): declares a
  * brand-new Role catalog entry -- name plus a required RoleGroup -- via
  * `POST /api/members/roster/roles/`, the same get-or-create endpoint the
- * Song page's `AddRoleRequirementSheet` uses. Renders only inside
- * `RolesSection`, which already gates the whole card on
- * `data.can_edit_roles` (admin or self, per that section's docstring) --
- * this control itself has no further gate. Lazily fetches the RoleGroup
- * catalog (`GET` on the same endpoint) the first time it's opened, rather
- * than on every Person page load, since most visits never open it.
+ * Song page's `AddRoleRequirementSheet` uses. `RoleDeclareApiView` is
+ * `AdminApiView`-gated, so `RolesSection` renders this only when
+ * `data.can_create_roles` is true (issue #505) -- unlike `can_edit_roles`,
+ * which also opens for a non-admin editing their own Roles but would 403
+ * against this endpoint. Lazily fetches the RoleGroup catalog (`GET` on
+ * the same endpoint) the first time it's opened, rather than on every
+ * Person page load, since most visits never open it.
  */
 function AddNewRoleForm({
   onCreated,
@@ -903,20 +925,32 @@ function AddNewRoleForm({
     kind: 'success' | 'error'
     message: string
   } | null>(null)
+  // Kept separate from `status` (the submit result) since a failed groups
+  // fetch and a failed submit are different failures with different
+  // recoveries -- Retry re-fetches, submit's error dismisses instead.
+  const [groupsError, setGroupsError] = useState<string | null>(null)
+
+  /** Fetches the RoleGroup catalog, surfacing a retryable `groupsError` instead of leaving `groups` null forever on a rejection. */
+  function fetchGroups() {
+    setGroupsError(null)
+    void apiFetch<ReadEnvelope<RoleGroupsPayload>>('/api/members/roster/roles/')
+      .then((envelope) => {
+        setGroups(envelope.data.role_groups)
+        if (envelope.data.role_groups.length > 0) {
+          setGroupId(envelope.data.role_groups[0]?.id ?? null)
+        }
+      })
+      .catch(() => {
+        setGroupsError('Could not load role groups.')
+      })
+  }
 
   /** Opens the form, lazily fetching the RoleGroup catalog for the group dropdown on first open. */
   function open() {
     setIsOpen(true)
     setStatus(null)
     if (groups !== null) return
-    void apiFetch<ReadEnvelope<RoleGroupsPayload>>(
-      '/api/members/roster/roles/',
-    ).then((envelope) => {
-      setGroups(envelope.data.role_groups)
-      if (envelope.data.role_groups.length > 0) {
-        setGroupId(envelope.data.role_groups[0]?.id ?? null)
-      }
-    })
+    fetchGroups()
   }
 
   /** Submits the new Role's name and chosen group, then hands the result to `onCreated` and reports what happened. */
@@ -982,7 +1016,9 @@ function AddNewRoleForm({
       <label className="flex flex-col gap-1 text-sm">
         Role group
         {groups === null ? (
-          <span className="text-rs-muted">Loading groups…</span>
+          groupsError === null && (
+            <span className="text-rs-muted">Loading groups…</span>
+          )
         ) : (
           <select
             value={groupId ?? ''}
@@ -997,6 +1033,22 @@ function AddNewRoleForm({
           </select>
         )}
       </label>
+      {/* Kept outside the `<label>` above: `<button>` is a labelable element
+          per the HTML spec, so nesting it inside that label would fold
+          "Role group" into its accessible name and break a `Retry` role
+          query. */}
+      {groups === null && groupsError !== null && (
+        <span className="flex items-center gap-2 text-sm text-rs-danger">
+          {groupsError}
+          <button
+            type="button"
+            onClick={fetchGroups}
+            className="text-rs-accent underline"
+          >
+            Retry
+          </button>
+        </span>
+      )}
       <div className="flex gap-2">
         <button
           type="submit"

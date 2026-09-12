@@ -13,7 +13,7 @@ from scheduling.factories import (
     RoleGroupFactory,
     SemesterFactory,
 )
-from scheduling.models import Membership, MembershipRole, Role
+from scheduling.models import Membership, MembershipRole, Role, RoleGroup
 from scheduling.tests.api_test_helpers import (
     admin_client,
     member_client,
@@ -303,6 +303,26 @@ class DeclareRoleTests(TestCase):
     def test_declaring_with_an_unknown_group_id_is_a_400(self):
         """A `group_id` matching no RoleGroup is rejected with a 400, not a created Role."""
         response, envelope = _post_json(self, _declare_role_url(), {'name': 'Trombone', 'group_id': 999999})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(envelope['error'], 'invalid_group')
+        self.assertFalse(Role.objects.filter(name='Trombone').exists())
+
+    def test_declaring_with_a_string_group_id_is_a_400(self):
+        """A numeric-string `group_id` (e.g. "1") is rejected with a 400 rather than silently coerced to an int pk lookup."""
+        group = RoleGroupFactory(name='Choir')
+
+        response, envelope = _post_json(self, _declare_role_url(), {'name': 'Trombone', 'group_id': str(group.pk)})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(envelope['error'], 'invalid_group')
+        self.assertFalse(Role.objects.filter(name='Trombone').exists())
+
+    def test_declaring_with_a_boolean_group_id_is_a_400(self):
+        """A boolean `group_id` (a Python `int` subtype, so `True == 1`) is rejected with a 400, even though a RoleGroup with pk 1 exists (seeded by migration 0024)."""
+        self.assertTrue(RoleGroup.objects.filter(pk=1).exists())
+
+        response, envelope = _post_json(self, _declare_role_url(), {'name': 'Trombone', 'group_id': True})
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(envelope['error'], 'invalid_group')

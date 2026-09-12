@@ -25,6 +25,7 @@ function teammatePayload(overrides: Record<string, unknown> = {}) {
     name: 'Alex Kim',
     is_self: false,
     can_edit_roles: false,
+    can_create_roles: false,
     has_membership: true,
     semester_name: 'Spring 2026',
     roles: [{ id: 1, name: 'Drummer' }],
@@ -40,6 +41,7 @@ function selfPayload(overrides: Record<string, unknown> = {}) {
     name: 'Sam Rivera',
     is_self: true,
     can_edit_roles: true,
+    can_create_roles: false,
     has_membership: true,
     semester_name: 'Spring 2026',
     email: 'sam@example.com',
@@ -59,6 +61,7 @@ function adminViewingTeammatePayload(overrides: Record<string, unknown> = {}) {
   return {
     ...teammatePayload(),
     can_edit_roles: true,
+    can_create_roles: true,
     available_roles: [
       { id: 1, name: 'Drummer' },
       { id: 2, name: 'Singer' },
@@ -360,6 +363,83 @@ describe('Person', () => {
     ).toBeInTheDocument()
   })
 
+  it('surfaces a retryable error, instead of loading forever, when the RoleGroup catalog fetch rejects (issue #505)', async () => {
+    const roleGroupsFetch = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('network error'))
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            context: memberContext({
+              viewer: { ...memberContext().viewer, is_admin: true },
+            }),
+            data: { role_groups: [{ id: 9, name: 'Brass' }] },
+          }),
+      })
+    const fetchDispatcher = vi
+      .fn()
+      .mockImplementation((input: RequestInfo | URL) => {
+        const url = typeof input === 'string' ? input : input.toString()
+        if (url.includes('/api/members/roster/roles/')) {
+          return roleGroupsFetch()
+        }
+        if (url.includes('/api/members/2/')) {
+          return Promise.resolve({
+            status: 200,
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                context: memberContext({
+                  viewer: { ...memberContext().viewer, is_admin: true },
+                }),
+                data: adminViewingTeammatePayload(),
+              }),
+          })
+        }
+        throw new Error(`No mock handler registered for fetch(${url})`)
+      })
+    vi.stubGlobal('fetch', fetchDispatcher)
+
+    const user = (await import('@testing-library/user-event')).default.setup()
+    renderPerson('/members/2')
+
+    await user.click(
+      await screen.findByRole('button', { name: '+ Add new role' }),
+    )
+
+    expect(
+      await screen.findByText('Could not load role groups.'),
+    ).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Retry' }))
+
+    await screen.findByText('Brass')
+    expect(
+      screen.queryByText('Could not load role groups.'),
+    ).not.toBeInTheDocument()
+  })
+
+  it('does not render "+ Add new role" for a non-admin self viewer (issue #505)', async () => {
+    // `RoleDeclareApiView` (`/api/members/roster/roles/`) is admin-only,
+    // so a self, non-admin editor must not see this control even though
+    // `can_edit_roles` is true for them.
+    mockFetchByUrl({
+      '/api/members/1/': () => ({
+        status: 200,
+        body: { context: memberContext(), data: selfPayload() },
+      }),
+    })
+
+    renderPerson('/members/1')
+
+    await screen.findByRole('heading', { name: 'Sam Rivera' })
+    expect(
+      screen.queryByRole('button', { name: '+ Add new role' }),
+    ).not.toBeInTheDocument()
+  })
+
   it('does not render a "Deliberately absent" card, for any viewer state (issue #363)', async () => {
     mockFetchByUrl({
       '/api/members/2/': () => ({
@@ -400,6 +480,7 @@ describe('Person', () => {
             name: 'Sam Rivera',
             is_self: true,
             can_edit_roles: true,
+            can_create_roles: false,
             has_membership: false,
             semester_name: 'Spring 2026',
             email: 'sam@example.com',

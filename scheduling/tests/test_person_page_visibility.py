@@ -194,6 +194,8 @@ class PersonApiViewerStateTests(TestCase):
 
         self.assertFalse(teammate_data['can_edit_roles'])
         self.assertTrue(admin_data['can_edit_roles'])
+        self.assertFalse(teammate_data['can_create_roles'])
+        self.assertTrue(admin_data['can_create_roles'])
         self.assertNotIn('available_roles', teammate_data)
         self.assertIn('available_roles', admin_data)
         self.assertIn('invite_status', admin_data)
@@ -201,7 +203,7 @@ class PersonApiViewerStateTests(TestCase):
         self.assertIn('is_active', admin_data)
         self.assertIn('future_scheduling_footprint', admin_data)
         gated_keys = {
-            'can_edit_roles', 'available_roles', 'invite_status', 'is_admin', 'is_active',
+            'can_edit_roles', 'can_create_roles', 'available_roles', 'invite_status', 'is_admin', 'is_active',
             'future_scheduling_footprint',
         }
         self.assertEqual(
