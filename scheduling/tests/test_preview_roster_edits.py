@@ -232,3 +232,84 @@ class PreviewRosterEditsTests(TestCase):
         self.assertEqual(Person.objects.count(), person_count_before)
         self.assertFalse(Person.objects.filter(email='never-created@example.com').exists())
         self.assertEqual(len(mail.outbox), 0)
+
+
+class PreviewRosterEditsQueryCountTests(TestCase):
+    """Query-count regression coverage for issue #500: preview_roster_edits() must not scale with the Semester's Song count or the number of removed People."""
+
+    def _preview(self, buffer, semester, admin):
+        """Call preview_roster_edits() against `semester`/`admin` inside a transaction this test itself rolls back, per its docstring's requirement."""
+        with transaction.atomic():
+            fallout = preview_roster_edits(buffer, viewing_semester=semester, requesting_admin=admin)
+            transaction.set_rollback(True)
+        return fallout
+
+    def _buffer(self, semester, removed_person_ids=()):
+        """Build a RosterEditBuffer against `semester` removing the given People, with no other edits."""
+        return RosterEditBuffer(
+            semester_id=semester.pk,
+            semester_updated_at=semester.updated_at,
+            entries=[],
+            removed_person_ids=frozenset(removed_person_ids),
+            pending_invites=[],
+        )
+
+    def _semester_with_songs(self, song_count):
+        """Build a fresh Semester/admin pair with `song_count` Songs, each carrying one Role Requirement and a matching Assignment."""
+        semester = SemesterFactory()
+        admin = PersonFactory(is_admin=True)
+        for _ in range(song_count):
+            song = SongFactory(semester=semester)
+            role = RoleFactory()
+            SongRoleRequirementFactory(song=song, role=role, count=1)
+            SongRoleAssignmentFactory(song=song, role=role, person=PersonFactory())
+        return semester, admin
+
+    def _semester_with_removed_people(self, person_count, *, assignments_and_conflicts_per_person):
+        """Build a fresh Semester/admin pair rostering `person_count` People to remove, each carrying `assignments_and_conflicts_per_person` Role Assignments and Conflicts, and return (semester, admin, removed_person_ids)."""
+        semester = SemesterFactory()
+        admin = PersonFactory(is_admin=True)
+        person_ids = []
+        for i in range(person_count):
+            person = PersonFactory()
+            MembershipFactory(person=person, semester=semester)
+            for j in range(assignments_and_conflicts_per_person):
+                song = SongFactory(semester=semester)
+                SongRoleAssignmentFactory(song=song, person=person)
+                rehearsal = RehearsalFactory(semester=semester, date=date(2026, 10, 1 + i * 10 + j))
+                ConflictFactory(person=person, rehearsal=rehearsal)
+            person_ids.append(person.pk)
+        return semester, admin, person_ids
+
+    def test_query_count_does_not_grow_with_song_count(self):
+        """Previewing against a Semester with many Songs costs the same queries as one Song — the fill-status diff is two semester-wide aggregate queries, not two per Song."""
+        few_semester, few_admin = self._semester_with_songs(1)
+        many_semester, many_admin = self._semester_with_songs(8)
+
+        with self.assertNumQueries(12):
+            self._preview(self._buffer(few_semester), few_semester, few_admin)
+        with self.assertNumQueries(12):
+            self._preview(self._buffer(many_semester), many_semester, many_admin)
+
+    def test_query_count_does_not_grow_with_assignments_or_conflicts_per_removed_person(self):
+        """Removing People who each carry many Role Assignments/Conflicts costs the same queries as removing People with just one apiece — the before/after counts are batched aggregates over all removed People, not one query pair per removed Person's row count.
+
+        Holds the number of removed People fixed (3) and varies only how
+        many rows each one carries: `apply_roster_edits()`'s own per-person
+        purge loop (`_purge_person_from_semester()`) still costs one
+        queryset `.delete()` per removed Person regardless of row count, so
+        that part of the query budget is already flat and unaffected by
+        this fix — this test isolates the piece issue #500 changed, the
+        Preview's own before/after aggregate counts.
+        """
+        light_semester, light_admin, light_removed_ids = self._semester_with_removed_people(
+            3, assignments_and_conflicts_per_person=1,
+        )
+        heavy_semester, heavy_admin, heavy_removed_ids = self._semester_with_removed_people(
+            3, assignments_and_conflicts_per_person=5,
+        )
+
+        with self.assertNumQueries(36):
+            self._preview(self._buffer(light_semester, light_removed_ids), light_semester, light_admin)
+        with self.assertNumQueries(36):
+            self._preview(self._buffer(heavy_semester, heavy_removed_ids), heavy_semester, heavy_admin)

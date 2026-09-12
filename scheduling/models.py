@@ -338,19 +338,36 @@ def _reevaluate_role_mismatches_for(person_id, role_id):
     Keyed on person + role only (issue #377, ADR-0014): PersonRole carries
     no Semester dimension, so a declaration change can affect assignments
     and backups across every Semester, not just one.
+
+    Bulk-writes rather than looping `.save()` per row (issue #500): every
+    affected row here shares the same `(person_id, role_id)` pair, so the
+    mismatch value `SongRoleAssignment._compute_is_role_mismatch()`/
+    `Backup._compute_is_role_mismatch()` would derive is identical across
+    every one of them -- it's computed once (a single PersonRole existence
+    check) instead of once per row, and written with one `bulk_update()`
+    per model instead of N `.save()` calls, each of which used to cost 3
+    queries on its own. `bulk_update()` bypasses `save()`/signals, but the
+    only other thing either model's `save()` does -- the
+    no-matching-SongRoleRequirement guard -- can't newly trip here: this
+    function only ever runs off a PersonRole change, which neither creates
+    nor destroys a SongRoleRequirement, so every already-persisted row
+    fetched below still has the one it had when it was saved.
     """
-    affected_assignments = SongRoleAssignment.objects.filter(
-        person_id=person_id,
-        role_id=role_id,
-    )
-    for assignment in affected_assignments:
-        assignment.save()
-    affected_backups = Backup.objects.filter(
-        person_id=person_id,
-        role_id=role_id,
-    )
-    for backup in affected_backups:
-        backup.save()
+    is_mismatch = not PersonRole.objects.filter(person_id=person_id, role_id=role_id).exists()
+
+    affected_assignments = list(SongRoleAssignment.objects.filter(person_id=person_id, role_id=role_id))
+    changed_assignments = [a for a in affected_assignments if a.is_role_mismatch != is_mismatch]
+    for assignment in changed_assignments:
+        assignment.is_role_mismatch = is_mismatch
+    if changed_assignments:
+        SongRoleAssignment.objects.bulk_update(changed_assignments, ['is_role_mismatch'], batch_size=500)
+
+    affected_backups = list(Backup.objects.filter(person_id=person_id, role_id=role_id))
+    changed_backups = [b for b in affected_backups if b.is_role_mismatch != is_mismatch]
+    for backup in changed_backups:
+        backup.is_role_mismatch = is_mismatch
+    if changed_backups:
+        Backup.objects.bulk_update(changed_backups, ['is_role_mismatch'], batch_size=500)
 
 
 @receiver(post_save, sender=PersonRole)
