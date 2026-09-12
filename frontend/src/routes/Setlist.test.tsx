@@ -1131,21 +1131,7 @@ describe('Setlist inline cast popover (issue #499, ADR 0019)', () => {
     expect(fetchSpy.mock.calls.length).toBe(2) // no preview/save call was ever made
   })
 
-  it("clicking the popover footer's Save changes opens the confirm dialog, and confirming commits the edit", async () => {
-    const okWrite = (fallout: unknown) => ({
-      status: 200,
-      ok: true,
-      json: () =>
-        Promise.resolve({
-          context: adminContext(),
-          ok: true,
-          errors: {},
-          non_field_errors: [],
-          fallout,
-          values: null,
-          data: null,
-        }),
-    })
+  it("clicking the popover footer's Save changes commits the edit directly, with no intermediate confirm popup", async () => {
     const fetchSpy = vi
       .fn()
       .mockResolvedValueOnce({
@@ -1163,20 +1149,30 @@ describe('Setlist inline cast popover (issue #499, ADR 0019)', () => {
             data: popoverSongPayload(),
           }),
       })
-      .mockResolvedValueOnce(
-        okWrite({
-          is_blocked: false,
-          block_message: '',
-          is_stale: false,
-          pending_adds: [],
-          pending_removals: [
-            { role_name: 'Singer', person_name: 'Sam Rivera' },
-          ],
-          loud: [],
-          quiet: [],
-        }),
-      )
-      .mockResolvedValueOnce(okWrite(null))
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            context: adminContext(),
+            ok: true,
+            errors: {},
+            non_field_errors: [],
+            fallout: {
+              is_blocked: false,
+              block_message: '',
+              is_stale: false,
+              pending_adds: [],
+              pending_removals: [
+                { role_name: 'Singer', person_name: 'Sam Rivera' },
+              ],
+              loud: [],
+              quiet: [],
+            },
+            values: null,
+            data: null,
+          }),
+      })
       .mockResolvedValueOnce({
         status: 200,
         ok: true,
@@ -1203,16 +1199,14 @@ describe('Setlist inline cast popover (issue #499, ADR 0019)', () => {
     await user.click(screen.getByRole('button', { name: 'Save changes' }))
 
     await waitFor(() =>
-      expect(screen.getByText('Sam Rivera — Singer')).toBeInTheDocument(),
+      expect(fetchSpy.mock.calls[2]?.[0]).toBe('/api/songs/1/cast/save/'),
     )
-    expect(fetchSpy.mock.calls[2]?.[0]).toBe('/api/songs/1/cast/preview/')
-
-    await user.click(
-      screen.getAllByRole('button', { name: 'Save changes' }).at(-1)!,
-    )
-
+    // No second confirm popup, and no separate preview round trip -- Save commits and closes.
+    expect(fetchSpy.mock.calls.length).toBe(4)
     await waitFor(() =>
-      expect(fetchSpy.mock.calls[3]?.[0]).toBe('/api/songs/1/cast/save/'),
+      expect(
+        screen.queryByRole('heading', { name: 'Singer — Test Song' }),
+      ).not.toBeInTheDocument(),
     )
   })
 })
