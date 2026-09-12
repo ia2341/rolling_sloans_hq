@@ -543,9 +543,10 @@ function SetlistCards({
  *
  * `onOpenCastCell` (admin only, issue #499) makes each Role column's cell
  * its own click target for the inline cast popover; every other cell still
- * opens the Song. A column with nobody in it anywhere on the Setlist isn't
- * rendered at all (`visibleCastGridColumns()`, issue #436), so casting an
- * as-yet-empty Role still starts from the Song page.
+ * opens the Song. A column no Song has a Requirement for isn't rendered at
+ * all (`visibleCastGridColumns()`, issue #436, narrowed by #506 to key off
+ * the Requirement rather than whether anyone is cast) -- a Role nobody has
+ * declared a Requirement for anywhere still starts from the Song page.
  */
 function SetlistTable({
   roles,

@@ -53,9 +53,16 @@ function setlistPayload(overrides: Record<string, unknown> = {}) {
             role_id: 1,
             role_name: 'Singer',
             code: 'SIN',
+            has_requirement: true,
             performers: [{ id: 1, name: 'Sam Rivera', is_role_mismatch: true }],
           },
-          { role_id: 2, role_name: 'Drummer', code: 'DRU', performers: [] },
+          {
+            role_id: 2,
+            role_name: 'Drummer',
+            code: 'DRU',
+            has_requirement: false,
+            performers: [],
+          },
         ],
         recording_count: 0,
       },
@@ -99,11 +106,18 @@ describe('Setlist', () => {
       notes: '',
       updated_at: '2026-01-01T00:00:00+00:00',
       cast: [
-        { role_id: 1, role_name: 'Singer', code: 'SIN', performers: [] },
+        {
+          role_id: 1,
+          role_name: 'Singer',
+          code: 'SIN',
+          has_requirement: false,
+          performers: [],
+        },
         {
           role_id: 2,
           role_name: 'Drummer',
           code: 'DRU',
+          has_requirement: true,
           performers: [{ id: 2, name: 'Alex Chen', is_role_mismatch: false }],
         },
       ],
@@ -127,21 +141,41 @@ describe('Setlist', () => {
     expect(screen.getAllByText('-').length).toBeGreaterThan(0) // an unfilled cell renders "-" (issue #365 -- not the word "unfilled")
   })
 
-  it('hides a Role column entirely when every Song in the table has no performer for it', async () => {
+  it('hides a Role column entirely when no Song in the table has a Requirement for it', async () => {
     mockFetchOnce(200, { context: memberContext(), data: setlistPayload() })
 
     renderShell(<Setlist />, ['/setlist'])
 
     await screen.findByText('Test Song')
-    // The fixture's only Song has a Singer performer but no Drummer one, so
-    // the Drums column (which matched no performers anywhere in this table)
-    // must not render at all (issue #436).
+    // The fixture's only Song has a Requirement for Singer but not Drummer,
+    // so the Drums column (no Song needs it anywhere in this table) must
+    // not render at all (issue #436, narrowed by #506 to key off the
+    // Requirement rather than whether anyone is cast).
     expect(
       screen.getByRole('columnheader', { name: 'Singer' }),
     ).toBeInTheDocument()
     expect(
       screen.queryByRole('columnheader', { name: 'Drums' }),
     ).not.toBeInTheDocument()
+  })
+
+  it('keeps a Role column visible when a Song needs it but nobody has been cast yet (issue #506)', async () => {
+    const payload = setlistPayload()
+    payload.songs[0]!.cast[1] = {
+      role_id: 2,
+      role_name: 'Drummer',
+      code: 'DRU',
+      has_requirement: true,
+      performers: [],
+    }
+    mockFetchOnce(200, { context: memberContext(), data: payload })
+
+    renderShell(<Setlist />, ['/setlist'])
+
+    await screen.findByText('Test Song')
+    expect(
+      screen.getByRole('columnheader', { name: 'Drums' }),
+    ).toBeInTheDocument()
   })
 
   it('renders a Song with no notes with no notes row at all', async () => {
@@ -379,11 +413,18 @@ describe('Setlist role-mismatch display (issue #365)', () => {
       notes: '',
       updated_at: '2026-01-01T00:00:00+00:00',
       cast: [
-        { role_id: 1, role_name: 'Singer', code: 'SIN', performers: [] },
+        {
+          role_id: 1,
+          role_name: 'Singer',
+          code: 'SIN',
+          has_requirement: false,
+          performers: [],
+        },
         {
           role_id: 2,
           role_name: 'Drummer',
           code: 'DRU',
+          has_requirement: true,
           performers: [{ id: 2, name: 'Alex Chen', is_role_mismatch: false }],
         },
       ],
@@ -696,8 +737,20 @@ describe('Setlist edit mode', () => {
       notes: '',
       updated_at: '2026-01-01T00:00:00+00:00',
       cast: [
-        { role_id: 1, role_name: 'Singer', code: 'SIN', performers: [] },
-        { role_id: 2, role_name: 'Drummer', code: 'DRU', performers: [] },
+        {
+          role_id: 1,
+          role_name: 'Singer',
+          code: 'SIN',
+          has_requirement: false,
+          performers: [],
+        },
+        {
+          role_id: 2,
+          role_name: 'Drummer',
+          code: 'DRU',
+          has_requirement: false,
+          performers: [],
+        },
       ],
       recording_count: 0,
     })
@@ -953,6 +1006,9 @@ describe('Setlist inline cast popover (issue #499, ADR 0019)', () => {
     expect(
       screen.getByRole('button', { name: '+ Cast Singer' }),
     ).toBeInTheDocument()
+    // The Requirement's target vs. how many are actually cast (issue #506),
+    // so an admin can see this Role is understaffed without leaving the popover.
+    expect(screen.getByText('1 of 2 cast (understaffed)')).toBeInTheDocument()
   })
 
   it('staging a removal in the popover batches into one Save rather than writing per click', async () => {
@@ -996,5 +1052,167 @@ describe('Setlist inline cast popover (issue #499, ADR 0019)', () => {
     )
 
     expect(fetchSpy.mock.calls.length).toBe(callsBeforeRemove)
+  })
+
+  it('the popover has its own Save changes/Cancel footer (issue #506), Save disabled until something is staged', async () => {
+    mockFetchByUrl({
+      '/api/setlist/': () => ({
+        status: 200,
+        body: { context: adminContext(), data: setlistPayload() },
+      }),
+      '/api/songs/1/': () => ({
+        status: 200,
+        body: { context: adminContext(), data: popoverSongPayload() },
+      }),
+    })
+    const user = userEvent.setup()
+
+    renderShell(<Setlist />, ['/setlist'])
+    await screen.findByText('Test Song')
+    await user.click(
+      screen.getByRole('button', { name: 'Edit Singer on Test Song' }),
+    )
+    await waitFor(() =>
+      expect(
+        screen.getByRole('heading', { name: 'Singer — Test Song' }),
+      ).toBeInTheDocument(),
+    )
+
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled()
+
+    await user.click(
+      screen.getByRole('button', { name: 'Remove Sam Rivera from Singer' }),
+    )
+
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled()
+  })
+
+  it("clicking the popover footer's Cancel discards the staged edit and closes without saving", async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        json: () =>
+          Promise.resolve({ context: adminContext(), data: setlistPayload() }),
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            context: adminContext(),
+            data: popoverSongPayload(),
+          }),
+      })
+    vi.stubGlobal('fetch', fetchSpy)
+    const user = userEvent.setup()
+
+    renderShell(<Setlist />, ['/setlist'])
+    await screen.findByText('Test Song')
+    await user.click(
+      screen.getByRole('button', { name: 'Edit Singer on Test Song' }),
+    )
+    await waitFor(() =>
+      expect(
+        screen.getByRole('heading', { name: 'Singer — Test Song' }),
+      ).toBeInTheDocument(),
+    )
+    await user.click(
+      screen.getByRole('button', { name: 'Remove Sam Rivera from Singer' }),
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    expect(
+      screen.queryByRole('heading', { name: 'Singer — Test Song' }),
+    ).not.toBeInTheDocument()
+    expect(fetchSpy.mock.calls.length).toBe(2) // no preview/save call was ever made
+  })
+
+  it("clicking the popover footer's Save changes opens the confirm dialog, and confirming commits the edit", async () => {
+    const okWrite = (fallout: unknown) => ({
+      status: 200,
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          context: adminContext(),
+          ok: true,
+          errors: {},
+          non_field_errors: [],
+          fallout,
+          values: null,
+          data: null,
+        }),
+    })
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        json: () =>
+          Promise.resolve({ context: adminContext(), data: setlistPayload() }),
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            context: adminContext(),
+            data: popoverSongPayload(),
+          }),
+      })
+      .mockResolvedValueOnce(
+        okWrite({
+          is_blocked: false,
+          block_message: '',
+          is_stale: false,
+          pending_adds: [],
+          pending_removals: [
+            { role_name: 'Singer', person_name: 'Sam Rivera' },
+          ],
+          loud: [],
+          quiet: [],
+        }),
+      )
+      .mockResolvedValueOnce(okWrite(null))
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        json: () =>
+          Promise.resolve({ context: adminContext(), data: setlistPayload() }),
+      })
+    vi.stubGlobal('fetch', fetchSpy)
+    const user = userEvent.setup()
+
+    renderShell(<Setlist />, ['/setlist'])
+    await screen.findByText('Test Song')
+    await user.click(
+      screen.getByRole('button', { name: 'Edit Singer on Test Song' }),
+    )
+    await waitFor(() =>
+      expect(
+        screen.getByRole('heading', { name: 'Singer — Test Song' }),
+      ).toBeInTheDocument(),
+    )
+    await user.click(
+      screen.getByRole('button', { name: 'Remove Sam Rivera from Singer' }),
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() =>
+      expect(screen.getByText('Sam Rivera — Singer')).toBeInTheDocument(),
+    )
+    expect(fetchSpy.mock.calls[2]?.[0]).toBe('/api/songs/1/cast/preview/')
+
+    await user.click(
+      screen.getAllByRole('button', { name: 'Save changes' }).at(-1)!,
+    )
+
+    await waitFor(() =>
+      expect(fetchSpy.mock.calls[3]?.[0]).toBe('/api/songs/1/cast/save/'),
+    )
   })
 })

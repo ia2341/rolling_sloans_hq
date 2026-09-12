@@ -1525,11 +1525,12 @@ class CastPerformer:
 
 @dataclass(frozen=True)
 class CastRoleEntry:
-    """One Role's slot in a Song's cast line: its code and every Person who fills it — empty when nobody does (issue #330)."""
+    """One Role's slot in a Song's cast line: its code, every Person who fills it — empty when nobody does (issue #330) — and whether the Song carries a Requirement for it at all."""
 
     role: Role
     code: str
     performers: list[CastPerformer]
+    has_requirement: bool
 
 
 def cast_line_for(song, roles: list[Role], codes: dict[int, str]) -> list[CastRoleEntry]:
@@ -1540,7 +1541,9 @@ def cast_line_for(song, roles: list[Role], codes: dict[int, str]) -> list[CastRo
     with nobody assigned still gets an entry with an empty performer list,
     a rendered empty rather than an omission. `roles`/`codes` are computed
     once per payload by the caller (`active_roles_for`/`role_codes_for`),
-    never re-derived per Song.
+    never re-derived per Song. `has_requirement` (issue #436 revisited)
+    reuses `_requirement_pairs_for()` so the client can tell a Role nobody
+    needs on this Song from one that's needed but unfilled.
     """
     assignment_by_role_and_person = {
         (role_id, person_id): (pk, is_role_mismatch)
@@ -1559,8 +1562,14 @@ def cast_line_for(song, roles: list[Role], codes: dict[int, str]) -> list[CastRo
                     assignment_id=assignment_id,
                 ),
             )
+    requirement_pairs = _requirement_pairs_for([song.pk])
     return [
-        CastRoleEntry(role=role, code=codes[role.id], performers=performers_by_role_id.get(role.id, []))
+        CastRoleEntry(
+            role=role,
+            code=codes[role.id],
+            performers=performers_by_role_id.get(role.id, []),
+            has_requirement=(song.pk, role.id) in requirement_pairs,
+        )
         for role in roles
     ]
 
@@ -1588,13 +1597,15 @@ def cast_lines_for_semester(semester, roles: list[Role], codes: dict[int, str]) 
                 assignment_id=assignment.pk,
             ),
         )
-    song_ids = Song.objects.filter(semester=semester).values_list('id', flat=True)
+    song_ids = list(Song.objects.filter(semester=semester).values_list('id', flat=True))
+    requirement_pairs = _requirement_pairs_for(song_ids)
     return {
         song_id: [
             CastRoleEntry(
                 role=role,
                 code=codes[role.id],
                 performers=performers_by_song_and_role.get((song_id, role.id), []),
+                has_requirement=(song_id, role.id) in requirement_pairs,
             )
             for role in roles
         ]
@@ -3288,7 +3299,7 @@ def setup_checklist_for(semester) -> list[SetupChecklistItem]:
                 if casting_count > 0
                 else 'Nobody assigned to a song yet'
             ),
-            destination='/schedule/edit',
+            destination='/setlist',
             waiting_on='Needs the roster and the setlist',
         ),
     ]

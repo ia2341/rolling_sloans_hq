@@ -156,6 +156,25 @@ export function SetlistCastPopover({
         }}
         title={`${columnLabel} — ${songTitle}`}
         wide
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={discard}
+              className="rounded border border-rs-border px-3 py-1.5 text-sm font-medium hover:bg-rs-border/40"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => setSaveDialogOpen(true)}
+              disabled={changeCount === 0}
+              className="rounded bg-rs-accent px-3 py-1.5 text-sm font-medium text-rs-accent-fg disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Save changes
+            </button>
+          </>
+        }
       >
         {song === null ? (
           <p className="text-sm text-rs-muted">Loading…</p>

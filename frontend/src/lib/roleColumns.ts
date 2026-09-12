@@ -26,38 +26,53 @@ export interface CastGridColumn {
   roleIds: number[]
 }
 
-/** A `CastGridRow`-shaped value narrow enough for `columnHasPerformers`/`visibleCastGridColumns` to check without depending on `CastLine.tsx`'s full row type. */
+/** A `CastGridRow`-shaped value narrow enough for `columnHasRequirement`/`visibleCastGridColumns` to check without depending on `CastLine.tsx`'s full row type. */
 export interface CastGridColumnRow {
-  cast: { role_id: number; performers: unknown[] }[]
+  cast: {
+    role_id: number
+    performers: unknown[]
+    /** Absent on a Schedule `MatrixEntry` adaptation -- see `columnHasRequirement()`. */
+    has_requirement?: boolean
+  }[]
 }
 
-/** Whether at least one row's cast has a performer under any of `column`'s Role ids. */
-function columnHasPerformers(
+/**
+ * Whether at least one row needs `column` -- carries a Requirement for one
+ * of its Role ids (issue #506), or, when an entry carries no
+ * `has_requirement` at all (the Schedule's read-only matrix, which has no
+ * per-(Song, Role) Requirement data of its own), falls back to "has a
+ * performer" so that table's older column-hiding rule is unchanged.
+ */
+function columnHasRequirement(
   column: CastGridColumn,
   rows: CastGridColumnRow[],
 ): boolean {
   return rows.some((row) =>
-    row.cast.some(
-      (entry) =>
-        column.roleIds.includes(entry.role_id) && entry.performers.length > 0,
-    ),
+    row.cast.some((entry) => {
+      if (!column.roleIds.includes(entry.role_id)) return false
+      return entry.has_requirement ?? entry.performers.length > 0
+    }),
   )
 }
 
 /**
- * Narrows `columns` (from `buildCastGridColumns()`) to those with at least
- * one performer somewhere across `rows` — evaluated per table instance
- * (issue #436), since a Role can be globally declared yet unused by every
- * row a particular Setlist/Rehearsal table renders (e.g. a rehearsal whose
- * songs never call for Flute). A different table (another rehearsal, or
- * the Setlist) still gets its own pass over its own rows, so the same Role
- * can be hidden on one and shown on another.
+ * Narrows `columns` (from `buildCastGridColumns()`) to those at least one
+ * row actually needs, evaluated per table instance (issue #436), since a
+ * Role can be globally declared yet unused by every row a particular
+ * Setlist/Rehearsal table renders (e.g. a rehearsal whose songs never
+ * call for Flute). A different table (another rehearsal, or the Setlist)
+ * still gets its own pass over its own rows, so the same Role can be
+ * hidden on one and shown on another. On the Setlist (issue #506), "needs"
+ * means carries a `SongRoleRequirement` for one of the column's Roles --
+ * deliberately not "someone is cast in it", so a Role every song needs but
+ * nobody has been cast for yet still shows its column; only a Role no
+ * song needs at all disappears.
  */
 export function visibleCastGridColumns(
   columns: CastGridColumn[],
   rows: CastGridColumnRow[],
 ): CastGridColumn[] {
-  return columns.filter((column) => columnHasPerformers(column, rows))
+  return columns.filter((column) => columnHasRequirement(column, rows))
 }
 
 /**

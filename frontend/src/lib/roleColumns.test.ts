@@ -130,7 +130,61 @@ describe('visibleCastGridColumns', () => {
     },
   ]
 
-  it('drops a column with zero matches across all rows', () => {
+  it('drops a column with no Requirement across all rows', () => {
+    const columns = buildCastGridColumns(roles)
+    const rows: CastGridColumnRow[] = [
+      {
+        cast: [
+          { role_id: 1, performers: [{ id: 1 }], has_requirement: true },
+          { role_id: 2, performers: [], has_requirement: false },
+        ],
+      },
+    ]
+
+    const visible = visibleCastGridColumns(columns, rows)
+
+    expect(visible.map((column) => column.label)).toEqual(['Singer'])
+  })
+
+  it('keeps a column with a Requirement in only one row', () => {
+    const columns = buildCastGridColumns(roles)
+    const rows: CastGridColumnRow[] = [
+      {
+        cast: [
+          { role_id: 1, performers: [], has_requirement: false },
+          { role_id: 2, performers: [], has_requirement: false },
+        ],
+      },
+      {
+        cast: [
+          { role_id: 1, performers: [], has_requirement: false },
+          { role_id: 2, performers: [], has_requirement: true },
+        ],
+      },
+    ]
+
+    const visible = visibleCastGridColumns(columns, rows)
+
+    expect(visible.map((column) => column.label)).toEqual(['Drums'])
+  })
+
+  it('keeps a column with a Requirement but nobody cast yet (issue #506)', () => {
+    const columns = buildCastGridColumns(roles)
+    const rows: CastGridColumnRow[] = [
+      {
+        cast: [
+          { role_id: 1, performers: [], has_requirement: false },
+          { role_id: 2, performers: [], has_requirement: true },
+        ],
+      },
+    ]
+
+    const visible = visibleCastGridColumns(columns, rows)
+
+    expect(visible.map((column) => column.label)).toEqual(['Drums'])
+  })
+
+  it('falls back to "has a performer" when an entry carries no has_requirement at all (the Schedule matrix)', () => {
     const columns = buildCastGridColumns(roles)
     const rows: CastGridColumnRow[] = [
       {
@@ -146,35 +200,13 @@ describe('visibleCastGridColumns', () => {
     expect(visible.map((column) => column.label)).toEqual(['Singer'])
   })
 
-  it('keeps a column with a match in only one row', () => {
-    const columns = buildCastGridColumns(roles)
-    const rows: CastGridColumnRow[] = [
-      {
-        cast: [
-          { role_id: 1, performers: [] },
-          { role_id: 2, performers: [] },
-        ],
-      },
-      {
-        cast: [
-          { role_id: 1, performers: [] },
-          { role_id: 2, performers: [{ id: 1 }] },
-        ],
-      },
-    ]
-
-    const visible = visibleCastGridColumns(columns, rows)
-
-    expect(visible.map((column) => column.label)).toEqual(['Drums'])
-  })
-
   it('never mutates the input column list, so the same columns can still be evaluated against another table', () => {
     const columns = buildCastGridColumns(roles)
     const emptyRows: CastGridColumnRow[] = [
-      { cast: [{ role_id: 1, performers: [] }] },
+      { cast: [{ role_id: 1, performers: [], has_requirement: false }] },
     ]
     const filledRows: CastGridColumnRow[] = [
-      { cast: [{ role_id: 1, performers: [{ id: 1 }] }] },
+      { cast: [{ role_id: 1, performers: [], has_requirement: true }] },
     ]
 
     expect(visibleCastGridColumns(columns, emptyRows)).toEqual([])
