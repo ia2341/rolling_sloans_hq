@@ -7,6 +7,8 @@ export interface AccordionItem {
   /** The collapsed summary line, always visible. */
   summary: ReactNode
   content: ReactNode
+  /** Optional controls rendered beside the summary, outside the Trigger so they don't nest inside its button. */
+  actions?: ReactNode
 }
 
 interface AccordionProps {
@@ -48,8 +50,8 @@ export function Accordion({
           value={item.key}
           className="border-b border-rs-border"
         >
-          <RadixAccordion.Header>
-            <RadixAccordion.Trigger className="group flex w-full items-center justify-between gap-2 py-3 text-left">
+          <RadixAccordion.Header className="flex items-center gap-2">
+            <RadixAccordion.Trigger className="group flex flex-1 items-center justify-between gap-2 py-3 text-left">
               <span className="flex-1">{item.summary}</span>
               <ChevronDown
                 size={16}
@@ -57,6 +59,7 @@ export function Accordion({
                 className="shrink-0 transition-transform group-data-[state=open]:rotate-180"
               />
             </RadixAccordion.Trigger>
+            {item.actions}
           </RadixAccordion.Header>
           <RadixAccordion.Content className="pb-3">
             {item.content}
