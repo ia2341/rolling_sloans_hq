@@ -158,13 +158,17 @@ export interface FutureSchedulingFootprint {
  * present only for an admin viewing a teammate — never for `is_self` (a
  * session implies `'accepted'`, an admin can't act on their own row, and
  * self-deactivation is refused outright) and never for a plain teammate
- * viewer.
+ * viewer. `can_create_roles` (issue #505) is `true` only for an admin
+ * viewer, unlike `can_edit_roles` — which is also `true` for a non-admin
+ * editing their own Roles — since the "+ Add role" form posts to the
+ * admin-only `RoleDeclareApiView`.
  */
 export interface PersonPayload {
   id: number
   name: string
   is_self: boolean
   can_edit_roles: boolean
+  can_create_roles: boolean
   has_membership: boolean
   semester_name: string | null
   roles: MemberRole[]
@@ -321,6 +325,17 @@ export interface RoleDeclaration {
   role: MemberRole
   created: boolean
   reactivated: boolean
+}
+
+/** One RoleGroup option, as offered by a new-Role picker's group dropdown (issue #506). */
+export interface RoleGroupOption {
+  id: number
+  name: string
+}
+
+/** `data` shape of `GET /api/members/roster/roles/` — every RoleGroup, for the Person page's "+ Add new role" group picker (issue #506). */
+export interface RoleGroupsPayload {
+  role_groups: RoleGroupOption[]
 }
 
 /** Success body of `POST /api/members/recordings/presign/` (`data` of the read envelope it wears — see #307's envelope boundary rule). */

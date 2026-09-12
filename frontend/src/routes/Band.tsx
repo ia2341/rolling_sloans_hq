@@ -13,6 +13,7 @@ import type { PreviewResult } from '../api/previewTypes'
 import type { ReadEnvelope } from '../api/types'
 import { PageHead } from '../components/ui/PageHead'
 import { SaveChangesDialog } from '../components/ui/SaveChangesDialog'
+import { SaveStatusMessage } from '../components/ui/SaveStatusMessage'
 import {
   buildRosterFilterBuckets,
   memberMatchesRosterFilter,
@@ -67,6 +68,10 @@ export function Band() {
   const [addSheetOpen, setAddSheetOpen] = useState(false)
   const [saveDialogOpen, setSaveDialogOpen] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [saveSuccessMessage, setSaveSuccessMessage] = useState<string | null>(
+    null,
+  )
+  const [isSaving, setIsSaving] = useState(false)
   const [revealedTempPasswords, setRevealedTempPasswords] = useState<
     RosterSaveValues['temp_passwords']
   >([])
@@ -132,6 +137,7 @@ export function Band() {
     setRows([])
     setRowErrors({})
     setSaveError(null)
+    setSaveSuccessMessage(null)
   }, [])
 
   const requestSave = useCallback(() => setSaveDialogOpen(true), [])
@@ -189,6 +195,14 @@ export function Band() {
     })
   }, [rows, viewingSemester])
 
+  /**
+   * Confirm handler for the roster editor's Save Changes dialog. Always
+   * resets `isSaving` in a `finally`, since `apiFetch` rejects on any
+   * non-2xx response (including the 409 a stale Semester selection can
+   * produce) and on a network failure -- without that, a rejected request
+   * would leave `isSaving` stuck `true` forever and the dialog's confirm
+   * button permanently disabled with no way to retry short of a reload.
+   */
   const confirmSave = useCallback(() => {
     if (viewingSemester === null) return
     const body = buildBufferWire(
@@ -196,36 +210,52 @@ export function Band() {
       viewingSemester.updated_at,
       rows,
     )
+    setIsSaving(true)
+    setSaveSuccessMessage(null)
     void apiFetch<RosterWriteEnvelope>('/api/members/roster/save/', {
       method: 'POST',
       body: JSON.stringify(body),
-    }).then((envelope) => {
-      if (!envelope.ok) {
-        // A rejected save (e.g. a stale Semester) means the successful
-        // preview the dialog is still showing no longer reflects what the
-        // server will do -- close it rather than leaving "Save changes"
-        // enabled over stale Fallout, and surface the rejection in the
-        // grid itself so a re-opened Save popup runs a fresh preview.
-        setSaveDialogOpen(false)
-        setSaveError(
-          envelope.non_field_errors.length > 0
-            ? envelope.non_field_errors.join(' ')
-            : 'This save was rejected. Review the roster and try again.',
-        )
-        setRowErrors(envelope.errors)
-        return
-      }
-      setSaveError(null)
-      setSaveDialogOpen(false)
-      setIsEditing(false)
-      setRows([])
-      setRowErrors({})
-      const values = envelope.values as RosterSaveValues | null
-      if (values !== null && values.temp_passwords.length > 0) {
-        setRevealedTempPasswords(values.temp_passwords)
-      }
-      load()
     })
+      .then((envelope) => {
+        if (!envelope.ok) {
+          // A rejected save (e.g. a stale Semester) means the successful
+          // preview the dialog is still showing no longer reflects what the
+          // server will do -- close it rather than leaving "Save changes"
+          // enabled over stale Fallout, and surface the rejection in the
+          // grid itself so a re-opened Save popup runs a fresh preview.
+          setSaveDialogOpen(false)
+          setSaveError(
+            envelope.non_field_errors.length > 0
+              ? envelope.non_field_errors.join(' ')
+              : 'This save was rejected. Review the roster and try again.',
+          )
+          setRowErrors(envelope.errors)
+          return
+        }
+        setSaveError(null)
+        setSaveDialogOpen(false)
+        setIsEditing(false)
+        setRows([])
+        setRowErrors({})
+        setSaveSuccessMessage('Roster saved successfully')
+        const values = envelope.values as RosterSaveValues | null
+        if (values !== null && values.temp_passwords.length > 0) {
+          setRevealedTempPasswords(values.temp_passwords)
+        }
+        load()
+      })
+      .catch(() => {
+        // A thrown request (a non-2xx `apiFetch` never resolves to, or a
+        // network failure) gets the same treatment as a rejected-but-`ok:
+        // false` envelope above: close the stale preview dialog and
+        // surface a generic failure, since there's no envelope here to
+        // read a server-provided message from.
+        setSaveDialogOpen(false)
+        setSaveError('This save failed. Review the roster and try again.')
+      })
+      .finally(() => {
+        setIsSaving(false)
+      })
   }, [rows, viewingSemester, load])
 
   const buckets = useMemo(
@@ -311,12 +341,18 @@ export function Band() {
           </p>
         )}
       {isEditing && saveError !== null && (
-        <p
-          role="alert"
-          className="mb-3 rounded border border-rs-danger/40 bg-rs-danger/5 px-3 py-2 text-sm text-rs-danger"
-        >
-          {saveError}
-        </p>
+        <SaveStatusMessage
+          kind="error"
+          message={saveError}
+          onDismiss={() => setSaveError(null)}
+        />
+      )}
+      {!isEditing && saveSuccessMessage !== null && (
+        <SaveStatusMessage
+          kind="success"
+          message={saveSuccessMessage}
+          onDismiss={() => setSaveSuccessMessage(null)}
+        />
       )}
       {isEditing ? (
         <RosterEditGrid
@@ -359,6 +395,7 @@ export function Band() {
           title={`Save ${changeCount} change${changeCount === 1 ? '' : 's'} to ${viewingSemester.name}?`}
           preview={previewRoster}
           onConfirm={confirmSave}
+          isSaving={isSaving}
         />
       )}
 

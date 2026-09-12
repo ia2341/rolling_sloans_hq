@@ -3987,15 +3987,16 @@ def default_role_group_for(name: str) -> RoleGroup:
     return RoleGroup.objects.get(is_catch_all=True)
 
 
-def create_or_reactivate_role(name: str) -> RoleCreationResult:
+def create_or_reactivate_role(name: str, *, group: RoleGroup | None = None) -> RoleCreationResult:
     """Get-or-create a Role by name, case-insensitively, and commit immediately (issue #225).
 
     Backs the inline "declare Trombone right now" control on the Roster
-    editor. Commits outside any Pending Buffer — discarding a batch of
-    Roster edits must not un-invent a Role a row is already ticking. It
-    writes with no `transaction.atomic()` wrapper and no `on_commit()`
-    deferral, so — as long as no future caller nests this call inside the
-    Roster batch's own `apply_roster_edits()` transaction — it commits in
+    editor and the Person page's "+ Add new role" control (issue #506).
+    Commits outside any Pending Buffer — discarding a batch of Roster
+    edits must not un-invent a Role a row is already ticking. It writes
+    with no `transaction.atomic()` wrapper and no `on_commit()` deferral,
+    so — as long as no future caller nests this call inside the Roster
+    batch's own `apply_roster_edits()` transaction — it commits in
     Django's default autocommit mode, independent of that batch's later
     success or failure.
 
@@ -4003,8 +4004,15 @@ def create_or_reactivate_role(name: str) -> RoleCreationResult:
     (`created=False`) rather than creating a near-duplicate that differs
     only in capitalisation. If that match is retired (`is_active=False`),
     it is flipped back to active (`reactivated=True`) — the soft-delete
-    convention's whole point (per Role's docstring). There is no retire
-    path here: retiring a Role stays a deliberate act in the Django admin.
+    convention's whole point (per Role's docstring) — and its `group` is
+    left untouched, since reactivating an existing Role is not a chance to
+    reclassify it. There is no retire path here: retiring a Role stays a
+    deliberate act in the Django admin.
+
+    `group` only applies on the create path (issue #506): an admin
+    choosing a RoleGroup for a brand-new Role from the Person page's
+    picker. Left `None` (every pre-#506 caller), a new Role falls back to
+    `default_role_group_for()`'s keyword classification, unchanged.
     """
     name = name.strip()
     existing = Role.objects.filter(name__iexact=name).first()
@@ -4014,8 +4022,18 @@ def create_or_reactivate_role(name: str) -> RoleCreationResult:
             existing.is_active = True
             existing.save(update_fields=['is_active'])
         return RoleCreationResult(role=existing, created=False, reactivated=reactivated)
-    role = Role.objects.create(name=name, group=default_role_group_for(name))
+    role = Role.objects.create(name=name, group=group or default_role_group_for(name))
     return RoleCreationResult(role=role, created=True, reactivated=False)
+
+
+def role_groups() -> list[RoleGroup]:
+    """Return every RoleGroup in display order (issue #506), for a new-Role picker's group dropdown.
+
+    RoleGroup has no soft-delete flag of its own (see its docstring) —
+    every row is a live candidate, so this is an unfiltered list rather
+    than an `is_active`-style query.
+    """
+    return list(RoleGroup.objects.all())
 
 
 def _prior_semester(semester: Semester) -> Semester | None:

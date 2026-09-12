@@ -7,6 +7,7 @@ from identity.factories import PersonFactory
 from scheduling.factories import (
     MembershipFactory,
     RoleFactory,
+    RoleGroupFactory,
     SemesterFactory,
 )
 from scheduling.models import Membership, PersonRole, Role, RoleGroup
@@ -14,6 +15,7 @@ from scheduling.services import (
     RosterImportProposal,
     create_or_reactivate_role,
     import_roster_from_semester,
+    role_groups,
     unrostered_people_for,
 )
 
@@ -68,6 +70,27 @@ class CreateOrReactivateRoleTests(TestCase):
 
         self.assertEqual(result.role.group.key, 'guitars')
 
+    def test_explicit_group_wins_over_keyword_classification_on_create(self):
+        """An explicit `group=` on the create path (issue #506) is used as-is, even against a name the keyword classifier would place elsewhere."""
+        chosen_group = RoleGroupFactory(name='Choir')
+
+        result = create_or_reactivate_role('Lead Guitar', group=chosen_group)
+
+        self.assertTrue(result.created)
+        self.assertEqual(result.role.group_id, chosen_group.pk)
+
+    def test_reactivating_an_existing_role_ignores_a_passed_group(self):
+        """Reactivating a retired Role (issue #506) never changes its existing group, even when a caller passes one."""
+        original_group = RoleGroupFactory(name='Original Group')
+        other_group = RoleGroupFactory(name='Other Group')
+        retired = RoleFactory(name='Trombone', is_active=False, group=original_group)
+
+        result = create_or_reactivate_role('Trombone', group=other_group)
+
+        self.assertTrue(result.reactivated)
+        self.assertEqual(result.role.pk, retired.pk)
+        self.assertEqual(result.role.group_id, original_group.pk)
+
 
 class CreateOrReactivateRoleCommitsIndependentlyTests(TransactionTestCase):
     # Restores the seeded RoleGroup catalog (issue #457) after this test's
@@ -97,6 +120,17 @@ class CreateOrReactivateRoleCommitsIndependentlyTests(TransactionTestCase):
             pass
 
         self.assertTrue(Role.objects.filter(pk=result.role.pk).exists())
+
+
+class RoleGroupsTests(TestCase):
+    def test_returns_every_role_group(self):
+        """`role_groups()` (issue #506) lists every RoleGroup, for a new-Role picker's group dropdown -- including, but not limited to, ones this test creates (the seeded catalog from migration #457 is already present)."""
+        one = RoleGroupFactory(name='Percussion Placeholder')
+        two = RoleGroupFactory(name='Brass Placeholder')
+
+        result = role_groups()
+
+        self.assertTrue({one.pk, two.pk}.issubset({group.pk for group in result}))
 
 
 class ImportRosterFromSemesterTests(TestCase):

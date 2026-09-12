@@ -25,6 +25,7 @@ function teammatePayload(overrides: Record<string, unknown> = {}) {
     name: 'Alex Kim',
     is_self: false,
     can_edit_roles: false,
+    can_create_roles: false,
     has_membership: true,
     semester_name: 'Spring 2026',
     roles: [{ id: 1, name: 'Drummer' }],
@@ -40,6 +41,7 @@ function selfPayload(overrides: Record<string, unknown> = {}) {
     name: 'Sam Rivera',
     is_self: true,
     can_edit_roles: true,
+    can_create_roles: false,
     has_membership: true,
     semester_name: 'Spring 2026',
     email: 'sam@example.com',
@@ -59,6 +61,7 @@ function adminViewingTeammatePayload(overrides: Record<string, unknown> = {}) {
   return {
     ...teammatePayload(),
     can_edit_roles: true,
+    can_create_roles: true,
     available_roles: [
       { id: 1, name: 'Drummer' },
       { id: 2, name: 'Singer' },
@@ -211,6 +214,232 @@ describe('Person', () => {
     await waitFor(() => expect(roleFetch).toHaveBeenCalledTimes(1))
   })
 
+  it('shows "Saving…" on the Save roles button while in flight, then a success message (issue #506)', async () => {
+    let resolveSave: (value: unknown) => void = () => {}
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((input: RequestInfo | URL) => {
+        const url = typeof input === 'string' ? input : input.toString()
+        if (url.includes('/api/members/1/roles/')) {
+          return new Promise((resolve) => {
+            resolveSave = resolve
+          })
+        }
+        return Promise.resolve({
+          status: 200,
+          ok: true,
+          json: () =>
+            Promise.resolve({ context: memberContext(), data: selfPayload() }),
+        })
+      }),
+    )
+
+    const user = (await import('@testing-library/user-event')).default.setup()
+    renderPerson('/members/1')
+
+    await user.click(await screen.findByRole('button', { name: 'Save roles' }))
+
+    const savingButton = await screen.findByRole('button', { name: 'Saving…' })
+    expect(savingButton).toBeDisabled()
+
+    resolveSave({
+      status: 200,
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          context: memberContext(),
+          ok: true,
+          errors: {},
+          non_field_errors: [],
+          fallout: null,
+          values: null,
+          data: selfPayload(),
+        }),
+    })
+
+    expect(
+      await screen.findByText('Roles saved successfully'),
+    ).toBeInTheDocument()
+  })
+
+  it('shows a failure message from non_field_errors when Save roles is rejected (issue #506)', async () => {
+    mockFetchByUrl({
+      '/api/members/1/roles/': () => ({
+        status: 200,
+        body: {
+          context: memberContext(),
+          ok: false,
+          errors: {},
+          non_field_errors: ['That Role set could not be saved.'],
+          fallout: null,
+          values: null,
+          data: null,
+        },
+      }),
+      '/api/members/1/': () => ({
+        status: 200,
+        body: { context: memberContext(), data: selfPayload() },
+      }),
+    })
+
+    const user = (await import('@testing-library/user-event')).default.setup()
+    renderPerson('/members/1')
+
+    await user.click(await screen.findByRole('button', { name: 'Save roles' }))
+
+    expect(
+      await screen.findByText('That Role set could not be saved.'),
+    ).toBeInTheDocument()
+  })
+
+  it('lets an admin declare a brand-new Role from "+ Add new role" and immediately stage it (issue #506)', async () => {
+    const roleGroupsAndDeclareFetch = vi
+      .fn()
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            context: memberContext({
+              viewer: { ...memberContext().viewer, is_admin: true },
+            }),
+            data: { role_groups: [{ id: 9, name: 'Brass' }] },
+          }),
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            context: memberContext({
+              viewer: { ...memberContext().viewer, is_admin: true },
+            }),
+            data: {
+              role: { id: 42, name: 'Trombone' },
+              created: true,
+              reactivated: false,
+            },
+          }),
+      })
+    const fetchDispatcher = vi
+      .fn()
+      .mockImplementation((input: RequestInfo | URL) => {
+        const url = typeof input === 'string' ? input : input.toString()
+        if (url.includes('/api/members/roster/roles/')) {
+          return roleGroupsAndDeclareFetch()
+        }
+        if (url.includes('/api/members/2/')) {
+          return Promise.resolve({
+            status: 200,
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                context: memberContext({
+                  viewer: { ...memberContext().viewer, is_admin: true },
+                }),
+                data: adminViewingTeammatePayload(),
+              }),
+          })
+        }
+        throw new Error(`No mock handler registered for fetch(${url})`)
+      })
+    vi.stubGlobal('fetch', fetchDispatcher)
+
+    const user = (await import('@testing-library/user-event')).default.setup()
+    renderPerson('/members/2')
+
+    await user.click(
+      await screen.findByRole('button', { name: '+ Add new role' }),
+    )
+    await screen.findByText('Brass')
+    await user.type(screen.getByLabelText('Role name'), 'Trombone')
+    await user.click(screen.getByRole('button', { name: 'Add role' }))
+
+    expect(
+      await screen.findByText('Trombone created and added.'),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Remove Trombone' }),
+    ).toBeInTheDocument()
+  })
+
+  it('surfaces a retryable error, instead of loading forever, when the RoleGroup catalog fetch rejects (issue #505)', async () => {
+    const roleGroupsFetch = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('network error'))
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            context: memberContext({
+              viewer: { ...memberContext().viewer, is_admin: true },
+            }),
+            data: { role_groups: [{ id: 9, name: 'Brass' }] },
+          }),
+      })
+    const fetchDispatcher = vi
+      .fn()
+      .mockImplementation((input: RequestInfo | URL) => {
+        const url = typeof input === 'string' ? input : input.toString()
+        if (url.includes('/api/members/roster/roles/')) {
+          return roleGroupsFetch()
+        }
+        if (url.includes('/api/members/2/')) {
+          return Promise.resolve({
+            status: 200,
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                context: memberContext({
+                  viewer: { ...memberContext().viewer, is_admin: true },
+                }),
+                data: adminViewingTeammatePayload(),
+              }),
+          })
+        }
+        throw new Error(`No mock handler registered for fetch(${url})`)
+      })
+    vi.stubGlobal('fetch', fetchDispatcher)
+
+    const user = (await import('@testing-library/user-event')).default.setup()
+    renderPerson('/members/2')
+
+    await user.click(
+      await screen.findByRole('button', { name: '+ Add new role' }),
+    )
+
+    expect(
+      await screen.findByText('Could not load role groups.'),
+    ).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Retry' }))
+
+    await screen.findByText('Brass')
+    expect(
+      screen.queryByText('Could not load role groups.'),
+    ).not.toBeInTheDocument()
+  })
+
+  it('does not render "+ Add new role" for a non-admin self viewer (issue #505)', async () => {
+    // `RoleDeclareApiView` (`/api/members/roster/roles/`) is admin-only,
+    // so a self, non-admin editor must not see this control even though
+    // `can_edit_roles` is true for them.
+    mockFetchByUrl({
+      '/api/members/1/': () => ({
+        status: 200,
+        body: { context: memberContext(), data: selfPayload() },
+      }),
+    })
+
+    renderPerson('/members/1')
+
+    await screen.findByRole('heading', { name: 'Sam Rivera' })
+    expect(
+      screen.queryByRole('button', { name: '+ Add new role' }),
+    ).not.toBeInTheDocument()
+  })
+
   it('does not render a "Deliberately absent" card, for any viewer state (issue #363)', async () => {
     mockFetchByUrl({
       '/api/members/2/': () => ({
@@ -251,6 +480,7 @@ describe('Person', () => {
             name: 'Sam Rivera',
             is_self: true,
             can_edit_roles: true,
+            can_create_roles: false,
             has_membership: false,
             semester_name: 'Spring 2026',
             email: 'sam@example.com',
@@ -1127,5 +1357,124 @@ describe('Person', () => {
 
     await screen.findByText("Could not reset this member's password.")
     expect(resetButton).not.toBeDisabled()
+  })
+
+  it('shows "Resetting…" on the Reset password button while the request is in flight (issue #506)', async () => {
+    let resolveReset: (value: unknown) => void = () => {}
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((input: RequestInfo | URL) => {
+        const url = typeof input === 'string' ? input : input.toString()
+        if (url.includes('/api/members/2/reset-password/')) {
+          return new Promise((resolve) => {
+            resolveReset = resolve
+          })
+        }
+        return Promise.resolve({
+          status: 200,
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              context: memberContext({
+                viewer: { ...memberContext().viewer, is_admin: true },
+              }),
+              data: adminViewingTeammatePayload({ is_active: true }),
+            }),
+        })
+      }),
+    )
+
+    const user = (await import('@testing-library/user-event')).default.setup()
+    renderPerson('/members/2')
+
+    await user.click(
+      await screen.findByRole('button', { name: 'Reset password' }),
+    )
+
+    const resettingButton = await screen.findByRole('button', {
+      name: 'Resetting…',
+    })
+    expect(resettingButton).toBeDisabled()
+
+    resolveReset({
+      status: 200,
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          context: memberContext({
+            viewer: { ...memberContext().viewer, is_admin: true },
+          }),
+          ok: true,
+          errors: {},
+          non_field_errors: [],
+          fallout: null,
+          values: null,
+          data: {
+            person: adminViewingTeammatePayload({ is_active: true }),
+            temp_password: 'abc123XYZdef',
+          },
+        }),
+    })
+    await screen.findByRole('dialog')
+  })
+
+  it('shows "Saving…" on the change-password submit button while the request is in flight, and a non_field_errors failure message (issue #506)', async () => {
+    let resolveChange: (value: unknown) => void = () => {}
+    mockFetchByUrl({
+      '/api/members/1/': () => ({
+        status: 200,
+        body: { context: memberContext(), data: selfPayload() },
+      }),
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((input: RequestInfo | URL) => {
+        const url = typeof input === 'string' ? input : input.toString()
+        if (url.includes('/api/password/')) {
+          return new Promise((resolve) => {
+            resolveChange = resolve
+          })
+        }
+        return Promise.resolve({
+          status: 200,
+          ok: true,
+          json: () =>
+            Promise.resolve({ context: memberContext(), data: selfPayload() }),
+        })
+      }),
+    )
+
+    const user = (await import('@testing-library/user-event')).default.setup()
+    renderPerson('/members/1')
+
+    await user.click(
+      await screen.findByRole('button', { name: 'Change password' }),
+    )
+    await user.type(screen.getByLabelText('Current password'), 'wrong-pw')
+    await user.type(screen.getByLabelText('New password'), 'new-pw-123')
+    await user.type(screen.getByLabelText('Confirm new password'), 'new-pw-123')
+    await user.click(screen.getByRole('button', { name: 'Save password' }))
+
+    const savingButton = await screen.findByRole('button', { name: 'Saving…' })
+    expect(savingButton).toBeDisabled()
+
+    resolveChange({
+      status: 200,
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          context: memberContext(),
+          ok: false,
+          errors: {},
+          non_field_errors: ['Your current password was incorrect.'],
+          fallout: null,
+          values: null,
+          data: null,
+        }),
+    })
+
+    expect(
+      await screen.findByText('Your current password was incorrect.'),
+    ).toBeInTheDocument()
   })
 })

@@ -187,6 +187,59 @@ describe('SaveChangesDialog', () => {
     ).toBeInTheDocument()
   })
 
+  it('isSaving swaps the confirm label to "Saving…" and disables it (issue #506)', async () => {
+    const preview = vi.fn().mockResolvedValue(okResult)
+    const { rerender } = render(
+      <SaveChangesDialog
+        open
+        onOpenChange={() => {}}
+        title="Save changes?"
+        preview={preview}
+        onConfirm={() => {}}
+        isSaving={false}
+      />,
+    )
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'Save changes' }),
+      ).toBeEnabled(),
+    )
+
+    rerender(
+      <SaveChangesDialog
+        open
+        onOpenChange={() => {}}
+        title="Save changes?"
+        preview={preview}
+        onConfirm={() => {}}
+        isSaving
+      />,
+    )
+
+    const button = screen.getByRole('button', { name: 'Saving…' })
+    expect(button).toBeDisabled()
+  })
+
+  it('isSaving is optional -- omitting it behaves exactly as before (issue #506)', async () => {
+    const preview = vi.fn().mockResolvedValue(okResult)
+    render(
+      <SaveChangesDialog
+        open
+        onOpenChange={() => {}}
+        title="Save changes?"
+        preview={preview}
+        onConfirm={() => {}}
+      />,
+    )
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'Save changes' }),
+      ).toBeEnabled(),
+    )
+  })
+
   it('renders errors with no confirm affordance and no What-changes/Fallout sections on ok: false', async () => {
     const preview = vi.fn().mockResolvedValue(rejectedResult)
     render(
