@@ -309,6 +309,7 @@ class DeclareRoleTests(TestCase):
         self.assertFalse(Role.objects.filter(name='Trombone').exists())
 
 
+@override_settings(SECURE_SSL_REDIRECT=False)
 class RoleGroupsListTests(TestCase):
     """`GET /api/members/roster/roles/` (issue #506) lists every RoleGroup for a new-Role picker."""
 
