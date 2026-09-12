@@ -1,3 +1,4 @@
+import { Trash2 } from 'lucide-react'
 import { useState } from 'react'
 
 import type { RoleCountRow, RoleGroupOption } from './roleCountStepModel'
@@ -20,6 +21,8 @@ interface RoleCountStepTableProps {
   addedGroupNames: Set<string>
   onChangeCount: (rowKey: string, groupName: string, next: number) => void
   onAddGroup: (groupName: string) => void
+  /** Hides a visible Role Group column entirely -- zeroes its count for every staged song, whether it was shown by a nonzero default or explicitly added. */
+  onRemoveGroup: (groupName: string) => void
 }
 
 /**
@@ -38,6 +41,7 @@ export function RoleCountStepTable({
   addedGroupNames,
   onChangeCount,
   onAddGroup,
+  onRemoveGroup,
 }: RoleCountStepTableProps) {
   const visible = visibleRoleGroups(groups, counts, addedGroupNames)
   const hidden = groups.filter(
@@ -62,9 +66,20 @@ export function RoleCountStepTable({
               {visible.map((group) => (
                 <th
                   key={group.name}
+                  aria-label={group.name}
                   className="border-b border-rs-border px-2 py-1 text-center font-medium"
                 >
-                  {group.name}
+                  <span className="inline-flex items-center gap-1">
+                    <span aria-hidden="true">{group.name}</span>
+                    <button
+                      type="button"
+                      aria-label={`Remove ${group.name}`}
+                      onClick={() => onRemoveGroup(group.name)}
+                      className="rounded p-0.5 text-rs-muted hover:bg-rs-border/40 hover:text-rs-danger"
+                    >
+                      <Trash2 size={14} aria-hidden="true" />
+                    </button>
+                  </span>
                 </th>
               ))}
             </tr>

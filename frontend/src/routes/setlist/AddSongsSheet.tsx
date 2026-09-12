@@ -1,3 +1,4 @@
+import { Trash2 } from 'lucide-react'
 import { useState } from 'react'
 
 import { apiFetch } from '../../api/client'
@@ -35,6 +36,23 @@ interface HandCard {
 function newHandCard(): HandCard {
   return { key: nextRowKey('byhand-card'), title: '', artist: '', length: '' }
 }
+
+/** `M:SS` or `H:MM:SS`, minutes/hours unbounded, seconds and inner minutes zero-padded 00-59. */
+const SONG_LENGTH_FORMAT = /^\d+:[0-5]\d(:[0-5]\d)?$/
+
+/**
+ * Early, non-authoritative check that `value` looks like a song length --
+ * mirrors `scheduling/fields.py`'s `parse_song_length` format for
+ * immediate feedback in this popup only. The raw string is still exactly
+ * what reaches the server on save, which remains the sole parser (issue
+ * #335's wire-primitives rule, see `setlistEditModel.ts`'s `EditRow.length`).
+ */
+function looksLikeValidLength(value: string): boolean {
+  return SONG_LENGTH_FORMAT.test(value.trim())
+}
+
+const INVALID_LENGTH_MESSAGE =
+  'Enter a length as M:SS (e.g. 3:45) or H:MM:SS (e.g. 1:15:00).'
 
 interface AddSongsSheetProps {
   open: boolean
@@ -116,6 +134,17 @@ export function AddSongsSheet({
     const card = newHandCard()
     setHandCards((cards) => [...cards, card])
     setOpenHandCardKey(card.key)
+  }
+
+  /** Removes one staged by-hand card before it's ever confirmed, opening a neighbour if the removed card was the open one. */
+  function removeHandCard(key: string) {
+    const index = handCards.findIndex((card) => card.key === key)
+    const next = handCards.filter((card) => card.key !== key)
+    setHandCards(next)
+    if (openHandCardKey === key) {
+      const fallback = next[Math.min(index, next.length - 1)]
+      setOpenHandCardKey(fallback ? fallback.key : '')
+    }
   }
 
   function fetchPlaylist() {
@@ -239,10 +268,34 @@ export function AddSongsSheet({
     )
   }
 
+  /** Hides a visible Role Group column -- zeroes its count for every staged song and clears it from the explicitly-added set, whether it was shown by a nonzero default or by "Add Role". */
+  function removeRoleGroup(groupName: string) {
+    setAddedGroupNames((current) => {
+      const next = new Set(current)
+      next.delete(groupName)
+      return next
+    })
+    setRoleCounts((current) =>
+      Object.fromEntries(
+        stagedRows.map((row) => [
+          row.rowKey,
+          { ...current[row.rowKey], [groupName]: 0 },
+        ]),
+      ),
+    )
+  }
+
+  const hasInvalidLength = handCards.some(
+    (card) =>
+      card.title.trim() !== '' &&
+      card.length.trim() !== '' &&
+      !looksLikeValidLength(card.length),
+  )
+
   const canAdd =
     source === 'spotify'
       ? ticked.size > 0
-      : handCards.some((card) => card.title.trim() !== '')
+      : handCards.some((card) => card.title.trim() !== '') && !hasInvalidLength
 
   return (
     <ResponsiveDialog
@@ -252,7 +305,8 @@ export function AddSongsSheet({
         else onOpenChange(next)
       }}
       title={step === 'songs' ? 'Add songs' : 'Set role counts'}
-      wide
+      wide={step === 'songs'}
+      xwide={step === 'roles'}
       footer={
         step === 'songs' ? (
           <>
@@ -320,6 +374,7 @@ export function AddSongsSheet({
           addedGroupNames={addedGroupNames}
           onChangeCount={updateRoleCount}
           onAddGroup={addRoleGroup}
+          onRemoveGroup={removeRoleGroup}
         />
       ) : (
         <>
@@ -472,6 +527,22 @@ export function AddSongsSheet({
                           placeholder="3:45"
                           className="mt-1 block w-full rounded border border-rs-border px-2 py-1 text-sm"
                         />
+                        {card.length.trim() !== '' &&
+                          !looksLikeValidLength(card.length) && (
+                            <p className="pt-1 text-xs text-rs-danger">
+                              {INVALID_LENGTH_MESSAGE}
+                            </p>
+                          )}
+                      </div>
+                      <div>
+                        <button
+                          type="button"
+                          onClick={() => removeHandCard(card.key)}
+                          className="flex items-center gap-1 rounded border border-rs-border px-2 py-1 text-xs font-medium text-rs-muted hover:bg-rs-border/40 hover:text-rs-danger"
+                        >
+                          <Trash2 size={14} aria-hidden="true" />
+                          Remove {handCardSummary(card, index)}
+                        </button>
                       </div>
                     </div>
                   ),
