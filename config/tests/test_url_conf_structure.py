@@ -26,11 +26,6 @@ from config.views import AdminApiView, AdminPreviewApiView, ApiView, BaseView
 ALLOWLISTED_VIEW_NAMES = {
     'LoginView',
     'LogoutView',
-    # The single token route serving both the invite and forgot-password
-    # flows (issue #327) — collapsed from the previous SetPasswordConfirmView
-    # + PasswordResetConfirmView pair.
-    'SetPasswordConfirmView',
-    'PasswordResetRequestView',
     # Serves the React SPA's shell document (issue #325). Deliberately not
     # login-gated: the document carries no member data — everything the SPA
     # renders comes from /api/, which is gated by ApiView — and gating it

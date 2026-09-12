@@ -37,7 +37,6 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'storages',
-    'anymail',
     'identity',
     'scheduling',
 ]
@@ -115,16 +114,6 @@ LOGIN_URL = reverse_lazy('identity:login')
 # #341 — the SPA's Home route, served by the root 'spa-index' pattern, is
 # every member's next-less-login destination now.
 LOGIN_REDIRECT_URL = reverse_lazy('spa-index')
-
-# Declared explicitly (issue #327) rather than inherited from Django's own
-# default (which happens to also be three days): this value governs BOTH
-# the invite link and the forgot-password link, since they share one token
-# route (`identity:set-password-confirm`). Don't raise it to suit the
-# invite — the same value would leave a multi-week account-takeover token
-# sitting in inboxes for the reset case. Short is correct for reset, and
-# `resend_invite()` (not a longer timeout) is what makes the invite's
-# expiry survivable.
-PASSWORD_RESET_TIMEOUT = 60 * 60 * 24 * 3  # 3 days
 
 
 # Password validation
@@ -262,53 +251,6 @@ AWS_ACCESS_KEY_ID = env('AWS_ACCESS_KEY_ID')
 AWS_SECRET_ACCESS_KEY = env('AWS_SECRET_ACCESS_KEY')
 AWS_STORAGE_BUCKET_NAME = env('AWS_STORAGE_BUCKET_NAME')
 AWS_S3_ENDPOINT_URL = env('AWS_S3_ENDPOINT_URL')
-
-
-# Outbound email (Resend), via django-anymail. CLUB_EMAIL_FROM is the one
-# address the club sends from; it's an env var so it's never hardcoded.
-#
-# The key is required in production and optional in dev, for the same reason
-# SITE_URL is: booting without it would mean an invite that silently can't be
-# delivered, whereas a dev checkout has no business holding a live key at all.
-RESEND_API_KEY = env('RESEND_API_KEY', default=None)
-if not DEBUG and not RESEND_API_KEY:
-    raise ImproperlyConfigured(
-        'RESEND_API_KEY must be set via the environment when DJANGO_DEBUG is False.'
-    )
-ANYMAIL = {
-    'RESEND_API_KEY': RESEND_API_KEY,
-}
-DEFAULT_FROM_EMAIL = env('CLUB_EMAIL_FROM')
-
-# Which backend actually sends (issue #299). In dev the default is Django's
-# console backend: it prints the message — set-password link included — to the
-# runserver terminal, so the invite → set password → profile flow can be
-# walked end to end without a live Resend key, which would otherwise 401 the
-# invite view. Point DJANGO_EMAIL_BACKEND at another backend to change that,
-# e.g. back to Resend on a dev machine that does hold a real key.
-#
-# Production is deliberately not overridable: EMAIL_BACKEND is pinned to
-# Resend whenever DEBUG is False, so a stray DJANGO_EMAIL_BACKEND in the host
-# environment can never turn a real member's invite into a log line.
-if DEBUG:
-    EMAIL_BACKEND = env(
-        'DJANGO_EMAIL_BACKEND',
-        default='django.core.mail.backends.console.EmailBackend',
-    )
-else:
-    EMAIL_BACKEND = 'anymail.backends.resend.EmailBackend'
-
-# Base URL used to build absolute links (e.g. invite set-password links) in
-# contexts with no request object, like a signal or admin action. The
-# localhost fallback is a dev-only convenience; in production (DEBUG=False)
-# it must be set explicitly, since silently falling back there would build
-# invite/reset links members can't actually use.
-SITE_URL = env('SITE_URL', default=None)
-if not DEBUG and not SITE_URL:
-    raise ImproperlyConfigured(
-        'SITE_URL must be set via the environment when DJANGO_DEBUG is False.'
-    )
-SITE_URL = SITE_URL or 'http://localhost:8000'
 
 # Spotify Client Credentials Flow, for the public-playlist import
 # (scheduling.spotify). Optional: absent locally, the import reports itself

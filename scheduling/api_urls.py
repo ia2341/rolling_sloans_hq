@@ -64,10 +64,6 @@ urlpatterns = [
     path('members/roster/save/', api_views.RosterSaveApiView.as_view(), name='api-roster-save'),
     path('members/roster/candidates/', api_views.RosterCandidatesApiView.as_view(), name='api-roster-candidates'),
     path('members/roster/roles/', api_views.RoleDeclareApiView.as_view(), name='api-roster-declare-role'),
-    path(
-        'members/roster/<int:pk>/resend-invite/',
-        api_views.RosterResendInviteApiView.as_view(), name='api-roster-resend-invite',
-    ),
     path('members/recordings/slots/', api_views.RecordingSlotsApiView.as_view(), name='api-recordings-slots'),
     path('members/recordings/presign/', api_views.RecordingPresignApiView.as_view(), name='api-recordings-presign'),
     path('members/recordings/confirm/', api_views.RecordingConfirmApiView.as_view(), name='api-recordings-confirm'),
@@ -77,7 +73,6 @@ urlpatterns = [
     ),
     path('members/<int:pk>/', api_views.PersonApiView.as_view(), name='api-member-detail'),
     path('members/<int:pk>/roles/', api_views.PersonRolesApiView.as_view(), name='api-member-roles'),
-    path('members/<int:pk>/invite/', api_views.RosterResendInviteApiView.as_view(), name='api-member-invite'),
     path(
         'members/<int:pk>/admin-status/',
         api_views.PersonAdminStatusApiView.as_view(), name='api-member-admin-status',

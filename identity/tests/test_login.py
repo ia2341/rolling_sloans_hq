@@ -1,14 +1,11 @@
 """Login + sessions (issue #25): login/logout views and sliding session expiry."""
 
 import json
-import re
 import tempfile
 from datetime import timedelta
 from pathlib import Path
-from urllib.parse import urlsplit
 
 from django.conf import settings
-from django.core import mail
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
@@ -16,7 +13,7 @@ from faker import Faker
 
 from identity.factories import PersonFactory
 from identity.models import LoginAttempt
-from identity.services import MAX_FAILED_LOGIN_ATTEMPTS, invite_person
+from identity.services import MAX_FAILED_LOGIN_ATTEMPTS
 
 PASSWORD = 'a-strong-test-password-123'
 fake = Faker()
@@ -220,27 +217,6 @@ class LoginRedirectTests(TestCase):
         person = PersonFactory(password=PASSWORD)
         self.client.login(username=person.email, password=PASSWORD)
         self.client.post(reverse('identity:logout'))
-
-        response = self.client.post(
-            reverse('identity:login'),
-            {'username': person.email, 'password': PASSWORD},
-        )
-
-        self.assertRedirects(response, reverse('spa-index'))
-
-    def test_invite_set_password_then_login_lands_on_a_real_page(self):
-        """A brand-new invited member's very first login, right after setting their password, must not 404."""
-        person = invite_person(name=fake.name(), email=fake.email(domain='example.com'))
-        set_password_link = re.search(r'https?://\S+', mail.outbox[0].body).group()
-        set_password_path = urlsplit(set_password_link).path
-
-        get_response = self.client.get(set_password_path, follow=True)
-        form_url = get_response.request['PATH_INFO']
-        self.client.post(
-            form_url,
-            {'new_password1': PASSWORD, 'new_password2': PASSWORD},
-        )
-        self.client.logout()
 
         response = self.client.post(
             reverse('identity:login'),

@@ -227,8 +227,7 @@ class ApplyRosterEditsTests(TestCase):
 class ApplyRosterEditsInviteTests(TestCase):
     """A `RosterEditBuffer.pending_invites` entry creates and rosters a Person with a real temp password (issue #336, #482, ADR 0018).
 
-    Plain `TestCase` (not `TransactionTestCase`): unlike the retired
-    `invite_person()` email path, `create_person_with_temp_password()`
+    Plain `TestCase` (not `TransactionTestCase`): `create_person_with_temp_password()`
     reaches no external service, so there's no `transaction.on_commit()`
     deferral for a test to need a real commit to observe.
     """

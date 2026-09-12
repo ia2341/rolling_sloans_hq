@@ -1,4 +1,4 @@
-"""`/api/members/roster/*`: the Roster editor's read/preview/save/candidates/roles/resend-invite surface (issue #336, ADR 0008)."""
+"""`/api/members/roster/*`: the Roster editor's read/preview/save/candidates/roles surface (issue #336, ADR 0008)."""
 
 import json
 
@@ -44,11 +44,6 @@ def _candidates_url():
 def _declare_role_url():
     """Return the `+ Role` chip's declare-a-Role `/api/` endpoint's URL."""
     return reverse('api-roster-declare-role')
-
-
-def _resend_invite_url(pk):
-    """Return the resend-invite `/api/` endpoint's URL for Person `pk`."""
-    return reverse('api-roster-resend-invite', args=[pk])
 
 
 def _post_json(test_case, url, body):
@@ -116,23 +111,6 @@ class AccessControlTests(TestCase):
         member_client(self)
 
         response = self.client.post(_declare_role_url(), data='{}', content_type='application/json')
-
-        self.assertEqual(response.status_code, 403)
-
-    def test_anonymous_resend_invite_post_is_401(self):
-        """An anonymous POST to resend-invite answers 401."""
-        person = Person.objects.create(name='Someone', email='someone@example.com')
-
-        response = self.client.post(_resend_invite_url(person.pk))
-
-        self.assertEqual(response.status_code, 401)
-
-    def test_non_admin_resend_invite_post_is_403(self):
-        """A logged-in non-admin's POST to resend-invite is rejected with 403."""
-        member_client(self)
-        person = Person.objects.create(name='Someone', email='someone@example.com')
-
-        response = self.client.post(_resend_invite_url(person.pk))
 
         self.assertEqual(response.status_code, 403)
 
@@ -282,116 +260,6 @@ class DeclareRoleTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(envelope['error'], 'invalid_name')
-
-
-@override_settings(SECURE_SSL_REDIRECT=False)
-class ResendInviteTests(TestCase):
-    """`POST /api/members/roster/<pk>/resend-invite/` re-sends a pending invite."""
-
-    def setUp(self):
-        """Log in a synthetic admin."""
-        admin_client(self)
-
-    def test_resend_invite_to_a_pending_person_succeeds(self):
-        """Resending to a Person with no usable password succeeds and sends mail."""
-        from identity.factories import PersonFactory
-
-        pending = PersonFactory(name='Pending Person', password=None, email='pending@example.com')
-
-        response, envelope = _post_json(self, _resend_invite_url(pending.pk), {})
-
-        self.assertEqual(response.status_code, 200)
-        self.assertTrue(envelope['ok'])
-        self.assertEqual(len(mail.outbox), 1)
-
-    def test_resend_invite_to_an_active_person_is_refused(self):
-        """Resending to a Person who already has a usable password is refused with ok: false."""
-        from identity.factories import PersonFactory
-
-        active = PersonFactory(name='Active Person', password='a-strong-test-password-123')
-
-        response, envelope = _post_json(self, _resend_invite_url(active.pk), {})
-
-        self.assertEqual(response.status_code, 200)
-        self.assertFalse(envelope['ok'])
-        self.assertTrue(envelope['non_field_errors'])
-
-    def test_resend_invite_to_a_deactivated_person_is_refused(self):
-        """Resending to a deactivated Person is refused with ok: false, never an unhandled 500 (issue #469 review)."""
-        from identity.factories import PersonFactory
-
-        deactivated = PersonFactory(name='Deactivated Person', password=None, is_active=False)
-
-        response, envelope = _post_json(self, _resend_invite_url(deactivated.pk), {})
-
-        self.assertEqual(response.status_code, 200)
-        self.assertFalse(envelope['ok'])
-        self.assertTrue(envelope['non_field_errors'])
-        self.assertEqual(len(mail.outbox), 0)
-
-    def test_resend_invite_reports_a_clean_failure_when_the_email_backend_raises(self):
-        """A production-shaped `AnymailError` (e.g. a rejected API key) from `send_mail()` surfaces as `ok: false`, never a 500 (issue #409)."""
-        from unittest import mock
-
-        from anymail.exceptions import AnymailAPIError
-
-        from identity.factories import PersonFactory
-
-        pending = PersonFactory(name='Pending Person', password=None, email='pending@example.com')
-
-        with mock.patch('identity.services.send_mail', side_effect=AnymailAPIError('bad api key')):
-            response, envelope = _post_json(self, _resend_invite_url(pending.pk), {})
-
-        self.assertEqual(response.status_code, 200)
-        self.assertFalse(envelope['ok'])
-        self.assertTrue(envelope['non_field_errors'])
-        self.assertEqual(len(mail.outbox), 0)
-
-
-@override_settings(SECURE_SSL_REDIRECT=False)
-class PersonPageInviteTests(TestCase):
-    """`POST /api/members/<pk>/invite/`: the legacy email-invite action (issue #397), kept but no longer reachable from the SPA (issue #482, ADR 0018)."""
-
-    def setUp(self):
-        """Log in a synthetic admin."""
-        admin_client(self)
-
-    def test_inviting_a_not_yet_invited_person_sends_mail(self):
-        """Inviting a Person `add_person()` created sends the legacy invite email. `invite_status` no longer tracks this path (#482) -- it reads 'active' either way, since `must_change_password` is untouched by it."""
-        from identity.services import add_person
-
-        person = add_person(name='Not Yet Invited Person', email='not-yet-invited@example.com')
-
-        response, envelope = _post_json(self, reverse('api-member-invite', args=[person.pk]), {})
-
-        self.assertEqual(response.status_code, 200)
-        self.assertTrue(envelope['ok'])
-        self.assertEqual(len(mail.outbox), 1)
-        self.assertEqual(envelope['data']['invite_status'], 'active')
-
-    def test_inviting_an_active_person_is_refused(self):
-        """Inviting a Person who already has a usable password is refused with ok: false."""
-        from identity.factories import PersonFactory
-
-        active = PersonFactory(name='Active Person', password='a-strong-test-password-123')
-
-        response, envelope = _post_json(self, reverse('api-member-invite', args=[active.pk]), {})
-
-        self.assertEqual(response.status_code, 200)
-        self.assertFalse(envelope['ok'])
-        self.assertTrue(envelope['non_field_errors'])
-
-    def test_inviting_a_deactivated_person_is_refused(self):
-        """Inviting a deactivated Person is refused with ok: false, never an unhandled 500 (issue #469 review)."""
-        from identity.factories import PersonFactory
-
-        deactivated = PersonFactory(name='Deactivated Person', password=None, is_active=False)
-
-        response, envelope = _post_json(self, reverse('api-member-invite', args=[deactivated.pk]), {})
-
-        self.assertEqual(response.status_code, 200)
-        self.assertFalse(envelope['ok'])
-        self.assertTrue(envelope['non_field_errors'])
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)

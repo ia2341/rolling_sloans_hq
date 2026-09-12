@@ -26,19 +26,16 @@ from django.views import View
 from config.views import AdminApiView, AdminPreviewApiView, ApiView
 from identity.models import Person
 from identity.services import (
-    AlreadyHasPasswordError,
     CannotDeactivateLastActiveAdminError,
     CannotDeactivateSelfError,
     CannotResetOwnPasswordError,
     CannotRevokeLastActiveAdminError,
     CannotRevokeOwnAdminStatusError,
-    EmailDeliveryError,
     PersonIsDeactivatedError,
     apply_admin_status_change,
     apply_password_reset,
     apply_person_deactivation,
     apply_person_reactivation,
-    resend_invite,
 )
 from scheduling import serializers, services, spotify
 from scheduling.api_builders import (
@@ -596,39 +593,6 @@ class RoleDeclareApiView(AdminApiView, View):
             return JsonResponse({'context': self.build_context(request), 'error': 'invalid_name'}, status=400)
         result = services.create_or_reactivate_role(name.strip())
         return self.read_response(request, serializers.serialize_role_declaration(result))
-
-
-class RosterResendInviteApiView(AdminApiView, View):
-    """`POST /api/members/roster/<pk>/resend-invite/` and `POST /api/members/<pk>/invite/`: (re)send a pending invite (issue #336, #327, #397).
-
-    One view, two routes: the Roster editor's "Invite again" control and
-    the Person page's "Invite"/"Invite again" action both call this —
-    never a second implementation. It equally serves the *first* invite
-    for someone `identity.services.add_person()` created without ever
-    emailing them (issue #397): `resend_invite()` only refuses a Person
-    who already has a usable password, so it doesn't care whether
-    `invited_at` was set before this call. An immediate act, not a Buffer
-    row: it changes no Roster state, so there is nothing to stage and
-    nothing for the Save popup to describe.
-    """
-
-    def post(self, request, pk):
-        """Re-send (or send for the first time) `pk`'s invite, returning their fresh Person payload, or the refusal if they already have a password or the email fails to send."""
-        person = get_object_or_404(Person, pk=pk)
-        try:
-            resend_invite(person)
-        except (AlreadyHasPasswordError, PersonIsDeactivatedError) as error:
-            return self.write_response(request, ok=False, non_field_errors=[str(error)])
-        except EmailDeliveryError:
-            return self.write_response(
-                request, ok=False, non_field_errors=[f"Couldn't send the invite email to {person.email}."],
-            )
-        semester = services.get_viewing_semester(request)
-        membership = Membership.objects.filter(person=person, semester=semester).first() if semester is not None else None
-        data = serializers.serialize_person(
-            person, semester=semester, is_self=False, can_edit_roles=True, membership=membership,
-        )
-        return self.write_response(request, ok=True, data=data)
 
 
 def _wrong_roster_semester_response(message: str) -> JsonResponse:
