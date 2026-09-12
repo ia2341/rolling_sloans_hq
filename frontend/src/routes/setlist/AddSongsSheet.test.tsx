@@ -706,6 +706,95 @@ describe('AddSongsSheet', () => {
     expect(onAddRows).not.toHaveBeenCalled()
   })
 
+  it('flags an unparseable length and disables "Confirm Songs" until it is fixed', async () => {
+    const user = userEvent.setup()
+    renderOpen()
+
+    await user.click(screen.getByRole('radio', { name: 'By hand' }))
+    await user.type(screen.getByLabelText('Title'), 'Hand Song')
+    await user.type(screen.getByLabelText('Length (M:SS)'), 'test')
+
+    expect(
+      screen.getByText(
+        'Enter a length as M:SS (e.g. 3:45) or H:MM:SS (e.g. 1:15:00).',
+      ),
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Confirm Songs' })).toBeDisabled()
+
+    await user.clear(screen.getByLabelText('Length (M:SS)'))
+    await user.type(screen.getByLabelText('Length (M:SS)'), '4:15')
+
+    expect(
+      screen.queryByText(
+        'Enter a length as M:SS (e.g. 3:45) or H:MM:SS (e.g. 1:15:00).',
+      ),
+    ).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Confirm Songs' })).toBeEnabled()
+  })
+
+  it('removes a staged by-hand card before confirming, via its Remove control', async () => {
+    const onAddRows = vi.fn()
+    const user = userEvent.setup()
+    renderOpen(onAddRows)
+
+    await user.click(screen.getByRole('radio', { name: 'By hand' }))
+    await user.type(screen.getByLabelText('Title'), 'First Song')
+    await user.click(screen.getByRole('button', { name: 'Add Another Song' }))
+    await user.type(screen.getByLabelText('Title'), 'Second Song')
+
+    await user.click(screen.getByRole('button', { name: 'Remove Second Song' }))
+
+    expect(screen.queryByText('Second Song')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Title')).toHaveValue('First Song')
+
+    await user.click(screen.getByRole('button', { name: 'Confirm Songs' }))
+    await user.click(screen.getByRole('button', { name: 'Confirm Roles' }))
+
+    const rows = onAddRows.mock.calls[0]?.[0] as EditRow[]
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ title: 'First Song' })
+  })
+
+  it('the role-count step opens as the extra-wide dialog variant on desktop', async () => {
+    const user = userEvent.setup()
+    renderOpen()
+
+    await user.click(screen.getByRole('radio', { name: 'By hand' }))
+    await user.type(screen.getByLabelText('Title'), 'Only Song')
+    await user.click(screen.getByRole('button', { name: 'Confirm Songs' }))
+
+    expect(screen.getByRole('dialog')).toHaveClass('max-w-[1040px]')
+  })
+
+  it('"Remove" on a visible Role Group column hides it, zeroing every staged song\'s count', async () => {
+    const onAddRows = vi.fn()
+    const user = userEvent.setup()
+    renderOpen(onAddRows)
+
+    await user.click(screen.getByRole('radio', { name: 'By hand' }))
+    await user.type(screen.getByLabelText('Title'), 'Only Song')
+    await user.click(screen.getByRole('button', { name: 'Confirm Songs' }))
+
+    expect(
+      screen.getByRole('columnheader', { name: 'Vocals' }),
+    ).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Remove Vocals' }))
+
+    expect(
+      screen.queryByRole('columnheader', { name: 'Vocals' }),
+    ).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Confirm Roles' }))
+    const rows = onAddRows.mock.calls[0]?.[0] as EditRow[]
+    expect(rows[0]?.roleGroupCounts).toEqual(
+      expect.arrayContaining([{ roleGroupId: 11, count: 2 }]), // Guitars
+    )
+    expect(rows[0]?.roleGroupCounts).not.toEqual(
+      expect.arrayContaining([{ roleGroupId: 10, count: expect.anything() }]),
+    )
+  })
+
   it('Cancel resets the form without calling onAddRows', async () => {
     const onOpenChange = vi.fn()
     const onAddRows = vi.fn()
