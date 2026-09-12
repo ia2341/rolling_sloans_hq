@@ -22,6 +22,16 @@ function ActiveEditSessionSaveButton() {
   )
 }
 
+/** One already-saved matrix entry, as `/api/schedule/` serializes it — spelled out so an empty `entries: []` literal below still widens to it. */
+interface FixtureEntry {
+  id: number
+  kind: string
+  person_id: number
+  person_name: string
+  is_role_mismatch: boolean
+  has_conflict: boolean
+}
+
 function schedulePayload() {
   return {
     context: adminContext(),
@@ -63,7 +73,7 @@ function schedulePayload() {
             song_title: 'Song One',
             start_time: '19:00:00',
             rehearsal_song_id: 200,
-            cells: [{ role_id: 5, entries: [] }],
+            cells: [{ role_id: 5, entries: [] as FixtureEntry[] }],
           },
         ],
         available_songs: [
@@ -122,6 +132,20 @@ function twoSongSchedulePayload() {
       cells: [{ role_id: 5, entries: [] }],
     },
   ]
+  return payload
+}
+
+/** A `schedulePayload()` variant whose one cell already holds a saved standing assignment, for the read-only-cast cases (ADR 0019). */
+function castSchedulePayload() {
+  const payload = schedulePayload()
+  payload.data.selected.rows[0]!.cells[0]!.entries.push({
+    id: 77,
+    kind: 'assignment',
+    person_id: 9,
+    person_name: 'Riley Song',
+    is_role_mismatch: false,
+    has_conflict: false,
+  })
   return payload
 }
 
@@ -241,30 +265,7 @@ describe('AssignmentEditor', () => {
 
   it('a saved standing assignee renders with no remove control at all (ADR 0019)', async () => {
     mockMatchMedia(false)
-    const payload = schedulePayload()
-    payload.data.selected.rows = [
-      {
-        song_id: 100,
-        song_title: 'Song One',
-        start_time: '19:00:00',
-        rehearsal_song_id: 200,
-        cells: [
-          {
-            role_id: 5,
-            entries: [
-              {
-                id: 77,
-                kind: 'assignment',
-                person_id: 9,
-                person_name: 'Riley Song',
-                is_role_mismatch: false,
-                has_conflict: false,
-              },
-            ],
-          },
-        ],
-      },
-    ]
+    const payload = castSchedulePayload()
     queueFetch(payload)
 
     renderEditor()

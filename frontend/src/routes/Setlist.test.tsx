@@ -97,6 +97,7 @@ describe('Setlist', () => {
       length: '2:45',
       position: 2,
       notes: '',
+      updated_at: '2026-01-01T00:00:00+00:00',
       cast: [
         { role_id: 1, role_name: 'Singer', code: 'SIN', performers: [] },
         {
@@ -376,6 +377,7 @@ describe('Setlist role-mismatch display (issue #365)', () => {
       length: '2:45',
       position: 2,
       notes: '',
+      updated_at: '2026-01-01T00:00:00+00:00',
       cast: [
         { role_id: 1, role_name: 'Singer', code: 'SIN', performers: [] },
         {
@@ -692,6 +694,7 @@ describe('Setlist edit mode', () => {
       length: '',
       position: 2,
       notes: '',
+      updated_at: '2026-01-01T00:00:00+00:00',
       cast: [
         { role_id: 1, role_name: 'Singer', code: 'SIN', performers: [] },
         { role_id: 2, role_name: 'Drummer', code: 'DRU', performers: [] },
