@@ -16,6 +16,17 @@ export interface CastEntry {
   role_name: string
   code: string
   performers: CastPerformer[]
+  /**
+   * Whether this Song carries a `SongRoleRequirement` for this Role at all
+   * (ADR 0015) — distinct from `performers` being empty, which can mean
+   * either "not needed" or "needed but unfilled". Always present on the
+   * Setlist's and Song page's own cast (both come straight from
+   * `_serialize_cast_entry()`); absent on a Schedule `MatrixEntry`
+   * adaptation, which carries no per-(Song, Role) Requirement data of its
+   * own -- `visibleCastGridColumns()` falls back to "has a performer" when
+   * it's missing.
+   */
+  has_requirement?: boolean
 }
 
 export interface RoleLegendEntry {

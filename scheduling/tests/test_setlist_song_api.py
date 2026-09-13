@@ -80,7 +80,9 @@ class SerializeSetlistExactKeySetTests(TestCase):
         data = serialize_setlist(semester)
 
         cast_entry = data['songs'][0]['cast'][0]
-        self.assertEqual(set(cast_entry.keys()), {'role_id', 'role_name', 'code', 'performers'})
+        self.assertEqual(
+            set(cast_entry.keys()), {'role_id', 'role_name', 'code', 'performers', 'has_requirement'},
+        )
         self.assertEqual(
             set(cast_entry['performers'][0].keys()), {'id', 'name', 'is_role_mismatch', 'assignment_id'},
         )

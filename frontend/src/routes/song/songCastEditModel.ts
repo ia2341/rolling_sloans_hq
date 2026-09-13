@@ -42,16 +42,17 @@ export interface PendingCastEntry {
 }
 
 /**
- * One Role the Cast editor offers a row for (PR #502 review). Deliberately
- * a two-field value rather than a `RoleRequirement`: the Song page derives
- * it from the *staged* Requirements rows of the open edit session (which
- * carry no `target`/`actual` yet), while the Setlist popover derives it
- * from the Song's saved `role_requirements` — and all the editor ever
- * needs from either is which Role, called what.
+ * One Role the Cast editor offers a row for (PR #502 review). The Song
+ * page derives it from the *staged* Requirements rows of the open edit
+ * session (which carry no saved `target` yet), while the Setlist popover
+ * derives it from the Song's saved `role_requirements` and can pass one
+ * -- `CastEditor` shows a live cast-count-vs-target line only when
+ * `target` is present.
  */
 export interface CastableRole {
   roleId: number
   roleName: string
+  target?: number
 }
 
 /** Maps a Song payload's saved `role_requirements` onto the editor's row list -- the Setlist popover's source, where no Requirement is being edited. */
@@ -61,6 +62,7 @@ export function castableRolesFromRequirements(
   return roleRequirements.map((requirement) => ({
     roleId: requirement.role_id,
     roleName: requirement.role_name,
+    target: requirement.target,
   }))
 }
 

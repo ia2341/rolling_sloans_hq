@@ -200,7 +200,10 @@ function mergedPerformersFor(
 
 /**
  * One merged cell (e.g. every Vocals Role's performers together) — a plain
- * "-" placeholder when empty (issue #365), and, for an admin viewer only, a
+ * "-" placeholder when empty and read-only, or, when `editable` (an
+ * `onOpenCastCell` cell, issue #506), a "+ Cast" pill with its own small
+ * background so an empty cell still visibly invites a click rather than
+ * reading as inert dead space -- and, for an admin viewer only, a
  * `RoleMismatchBadge` beside a mismatched performer's name instead of an
  * inline text line.
  */
@@ -210,16 +213,24 @@ function CastGridCell({
   viewerId,
   nameFor,
   isAdmin,
+  editable,
 }: {
   column: CastGridColumn
   cast: CastEntry[]
   viewerId?: number
   nameFor: (fullName: string) => string
   isAdmin: boolean
+  editable: boolean
 }) {
   const performers = mergedPerformersFor(column, cast)
   if (performers.length === 0) {
-    return <span className="text-xs text-rs-muted">-</span>
+    return editable ? (
+      <span className="rounded bg-rs-accent/10 px-1.5 py-0.5 text-xs font-medium text-rs-accent">
+        + Cast
+      </span>
+    ) : (
+      <span className="text-xs text-rs-muted">-</span>
+    )
   }
   return (
     <div className="flex flex-col gap-1">
@@ -252,7 +263,10 @@ function CastGridCell({
  * order & assignments" read view both render (issue: UI overhaul round
  * 2, item 11) — `#`, `Song`, `Length`, then whatever fixed instrument
  * columns this Semester's Roles populate (`buildCastGridColumns()`), narrowed
- * to the ones any row in *this* table instance actually has a performer for
+ * to the ones any row in *this* table instance actually needs -- the
+ * Setlist keys that on the Requirement's existence rather than whether
+ * anyone is cast (issue #506), the Schedule's read-only matrix (which
+ * carries no per-(Song, Role) Requirement data) on "has a performer"
  * (`visibleCastGridColumns()`, issue #436) -- a Role can still be declared
  * band-wide yet unused by every Song this particular Rehearsal or the
  * Setlist renders. Add Recording. Each row is itself the "Open" control, clicking anywhere
@@ -367,6 +381,7 @@ export function CastGridTable({
                         viewerId={viewerId}
                         nameFor={nameFor}
                         isAdmin={isAdmin}
+                        editable={false}
                       />
                     </div>
                   ) : (
@@ -401,6 +416,7 @@ export function CastGridTable({
                         viewerId={viewerId}
                         nameFor={nameFor}
                         isAdmin={isAdmin}
+                        editable
                       />
                     </div>
                   )}

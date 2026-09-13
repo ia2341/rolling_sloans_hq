@@ -266,12 +266,13 @@ def _serialize_cast_performer(performer):
 
 
 def _serialize_cast_entry(entry):
-    """Return one `CastRoleEntry`: the Role's id/name/code and its performers, empty when the Role is unfilled."""
+    """Return one `CastRoleEntry`: the Role's id/name/code, its performers (empty when the Role is unfilled), and whether the Song has a Requirement for it at all."""
     return {
         'role_id': entry.role.pk,
         'role_name': entry.role.name,
         'code': entry.code,
         'performers': [_serialize_cast_performer(performer) for performer in entry.performers],
+        'has_requirement': entry.has_requirement,
     }
 
 

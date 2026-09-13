@@ -341,7 +341,7 @@ describe('Home', () => {
               label: 'Casting',
               is_done: false,
               status: 'Nobody assigned to a song yet',
-              destination: '/schedule/edit',
+              destination: '/setlist',
               waiting_on: 'Needs the roster and the setlist',
             },
           ],
@@ -396,7 +396,7 @@ describe('Home', () => {
     const castingLink = within(castingRow).getByRole('link', {
       name: 'Get Started',
     })
-    expect(castingLink).toHaveAttribute('href', '/schedule/edit')
+    expect(castingLink).toHaveAttribute('href', '/setlist')
   })
 
   it('never disables a checklist item and Dismiss removes the panel', async () => {

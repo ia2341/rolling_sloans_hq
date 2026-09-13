@@ -66,14 +66,40 @@ export function CastEditor({
             const pending = buffer.addedEntries.filter(
               (candidate) => candidate.roleId === requirement.roleId,
             )
+            const activeCount =
+              (entry?.performers ?? []).filter(
+                (performer) =>
+                  performer.assignment_id === undefined ||
+                  !buffer.removedAssignmentIds.includes(
+                    performer.assignment_id,
+                  ),
+              ).length + pending.length
+            const target = requirement.target
             return (
               <li
                 key={requirement.roleId}
                 className="flex flex-col gap-1 rounded border border-rs-border p-2"
               >
-                <span className="text-xs font-semibold uppercase text-rs-muted">
-                  {requirement.roleName}
-                </span>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-semibold uppercase text-rs-muted">
+                    {requirement.roleName}
+                  </span>
+                  {target !== undefined && (
+                    <span
+                      className={`text-xs ${
+                        activeCount < target
+                          ? 'text-rs-warning-fg'
+                          : activeCount > target
+                            ? 'text-rs-warning-fg'
+                            : 'text-rs-muted'
+                      }`}
+                    >
+                      {activeCount} of {target} cast
+                      {activeCount < target && ' (understaffed)'}
+                      {activeCount > target && ' (overstaffed)'}
+                    </span>
+                  )}
+                </div>
                 <div className="flex flex-wrap items-center gap-2">
                   {(entry?.performers ?? []).map((performer) => {
                     const assignmentId = performer.assignment_id
