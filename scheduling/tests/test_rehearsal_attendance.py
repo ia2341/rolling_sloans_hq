@@ -175,6 +175,53 @@ def _shifted(date, time_value, minutes):
     return (datetime.combine(date, time_value) + timedelta(minutes=minutes)).time()
 
 
+class RegularRehearsalAttendanceSuggestionEdgeSongTests(TestCase):
+    """attendance_suggestion_for on a regular Rehearsal, when the Person holds only the first or only the last slot.
+
+    A Person needed from the start helps with setup, so their arrival is the
+    Rehearsal's own start_time with no buffer subtracted, regardless of what
+    other slots they do or don't hold; symmetrically for departure and
+    teardown at the end. The buffer only ever applies at the end the Person
+    is *not* pinned to (issue: first/last-song arrival/departure used the
+    buffered song boundary instead of the Rehearsal's own start/end).
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        """Build a three-slot Rehearsal with a distinct arrival/departure buffer, plus an unassigned Person."""
+        cls.rehearsal = RehearsalFactory(
+            is_full_setlist=False, arrival_buffer_minutes=20, departure_buffer_minutes=10,
+        )
+        cls.role = RoleFactory()
+        cls.first_song = SongFactory(semester=cls.rehearsal.semester)
+        cls.middle_song = SongFactory(semester=cls.rehearsal.semester)
+        cls.last_song = SongFactory(semester=cls.rehearsal.semester)
+        cls.first_slot = RehearsalSongFactory(rehearsal=cls.rehearsal, song=cls.first_song, order=1)
+        cls.middle_slot = RehearsalSongFactory(rehearsal=cls.rehearsal, song=cls.middle_song, order=2)
+        cls.last_slot = RehearsalSongFactory(rehearsal=cls.rehearsal, song=cls.last_song, order=3)
+        cls.person = PersonFactory()
+
+    def test_assigned_only_to_the_first_song_arrives_at_rehearsal_start_and_departs_with_buffer(self):
+        """Needed from the start only: arrival is the Rehearsal's start_time (setup), departure still buffers off the first slot's end."""
+        SongRoleAssignmentFactory(song=self.first_song, role=self.role, person=self.person)
+
+        suggestion = services.attendance_suggestion_for(self.rehearsal, self.person)
+
+        self.assertEqual(suggestion.arrival_time, self.rehearsal.start_time)
+        expected_departure = _shifted(self.rehearsal.date, self.first_slot.end_time, self.rehearsal.departure_buffer_minutes)
+        self.assertEqual(suggestion.departure_time, expected_departure)
+
+    def test_assigned_only_to_the_last_song_arrives_with_buffer_and_departs_at_rehearsal_end(self):
+        """Needed until the end only: arrival still buffers off the last slot's start, departure is the Rehearsal's end_time (teardown)."""
+        SongRoleAssignmentFactory(song=self.last_song, role=self.role, person=self.person)
+
+        suggestion = services.attendance_suggestion_for(self.rehearsal, self.person)
+
+        expected_arrival = _shifted(self.rehearsal.date, self.last_slot.start_time, -self.rehearsal.arrival_buffer_minutes)
+        self.assertEqual(suggestion.arrival_time, expected_arrival)
+        self.assertEqual(suggestion.departure_time, self.rehearsal.end_time)
+
+
 class BackupWidensSlotMembershipTests(TestCase):
     """Slot membership is the union of assignment- and Backup-derived slots, across all three reads (issue #175)."""
 
