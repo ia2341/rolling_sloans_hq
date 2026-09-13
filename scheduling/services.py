@@ -2944,10 +2944,14 @@ def _regular_attendance_suggestion_from_slots(rehearsal, rehearsal_songs, your_r
     your_orders = {rehearsal_song.order for rehearsal_song in your_rehearsal_songs}
     needed_from_start = bool(orders) and min(orders) in your_orders
     needed_until_end = bool(orders) and max(orders) in your_orders
-    if needed_from_start and needed_until_end:
-        return AttendanceSuggestion(arrival_time=rehearsal.start_time, departure_time=rehearsal.end_time)
-    arrival_time = _shift_time(rehearsal.date, earliest_start, -rehearsal.arrival_buffer_minutes)
-    departure_time = _shift_time(rehearsal.date, latest_end, rehearsal.departure_buffer_minutes)
+    if needed_from_start:
+        arrival_time = rehearsal.start_time
+    else:
+        arrival_time = _shift_time(rehearsal.date, earliest_start, -rehearsal.arrival_buffer_minutes)
+    if needed_until_end:
+        departure_time = rehearsal.end_time
+    else:
+        departure_time = _shift_time(rehearsal.date, latest_end, rehearsal.departure_buffer_minutes)
     return AttendanceSuggestion(arrival_time=arrival_time, departure_time=departure_time)
 
 
