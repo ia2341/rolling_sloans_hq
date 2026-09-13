@@ -78,10 +78,16 @@ function RehearsalTimelineBar({ timeline }: { timeline: Timeline }) {
   const arrivalTime = timeline.viewer_start_time ?? timeline.window_start
   const departureTime = timeline.viewer_end_time ?? timeline.window_end
 
-  // Marker positions are percent-along-the-bar, found by mapping the
-  // viewer's own arrival/departure clock times onto the window's span --
-  // clamped in case a stale window edge would otherwise push a marker
-  // outside the bar (e.g. an arrival right at the window's start).
+  // Marker and slot positions are all percent-along-the-bar, found by
+  // mapping clock times onto the *full* window's span (setup grace through
+  // teardown grace) -- clamped in case a stale window edge would otherwise
+  // push a marker outside the bar (e.g. an arrival right at the window's
+  // start). Slots are sized by their own real start/end rather than an
+  // equal share of the bar: window_start/window_end are the Rehearsal's
+  // own start_time/end_time, which include setup/teardown dead time the
+  // slots don't span, so rendering slots as equal-width flex children
+  // while measuring ticks against the full window left the ticks
+  // misaligned with the song block they were meant to bound.
   const windowStart = minutesSinceMidnight(timeline.window_start)
   const windowEnd = minutesSinceMidnight(timeline.window_end)
   const windowSpan = windowEnd - windowStart
@@ -93,6 +99,11 @@ function RehearsalTimelineBar({ timeline }: { timeline: Timeline }) {
   const arrivalPercent = percentAlong(arrivalTime)
   const departurePercent = percentAlong(departureTime)
 
+  const firstSlot = timeline.slots[0]
+  const lastSlot = timeline.slots[timeline.slots.length - 1]
+  const setupPercent = firstSlot ? percentAlong(firstSlot.start_time) : 0
+  const teardownPercent = lastSlot ? 100 - percentAlong(lastSlot.end_time) : 0
+
   return (
     <div className="mt-2" data-testid="next-rehearsal-timeline">
       <div className="flex justify-between text-xs text-rs-muted">
@@ -100,13 +111,23 @@ function RehearsalTimelineBar({ timeline }: { timeline: Timeline }) {
         <span>{formatClockTime(timeline.window_end)}</span>
       </div>
       <div className="relative mt-1">
-        <div className="flex overflow-hidden rounded border border-rs-border">
+        <div className="flex h-10 overflow-hidden rounded border border-rs-border">
+          {setupPercent > 0 && (
+            <div
+              aria-hidden="true"
+              className="h-full flex-none bg-rs-border/10"
+              style={{ width: `${setupPercent}%` }}
+            />
+          )}
           {timeline.slots.map((slot) => (
             <Link
               key={slot.song_id}
               to={`/songs/${slot.song_id}`}
               onClick={(event) => event.stopPropagation()}
-              className={`flex h-10 min-w-0 flex-1 items-center justify-center border-r border-rs-border px-1 text-center text-xs leading-tight last:border-r-0 ${
+              style={{
+                width: `${percentAlong(slot.end_time) - percentAlong(slot.start_time)}%`,
+              }}
+              className={`flex h-full min-w-0 flex-none items-center justify-center border-r border-rs-border px-1 text-center text-xs leading-tight last:border-r-0 ${
                 slot.is_viewer
                   ? 'bg-rs-accent text-rs-accent-fg'
                   : 'bg-rs-border/30 text-rs-fg'
@@ -117,6 +138,13 @@ function RehearsalTimelineBar({ timeline }: { timeline: Timeline }) {
               </span>
             </Link>
           ))}
+          {teardownPercent > 0 && (
+            <div
+              aria-hidden="true"
+              className="h-full flex-none bg-rs-border/10"
+              style={{ width: `${teardownPercent}%` }}
+            />
+          )}
         </div>
         {/* Your own arrival/departure ticks, drawn over the bar rather than left to the caption above it. */}
         <div
