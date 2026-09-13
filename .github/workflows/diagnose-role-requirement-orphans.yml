@@ -1,0 +1,81 @@
+name: Diagnose Role Requirement orphans (production)
+
+# One-shot, manually-triggered, READ-ONLY job for issue #443: reports how
+# many SongRoleAssignment/Backup rows in the production database have no
+# backing SongRoleRequirement (the invariant issues #439/#440 introduced),
+# broken down by numeric Semester id. Writes nothing to the database.
+#
+# Output is deliberately limited to counts and Semester ids — never a
+# Song/Role/Person name or email — because this repo is public and a
+# workflow_dispatch run's logs and Job Summary are visible to anyone, so
+# CONTRIBUTING.md's "no real member data anywhere in the repo" constraint
+# has to hold here too, not just in committed files.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type exactly "diagnose production" to proceed.'
+        required: true
+
+jobs:
+  diagnose:
+    name: Diagnose Role Requirement orphans
+    runs-on: ubuntu-latest
+    steps:
+      - name: Guard on the typed confirmation
+        run: |
+          if [ "${{ github.event.inputs.confirm }}" != "diagnose production" ]; then
+            echo "::error::Confirmation phrase did not match. Nothing was queried. Re-run and type exactly: diagnose production"
+            echo "### ❌ Aborted before querying the database" >> "$GITHUB_STEP_SUMMARY"
+            echo "Confirmation input did not match \`diagnose production\` — no code ran." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "Confirmation matched — proceeding."
+
+      - name: Check required secret is present
+        run: |
+          if [ -z "${{ secrets.PRODUCTION_DATABASE_URL }}" ]; then
+            echo "::error::Missing repo secret PRODUCTION_DATABASE_URL. Add it under Settings > Secrets and variables > Actions, then re-run."
+            echo "### ❌ Missing required secret" >> "$GITHUB_STEP_SUMMARY"
+            echo '- `PRODUCTION_DATABASE_URL`' >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "Required secret is present."
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run diagnostic (read-only)
+        id: diagnose
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          # Only DATABASE_URL needs to be the real production value — this
+          # command never sends mail or touches R2, so the rest just need
+          # to satisfy config/settings.py's env() calls at import time.
+          DJANGO_SECRET_KEY: diagnose-job-unused-secret-key
+          DJANGO_DEBUG: "True"
+          DJANGO_ALLOWED_HOSTS: example.com
+          AWS_ACCESS_KEY_ID: unused
+          AWS_SECRET_ACCESS_KEY: unused
+          AWS_STORAGE_BUCKET_NAME: unused
+          AWS_S3_ENDPOINT_URL: https://unused.example.com
+        run: |
+          set -o pipefail
+          python manage.py diagnose_role_requirement_orphans 2>&1 | tee diagnose_output.log
+
+      - name: Report result
+        if: always()
+        run: |
+          echo "### Role Requirement orphan diagnostic" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat diagnose_output.log >> "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "This job is read-only: nothing in the database was changed. If a Semester id shows orphaned rows above, inspect that Semester in the Django admin before deciding whether to delete or backfill it." >> "$GITHUB_STEP_SUMMARY"
